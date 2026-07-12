@@ -1,3 +1,4 @@
+// Vendored from https://github.com/mumble-voip/mumble @ ec64d867ffff83b55f1e54ef6ca32d5759277d1d (src/Mumble.proto); local changes: java_package/java_outer_classname options only.
 // Copyright The Mumble Developers. All rights reserved.
 // Use of this source code is governed by a BSD-style license
 // that can be found in the LICENSE file at the root of the
