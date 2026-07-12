@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.protobuf)
 }
 
 android {
@@ -33,12 +34,25 @@ android {
     }
 }
 
+protobuf {
+    protoc { artifact = "com.google.protobuf:protoc:4.31.1" }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins { create("java") { option("lite") } }
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.protobuf.javalite)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }
