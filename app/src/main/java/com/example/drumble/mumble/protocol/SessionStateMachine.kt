@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Abstraction over MumbleTcpTransport so the state machine tests with a fake. */
 interface ControlChannel {
     fun send(type: TcpMessageType, message: MessageLite): Boolean
+    /** Raw payload frame (UDPTunnel carries opaque bytes, not protobuf). */
+    fun sendRaw(type: TcpMessageType, payload: ByteArray, len: Int): Boolean
     fun close()
 }
 

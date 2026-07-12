@@ -15,6 +15,7 @@ class SessionStateMachineTest {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()
         var closedCount = 0
         override fun send(type: TcpMessageType, message: MessageLite): Boolean { sent.add(type to message); return true }
+        override fun sendRaw(type: TcpMessageType, payload: ByteArray, len: Int) = true
         override fun close() { closedCount++ }
     }
 

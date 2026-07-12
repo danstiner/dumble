@@ -107,6 +107,15 @@ class MumbleTcpTransport(private val pinStore: PinStore) : ControlChannel {
         return sendQueue.trySend(bos.toByteArray()).isSuccess
     }
 
+    /** Thread-safe, non-blocking. False if the queue is full or transport closed. */
+    override fun sendRaw(type: TcpMessageType, payload: ByteArray, len: Int): Boolean {
+        if (closed.get()) return false
+        val bos = ByteArrayOutputStream(6 + len)
+        val dos = DataOutputStream(bos)
+        dos.writeShort(type.id); dos.writeInt(len); dos.write(payload, 0, len)
+        return sendQueue.trySend(bos.toByteArray()).isSuccess
+    }
+
     override fun close() {
         // closed.compareAndSet is the idempotency gate — only the winning caller runs
         // cleanup. The lock below just serializes that cleanup against connect()'s
