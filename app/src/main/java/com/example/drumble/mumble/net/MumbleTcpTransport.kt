@@ -1,5 +1,6 @@
 package com.example.drumble.mumble.net
 
+import com.example.drumble.mumble.protocol.ControlChannel
 import com.example.drumble.mumble.protocol.MumbleCodec
 import com.example.drumble.mumble.protocol.TcpFrame
 import com.example.drumble.mumble.protocol.TcpMessageType
@@ -15,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 
-class MumbleTcpTransport(private val pinStore: PinStore) {
+class MumbleTcpTransport(private val pinStore: PinStore) : ControlChannel {
     companion object {
         private const val TAG = "MumbleTcpTransport"
         private const val CONNECT_TIMEOUT_MS = 10_000
@@ -99,14 +100,14 @@ class MumbleTcpTransport(private val pinStore: PinStore) {
     }
 
     /** Thread-safe, non-blocking. False if the queue is full or transport closed. */
-    fun send(type: TcpMessageType, message: MessageLite): Boolean {
+    override fun send(type: TcpMessageType, message: MessageLite): Boolean {
         if (closed.get()) return false
         val bos = ByteArrayOutputStream(6 + message.serializedSize)
         MumbleCodec.writeFrame(DataOutputStream(bos), type.id, message.toByteArray())
         return sendQueue.trySend(bos.toByteArray()).isSuccess
     }
 
-    fun close() {
+    override fun close() {
         // closed.compareAndSet is the idempotency gate — only the winning caller runs
         // cleanup. The lock below just serializes that cleanup against connect()'s
         // socket-assign section so a socket can't be assigned after we've already closed.
