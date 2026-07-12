@@ -120,4 +120,21 @@ class SessionStateMachineTest {
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, payload))
         assertArrayEquals(payload, events.tunneled.single())
     }
+
+    @Test fun versionV1FallbackDecodes() {
+        sm.start("dan", null)
+        // Server sends ONLY version_v1 (legacy encoding major<<16|minor<<8|patch) for 1.4.0 → too old.
+        frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV1(MumbleVersion.encodeV1(1, 4, 0)).build())
+        val s = sm.state.value
+        assertTrue(s is ConnectionState.Failed && s.reason == FailReason.VERSION_TOO_OLD)
+    }
+
+    @Test fun versionV1FallbackAccepts15() {
+        sm.start("dan", null)
+        frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV1(MumbleVersion.encodeV1(1, 5, 0)).build())
+        // 1.5 via v1-only encoding must NOT fail the version gate.
+        assertFalse(sm.state.value is ConnectionState.Failed)
+    }
 }

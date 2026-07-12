@@ -35,6 +35,13 @@ object MumbleVersion {
     fun minorOf(v2: Long): Int = ((v2 ushr 32) and 0xFFFF).toInt()
 }
 
+/**
+ * Threading contract: [onFrame] is invoked single-threaded on the transport reader coroutine;
+ * [sendPing] and [requestCryptResync] may be called from a separate ticker coroutine. State is
+ * exposed via a thread-safe [MutableStateFlow]; [lastPingSentNanos] is `@Volatile` for
+ * cross-coroutine visibility since it is written by [sendPing] on the ticker coroutine and read
+ * by [handlePingEcho] on the reader coroutine.
+ */
 class SessionStateMachine(
     private val channel: ControlChannel,
     private val model: MumbleModel,
@@ -57,7 +64,7 @@ class SessionStateMachine(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
-    private var lastPingSentNanos = 0L
+    @Volatile private var lastPingSentNanos = 0L
 
     fun start(username: String, password: String?) {
         _state.value = ConnectionState.Handshaking
@@ -139,11 +146,17 @@ class SessionStateMachine(
     }
 
     fun fail(reason: FailReason, detail: String? = null, cause: Throwable? = null) {
-        if (_state.value is ConnectionState.Failed) return
-        _state.value = ConnectionState.Failed(reason, detail, cause)
+        val failed = ConnectionState.Failed(reason, detail, cause)
+        while (true) {
+            val cur = _state.value
+            if (cur is ConnectionState.Failed) return // first failure wins
+            if (_state.compareAndSet(cur, failed)) break
+        }
         channel.close()
     }
 
+    // Intentionally overrides any prior state (including Failed) — an explicit local disconnect
+    // should always win.
     fun disconnectLocal() {
         _state.value = ConnectionState.Disconnected
         channel.close()
