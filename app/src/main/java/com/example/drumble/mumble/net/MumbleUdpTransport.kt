@@ -55,24 +55,36 @@ class MumbleUdpTransport(
         val wire = ByteBuffer.allocate(BUFFER_SIZE) // heap: array() feeds decrypt
         val plain = ByteArray(BUFFER_SIZE)
         while (running) {
+            val plainLen: Int
+            val arrival: Long
             try {
                 wire.clear()
                 val n = ch.read(wire)
-                val arrival = System.nanoTime()
-                if (n < 5 || !crypt.isValid()) continue
-                val plainLen = crypt.decrypt(wire.array(), n, plain)
-                if (plainLen < 0) {
-                    if (crypt.lastGoodElapsedNanos() > RESYNC_QUIET_NANOS &&
-                        crypt.lastRequestElapsedNanos() > RESYNC_QUIET_NANOS) {
-                        crypt.markResyncRequested()
-                        listener.requestCryptResync()
-                    }
-                    continue
+                arrival = System.nanoTime()
+                // n == CryptState.OVERHEAD (4 bytes) is a legal zero-payload OCB2 packet.
+                if (n < CryptState.OVERHEAD || !crypt.isValid()) continue
+                plainLen = crypt.decrypt(wire.array(), n, plain)
+            } catch (e: Exception) {
+                // Fatal: socket closed locally (running already false → quiet) or a real IO error.
+                if (running) {
+                    running = false
+                    listener.onUdpError(e)
+                    MumbleLog.w(TAG, "receive error — transport stopped", e)
                 }
+                return
+            }
+            if (plainLen < 0) {
+                if (crypt.lastGoodElapsedNanos() > RESYNC_QUIET_NANOS &&
+                    crypt.lastRequestElapsedNanos() > RESYNC_QUIET_NANOS) {
+                    crypt.markResyncRequested()
+                    listener.requestCryptResync()
+                }
+                continue
+            }
+            try {
                 listener.onUdpPlaintext(plain, plainLen, arrival)
             } catch (e: Exception) {
-                if (running) { listener.onUdpError(e); MumbleLog.w(TAG, "receive error", e) }
-                return
+                MumbleLog.w(TAG, "listener threw on inbound packet — dropping, continuing", e)
             }
         }
     }
