@@ -72,6 +72,13 @@ class CryptStateTest {
         assertEquals(-1, c.decrypt(ByteArray(8), 8, ByteArray(4)))
     }
 
+    @Test fun zeroLengthPayloadRoundTrips() {
+        val wire = ByteArray(CryptState.OVERHEAD)
+        val out = ByteArray(0)
+        assertEquals(CryptState.OVERHEAD, a.encrypt(ByteArray(0), 0, wire))
+        assertEquals(0, b.decrypt(wire, wire.size, out))
+    }
+
     // ------------------------------------------------------------------
     // Known-answer vectors ported from desktop Mumble's
     // src/tests/TestCrypt/TestCrypt.cpp (BSD-licensed, mumble-voip/mumble).

@@ -89,7 +89,10 @@ class CryptState {
 
     /** Decrypts src[0..len) into dst. Returns plaintext length or -1 on any failure. */
     @Synchronized fun decrypt(src: ByteArray, len: Int, dst: ByteArray): Int {
-        if (decryptCipher == null || len < OVERHEAD + 1) return -1
+        // len == OVERHEAD is a legal zero-payload packet (4-byte header, no
+        // ciphertext) -- matches desktop Mumble's CryptStateOCB2, which only
+        // rejects crypted_length < 4.
+        if (decryptCipher == null || len < OVERHEAD) return -1
         val plainLen = len - OVERHEAD
         val ivByte = src[0].toInt() and 0xFF
         var restore = false
