@@ -77,11 +77,11 @@ Protobuf: vendor `Mumble.proto` + `MumbleUDP.proto` from upstream `mumble-voip/m
 
 **MumbleTcpTransport** — `SSLSocket` over a dedicated single-thread coroutine dispatcher for the read loop (frame → decode → emit `Flow<MumbleMessage>`); separate writer coroutine drains a `Channel` so sends never block reads. TLS trust: **accept-and-pin on first use (TOFU)** — persist the server cert's SHA-256 fingerprint; mismatch on reconnect = hard fail. *Flagged: proper pinning/CA validation required before real-world use.*
 
-**MumbleUdpTransport** — connected `DatagramChannel`, blocking mode, **dedicated raw threads** (not coroutine dispatchers — no dispatch-queue wakeup hops on the hot path):
+**MumbleUdpTransport** — connected `DatagramChannel`, blocking mode:
 
-- *Receive thread* (`THREAD_PRIORITY_URGENT_AUDIO`): blocking `receive()` into a pooled direct `ByteBuffer`; stamp arrival with `System.nanoTime()` (same `CLOCK_MONOTONIC` domain Oboe uses); OCB2-decrypt; route by type byte (Audio → voice path, Ping → stats).
-- *Send thread* (`URGENT_AUDIO`): drains an `ArrayBlockingQueue`/SPSC of outgoing frames; OCB2-encrypt; `send()`.
-- **Zero-allocation discipline in both loops**: pooled direct buffers, preallocated frame holders, no per-packet objects.
+- *Receive thread* (dedicated raw thread at `THREAD_PRIORITY_URGENT_AUDIO`, not a coroutine dispatcher — no dispatch-queue wakeup hops): blocking `receive()` into a pooled direct `ByteBuffer`; stamp arrival with `System.nanoTime()` (same `CLOCK_MONOTONIC` domain Oboe uses); OCB2-decrypt; route by type byte (Audio → voice path, Ping → stats).
+- *Sending has no dedicated thread*: `DatagramChannel.send()` is thread-safe, so callers send in-line — the voice-send thread on the hot path (~50–100/s), the ping scheduler on the cold path (~0.2/s). `CryptState.encrypt` is `synchronized` (microseconds per call; contention between those rates is negligible). No handoff queue, no extra hop.
+- **Zero-allocation discipline on the hot paths**: pooled direct buffers, preallocated frame holders, no per-packet objects.
 
 **CryptState** — OCB2-AES128 port (JCE `AES/ECB/NoPadding` as block primitive; OCB2 mode logic — S2/S3 GF(2¹²⁸) doubling, XOR, 3-byte tag — in Kotlin). IV counter management, late/lost/reorder window (±30, history table), replay rejection, and the good/late/lost/resync counters that feed both `NetStats` and the transport selector. Resync: on persistent decrypt failure (>5 s since last good and last request), send empty `CryptSetup` to request server resync. **Highest-risk component → known-answer tests first** (vectors cross-checked against Mumble desktop's BSD test suite), plus round-trip, tamper-reject, replay/reorder tests. *Known caveat: OCB2 has published cryptographic weaknesses; it is required for Mumble compatibility and is not ours to change.*
 
