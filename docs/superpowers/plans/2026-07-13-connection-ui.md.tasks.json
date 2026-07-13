@@ -31,7 +31,7 @@
     {
       "id": 29,
       "subject": "Task 5: ConnectScreen composable (form + settings gear)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [26, 28],
       "description": "**Goal:** Stateless connect form: TopAppBar 'Dumble' + settings gear, four fields with inline errors, Connect enabled only when valid.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ConnectScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"ConnectScreen stateless with form/errors/canConnect/callbacks/snackbarHostState\", \"password masked, port numeric keyboard, per-field error text\", \"Connect button enabled=canConnect\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:13:19Z"
+  "lastUpdated": "2026-07-13T14:16:46Z"
 }
