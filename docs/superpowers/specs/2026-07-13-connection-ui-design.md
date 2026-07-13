@@ -27,6 +27,11 @@ panel** when connected.
 - Drive connect through the exact path today's `placeTestCall()` uses (Telecom
   `placeCall` + `MumbleManager.connect`), just with form values.
 - Surface connection failures back on the form.
+- Rename the app to **Dumble**, including the `com.example.drumble` →
+  `me.danielstiner.dumble` package/namespace refactor (reverse-domain of the
+  owner's site, danielstiner.me).
+- A Settings / Advanced entry (a top-bar gear) reaching a screen that launches
+  the existing Echo Test debug view.
 
 ## Non-goals (deferred / out of scope)
 
@@ -38,8 +43,30 @@ panel** when connected.
 - **Persisting the password** — never written to storage in this iteration.
 - **Force-TCP toggle** — the config supports `forceTcp`, but it stays out of the
   form for now (trivial to add later as an Advanced toggle).
-- **Rewriting `EchoTestActivity`** — the separate audio echo-test screen stays
-  on Views, untouched.
+- **Rewriting `EchoTestActivity`** — the separate audio echo-test screen keeps
+  its Views-based UI (only its package moves in the rename). It gains an in-app
+  entry via the new Settings screen instead of being launched by hand.
+
+## App rename (Drumble → Dumble)
+
+A mechanical but wide refactor, done as its own step and verified by a clean
+build:
+
+- **Display name** — `app_name` in `strings.xml`: `Drumble` → `Dumble`; rename
+  the `Theme.Drumble` style (and references) accordingly.
+- **Package / namespace** — `com.example.drumble` → `me.danielstiner.dumble`
+  across all 37 referencing files: `package`/`import` statements, the
+  `AndroidManifest` (relative `.` component names resolve against the new
+  namespace), and the source directory move
+  `app/src/main/java/com/example/drumble/…` → `app/src/main/java/me/danielstiner/dumble/…`
+  (plus the matching test-source move).
+- **Build config** — `namespace` and `applicationId` in `app/build.gradle.kts`
+  → `me.danielstiner.dumble`.
+- **New code** is authored directly under `me.danielstiner.dumble`, so the
+  Compose work and the rename converge rather than fighting.
+
+**Verify:** `./gradlew :app:assembleDebug` builds and the existing unit-test
+suite (59 tests) passes under the new package.
 
 ## Architecture
 
@@ -47,15 +74,25 @@ A single state-driven Compose screen, hosted by the existing (singleInstance)
 launcher activity. `ActiveCallActivity` retains ownership of the Android-level
 concerns it already handles — Telecom setup, `placeCall`, and the runtime
 permission flow — and replaces its imperative view tree with
-`setContent { DrumbleTheme { DrumbleApp(...) } }`.
+`setContent { DumbleTheme { DumbleApp(...) } }`.
 
 Responsibilities split cleanly:
 
-- **Composables** (`DrumbleApp`, `ConnectScreen`, `ActiveCallScreen`) are
+- **Composables** (`DumbleApp`, `ConnectScreen`, `ActiveCallScreen`) are
   presentation only, with hoisted state.
 - **`ConnectViewModel`** owns form state, validation, and persistence.
 - **Activity** owns Telecom + permissions and provides `onConnect(config)` /
   `onHangUp()` lambdas.
+
+### Navigation & screens
+
+There are three screens: **Connect**, **ActiveCall**, and **Settings**. Connect
+and ActiveCall are selected automatically by `ConnectionState` (never both).
+Settings is reached only from the idle ConnectScreen, via a gear in its top app
+bar. Rather than add Navigation-Compose for three screens, `DumbleApp` holds a
+small `showSettings` flag (hoisted state); when set, it renders `SettingsScreen`
+over the Connect flow and a `BackHandler` clears it. Settings is not reachable
+mid-call.
 
 ### File structure
 
@@ -63,12 +100,15 @@ New:
 
 | File | Responsibility |
 |------|----------------|
-| `ui/theme/Theme.kt` | `DrumbleTheme` — Material 3 dynamic color scheme + typography |
-| `ui/DrumbleApp.kt` | Root composable; observes `MumbleManager.state` (+ `CallManager.activeConnection`), switches Connect ↔ ActiveCall, hosts the failure snackbar |
+| `ui/theme/Theme.kt` | `DumbleTheme` — Material 3 dynamic color scheme + typography |
+| `ui/DumbleApp.kt` | Root composable; observes `MumbleManager.state` (+ `CallManager.activeConnection`), switches Connect ↔ ActiveCall, hosts the failure snackbar |
 | `ui/ConnectScreen.kt` | Stateless connect form (host/port/username/password fields, inline errors, Connect button) |
 | `ui/ActiveCallScreen.kt` | Compose port of today's status / live-stats / hang-up UI |
+| `ui/SettingsScreen.kt` | Material 3 settings/advanced list; launches Echo Test, home for future advanced/debug entries |
 | `ui/ConnectViewModel.kt` | Form state, `validate()`, builds `MumbleServerConfig`, owns `ServerConfigStore` |
 | `data/ServerConfigStore.kt` | Persistence interface + SharedPreferences impl (host/port/username); in-memory fake lives in test sources |
+
+All new files live under the renamed base package `me.danielstiner.dumble`.
 
 Modified:
 
@@ -81,10 +121,11 @@ Modified:
 ## Data flow
 
 1. **Launch** → `ActiveCallActivity.onCreate` inits `CallManager`/`MumbleManager`
-   (as today) and calls `setContent { DrumbleTheme { DrumbleApp(vm, onConnect, onHangUp) } }`.
-2. **`DrumbleApp`** collects `MumbleManager.state` (via
+   (as today) and calls `setContent { DumbleTheme { DumbleApp(vm, onConnect, onHangUp) } }`.
+2. **`DumbleApp`** collects `MumbleManager.state` (via
    `collectAsStateWithLifecycle`) and `CallManager.activeConnection`:
    - `Disconnected` / `Failed` and no active connection → **ConnectScreen**
+     (its top-bar gear sets `showSettings` → **SettingsScreen**)
    - otherwise (`Connecting` / `Handshaking` / `Synchronized`, or an active
      connection) → **ActiveCallScreen**
 3. **Connect** → the form calls `viewModel.validateAndBuild()`. On success the
@@ -126,7 +167,7 @@ the SharedPreferences impl from `applicationContext`.
 
 ## Theming (Material You)
 
-`DrumbleTheme` wraps `MaterialTheme` with Material 3. Because `minSdk` is 33
+`DumbleTheme` wraps `MaterialTheme` with Material 3. Because `minSdk` is 33
 (≥ API 31), dynamic color is always available: pick
 `dynamicDarkColorScheme(context)` or `dynamicLightColorScheme(context)` by
 `isSystemInDarkTheme()`. A small static fallback scheme is defined for `@Preview`
@@ -135,11 +176,23 @@ the SharedPreferences impl from `applicationContext`.
 ## Failure handling
 
 `ConnectionState.Failed` is transient — `MumbleManager` self-heals to
-`Disconnected` after a `Failed`. `DrumbleApp` observes the state stream, captures
+`Disconnected` after a `Failed`. `DumbleApp` observes the state stream, captures
 the failure reason on the `Failed` transition into a one-shot UI event, routes
 back to `ConnectScreen`, and shows the reason in a `Snackbar`. Invalid form input
 never reaches connect (Connect is disabled), so the snackbar is reserved for real
 connection/handshake failures.
+
+## Settings / Advanced entry
+
+The idle **ConnectScreen** carries a Material 3 `TopAppBar` (title "Dumble") with
+a **settings gear `IconButton`** in the trailing actions — the canonical M3
+choice for a single well-known destination (preferred over a three-dot overflow).
+
+Tapping the gear opens **SettingsScreen**: an M3 screen with a back-arrow app bar
+and a list of `ListItem`s. The first item, **"Echo Test"**, starts the existing
+`EchoTestActivity` via an `Intent`. The screen is the designated home for future
+advanced/debug entries (e.g. a force-TCP toggle, logs, protocol diagnostics).
+Back-arrow or system back returns to ConnectScreen.
 
 ## Permissions
 
@@ -168,6 +221,9 @@ dependency set — Compose BOM, `compose.ui`, `ui-tooling-preview`, `material3`,
 (for `collectAsStateWithLifecycle`); `debugImplementation` `ui-tooling`; and
 (stretch) `androidTestImplementation` `ui-test-junit4`. `appcompat` /
 `com.google.android.material` remain for the untouched `EchoTestActivity`.
+**No Navigation-Compose** is added — the three-screen switch is a hoisted state
+flag + `BackHandler`. The `namespace` / `applicationId` change is covered under
+[App rename](#app-rename-drumble--dumble).
 
 ## Future extension points
 
