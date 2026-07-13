@@ -17,7 +17,7 @@
     {
       "id": 27,
       "subject": "Task 3: ServerConfigStore persistence (no password)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [25],
       "description": "**Goal:** SharedPreferences-backed ServerConfigStore remembering host/port/username (never password), with an in-memory fake + JVM tests.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.data.*\" → all pass\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/data/ServerConfigStore.kt\", \"app/src/test/java/me/danielstiner/dumble/data/FakeServerConfigStore.kt\", \"app/src/test/java/me/danielstiner/dumble/data/ServerConfigStoreTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.data.*\\\"\", \"acceptanceCriteria\": [\"save persists host/port/username only\", \"load defaults port to 64738\", \"no password parameter anywhere in the interface\", \"fake round-trips\", \"data.* tests pass\"], \"modelTier\": \"mechanical\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:01:15Z"
+  "lastUpdated": "2026-07-13T14:08:04Z"
 }
