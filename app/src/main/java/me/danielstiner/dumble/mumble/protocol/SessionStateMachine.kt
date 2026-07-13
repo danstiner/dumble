@@ -129,7 +129,9 @@ class SessionStateMachine(
 
     private fun handlePingEcho(p: MumbleProtos.Ping) {
         if (p.hasTimestamp() && p.timestamp == lastPingSentNanos && lastPingSentNanos != 0L) {
-            events.onTcpRtt((clockNanos() - p.timestamp) / 1e6)
+            val rtt = (clockNanos() - p.timestamp) / 1e6
+            MumbleLog.d("Ping", "TCP pong rtt=%.1fms serverGood=${p.good} serverLost=${p.lost}".format(rtt))
+            events.onTcpRtt(rtt)
         }
         crypt.setRemoteStats(p.good, p.late, p.lost, p.resync)
     }

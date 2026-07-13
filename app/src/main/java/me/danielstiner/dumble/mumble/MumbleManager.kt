@@ -174,15 +174,22 @@ object MumbleManager {
         private suspend fun pingLoop() {
             while (currentCoroutineContext().isActive) {
                 delay(SessionStateMachine.PING_INTERVAL_MS)
-                sm.sendPing()
-                udp?.let { u ->
-                    val ping = MumbleUdpProtos.Ping.newBuilder().setTimestamp(System.nanoTime()).build()
-                    synchronized(pingBuf) {
-                        val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_PING, ping, pingBuf)
-                        u.send(pingBuf, n)
+                try {
+                    sm.sendPing()
+                    val u = udp
+                    if (u != null) {
+                        val ping = MumbleUdpProtos.Ping.newBuilder().setTimestamp(System.nanoTime()).build()
+                        synchronized(pingBuf) {
+                            val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_PING, ping, pingBuf)
+                            u.send(pingBuf, n)
+                        }
                     }
+                    val stats = crypt.stats()
+                    selector.evaluate(stats, sendingVoice = crypt.isValid())
+                    Log.d("Ping", "tick good=${stats.good} late=${stats.late} lost=${stats.lost} remoteGood=${stats.remoteGood} mode=${selector.mode} udp=${u != null} valid=${crypt.isValid()}")
+                } catch (t: Throwable) {
+                    Log.e("Ping", "pingLoop iteration threw (continuing)", t)
                 }
-                selector.evaluate(crypt.stats(), sendingVoice = crypt.isValid())
             }
         }
 
