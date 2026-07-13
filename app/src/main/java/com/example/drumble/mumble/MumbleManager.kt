@@ -51,6 +51,17 @@ object MumbleManager {
     private var pinStore: PinStore = InMemoryPinStore()
     private var active: ActiveSession? = null
 
+    init {
+        // Long-lived watcher on the app-lifetime `scope` (outlives any single session):
+        // whenever a session reaches Failed (e.g. auth reject, TLS/TOFU pin mismatch, IO
+        // error surfaced by the state machine), self-heal by tearing the session down so
+        // `active` is reset to null and a fresh connect() isn't a silent no-op. shutdown()
+        // sets _state = Disconnected *after* tearing down, so this doesn't re-fire or recurse.
+        scope.launch {
+            state.collect { s -> if (s is ConnectionState.Failed) disconnect() }
+        }
+    }
+
     fun init(context: Context) {
         pinStore = SharedPrefsPinStore(context.applicationContext)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
@@ -73,7 +84,11 @@ object MumbleManager {
     }
 
     private class ActiveSession(private val config: MumbleServerConfig) {
-        private val jobs = mutableListOf<Job>()
+        // Child of the manager-lifetime `scope`, scoped to this session only. shutdown()
+        // cancels this (not the individual jobs list) so every coroutine launched under it —
+        // including pingLoop, which is launched later from inside the connect coroutine — is
+        // torn down atomically, with no race against late-arriving `jobs +=` appends.
+        private val sessionScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         private val crypt = CryptState()
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
@@ -110,10 +125,10 @@ object MumbleManager {
         private val sm: SessionStateMachine = SessionStateMachine(tcp, model, crypt, events)
 
         fun start() {
-            jobs += scope.launch { sm.state.collect { _state.value = it } }
-            jobs += scope.launch { selector.stats.collect { _netStats.value = it } }
-            jobs += scope.launch { synthetic.stats.collect { _loopbackStats.value = it } }
-            jobs += scope.launch {
+            sessionScope.launch { sm.state.collect { _state.value = it } }
+            sessionScope.launch { selector.stats.collect { _netStats.value = it } }
+            sessionScope.launch { synthetic.stats.collect { _loopbackStats.value = it } }
+            sessionScope.launch {
                 _state.value = ConnectionState.Connecting
                 try {
                     tcp.connect(config.host, config.port, object : MumbleTcpTransport.Listener {
@@ -127,7 +142,7 @@ object MumbleManager {
                     return@launch
                 }
                 sm.start(config.username, config.password)
-                jobs += scope.launch { pingLoop() }
+                sessionScope.launch { pingLoop() }
             }
         }
 
@@ -159,7 +174,7 @@ object MumbleManager {
             voice.stop()
             udp?.close()
             sm.disconnectLocal()
-            jobs.forEach { it.cancel() }
+            sessionScope.cancel()
             _state.value = ConnectionState.Disconnected
             _netStats.value = NetStats()
             _loopbackStats.value = LoopbackStats()

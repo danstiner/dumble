@@ -49,8 +49,16 @@ class MumbleTcpTransport(private val pinStore: PinStore) : ControlChannel {
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, arrayOf(TofuTrustManager(pinStore, "$host:$port")), null)
         val s = ctx.socketFactory.createSocket() as SSLSocket
-        s.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-        s.startHandshake()
+        try {
+            s.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            s.startHandshake()
+        } catch (t: Throwable) {
+            // TLS/TOFU pin-mismatch (CertificateException) or any other connect/handshake
+            // failure throws before the socket is ever published to `socket` — close it here
+            // or it leaks (open fd, handshake thread) since nothing else owns it yet.
+            runCatching { s.close() }
+            throw t
+        }
         synchronized(connectLock) {
             if (closed.get()) {
                 // close() ran (or raced us) while we were handshaking. Don't publish the

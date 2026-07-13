@@ -3,6 +3,7 @@ package com.example.drumble.telecom
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import android.util.Log
+import com.example.drumble.mumble.MumbleManager
 
 class DrumbleConnection : Connection() {
 
@@ -23,6 +24,7 @@ class DrumbleConnection : Connection() {
 
     override fun onReject() {
         Log.d(TAG, "onReject")
+        MumbleManager.disconnect()
         setDisconnected(DisconnectCause(DisconnectCause.REJECTED))
         destroy()
         CallManager.setConnection(null)
@@ -35,6 +37,7 @@ class DrumbleConnection : Connection() {
 
     override fun onDisconnect() {
         Log.d(TAG, "onDisconnect")
+        MumbleManager.disconnect()
         setDisconnected(DisconnectCause(DisconnectCause.LOCAL))
         destroy()
         CallManager.setConnection(null)
@@ -43,6 +46,7 @@ class DrumbleConnection : Connection() {
 
     override fun onAbort() {
         Log.d(TAG, "onAbort")
+        MumbleManager.disconnect()
         setDisconnected(DisconnectCause(DisconnectCause.CANCELED))
         destroy()
         CallManager.setConnection(null)
