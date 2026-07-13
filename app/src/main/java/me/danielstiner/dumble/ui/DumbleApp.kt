@@ -31,7 +31,9 @@ fun DumbleApp(
     val state by MumbleManager.state.collectAsStateWithLifecycle()
     val connection by CallManager.activeConnection.collectAsStateWithLifecycle()
     val net by MumbleManager.netStats.collectAsStateWithLifecycle()
-    val loop by MumbleManager.loopbackStats.collectAsStateWithLifecycle()
+    val voice by MumbleManager.voiceStats.collectAsStateWithLifecycle()
+    val muted by MumbleManager.muted.collectAsStateWithLifecycle()
+    val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -56,9 +58,16 @@ fun DumbleApp(
         inCall -> {
             val statusText = if (state is ConnectionState.Synchronized) "In Call" else "Connecting…"
             val statsText = "state=${state::class.simpleName} mode=${net.mode}\n" +
-                "tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
-                "loop: sent=${loop.sent} rcvd=${loop.received} lost=${loop.lost} rtt=%.1fms".format(loop.lastRttMs)
-            ActiveCallScreen(statusText = statusText, statsText = statsText, onHangUp = onHangUp)
+                "net: tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
+                "voice: sent=${voice.sent} rcvd=${voice.received} lost=${voice.lost} " +
+                "concealed=${voice.concealed} buf=${voice.bufferMs}ms spk=${voice.activeSpeakers}"
+            ActiveCallScreen(
+                statusText = statusText, statsText = statsText,
+                muted = muted, speaker = speaker,
+                onToggleMute = { MumbleManager.setMuted(!muted) },
+                onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
+                onHangUp = onHangUp,
+            )
         }
         showSettings -> {
             BackHandler { showSettings = false }

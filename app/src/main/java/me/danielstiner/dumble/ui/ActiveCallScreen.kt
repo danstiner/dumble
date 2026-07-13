@@ -2,12 +2,14 @@ package me.danielstiner.dumble.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -24,6 +26,10 @@ import me.danielstiner.dumble.ui.theme.DumbleTheme
 fun ActiveCallScreen(
     statusText: String,
     statsText: String,
+    muted: Boolean,
+    speaker: Boolean,
+    onToggleMute: () -> Unit,
+    onToggleSpeaker: () -> Unit,
     onHangUp: () -> Unit,
 ) {
     Scaffold(topBar = { TopAppBar(title = { Text("Dumble") }) }) { padding ->
@@ -37,6 +43,23 @@ fun ActiveCallScreen(
         ) {
             Text(statusText, style = MaterialTheme.typography.headlineSmall)
             Text(statsText, style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FilterChip(
+                    selected = muted,
+                    onClick = onToggleMute,
+                    label = { Text(if (muted) "Unmute" else "Mute") },
+                    modifier = Modifier.weight(1f),
+                )
+                FilterChip(
+                    selected = speaker,
+                    onClick = onToggleSpeaker,
+                    label = { Text("Speaker") },
+                    modifier = Modifier.weight(1f),
+                )
+            }
             Button(
                 onClick = onHangUp,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -53,6 +76,10 @@ private fun ActiveCallScreenPreview() {
         ActiveCallScreen(
             statusText = "In Call",
             statsText = "state=Synchronized mode=UDP\nudpRtt=11.5ms jit=1.4ms",
+            muted = false,
+            speaker = false,
+            onToggleMute = {},
+            onToggleSpeaker = {},
             onHangUp = {},
         )
     }
