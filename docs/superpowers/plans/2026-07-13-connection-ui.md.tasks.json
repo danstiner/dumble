@@ -4,13 +4,13 @@
     {
       "id": 25,
       "subject": "Task 1: Rename Drumble → Dumble (package me.danielstiner.dumble)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Rename the app to Dumble and move the codebase from com.example.drumble to me.danielstiner.dumble, build + existing unit tests green.\n\n**Verify:** ./gradlew :app:testDebugUnitTest :app:assembleDebug → BUILD SUCCESSFUL, 0 failures\n\n```json:metadata\n{\"files\": [\"app/build.gradle.kts\", \"app/src/main/AndroidManifest.xml\", \"app/src/main/res/values/strings.xml\", \"app/src/main/res/values/themes.xml\", \"app/src/main/proto/Mumble.proto\", \"app/src/main/proto/MumbleUDP.proto\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest :app:assembleDebug\", \"acceptanceCriteria\": [\"no com.example.drumble under app/src or in build.gradle.kts\", \"no DrumbleConnection identifier remains\", \"app_name=Dumble, Theme.Dumble, .telecom.DumbleConnectionService in Manifest\", \"testDebugUnitTest BUILD SUCCESSFUL 0 failures\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 26,
       "subject": "Task 2: Enable Compose + Material 3; add DumbleTheme; NoActionBar",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [25],
       "description": "**Goal:** Enable Jetpack Compose under AGP 9 built-in Kotlin, add Material 3 deps, create DumbleTheme (dynamic color), switch app theme to NoActionBar.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"gradle/libs.versions.toml\", \"build.gradle.kts\", \"app/build.gradle.kts\", \"app/src/main/res/values/themes.xml\", \"app/src/main/java/me/danielstiner/dumble/ui/theme/Theme.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"compose compiler plugin applied + buildFeatures.compose=true\", \"DumbleTheme wraps MaterialTheme with dynamic color + pre-31 fallback\", \"Theme.Dumble parent is NoActionBar\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T13:35:34Z"
+  "lastUpdated": "2026-07-13T14:01:15Z"
 }
