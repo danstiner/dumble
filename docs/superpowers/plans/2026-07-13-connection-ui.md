@@ -755,7 +755,7 @@ fun ConnectScreen(
             OutlinedTextField(
                 value = form.password,
                 onValueChange = onPasswordChange,
-                label = { Text("Password (optional)") },
+                label = { Text("Password") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
