@@ -30,9 +30,9 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - Mute button state desynced across calls (stale singleton vs. fresh engine) — `a03a873`
 - Only one of two simultaneous speakers audible — mixer hard-sum clipping collapse; fixed with an Int-accumulate + soft-knee limiter — `49b9846`
 - Other Mumble clients didn't show self-mute — now broadcast `UserState{self_mute}` on toggle — `5107a2c`
+- `libdumbleopus.so` 16 KB page alignment (Play compliance) — `-Wl,-z,max-page-size=16384`; all LOAD segments 0x4000 on all ABIs — `1567505`
 
 ## Deferred features (tracked as tasks, not defects)
 - **#40** voice-activity detection (transmit mode)
-- **#52** `libdumbleopus.so` 16 KB page alignment (Play compliance)
 - **#53** evaluate 32 kbps CVBR encoder default
 - **#54** Bluetooth headset not selected as the initial call audio route
