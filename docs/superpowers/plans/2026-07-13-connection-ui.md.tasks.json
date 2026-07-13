@@ -59,10 +59,10 @@
     {
       "id": 33,
       "subject": "Task 9: Manual on-device verification",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [32],
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:25:47Z"
+  "lastUpdated": "2026-07-13T15:05:27Z"
 }
