@@ -5,14 +5,14 @@
       "id": 1,
       "nativeId": 10,
       "subject": "Task 1: Build setup — protobuf toolchain, coroutines, vendored protos",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Project compiles with generated javalite classes for Mumble.proto/MumbleUDP.proto and coroutines on the classpath.\n\n**Files:**\n- Modify: gradle/libs.versions.toml\n- Modify: app/build.gradle.kts\n- Create: app/src/main/proto/Mumble.proto\n- Create: app/src/main/proto/MumbleUDP.proto\n- Test: app/src/test/java/com/example/drumble/mumble/ProtoSmokeTest.kt\n\n**Acceptance Criteria:**\n- [ ] assembleDebug succeeds with generated proto classes\n- [ ] proto round-trip smoke test passes\n- [ ] baseline committed separately\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.ProtoSmokeTest\"\n\n```json:metadata\n{\"files\": [\"gradle/libs.versions.toml\", \"app/build.gradle.kts\", \"app/src/main/proto/Mumble.proto\", \"app/src/main/proto/MumbleUDP.proto\", \"app/src/test/java/com/example/drumble/mumble/ProtoSmokeTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.ProtoSmokeTest\\\"\", \"acceptanceCriteria\": [\"assembleDebug succeeds with generated proto classes\", \"proto round-trip smoke test passes\", \"baseline committed separately\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 1}\n```"
     },
     {
       "id": 2,
       "nativeId": 11,
       "subject": "Task 2: CryptState — OCB2-AES128 with known-answer tests",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Wire-compatible OCB2-AES128 encrypt/decrypt with Mumble's IV window/replay handling and counters, proven by ported desktop-Mumble test vectors.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/net/CryptState.kt\n- Create: app/src/main/java/com/example/drumble/mumble/util/MumbleLog.kt\n- Test: app/src/test/java/com/example/drumble/mumble/CryptStateTest.kt\n\n**Acceptance Criteria:**\n- [ ] KAT vectors pass\n- [ ] round-trip/tamper/replay/late tests pass\n- [ ] IV wraparound loop good==300\n- [ ] XEX* mitigation ported\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.CryptStateTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/net/CryptState.kt\", \"app/src/main/java/com/example/drumble/mumble/util/MumbleLog.kt\", \"app/src/test/java/com/example/drumble/mumble/CryptStateTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.CryptStateTest\\\"\", \"acceptanceCriteria\": [\"KAT vectors pass\", \"round-trip/tamper/replay/late tests pass\", \"IV wraparound loop good==300\", \"XEX* mitigation ported\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 2}\n```",
       "blockedBy": [
         1
@@ -22,7 +22,7 @@
       "id": 3,
       "nativeId": 12,
       "subject": "Task 3: MumbleCodec — TCP framing + UDP plaintext format",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Encode/decode TCP framing [u16 type][u32 len][protobuf] and UDP plaintext [u8 type][protobuf], with the message-type registry.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/protocol/MumbleCodec.kt\n- Test: app/src/test/java/com/example/drumble/mumble/MumbleCodecTest.kt\n\n**Acceptance Criteria:**\n- [ ] TCP frame round-trip + wire layout + bound check\n- [ ] UDP plaintext into caller buffer\n- [ ] type registry complete\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.MumbleCodecTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/protocol/MumbleCodec.kt\", \"app/src/test/java/com/example/drumble/mumble/MumbleCodecTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.MumbleCodecTest\\\"\", \"acceptanceCriteria\": [\"TCP frame round-trip + wire layout + bound check\", \"UDP plaintext into caller buffer\", \"type registry complete\"], \"modelTier\": \"mechanical\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 3}\n```",
       "blockedBy": [
         1
@@ -32,7 +32,7 @@
       "id": 4,
       "nativeId": 13,
       "subject": "Task 4: Model — channel tree, user map, reducers",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Immutable ServerModel snapshots built by pure reducers over channel/user state messages, exposed via StateFlow.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/model/MumbleModel.kt\n- Test: app/src/test/java/com/example/drumble/mumble/MumbleModelTest.kt\n\n**Acceptance Criteria:**\n- [ ] partial updates preserve fields\n- [ ] user/channel lifecycle correct\n- [ ] ServerSync recorded\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.MumbleModelTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/model/MumbleModel.kt\", \"app/src/test/java/com/example/drumble/mumble/MumbleModelTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.MumbleModelTest\\\"\", \"acceptanceCriteria\": [\"partial updates preserve fields\", \"user/channel lifecycle correct\", \"ServerSync recorded\"], \"modelTier\": \"mechanical\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 4}\n```",
       "blockedBy": [
         1
@@ -42,7 +42,7 @@
       "id": 5,
       "nativeId": 14,
       "subject": "Task 5: MumbleTcpTransport — TLS + TOFU pinning, reader/writer loops",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** TLS control-channel transport: TOFU cert pinning, blocking reader loop delivering TcpFrames, writer coroutine draining a send queue; testable via injected streams.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/net/PinStore.kt\n- Create: app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\n- Test: app/src/test/java/com/example/drumble/mumble/TofuTrustTest.kt\n- Test: app/src/test/java/com/example/drumble/mumble/MumbleTcpTransportTest.kt\n\n**Acceptance Criteria:**\n- [ ] TOFU first-use/match/mismatch\n- [ ] reader+writer loops verified via pipes\n- [ ] close idempotent\n- [ ] no android imports\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.TofuTrustTest\" --tests \"com.example.drumble.mumble.MumbleTcpTransportTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/net/PinStore.kt\", \"app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\", \"app/src/test/java/com/example/drumble/mumble/TofuTrustTest.kt\", \"app/src/test/java/com/example/drumble/mumble/MumbleTcpTransportTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.TofuTrustTest\\\" --tests \\\"com.example.drumble.mumble.MumbleTcpTransportTest\\\"\", \"acceptanceCriteria\": [\"TOFU first-use/match/mismatch\", \"reader+writer loops verified via pipes\", \"close idempotent\", \"no android imports\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 5}\n```",
       "blockedBy": [
         3
@@ -52,7 +52,7 @@
       "id": 6,
       "nativeId": 15,
       "subject": "Task 6: SessionStateMachine — handshake to Synchronized, pings, CryptSetup",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Drive Version+Authenticate → CryptSetup → ServerSync, expose ConnectionState StateFlow, handle TCP pings, CryptSetup resync, route UDPTunnel — tested against a fake channel.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/protocol/SessionStateMachine.kt\n- Modify: app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\n- Test: app/src/test/java/com/example/drumble/mumble/SessionStateMachineTest.kt\n\n**Acceptance Criteria:**\n- [ ] handshake to Synchronized\n- [ ] CryptSetup full/resync/empty flows\n- [ ] version gate + reject\n- [ ] ping RTT + remote stats\n- [ ] model forwarding\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.SessionStateMachineTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/protocol/SessionStateMachine.kt\", \"app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\", \"app/src/test/java/com/example/drumble/mumble/SessionStateMachineTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.SessionStateMachineTest\\\"\", \"acceptanceCriteria\": [\"handshake to Synchronized\", \"CryptSetup full/resync/empty flows\", \"version gate + reject\", \"ping RTT + remote stats\", \"model forwarding\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 6}\n```",
       "blockedBy": [
         2,
@@ -64,7 +64,7 @@
       "id": 7,
       "nativeId": 16,
       "subject": "Task 7: MumbleUdpTransport + TransportSelector — encrypted UDP with fallback policy",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Blocking-receive UDP thread (pooled buffers, decrypt at edge, resync trigger), in-line encrypted sends, delta-based UDP↔TCP-tunnel policy exposing NetStats.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/net/TransportSelector.kt\n- Create: app/src/main/java/com/example/drumble/mumble/net/MumbleUdpTransport.kt\n- Test: app/src/test/java/com/example/drumble/mumble/TransportSelectorTest.kt\n- Test: app/src/test/java/com/example/drumble/mumble/MumbleUdpTransportTest.kt\n\n**Acceptance Criteria:**\n- [ ] selector stall/recover/force policy\n- [ ] encrypted UDP round-trip\n- [ ] resync trigger throttled\n- [ ] pooled buffers + clean close\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.TransportSelectorTest\" --tests \"com.example.drumble.mumble.MumbleUdpTransportTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/net/TransportSelector.kt\", \"app/src/main/java/com/example/drumble/mumble/net/MumbleUdpTransport.kt\", \"app/src/test/java/com/example/drumble/mumble/TransportSelectorTest.kt\", \"app/src/test/java/com/example/drumble/mumble/MumbleUdpTransportTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.TransportSelectorTest\\\" --tests \\\"com.example.drumble.mumble.MumbleUdpTransportTest\\\"\", \"acceptanceCriteria\": [\"selector stall/recover/force policy\", \"encrypted UDP round-trip\", \"resync trigger throttled\", \"pooled buffers + clean close\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 7}\n```",
       "blockedBy": [
         2,
@@ -75,7 +75,7 @@
       "id": 8,
       "nativeId": 17,
       "subject": "Task 8: Voice seam + SyntheticVoiceSource + VoiceTransport",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Frame-level audio seam (blocking-with-timeout, permanent JNI boundary shape), self-clocked synthetic source measuring loopback RTT/jitter/loss, voice-send thread routing by selector mode.\n\n**Files:**\n- Create: app/src/main/java/com/example/drumble/mumble/voice/VoiceEngine.kt\n- Create: app/src/main/java/com/example/drumble/mumble/voice/SyntheticVoiceSource.kt\n- Create: app/src/main/java/com/example/drumble/mumble/voice/VoiceTransport.kt\n- Modify: app/src/main/java/com/example/drumble/mumble/protocol/SessionStateMachine.kt\n- Modify: app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\n- Test: app/src/test/java/com/example/drumble/mumble/SyntheticVoiceSourceTest.kt\n- Test: app/src/test/java/com/example/drumble/mumble/VoiceTransportTest.kt\n\n**Acceptance Criteria:**\n- [ ] blocking seam with timeout\n- [ ] loopback stats math\n- [ ] target=31 routing by mode\n- [ ] incoming audio/ping routing\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.SyntheticVoiceSourceTest\" --tests \"com.example.drumble.mumble.VoiceTransportTest\" --tests \"com.example.drumble.mumble.SessionStateMachineTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/voice/VoiceEngine.kt\", \"app/src/main/java/com/example/drumble/mumble/voice/SyntheticVoiceSource.kt\", \"app/src/main/java/com/example/drumble/mumble/voice/VoiceTransport.kt\", \"app/src/main/java/com/example/drumble/mumble/protocol/SessionStateMachine.kt\", \"app/src/main/java/com/example/drumble/mumble/net/MumbleTcpTransport.kt\", \"app/src/test/java/com/example/drumble/mumble/SyntheticVoiceSourceTest.kt\", \"app/src/test/java/com/example/drumble/mumble/VoiceTransportTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.SyntheticVoiceSourceTest\\\" --tests \\\"com.example.drumble.mumble.VoiceTransportTest\\\" --tests \\\"com.example.drumble.mumble.SessionStateMachineTest\\\"\", \"acceptanceCriteria\": [\"blocking seam with timeout\", \"loopback stats math\", \"target=31 routing by mode\", \"incoming audio/ping routing\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 8}\n```",
       "blockedBy": [
         6,
@@ -86,7 +86,7 @@
       "id": 9,
       "nativeId": 18,
       "subject": "Task 9: MumbleManager facade + Telecom bridge",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Rewrite the MumbleManager placeholder to wire the whole stack and bridge connection state into the Telecom call shell with debug stats.\n\n**Files:**\n- Modify: app/src/main/java/com/example/drumble/mumble/MumbleManager.kt\n- Modify: app/src/main/java/com/example/drumble/telecom/CallManager.kt\n- Modify: app/src/main/java/com/example/drumble/telecom/DrumbleConnectionService.kt\n- Modify: app/src/main/java/com/example/drumble/ActiveCallActivity.kt\n\n**Acceptance Criteria:**\n- [ ] full stack wiring with failure classification\n- [ ] flows exposed + idempotent disconnect\n- [ ] telecom bridge active/failed/hangup\n- [ ] debug stats visible\n- [ ] build green\n\n**Verify:** ./gradlew :app:testDebugUnitTest :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/com/example/drumble/mumble/MumbleManager.kt\", \"app/src/main/java/com/example/drumble/telecom/CallManager.kt\", \"app/src/main/java/com/example/drumble/telecom/DrumbleConnectionService.kt\", \"app/src/main/java/com/example/drumble/ActiveCallActivity.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest :app:assembleDebug\", \"acceptanceCriteria\": [\"full stack wiring with failure classification\", \"flows exposed + idempotent disconnect\", \"telecom bridge active/failed/hangup\", \"debug stats visible\", \"build green\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 9}\n```",
       "blockedBy": [
         8
@@ -96,12 +96,12 @@
       "id": 10,
       "nativeId": 19,
       "subject": "Task 10: Live-server integration — Synchronized, loopback latency, fallback drill",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Prove the stack end-to-end against a real Mumble server ≥ 1.5: Synchronized, UDP loopback RTT/jitter/loss, TCP-tunnel fallback drill, on-device Telecom call.\n\n**USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create: docs/dev/mumble-server/docker-compose.yml\n- Test: app/src/test/java/com/example/drumble/mumble/integration/LiveServerIntegrationTest.kt\n\n**Acceptance Criteria:**\n- [ ] Synchronized within 10s + channel tree\n- [ ] LOOPBACK[udp] >=100 frames avg RTT <250ms captured\n- [ ] LOOPBACK[tcp-tunnel] mode=TCP_TUNNEL captured\n- [ ] on-device call active/stats/hangup with logcat evidence\n\n**Verify:** docker compose -f docs/dev/mumble-server/docker-compose.yml up -d && MUMBLE_TEST_SERVER=127.0.0.1 ./gradlew :app:testDebugUnitTest --tests \"com.example.drumble.mumble.integration.LiveServerIntegrationTest\"\n\n```json:metadata\n{\"files\": [\"docs/dev/mumble-server/docker-compose.yml\", \"app/src/test/java/com/example/drumble/mumble/integration/LiveServerIntegrationTest.kt\"], \"verifyCommand\": \"docker compose -f docs/dev/mumble-server/docker-compose.yml up -d && MUMBLE_TEST_SERVER=127.0.0.1 ./gradlew :app:testDebugUnitTest --tests \\\"com.example.drumble.mumble.integration.LiveServerIntegrationTest\\\"\", \"acceptanceCriteria\": [\"Synchronized within 10s + channel tree\", \"LOOPBACK[udp] >=100 frames avg RTT <250ms captured\", \"LOOPBACK[tcp-tunnel] mode=TCP_TUNNEL captured\", \"on-device call active/stats/hangup with logcat evidence\"], \"modelTier\": \"standard\", \"planPath\": \"docs/superpowers/plans/2026-07-11-mumble-network-layer.md\", \"planTask\": 10, \"userGate\": true, \"tags\": [\"user-gate\"], \"requireEvidenceTokens\": [[\"udp\", \"LOOPBACK[udp]\"], [\"tcp-tunnel\", \"TCP_TUNNEL\", \"LOOPBACK[tcp-tunnel]\"]]}\n```",
       "blockedBy": [
         9
       ]
     }
   ],
-  "lastUpdated": "2026-07-12T00:00:00Z"
+  "lastUpdated": "2026-07-13T07:00:00Z"
 }
