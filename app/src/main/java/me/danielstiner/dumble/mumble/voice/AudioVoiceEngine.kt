@@ -38,7 +38,7 @@ class AudioVoiceEngine(
 
     private val speakers = ConcurrentHashMap<Int, SpeakerStream>()
     @Volatile private var sent = 0L
-    @Volatile private var received = 0L
+    private val received = java.util.concurrent.atomic.AtomicLong(0)
 
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
@@ -76,9 +76,12 @@ class AudioVoiceEngine(
         val isTerminator = length == 0
         val copy = if (length == 0) ByteArray(0) else opusData.copyOfRange(offset, offset + length)
         val span = if (length == 0) 0 else codec.packetSamples(copy, 0, copy.size)
-        val stream = speakers.computeIfAbsent(senderSession) { SpeakerStream(codec) }
+        val stream = speakers.computeIfAbsent(senderSession) {
+            android.util.Log.d("AudioVoiceEngine", "new speaker session=$senderSession (total=${speakers.size + 1})")
+            SpeakerStream(codec)
+        }
         stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, isTerminator)
-        received++
+        received.incrementAndGet()
     }
 
     private fun playbackLoop() {
@@ -96,13 +99,13 @@ class AudioVoiceEngine(
                 if (stream.retired) { stream.close(); it.remove() }
             }
             out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle)
-            _stats.update { it.copy(received = received, activeSpeakers = active) }
+            _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
         }
     }
 
     override fun stop() {
         running = false
-        playbackThread?.join(500)
+        playbackThread?.join()
         playbackThread = null
         speakers.values.forEach { it.close() }
         speakers.clear()

@@ -42,8 +42,8 @@ class VoiceTransport(
 
     fun stop() {
         running = false
-        engine.stop()
         thread?.join(500)
+        engine.stop()
     }
 
     private fun sendLoop() {

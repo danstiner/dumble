@@ -151,7 +151,7 @@ object CallManager {
         val target = if (speaker) android.telecom.CallEndpoint.TYPE_SPEAKER
                      else android.telecom.CallEndpoint.TYPE_EARPIECE
         val ep = _endpoints.value.firstOrNull { it.endpointType == target } ?: return
-        conn.requestCallEndpointChange(ep, java.util.concurrent.Executors.newSingleThreadExecutor(),
+        conn.requestCallEndpointChange(ep, java.util.concurrent.Executor { it.run() },
             object : android.os.OutcomeReceiver<Void, android.telecom.CallEndpointException> {
                 override fun onResult(result: Void?) {}
                 override fun onError(error: android.telecom.CallEndpointException) {}
