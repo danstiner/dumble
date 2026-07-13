@@ -82,4 +82,26 @@ class VoiceTransportTest {
         vt.onPlaintext(buf, m, arrivalNanos = 888L)
         assertEquals(1234L, pingTs)
     }
+
+    @Test fun terminatorFrameSetsIsTerminator() {
+        val captured = ArrayList<ByteArray>()
+        val engine = object : VoiceEngine {
+            var sent = false
+            override fun start() {}
+            override fun stop() {}
+            override fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame? {
+                if (sent) return null
+                sent = true
+                return VoiceFrame(ByteArray(0), 0, 4, isTerminator = true)
+            }
+            override fun onIncomingFrame(o: ByteArray, off: Int, len: Int, fn: Long, s: Int, a: Long) {}
+        }
+        val t = VoiceTransport(engine, { VoiceTransportMode.UDP },
+            udpSend = { buf, n -> captured.add(buf.copyOf(n)); true },
+            tunnelSend = { _, _ -> true })
+        t.start(); Thread.sleep(50); t.stop()
+        val wire = captured.first()
+        val audio = MumbleUdpProtos.Audio.parser().parseFrom(wire, 1, wire.size - 1)
+        assertTrue(audio.isTerminator)
+    }
 }

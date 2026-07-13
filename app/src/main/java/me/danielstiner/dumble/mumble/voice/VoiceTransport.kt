@@ -54,6 +54,7 @@ class VoiceTransport(
             val audio = MumbleUdpProtos.Audio.newBuilder()
                 .setTarget(target)
                 .setFrameNumber(frame.frameNumber)
+                .setIsTerminator(frame.isTerminator)
                 .setOpusData(ByteString.copyFrom(frame.opusData, 0, frame.length))
                 .build()
             val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_AUDIO, audio, wireBuf)

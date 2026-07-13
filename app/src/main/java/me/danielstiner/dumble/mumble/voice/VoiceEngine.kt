@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.mumble.voice
 
 /** One encoded voice frame crossing the seam. */
-class VoiceFrame(val opusData: ByteArray, val length: Int, val frameNumber: Long)
+class VoiceFrame(val opusData: ByteArray, val length: Int, val frameNumber: Long, val isTerminator: Boolean = false)
 
 /**
  * THE audio seam — this interface is shaped as the permanent JNI boundary
