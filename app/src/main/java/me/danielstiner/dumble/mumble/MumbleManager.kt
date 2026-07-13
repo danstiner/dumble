@@ -21,7 +21,7 @@ data class MumbleServerConfig(
     val username: String,
     val password: String? = null,
     val forceTcp: Boolean = false,
-    val loopbackVoice: Boolean = true,
+    val loopbackVoice: Boolean = false,
 )
 
 class SharedPrefsPinStore(context: Context) : PinStore {
@@ -47,6 +47,15 @@ object MumbleManager {
     val netStats: StateFlow<NetStats> = _netStats.asStateFlow()
     private val _loopbackStats = MutableStateFlow(LoopbackStats())
     val loopbackStats: StateFlow<LoopbackStats> = _loopbackStats.asStateFlow()
+    private val _voiceStats = MutableStateFlow(VoiceStats())
+    val voiceStats: StateFlow<VoiceStats> = _voiceStats.asStateFlow()
+    private val _muted = MutableStateFlow(false)
+    val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
+    @Synchronized fun setMuted(value: Boolean) {
+        _muted.value = value
+        active?.setMuted(value)
+    }
 
     // Non-conflated failure events. `state` is a conflated StateFlow and the self-heal below flips
     // Failed -> Disconnected almost immediately, so main-thread observers can miss the transient
@@ -104,13 +113,15 @@ object MumbleManager {
         private val crypt = CryptState()
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
-        private val synthetic = SyntheticVoiceSource()
+        private val codec = LibOpusCodec()
+        private val engine = AudioVoiceEngine(codec)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
         private val voice = VoiceTransport(
-            engine = synthetic,
+            engine = engine,
             modeProvider = { selector.mode },
+            target = if (config.loopbackVoice) VoiceTransport.LOOPBACK_TARGET else 0,
             udpSend = { buf, n -> udp?.send(buf, n) ?: false },
             tunnelSend = { buf, n -> tcp.sendRaw(TcpMessageType.UDPTunnel, buf, n) },
             onUdpPing = { ts, arrival -> selector.onUdpPong((arrival - ts) / 1e6) },
@@ -127,7 +138,7 @@ object MumbleManager {
                 }, threadSetup = ::urgentAudioThread)
                 u.connect(config.host, config.port)
                 udp = u
-                if (config.loopbackVoice) voice.start()
+                voice.start()
             }
             override fun onTcpRtt(rttMs: Double) = selector.onTcpRtt(rttMs)
             override fun onTunneledVoice(plaintext: ByteArray, len: Int, arrivalNanos: Long) =
@@ -139,7 +150,7 @@ object MumbleManager {
         fun start() {
             sessionScope.launch { sm.state.collect { _state.value = it } }
             sessionScope.launch { selector.stats.collect { _netStats.value = it } }
-            sessionScope.launch { synthetic.stats.collect { _loopbackStats.value = it } }
+            sessionScope.launch { engine.stats.collect { _voiceStats.value = it } }
             sessionScope.launch {
                 _state.value = ConnectionState.Connecting
                 try {
@@ -169,7 +180,7 @@ object MumbleManager {
                         u.send(pingBuf, n)
                     }
                 }
-                selector.evaluate(crypt.stats(), sendingVoice = config.loopbackVoice && crypt.isValid())
+                selector.evaluate(crypt.stats(), sendingVoice = crypt.isValid())
             }
         }
 
@@ -181,6 +192,8 @@ object MumbleManager {
             t is SSLException -> FailReason.TLS
             else -> FailReason.IO
         }
+
+        fun setMuted(value: Boolean) = engine.setMuted(value)
 
         fun shutdown() {
             voice.stop()
