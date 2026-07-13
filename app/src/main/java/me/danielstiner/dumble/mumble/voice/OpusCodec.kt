@@ -16,7 +16,7 @@ interface OpusCodec {
 
 /** libopus-backed factory. Each encoder/decoder owns one native handle, used by a single thread. */
 class LibOpusCodec(
-    private val bitrate: Int = 24_000,
+    private val bitrate: Int = 32_000,
     private val complexity: Int = 5,
 ) : OpusCodec {
     override fun newEncoder(): OpusEncoder = LibOpusEncoder(bitrate, complexity)

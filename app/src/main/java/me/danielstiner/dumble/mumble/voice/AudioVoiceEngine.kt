@@ -39,6 +39,8 @@ class AudioVoiceEngine(
     private val speakers = ConcurrentHashMap<Int, SpeakerStream>()
     @Volatile private var sent = 0L
     private val received = java.util.concurrent.atomic.AtomicLong(0)
+    private var uplinkBytes = 0L
+    private var uplinkFrames = 0
 
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
@@ -63,6 +65,12 @@ class AudioVoiceEngine(
         }
         wasMuted = false
         val opus = encoder.encode(capturePcm, FRAME_SAMPLES_20MS)
+        uplinkBytes += opus.size
+        if (++uplinkFrames >= 250) {
+            val avgBytes = uplinkBytes.toDouble() / uplinkFrames
+            android.util.Log.d("AudioVoiceEngine", "uplink avg=%.1f B/frame ~%.1f kbps".format(avgBytes, avgBytes * 0.4))
+            uplinkBytes = 0; uplinkFrames = 0
+        }
         val fn = frameNumber
         frameNumber += 2                                  // 10 ms units: 20 ms = 2 frames
         sent++
