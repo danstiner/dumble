@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 
 /** Abstracts the Android capture device so the engine's logic is JVM-testable. */
@@ -65,7 +66,7 @@ class AudioVoiceEngine(
         val fn = frameNumber
         frameNumber += 2                                  // 10 ms units: 20 ms = 2 frames
         sent++
-        _stats.value = _stats.value.copy(sent = sent)
+        _stats.update { it.copy(sent = sent) }
         return VoiceFrame(opus, opus.size, fn)
     }
 
@@ -95,7 +96,7 @@ class AudioVoiceEngine(
                 if (stream.retired) { stream.close(); it.remove() }
             }
             out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle)
-            _stats.value = _stats.value.copy(received = received, activeSpeakers = active)
+            _stats.update { it.copy(received = received, activeSpeakers = active) }
         }
     }
 

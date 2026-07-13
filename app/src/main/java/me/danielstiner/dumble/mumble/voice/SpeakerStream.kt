@@ -12,6 +12,8 @@ class SpeakerStream(
 ) {
     private val buffer = JitterBuffer()
     @Volatile private var cursor = -1L          // -1 = un-anchored; only fillTick writes it
+    private var consecutivePlc = 0
+    private val maxConsecutivePlc = 10          // ~200 ms of dropout before going idle
     private var decoder: OpusDecoder? = null    // playback-thread only
     private val decodeOut = ShortArray(MAX_FRAME_SAMPLES)
     private val fifo = ShortArrayFifo(MAX_FRAME_SAMPLES * 4)
@@ -34,13 +36,17 @@ class SpeakerStream(
             cursor = first
         }
         while (fifo.size < FRAME_SAMPLES_20MS) {                // ensure ≥ one 20 ms frame
+            if (consecutivePlc >= maxConsecutivePlc) {
+                if (buffer.isEmpty()) { if (fifo.size == 0) { retired = true; return false } }
+                break
+            }
             val next = buffer.peekFirstTimestamp()
             if (next == null) {
                 if (isPastTerminator()) { if (fifo.size == 0) return idleOrRetire() else break }
                 plcStep(); break                                // live underrun → one PLC step
             }
             when {
-                next > cursor + reanchorGapSamples -> { cursor = next; fifo.clear() } // re-anchor
+                next > cursor + reanchorGapSamples -> { cursor = next; fifo.clear(); consecutivePlc = 0 } // re-anchor
                 next > cursor -> plcStep()                                            // measured hole
                 else -> decodeNext()                                                  // due
             }
@@ -57,9 +63,11 @@ class SpeakerStream(
         val n = ensureDecoder().decode(p.opus, 0, p.opus.size, decodeOut, FRAME_SAMPLES_20MS)
         fifo.push(decodeOut, n)
         cursor = p.timestampSamples + n
+        consecutivePlc = 0
     }
 
     private fun plcStep() {
+        consecutivePlc++
         val n = ensureDecoder().decode(null, 0, 0, decodeOut, FRAME_SAMPLES_20MS)
         fifo.push(decodeOut, n)
         cursor += FRAME_SAMPLES_20MS

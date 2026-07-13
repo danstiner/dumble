@@ -39,4 +39,14 @@ class SpeakerStreamTest {
         assertFalse(s.fillTick(ShortArray(FRAME_SAMPLES_20MS))) // nothing left, past terminator → idle
         assertTrue(s.retired)
     }
+
+    @Test fun retiresAfterExtendedDropoutWithoutTerminator() {
+        val s = SpeakerStream(codec, prebufferSamples = 0)
+        s.offer(0, encoded(960), 960, false)                 // one packet, NO terminator
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        // drain the one real frame, then PLC until the cap trips
+        var idleTicks = 0
+        repeat(30) { if (!s.fillTick(out)) idleTicks++ }
+        assertTrue("stream retires after extended dropout", s.retired)
+    }
 }
