@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -67,6 +68,11 @@ class ActiveCallActivity : ComponentActivity() {
 
     private fun onConnect(config: MumbleServerConfig) {
         if (!hasRecordAudio()) {
+            Toast.makeText(
+                this,
+                "Microphone permission required — grant it, then tap Connect again",
+                Toast.LENGTH_LONG,
+            ).show()
             requestCallPermissions()
             return
         }

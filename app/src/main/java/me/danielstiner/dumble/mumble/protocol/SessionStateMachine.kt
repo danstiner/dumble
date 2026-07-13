@@ -73,7 +73,7 @@ class SessionStateMachine(
         val version = MumbleProtos.Version.newBuilder()
             .setVersionV1(MumbleVersion.encodeV1(CLIENT_MAJOR, CLIENT_MINOR, CLIENT_PATCH))
             .setVersionV2(MumbleVersion.encodeV2(CLIENT_MAJOR, CLIENT_MINOR, CLIENT_PATCH))
-            .setRelease("Drumble").setOs("Android").build()
+            .setRelease("Dumble").setOs("Android").build()
         channel.send(TcpMessageType.Version, version)
         val auth = MumbleProtos.Authenticate.newBuilder()
             .setUsername(username).setOpus(true)

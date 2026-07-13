@@ -37,16 +37,14 @@ fun DumbleApp(
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
 
-    // Latch failures: MumbleManager self-heals Failed -> Disconnected, so capture the reason
-    // independently of the transient state and show it from its own effect.
-    var pendingError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(state) {
-        (state as? ConnectionState.Failed)?.let { f ->
-            pendingError = "Connection failed: ${f.reason}" + (f.detail?.let { " – $it" } ?: "")
+    // Failures arrive on a non-conflated SharedFlow (MumbleManager self-heals Failed -> Disconnected
+    // too fast to read off the conflated state flow). Collect it for the whole lifetime of the app.
+    LaunchedEffect(Unit) {
+        MumbleManager.failures.collect { f ->
+            snackbarHostState.showSnackbar(
+                "Connection failed: ${f.reason}" + (f.detail?.let { " – $it" } ?: "")
+            )
         }
-    }
-    LaunchedEffect(pendingError) {
-        pendingError?.let { snackbarHostState.showSnackbar(it); pendingError = null }
     }
 
     val inCall = connection != null ||

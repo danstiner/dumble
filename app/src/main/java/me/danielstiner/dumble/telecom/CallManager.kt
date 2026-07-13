@@ -52,15 +52,20 @@ object CallManager {
         bridgeJob?.cancel()
         if (connection != null) {
             bridgeJob = bridgeScope.launch {
-                MumbleManager.state.collect { s ->
-                    when (s) {
-                        is ConnectionState.Synchronized -> connection.setActive()
-                        is ConnectionState.Failed -> {
-                            connection.setDisconnected(DisconnectCause(DisconnectCause.ERROR))
-                            connection.destroy()
-                            setConnection(null)
-                        }
-                        else -> { /* Connecting/Handshaking: stay initializing; Disconnected handled by disconnect() */ }
+                // Synchronized is a stable state — fine to read off the conflated state flow.
+                launch {
+                    MumbleManager.state.collect { s ->
+                        if (s is ConnectionState.Synchronized) connection.setActive()
+                    }
+                }
+                // Failure teardown MUST use the non-conflated failures flow: the self-heal in
+                // MumbleManager flips Failed -> Disconnected too fast for a conflated collector to
+                // observe, which would otherwise strand this connection (never destroyed).
+                launch {
+                    MumbleManager.failures.collect {
+                        connection.setDisconnected(DisconnectCause(DisconnectCause.ERROR))
+                        connection.destroy()
+                        setConnection(null)
                     }
                 }
             }
@@ -74,7 +79,7 @@ object CallManager {
         if (connection != null) {
             // If the UI is not visible, we treat it as more "urgent" if it's just starting
             // But generally, once a call is active, it uses the ongoing channel.
-            val notification = notificationManager?.createNotification("Drumble User", isIncoming = false)
+            val notification = notificationManager?.createNotification("Dumble User", isIncoming = false)
             if (notification != null) {
                 if (service != null) {
                     service.startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)

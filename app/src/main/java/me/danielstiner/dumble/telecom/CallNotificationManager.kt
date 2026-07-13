@@ -11,8 +11,8 @@ import me.danielstiner.dumble.ActiveCallActivity
 class CallNotificationManager(context: Context) {
 
     companion object {
-        private const val ONGOING_CHANNEL_ID = "drumble_ongoing_calls"
-        private const val INCOMING_CHANNEL_ID = "drumble_incoming_calls"
+        private const val ONGOING_CHANNEL_ID = "dumble_ongoing_calls"
+        private const val INCOMING_CHANNEL_ID = "dumble_incoming_calls"
         private const val NOTIFICATION_ID = 1001
     }
 
@@ -30,7 +30,7 @@ class CallNotificationManager(context: Context) {
             "Ongoing Calls",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Notifications for active Drumble calls"
+            description = "Notifications for active Dumble calls"
             setShowBadge(false)
         }
 
@@ -40,7 +40,7 @@ class CallNotificationManager(context: Context) {
             "Incoming Calls",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Notifications for new Drumble calls"
+            description = "Notifications for new Dumble calls"
         }
 
         notificationManager.createNotificationChannel(ongoingChannel)
@@ -66,7 +66,7 @@ class CallNotificationManager(context: Context) {
 
         val builder = Notification.Builder(appContext, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setContentTitle("Drumble Call")
+            .setContentTitle("Dumble Call")
             .setContentText(if (isIncoming) "Incoming call from $callerName" else "Call with $callerName")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_CALL)

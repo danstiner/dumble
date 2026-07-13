@@ -48,6 +48,13 @@ object MumbleManager {
     private val _loopbackStats = MutableStateFlow(LoopbackStats())
     val loopbackStats: StateFlow<LoopbackStats> = _loopbackStats.asStateFlow()
 
+    // Non-conflated failure events. `state` is a conflated StateFlow and the self-heal below flips
+    // Failed -> Disconnected almost immediately, so main-thread observers can miss the transient
+    // Failed. Subscribers that must reliably react to a failure (UI snackbar, Telecom teardown)
+    // collect this instead.
+    private val _failures = MutableSharedFlow<ConnectionState.Failed>(extraBufferCapacity = 8)
+    val failures: SharedFlow<ConnectionState.Failed> = _failures.asSharedFlow()
+
     private var pinStore: PinStore = InMemoryPinStore()
     private var active: ActiveSession? = null
 
@@ -58,7 +65,12 @@ object MumbleManager {
         // `active` is reset to null and a fresh connect() isn't a silent no-op. shutdown()
         // sets _state = Disconnected *after* tearing down, so this doesn't re-fire or recurse.
         scope.launch {
-            state.collect { s -> if (s is ConnectionState.Failed) disconnect() }
+            state.collect { s ->
+                if (s is ConnectionState.Failed) {
+                    _failures.tryEmit(s)
+                    disconnect()
+                }
+            }
         }
     }
 
