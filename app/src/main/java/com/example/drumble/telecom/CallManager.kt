@@ -4,6 +4,14 @@ import android.app.Service
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.telecom.Connection
+import android.telecom.DisconnectCause
+import com.example.drumble.mumble.MumbleManager
+import com.example.drumble.mumble.protocol.ConnectionState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.lang.ref.WeakReference
@@ -15,6 +23,9 @@ object CallManager {
     private var notificationManager: CallNotificationManager? = null
     private var serviceRef: WeakReference<Service>? = null
     private var isUiVisible = false
+
+    private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var bridgeJob: Job? = null
 
     fun init(context: Context) {
         if (notificationManager == null) {
@@ -37,6 +48,23 @@ object CallManager {
     fun setConnection(connection: Connection?) {
         _activeConnection.value = connection
         updateNotification()
+
+        bridgeJob?.cancel()
+        if (connection != null) {
+            bridgeJob = bridgeScope.launch {
+                MumbleManager.state.collect { s ->
+                    when (s) {
+                        is ConnectionState.Synchronized -> connection.setActive()
+                        is ConnectionState.Failed -> {
+                            connection.setDisconnected(DisconnectCause(DisconnectCause.ERROR))
+                            connection.destroy()
+                            setConnection(null)
+                        }
+                        else -> { /* Connecting/Handshaking: stay initializing; Disconnected handled by disconnect() */ }
+                    }
+                }
+            }
+        }
     }
 
     private fun updateNotification() {
@@ -61,6 +89,7 @@ object CallManager {
     }
 
     fun disconnect() {
+        MumbleManager.disconnect()
         _activeConnection.value?.onDisconnect()
         _activeConnection.value = null
         notificationManager?.cancelNotification()

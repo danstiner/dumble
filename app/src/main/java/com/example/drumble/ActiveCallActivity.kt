@@ -17,17 +17,26 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.drumble.mumble.MumbleManager
+import com.example.drumble.mumble.MumbleServerConfig
 import com.example.drumble.telecom.CallManager
 import com.example.drumble.telecom.DrumbleConnectionService
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class ActiveCallActivity : AppCompatActivity() {
 
+    companion object {
+        /** Emulator alias for the host machine; physical devices need a real LAN IP. */
+        const val TEST_HOST = "10.0.2.2"
+    }
+
     private lateinit var telecomManager: TelecomManager
     private lateinit var phoneAccountHandle: PhoneAccountHandle
-    
+
     private lateinit var statusView: TextView
+    private lateinit var statsView: TextView
     private lateinit var callButton: Button
     private lateinit var hangupButton: Button
 
@@ -53,6 +62,7 @@ class ActiveCallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CallManager.init(this)
+        MumbleManager.init(this)
 
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         phoneAccountHandle = PhoneAccountHandle(
@@ -86,6 +96,15 @@ class ActiveCallActivity : AppCompatActivity() {
             setPadding(0, 32, 0, 64)
         }
         layout.addView(statusView)
+
+        statsView = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            setTextColor(Color.GRAY)
+            gravity = Gravity.CENTER
+            setPadding(0, 16, 0, 32)
+        }
+        layout.addView(statsView)
 
         callButton = Button(this).apply {
             text = "Start Call"
@@ -143,6 +162,14 @@ class ActiveCallActivity : AppCompatActivity() {
                 }
             }
         }
+
+        lifecycleScope.launch {
+            combine(MumbleManager.netStats, MumbleManager.loopbackStats, MumbleManager.state) { net, loop, st ->
+                "state=${st::class.simpleName} mode=${net.mode}\n" +
+                "tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
+                "loop: sent=${loop.sent} rcvd=${loop.received} lost=${loop.lost} rtt=%.1fms".format(loop.lastRttMs)
+            }.collect { statsView.text = it }
+        }
     }
 
     private fun registerPhoneAccount() {
@@ -163,5 +190,7 @@ class ActiveCallActivity : AppCompatActivity() {
         } catch (e: Exception) {
             statusView.text = "Error: ${e.message}"
         }
+        MumbleManager.connect(MumbleServerConfig(
+            host = TEST_HOST, username = "drumble-${android.os.Build.MODEL.take(8)}"))
     }
 }

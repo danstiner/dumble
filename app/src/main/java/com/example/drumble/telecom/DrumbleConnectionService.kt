@@ -28,7 +28,6 @@ class DrumbleConnectionService : ConnectionService() {
             audioModeIsVoip = true
             setAddress(request?.address, TelecomManager.PRESENTATION_ALLOWED)
             setInitializing()
-            setActive() 
         }
         CallManager.setConnection(connection)
         return connection
