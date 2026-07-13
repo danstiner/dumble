@@ -8,7 +8,7 @@ syntax = "proto3";
 
 package MumbleUDP;
 
-option java_package = "com.example.drumble.mumble.proto";
+option java_package = "me.danielstiner.dumble.mumble.proto";
 option java_outer_classname = "MumbleUdpProtos";
 option optimize_for = SPEED;
 
