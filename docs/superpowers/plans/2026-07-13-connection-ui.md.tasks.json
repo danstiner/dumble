@@ -38,7 +38,7 @@
     {
       "id": 30,
       "subject": "Task 6: ActiveCallScreen composable",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [26],
       "description": "**Goal:** Compose port of the active-call UI — status line, live stats text, Hang Up button (caller supplies the strings).\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"ActiveCallScreen takes statusText/statsText/onHangUp\", \"TopAppBar + status + stats + Hang Up wired to onHangUp\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:16:46Z"
+  "lastUpdated": "2026-07-13T14:18:08Z"
 }
