@@ -3,61 +3,31 @@ package me.danielstiner.dumble
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
-import android.view.Gravity
-import android.view.View
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
+import androidx.core.content.ContextCompat
 import me.danielstiner.dumble.mumble.MumbleManager
 import me.danielstiner.dumble.mumble.MumbleServerConfig
 import me.danielstiner.dumble.telecom.CallManager
 import me.danielstiner.dumble.telecom.DumbleConnectionService
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
+import me.danielstiner.dumble.ui.DumbleApp
+import me.danielstiner.dumble.ui.theme.DumbleTheme
 
-class ActiveCallActivity : AppCompatActivity() {
-
-    companion object {
-        /** Emulator alias for the host machine; physical devices need a real LAN IP. */
-        const val TEST_HOST = "10.0.2.2"
-    }
+class ActiveCallActivity : ComponentActivity() {
 
     private lateinit var telecomManager: TelecomManager
     private lateinit var phoneAccountHandle: PhoneAccountHandle
 
-    private lateinit var statusView: TextView
-    private lateinit var statsView: TextView
-    private lateinit var callButton: Button
-    private lateinit var hangupButton: Button
-
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val recordAudioGranted = permissions[android.Manifest.permission.RECORD_AUDIO] ?: false
-        val postNotificationsGranted = permissions[android.Manifest.permission.POST_NOTIFICATIONS] ?: false
-        if (!recordAudioGranted || !postNotificationsGranted) {
-            statusView.text = "Permissions required for calls"
-        }
-    }
-
-    private fun checkAndRequestPermissions() {
-        requestPermissionLauncher.launch(
-            arrayOf(
-                android.Manifest.permission.RECORD_AUDIO,
-                android.Manifest.permission.POST_NOTIFICATIONS
-            )
-        )
-    }
+    ) { /* result handled lazily on the next Connect tap */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,75 +37,22 @@ class ActiveCallActivity : AppCompatActivity() {
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         phoneAccountHandle = PhoneAccountHandle(
             ComponentName(this, DumbleConnectionService::class.java),
-            "DrumbleID"
+            "DumbleID",
         )
-
         registerPhoneAccount()
-        checkAndRequestPermissions()
+        requestCallPermissions()
 
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(64, 64, 64, 64)
-            setBackgroundColor(Color.parseColor("#121212"))
-        }
-
-        val titleView = TextView(this).apply {
-            text = "Drumble Call"
-            textSize = 32f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-        }
-        layout.addView(titleView)
-
-        statusView = TextView(this).apply {
-            text = "Ready"
-            textSize = 18f
-            setTextColor(Color.LTGRAY)
-            gravity = Gravity.CENTER
-            setPadding(0, 32, 0, 64)
-        }
-        layout.addView(statusView)
-
-        statsView = TextView(this).apply {
-            text = ""
-            textSize = 12f
-            setTextColor(Color.GRAY)
-            gravity = Gravity.CENTER
-            setPadding(0, 16, 0, 32)
-        }
-        layout.addView(statsView)
-
-        callButton = Button(this).apply {
-            text = "Start Call"
-            setOnClickListener {
-                placeTestCall()
+        setContent {
+            DumbleTheme {
+                DumbleApp(
+                    onConnect = { config -> onConnect(config) },
+                    onHangUp = { CallManager.disconnect() },
+                    onLaunchEchoTest = {
+                        startActivity(Intent(this, EchoTestActivity::class.java))
+                    },
+                )
             }
         }
-        layout.addView(callButton)
-
-        hangupButton = Button(this).apply {
-            text = "Hang Up"
-            setBackgroundColor(Color.RED)
-            setTextColor(Color.WHITE)
-            visibility = View.GONE
-            setOnClickListener {
-                CallManager.disconnect()
-            }
-        }
-        layout.addView(hangupButton)
-
-        val debugButton = Button(this).apply {
-            text = "Debug: Echo Test"
-            setOnClickListener {
-                startActivity(Intent(this@ActiveCallActivity, EchoTestActivity::class.java))
-            }
-        }
-        layout.addView(debugButton)
-
-        setContentView(layout)
-
-        observeCallState()
     }
 
     override fun onResume() {
@@ -148,49 +65,43 @@ class ActiveCallActivity : AppCompatActivity() {
         CallManager.setUiVisible(false)
     }
 
-    private fun observeCallState() {
-        lifecycleScope.launch {
-            CallManager.activeConnection.collectLatest { connection ->
-                if (connection != null) {
-                    statusView.text = "In Call"
-                    callButton.visibility = View.GONE
-                    hangupButton.visibility = View.VISIBLE
-                } else {
-                    statusView.text = "Ready"
-                    callButton.visibility = View.VISIBLE
-                    hangupButton.visibility = View.GONE
-                }
-            }
+    private fun onConnect(config: MumbleServerConfig) {
+        if (!hasRecordAudio()) {
+            requestCallPermissions()
+            return
         }
+        placeTelecomCall()
+        MumbleManager.connect(config)
+    }
 
-        lifecycleScope.launch {
-            combine(MumbleManager.netStats, MumbleManager.loopbackStats, MumbleManager.state) { net, loop, st ->
-                "state=${st::class.simpleName} mode=${net.mode}\n" +
-                "tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
-                "loop: sent=${loop.sent} rcvd=${loop.received} lost=${loop.lost} rtt=%.1fms".format(loop.lastRttMs)
-            }.collect { statsView.text = it }
+    private fun placeTelecomCall() {
+        val extras = Bundle().apply {
+            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+        }
+        try {
+            telecomManager.placeCall(Uri.fromParts("tel", "DumbleUser", null), extras)
+        } catch (_: SecurityException) {
+            // Permission revoked between check and call; the next tap re-requests.
         }
     }
 
     private fun registerPhoneAccount() {
-        val phoneAccount = PhoneAccount.builder(phoneAccountHandle, "Drumble")
+        val phoneAccount = PhoneAccount.builder(phoneAccountHandle, "Dumble")
             .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
             .build()
         telecomManager.registerPhoneAccount(phoneAccount)
     }
 
-    private fun placeTestCall() {
-        val extras = Bundle().apply {
-            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
-        }
-        try {
-            telecomManager.placeCall(Uri.fromParts("tel", "DrumbleUser", null), extras)
-        } catch (e: SecurityException) {
-            statusView.text = "Error: Permission denied"
-        } catch (e: Exception) {
-            statusView.text = "Error: ${e.message}"
-        }
-        MumbleManager.connect(MumbleServerConfig(
-            host = TEST_HOST, username = "drumble-${android.os.Build.MODEL.take(8)}"))
+    private fun hasRecordAudio(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestCallPermissions() {
+        requestPermissionLauncher.launch(
+            arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            )
+        )
     }
 }
