@@ -52,7 +52,7 @@
     {
       "id": 32,
       "subject": "Task 8: DumbleApp root + ActiveCallActivity rewrite",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [28, 29, 30, 31],
       "description": "**Goal:** State-driven DumbleApp switching Connect/ActiveCall/Settings + failure snackbar; ActiveCallActivity (ComponentActivity) keeps Telecom + permissions and connects from the form.\n\n**Verify:** ./gradlew :app:testDebugUnitTest :app:assembleDebug → BUILD SUCCESSFUL, 0 failures\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\", \"app/src/main/java/me/danielstiner/dumble/ActiveCallActivity.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest :app:assembleDebug\", \"acceptanceCriteria\": [\"DumbleApp switches Connect/ActiveCall/Settings from state; snackbar on Failed; BackHandler closes Settings\", \"ActiveCallActivity is ComponentActivity; registers account; requests RECORD_AUDIO/POST_NOTIFICATIONS; onConnect places Telecom call + MumbleManager.connect(config)\", \"testDebugUnitTest 0 failures\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:19:37Z"
+  "lastUpdated": "2026-07-13T14:25:47Z"
 }
