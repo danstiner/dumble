@@ -20,7 +20,7 @@ data class MumbleServerConfig(
     val port: Int = 64738,
     val username: String,
     val password: String? = null,
-    val forceTcp: Boolean = true,
+    val forceTcp: Boolean = false,
     val loopbackVoice: Boolean = false,
 )
 
@@ -186,7 +186,7 @@ object MumbleManager {
                     }
                     val stats = crypt.stats()
                     selector.evaluate(stats, sendingVoice = crypt.isValid())
-                    Log.d("Ping", "tick good=${stats.good} late=${stats.late} lost=${stats.lost} remoteGood=${stats.remoteGood} mode=${selector.mode} udp=${u != null} valid=${crypt.isValid()} voiceRx=${engine.stats.value.received}")
+                    Log.d("Ping", "tick good=${stats.good} late=${stats.late} lost=${stats.lost} remoteGood=${stats.remoteGood} mode=${selector.mode} udp=${u != null} valid=${crypt.isValid()} voiceRx=${engine.stats.value.received} udpAudioRx=${u?.audioRx} udpPingRx=${u?.pingRx} decryptFail=${u?.decryptFail}")
                 } catch (t: Throwable) {
                     Log.e("Ping", "pingLoop iteration threw (continuing)", t)
                 }

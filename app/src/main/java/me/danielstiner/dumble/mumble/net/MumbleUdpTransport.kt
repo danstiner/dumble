@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import me.danielstiner.dumble.mumble.protocol.MumbleCodec
 import me.danielstiner.dumble.mumble.util.MumbleLog
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -34,6 +35,15 @@ class MumbleUdpTransport(
     @Volatile private var running = false
     private var channel: DatagramChannel? = null
     private var receiveThread: Thread? = null
+
+    // Diagnostic counters for downlink UDP triage: written only from the single-threaded
+    // receiveLoop, but @Volatile so pingLoop (a different thread) can read a fresh value.
+    @Volatile var audioRx: Long = 0L
+        private set
+    @Volatile var pingRx: Long = 0L
+        private set
+    @Volatile var decryptFail: Long = 0L
+        private set
 
     private val sendLock = Any()
     private val sendCipher = ByteArray(BUFFER_SIZE)
@@ -74,12 +84,19 @@ class MumbleUdpTransport(
                 return
             }
             if (plainLen < 0) {
+                decryptFail++
                 if (crypt.lastGoodElapsedNanos() > RESYNC_QUIET_NANOS &&
                     crypt.lastRequestElapsedNanos() > RESYNC_QUIET_NANOS) {
                     crypt.markResyncRequested()
                     listener.requestCryptResync()
                 }
                 continue
+            }
+            if (plainLen > 0) {
+                when (plain[0].toInt()) {
+                    MumbleCodec.UDP_TYPE_AUDIO -> audioRx++
+                    MumbleCodec.UDP_TYPE_PING -> pingRx++
+                }
             }
             try {
                 listener.onUdpPlaintext(plain, plainLen, arrival)
