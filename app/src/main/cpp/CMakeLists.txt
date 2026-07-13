@@ -13,3 +13,4 @@ FetchContent_MakeAvailable(opus)
 
 add_library(dumbleopus SHARED opus_jni.c)
 target_link_libraries(dumbleopus opus)
+target_link_options(dumbleopus PRIVATE "-Wl,-z,max-page-size=16384")
