@@ -45,7 +45,7 @@
     {
       "id": 31,
       "subject": "Task 7: SettingsScreen composable (Echo Test entry)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [26],
       "description": "**Goal:** M3 settings list with a back arrow; first item 'Echo Test' launches EchoTestActivity.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"SettingsScreen takes onBack + onLaunchEchoTest\", \"TopAppBar 'Settings' with back icon; clickable Echo Test ListItem\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:18:08Z"
+  "lastUpdated": "2026-07-13T14:19:37Z"
 }
