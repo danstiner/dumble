@@ -92,6 +92,7 @@ object MumbleManager {
         if (active != null) { Log.w(TAG, "connect ignored — session active"); return }
         model.reset()
         active = ActiveSession(config).also { it.start() }
+        _muted.value = false
     }
 
     @Synchronized fun disconnect() {

@@ -88,6 +88,7 @@ class AudioVoiceEngine(
         val out = track!!
         val mix = ShortArray(FRAME_SAMPLES_20MS)
         val speakerOut = ShortArray(FRAME_SAMPLES_20MS)
+        var logTick = 0
         while (running) {
             java.util.Arrays.fill(mix, 0)
             var active = 0
@@ -95,11 +96,23 @@ class AudioVoiceEngine(
             while (it.hasNext()) {
                 val (session, stream) = it.next()
                 val produced = stream.fillTick(speakerOut)
-                if (produced) { AudioMixer.mixInto(mix, speakerOut, FRAME_SAMPLES_20MS); active++ }
+                if (produced) {
+                    AudioMixer.mixInto(mix, speakerOut, FRAME_SAMPLES_20MS)
+                    active++
+                    if (logTick % 50 == 0) {
+                        var peak = 0
+                        for (i in 0 until FRAME_SAMPLES_20MS) {
+                            val a = kotlin.math.abs(speakerOut[i].toInt())
+                            if (a > peak) peak = a
+                        }
+                        android.util.Log.d("AudioVoiceEngine", "mix session=$session peak=$peak active=$active")
+                    }
+                }
                 if (stream.retired) { stream.close(); it.remove() }
             }
             out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle)
             _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
+            logTick++
         }
     }
 
