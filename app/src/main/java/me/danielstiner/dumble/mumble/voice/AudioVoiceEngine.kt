@@ -138,12 +138,19 @@ class AndroidAudioIn : AudioIn {
         MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4)).also { it.startRecording() }
+    private var readCount = 0
     override fun read(out: ShortArray, n: Int): Int {
         var off = 0
         while (off < n) {
             val r = record.read(out, off, n - off, AudioRecord.READ_BLOCKING)
-            if (r <= 0) break
+            if (r <= 0) {
+                android.util.Log.w("AudioVoiceEngine", "AudioRecord.read=$r state=${record.recordingState} off=$off")
+                break
+            }
             off += r
+        }
+        if (readCount++ % 250 == 0) {
+            android.util.Log.d("AudioVoiceEngine", "mic recordingState=${record.recordingState} lastRead=$off")
         }
         return off
     }
@@ -164,6 +171,15 @@ class AndroidAudioOut : AudioOut {
         .setBufferSizeInBytes(maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4))
         .setTransferMode(AudioTrack.MODE_STREAM).build()
         .also { it.play() }
-    override fun write(pcm: ShortArray, n: Int) { track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING) }
+    private var writeCount = 0
+    override fun write(pcm: ShortArray, n: Int) {
+        val w = track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING)
+        if (w < 0) {
+            android.util.Log.w("AudioVoiceEngine", "AudioTrack.write err=$w playState=${track.playState}")
+        }
+        if (writeCount++ % 250 == 0) {
+            android.util.Log.d("AudioVoiceEngine", "spk playState=${track.playState} lastWrite=$w")
+        }
+    }
     override fun close() { runCatching { track.stop() }; track.release() }
 }

@@ -119,12 +119,18 @@ object CallManager {
         audioManager = am
         priorMode = am.mode
         am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+        android.util.Log.d("CallManager", "mode set to MODE_IN_COMMUNICATION am.mode=${am.mode}")
         val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(android.media.AudioAttributes.Builder()
                 .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setOnAudioFocusChangeListener { focusChange ->
+                android.util.Log.w("CallManager", "AUDIOFOCUS change=$focusChange")
+            }
             .build()
-        am.requestAudioFocus(req); focusRequest = req
+        val res = am.requestAudioFocus(req)
+        android.util.Log.d("CallManager", "requestAudioFocus result=$res mode=${am.mode}")
+        focusRequest = req
         logAecAvailability()
     }
 
