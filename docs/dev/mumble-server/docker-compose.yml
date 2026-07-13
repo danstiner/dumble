@@ -1,0 +1,18 @@
+# OPTIONAL — only needed if you don't already have a Mumble server >= 1.5 to test against.
+# The integration test (LiveServerIntegrationTest) points at whatever MUMBLE_TEST_SERVER
+# names, so a real server works just as well (and proves real interop). This compose file
+# is a convenience for a hermetic local server / CI.
+#
+#   docker compose -f docs/dev/mumble-server/docker-compose.yml up -d
+#   docker logs drumble-murmur 2>&1 | head -20   # confirm version >= 1.5
+#
+services:
+  mumble-server:
+    image: mumblevoip/mumble-server:latest
+    container_name: drumble-murmur
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    environment:
+      MUMBLE_CONFIG_WELCOMETEXT: "Drumble test server"
