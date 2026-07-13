@@ -87,17 +87,18 @@ class AudioVoiceEngine(
     private fun playbackLoop() {
         val out = track!!
         val mix = ShortArray(FRAME_SAMPLES_20MS)
+        val acc = IntArray(FRAME_SAMPLES_20MS)
         val speakerOut = ShortArray(FRAME_SAMPLES_20MS)
         var logTick = 0
         while (running) {
-            java.util.Arrays.fill(mix, 0)
+            java.util.Arrays.fill(acc, 0)
             var active = 0
             val it = speakers.entries.iterator()
             while (it.hasNext()) {
                 val (session, stream) = it.next()
                 val produced = stream.fillTick(speakerOut)
                 if (produced) {
-                    AudioMixer.mixInto(mix, speakerOut, FRAME_SAMPLES_20MS)
+                    AudioMixer.accumulate(acc, speakerOut, FRAME_SAMPLES_20MS)
                     active++
                     if (logTick % 50 == 0) {
                         var peak = 0
@@ -110,6 +111,7 @@ class AudioVoiceEngine(
                 }
                 if (stream.retired) { stream.close(); it.remove() }
             }
+            AudioMixer.finalizeMix(acc, mix, FRAME_SAMPLES_20MS)
             out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle)
             _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
             logTick++
