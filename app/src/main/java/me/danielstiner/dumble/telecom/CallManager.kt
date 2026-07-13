@@ -23,11 +23,21 @@ object CallManager {
     private var notificationManager: CallNotificationManager? = null
     private var serviceRef: WeakReference<Service>? = null
     private var isUiVisible = false
+    private var appContext: Context? = null
+
+    private var audioManager: android.media.AudioManager? = null
+    private var focusRequest: android.media.AudioFocusRequest? = null
+    private var priorMode = android.media.AudioManager.MODE_NORMAL
+
+    private val _isSpeaker = MutableStateFlow(false)
+    val isSpeaker: StateFlow<Boolean> = _isSpeaker
+    private val _endpoints = MutableStateFlow<List<android.telecom.CallEndpoint>>(emptyList())
 
     private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var bridgeJob: Job? = null
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (notificationManager == null) {
             notificationManager = CallNotificationManager(context.applicationContext)
         }
@@ -51,6 +61,7 @@ object CallManager {
 
         bridgeJob?.cancel()
         if (connection != null) {
+            appContext?.let { enterCallAudio(it) }
             bridgeJob = bridgeScope.launch {
                 // Synchronized is a stable state — fine to read off the conflated state flow.
                 launch {
@@ -65,6 +76,7 @@ object CallManager {
                     MumbleManager.failures.collect {
                         connection.setDisconnected(DisconnectCause(DisconnectCause.ERROR))
                         connection.destroy()
+                        exitCallAudio()
                         setConnection(null)
                     }
                 }
@@ -99,5 +111,50 @@ object CallManager {
         _activeConnection.value = null
         notificationManager?.cancelNotification()
         serviceRef?.get()?.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        exitCallAudio()
+    }
+
+    private fun enterCallAudio(context: Context) {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        audioManager = am
+        priorMode = am.mode
+        am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+        val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .build()
+        am.requestAudioFocus(req); focusRequest = req
+        logAecAvailability()
+    }
+
+    private fun exitCallAudio() {
+        val am = audioManager ?: return
+        focusRequest?.let { am.abandonAudioFocusRequest(it) }; focusRequest = null
+        am.mode = priorMode
+        audioManager = null
+    }
+
+    private fun logAecAvailability() {
+        android.util.Log.d("CallManager",
+            "AEC available=${android.media.audiofx.AcousticEchoCanceler.isAvailable()}")
+    }
+
+    fun onAvailableEndpoints(list: List<android.telecom.CallEndpoint>) { _endpoints.value = list }
+
+    fun onActiveEndpoint(ep: android.telecom.CallEndpoint) {
+        _isSpeaker.value = ep.endpointType == android.telecom.CallEndpoint.TYPE_SPEAKER
+    }
+
+    fun setSpeaker(speaker: Boolean) {
+        val conn = _activeConnection.value ?: return
+        val target = if (speaker) android.telecom.CallEndpoint.TYPE_SPEAKER
+                     else android.telecom.CallEndpoint.TYPE_EARPIECE
+        val ep = _endpoints.value.firstOrNull { it.endpointType == target } ?: return
+        conn.requestCallEndpointChange(ep, java.util.concurrent.Executors.newSingleThreadExecutor(),
+            object : android.os.OutcomeReceiver<Void, android.telecom.CallEndpointException> {
+                override fun onResult(result: Void?) {}
+                override fun onError(error: android.telecom.CallEndpointException) {}
+            })
     }
 }

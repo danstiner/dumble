@@ -30,9 +30,12 @@ class DumbleConnection : Connection() {
         CallManager.setConnection(null)
     }
 
-    override fun onCallAudioStateChanged(state: android.telecom.CallAudioState?) {
-        Log.d(TAG, "onCallAudioStateChanged: $state")
-        // TODO: Update UI or audio routing based on state (e.g. earpiece vs speaker)
+    override fun onAvailableCallEndpointsChanged(endpoints: MutableList<android.telecom.CallEndpoint>) {
+        CallManager.onAvailableEndpoints(endpoints)
+    }
+
+    override fun onCallEndpointChanged(callEndpoint: android.telecom.CallEndpoint) {
+        CallManager.onActiveEndpoint(callEndpoint)
     }
 
     override fun onDisconnect() {
