@@ -20,7 +20,7 @@ data class MumbleServerConfig(
     val port: Int = 64738,
     val username: String,
     val password: String? = null,
-    val forceTcp: Boolean = false,
+    val forceTcp: Boolean = true,
     val loopbackVoice: Boolean = false,
 )
 
@@ -177,7 +177,7 @@ object MumbleManager {
                 try {
                     sm.sendPing()
                     val u = udp
-                    if (u != null) {
+                    if (u != null && selector.mode == VoiceTransportMode.UDP) {
                         val ping = MumbleUdpProtos.Ping.newBuilder().setTimestamp(System.nanoTime()).build()
                         synchronized(pingBuf) {
                             val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_PING, ping, pingBuf)
@@ -186,7 +186,7 @@ object MumbleManager {
                     }
                     val stats = crypt.stats()
                     selector.evaluate(stats, sendingVoice = crypt.isValid())
-                    Log.d("Ping", "tick good=${stats.good} late=${stats.late} lost=${stats.lost} remoteGood=${stats.remoteGood} mode=${selector.mode} udp=${u != null} valid=${crypt.isValid()}")
+                    Log.d("Ping", "tick good=${stats.good} late=${stats.late} lost=${stats.lost} remoteGood=${stats.remoteGood} mode=${selector.mode} udp=${u != null} valid=${crypt.isValid()} voiceRx=${engine.stats.value.received}")
                 } catch (t: Throwable) {
                     Log.e("Ping", "pingLoop iteration threw (continuing)", t)
                 }
