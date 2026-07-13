@@ -1,0 +1,68 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-13-connection-ui.md",
+  "tasks": [
+    {
+      "id": 25,
+      "subject": "Task 1: Rename Drumble → Dumble (package me.danielstiner.dumble)",
+      "status": "pending",
+      "description": "**Goal:** Rename the app to Dumble and move the codebase from com.example.drumble to me.danielstiner.dumble, build + existing unit tests green.\n\n**Verify:** ./gradlew :app:testDebugUnitTest :app:assembleDebug → BUILD SUCCESSFUL, 0 failures\n\n```json:metadata\n{\"files\": [\"app/build.gradle.kts\", \"app/src/main/AndroidManifest.xml\", \"app/src/main/res/values/strings.xml\", \"app/src/main/res/values/themes.xml\", \"app/src/main/proto/Mumble.proto\", \"app/src/main/proto/MumbleUDP.proto\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest :app:assembleDebug\", \"acceptanceCriteria\": [\"no com.example.drumble under app/src or in build.gradle.kts\", \"no DrumbleConnection identifier remains\", \"app_name=Dumble, Theme.Dumble, .telecom.DumbleConnectionService in Manifest\", \"testDebugUnitTest BUILD SUCCESSFUL 0 failures\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 26,
+      "subject": "Task 2: Enable Compose + Material 3; add DumbleTheme; NoActionBar",
+      "status": "pending",
+      "blockedBy": [25],
+      "description": "**Goal:** Enable Jetpack Compose under AGP 9 built-in Kotlin, add Material 3 deps, create DumbleTheme (dynamic color), switch app theme to NoActionBar.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"gradle/libs.versions.toml\", \"build.gradle.kts\", \"app/build.gradle.kts\", \"app/src/main/res/values/themes.xml\", \"app/src/main/java/me/danielstiner/dumble/ui/theme/Theme.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"compose compiler plugin applied + buildFeatures.compose=true\", \"DumbleTheme wraps MaterialTheme with dynamic color + pre-31 fallback\", \"Theme.Dumble parent is NoActionBar\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 27,
+      "subject": "Task 3: ServerConfigStore persistence (no password)",
+      "status": "pending",
+      "blockedBy": [25],
+      "description": "**Goal:** SharedPreferences-backed ServerConfigStore remembering host/port/username (never password), with an in-memory fake + JVM tests.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.data.*\" → all pass\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/data/ServerConfigStore.kt\", \"app/src/test/java/me/danielstiner/dumble/data/FakeServerConfigStore.kt\", \"app/src/test/java/me/danielstiner/dumble/data/ServerConfigStoreTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.data.*\\\"\", \"acceptanceCriteria\": [\"save persists host/port/username only\", \"load defaults port to 64738\", \"no password parameter anywhere in the interface\", \"fake round-trips\", \"data.* tests pass\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 28,
+      "subject": "Task 4: ConnectForm validation + ConnectViewModel",
+      "status": "pending",
+      "blockedBy": [26, 27],
+      "description": "**Goal:** Pure validate()/toConfig() (blank password → null) + ConnectViewModel (StateFlow form, pre-fill from store, persistAndBuild).\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.ui.*\" → all pass\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ConnectForm.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/ConnectViewModel.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/ConnectFormTest.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/ConnectViewModelTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.ui.*\\\"\", \"acceptanceCriteria\": [\"validate rejects blank host/username and port outside 1..65535\", \"toConfig blank password -> null and trims host/username\", \"ConnectViewModel pre-fills from store, password blank\", \"persistAndBuild saves host/port/username (not password) and returns config\", \"ui.* tests pass\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 29,
+      "subject": "Task 5: ConnectScreen composable (form + settings gear)",
+      "status": "pending",
+      "blockedBy": [26, 28],
+      "description": "**Goal:** Stateless connect form: TopAppBar 'Dumble' + settings gear, four fields with inline errors, Connect enabled only when valid.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ConnectScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"ConnectScreen stateless with form/errors/canConnect/callbacks/snackbarHostState\", \"password masked, port numeric keyboard, per-field error text\", \"Connect button enabled=canConnect\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 30,
+      "subject": "Task 6: ActiveCallScreen composable",
+      "status": "pending",
+      "blockedBy": [26],
+      "description": "**Goal:** Compose port of the active-call UI — status line, live stats text, Hang Up button (caller supplies the strings).\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"ActiveCallScreen takes statusText/statsText/onHangUp\", \"TopAppBar + status + stats + Hang Up wired to onHangUp\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 31,
+      "subject": "Task 7: SettingsScreen composable (Echo Test entry)",
+      "status": "pending",
+      "blockedBy": [26],
+      "description": "**Goal:** M3 settings list with a back arrow; first item 'Echo Test' launches EchoTestActivity.\n\n**Verify:** ./gradlew :app:assembleDebug → BUILD SUCCESSFUL\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"SettingsScreen takes onBack + onLaunchEchoTest\", \"TopAppBar 'Settings' with back icon; clickable Echo Test ListItem\", \"@Preview present, assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 32,
+      "subject": "Task 8: DumbleApp root + ActiveCallActivity rewrite",
+      "status": "pending",
+      "blockedBy": [28, 29, 30, 31],
+      "description": "**Goal:** State-driven DumbleApp switching Connect/ActiveCall/Settings + failure snackbar; ActiveCallActivity (ComponentActivity) keeps Telecom + permissions and connects from the form.\n\n**Verify:** ./gradlew :app:testDebugUnitTest :app:assembleDebug → BUILD SUCCESSFUL, 0 failures\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\", \"app/src/main/java/me/danielstiner/dumble/ActiveCallActivity.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest :app:assembleDebug\", \"acceptanceCriteria\": [\"DumbleApp switches Connect/ActiveCall/Settings from state; snackbar on Failed; BackHandler closes Settings\", \"ActiveCallActivity is ComponentActivity; registers account; requests RECORD_AUDIO/POST_NOTIFICATIONS; onConnect places Telecom call + MumbleManager.connect(config)\", \"testDebugUnitTest 0 failures\", \"assembleDebug BUILD SUCCESSFUL\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 33,
+      "subject": "Task 9: Manual on-device verification",
+      "status": "pending",
+      "blockedBy": [32],
+      "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-13T13:35:34Z"
+}
