@@ -19,7 +19,8 @@ class SyntheticVoiceSourceTest {
         val src = SyntheticVoiceSource(frameIntervalNanos = 1_000_000L)
         fun payload(sendNanos: Long): ByteArray {
             val p = ByteArray(40)
-            for (i in 0 until 8) p[i] = (sendNanos ushr ((7 - i) * 8)).toByte()
+            p[0] = 0x44.toByte(); p[1] = 0x52.toByte(); p[2] = 0x4D.toByte(); p[3] = 0x42.toByte() // "DRMB"
+            for (i in 0 until 8) p[4 + i] = (sendNanos ushr ((7 - i) * 8)).toByte()
             return p
         }
         src.onIncomingFrame(payload(1_000_000_000L), 0, 40, 0L, 1, 1_015_000_000L)
@@ -35,5 +36,17 @@ class SyntheticVoiceSourceTest {
     @Test fun timeoutReturnsNullWhenStopped() {
         val src = SyntheticVoiceSource(frameIntervalNanos = 1_000_000L)
         assertNull(src.nextOutgoingFrame(1_000_000L))
+    }
+
+    @Test fun foreignVoiceWithoutMarkerIgnored() {
+        val src = SyntheticVoiceSource(frameIntervalNanos = 1_000_000L)
+        // A frame from another speaker on a shared server: no DRMB marker, foreign frame_number,
+        // real (non-timestamp) payload bytes. Must NOT be counted as our loopback — this is exactly
+        // what corrupted the real-server tcp-tunnel stats (received>sent, absurd loss/jitter).
+        val foreign = ByteArray(40) { (it + 7).toByte() }
+        src.onIncomingFrame(foreign, 0, 40, 154_000L, 42, 999_999_999_999L)
+        assertEquals(0L, src.stats.value.received)
+        assertEquals(0L, src.stats.value.lost)
+        assertEquals(-1.0, src.stats.value.lastRttMs, 0.0)
     }
 }

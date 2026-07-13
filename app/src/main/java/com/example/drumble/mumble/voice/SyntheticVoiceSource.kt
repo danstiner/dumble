@@ -22,6 +22,15 @@ class SyntheticVoiceSource(
     private val payloadSize: Int = 40,
     private val clockNanos: () -> Long = System::nanoTime,
 ) : VoiceEngine {
+    companion object {
+        // 'DRMB' marker: lets us tell echoes of our own synthetic frames apart from real voice
+        // from other speakers on a shared server (which would otherwise pollute RTT/loss/jitter —
+        // their foreign frame_number/opus bytes read as garbage). Layout: [4B marker][8B big-endian
+        // send-nanos][filler].
+        private val MARKER = byteArrayOf(0x44, 0x52, 0x4D, 0x42) // "DRMB"
+        private const val HEADER = 12 // 4 marker + 8 timestamp
+    }
+
     private val _stats = MutableStateFlow(LoopbackStats())
     val stats: StateFlow<LoopbackStats> = _stats.asStateFlow()
 
@@ -52,8 +61,9 @@ class SyntheticVoiceSource(
         if (!running) return null
         nextDeadline += frameIntervalNanos
         val payload = ByteArray(payloadSize)
+        MARKER.copyInto(payload, 0)
         val sendNanos = clockNanos()
-        for (i in 0 until 8) payload[i] = (sendNanos ushr ((7 - i) * 8)).toByte()
+        for (i in 0 until 8) payload[4 + i] = (sendNanos ushr ((7 - i) * 8)).toByte()
         val fn = frameNumber++
         _stats.update { it.copy(sent = fn + 1) }
         return VoiceFrame(payload, payloadSize, fn)
@@ -62,9 +72,13 @@ class SyntheticVoiceSource(
     @Synchronized
     override fun onIncomingFrame(opusData: ByteArray, offset: Int, length: Int,
                                  frameNumber: Long, senderSession: Int, arrivalNanos: Long) {
-        if (length < 8) return
+        if (length < HEADER) return
+        // No marker → real voice from another speaker/server, not our loopback echo: ignore it,
+        // else its foreign frame_number and opus bytes corrupt the RTT/loss/jitter measurement.
+        if (opusData[offset] != MARKER[0] || opusData[offset + 1] != MARKER[1] ||
+            opusData[offset + 2] != MARKER[2] || opusData[offset + 3] != MARKER[3]) return
         var sendNanos = 0L
-        for (i in 0 until 8) sendNanos = (sendNanos shl 8) or (opusData[offset + i].toLong() and 0xFF)
+        for (i in 0 until 8) sendNanos = (sendNanos shl 8) or (opusData[offset + 4 + i].toLong() and 0xFF)
         val rttMs = (arrivalNanos - sendNanos) / 1e6
         receivedCount++
         if (frameNumber > highestSeen) {
