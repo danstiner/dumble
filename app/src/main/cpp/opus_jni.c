@@ -13,14 +13,16 @@ JNIEXPORT jlong JNICALL PKG(createEncoder)(JNIEnv *e, jobject o, jint sr, jint c
 
 JNIEXPORT jint JNICALL PKG(configureEncoder)(JNIEnv *e, jobject o, jlong h, jint bitrate, jint complexity) {
     OpusEncoder *enc = (OpusEncoder *)(intptr_t)h;
-    opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
-    opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(complexity));
-    opus_encoder_ctl(enc, OPUS_SET_VBR(1));
-    opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT(1));       /* CVBR */
-    opus_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-    opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(0));           /* FEC off in v1 */
-    opus_encoder_ctl(enc, OPUS_SET_DTX(0));                  /* DTX off in v1 */
-    return OPUS_OK;
+    int err = OPUS_OK;
+    int r;
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate))) < 0) err = r;
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(complexity))) < 0) err = r;
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_VBR(1))) < 0) err = r;
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT(1))) < 0) err = r;       /* CVBR */
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE))) < 0) err = r;
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(0))) < 0) err = r;           /* FEC off in v1 */
+    if ((r = opus_encoder_ctl(enc, OPUS_SET_DTX(0))) < 0) err = r;                  /* DTX off in v1 */
+    return err;
 }
 
 JNIEXPORT jlong JNICALL PKG(createDecoder)(JNIEnv *e, jobject o, jint sr, jint ch) {
@@ -46,6 +48,11 @@ JNIEXPORT jint JNICALL PKG(decode)(JNIEnv *e, jobject o, jlong h, jbyteArray dat
     if (data == NULL) {
         n = opus_decode(dec, NULL, 0, ob, frameSize, fec);      /* PLC */
     } else {
+        jsize dataLen = (*e)->GetArrayLength(e, data);
+        if (offset < 0 || len < 0 || (jlong)offset + len > dataLen) {
+            (*e)->ReleaseShortArrayElements(e, out, ob, 0);
+            return 0;
+        }
         jbyte *db = (*e)->GetByteArrayElements(e, data, NULL);
         n = opus_decode(dec, (const unsigned char *)(db + offset), len, ob, frameSize, fec);
         (*e)->ReleaseByteArrayElements(e, data, db, JNI_ABORT);
@@ -55,6 +62,10 @@ JNIEXPORT jint JNICALL PKG(decode)(JNIEnv *e, jobject o, jlong h, jbyteArray dat
 }
 
 JNIEXPORT jint JNICALL PKG(packetGetNbSamples)(JNIEnv *e, jobject o, jbyteArray data, jint offset, jint len, jint sr) {
+    jsize dataLen = (*e)->GetArrayLength(e, data);
+    if (offset < 0 || len < 0 || (jlong)offset + len > dataLen) {
+        return 0;
+    }
     jbyte *db = (*e)->GetByteArrayElements(e, data, NULL);
     int n = opus_packet_get_nb_samples((const unsigned char *)(db + offset), len, sr);
     (*e)->ReleaseByteArrayElements(e, data, db, JNI_ABORT);
