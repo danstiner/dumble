@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.net
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import me.danielstiner.dumble.mumble.util.MumbleLog
 
 enum class VoiceTransportMode { UDP, TCP_TUNNEL }
 
@@ -46,6 +47,10 @@ class TransportSelector(private val forceTcp: Boolean) {
                 stallTicks = 0; VoiceTransportMode.UDP
             }
             else -> { if (goodDelta > 0 && remoteDelta > 0) stallTicks = 0; current }
+        }
+        if (next != current) {
+            MumbleLog.d("TransportSelector",
+                "voice transport $current -> $next (goodDelta=$goodDelta remoteDelta=$remoteDelta stallTicks=$stallTicks sendingVoice=$sendingVoice)")
         }
         _stats.value = _stats.value.copy(
             mode = next,
