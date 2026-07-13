@@ -147,6 +147,11 @@ class SessionStateMachine(
         channel.send(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder().build())
     }
 
+    /** Broadcasts local mute state so other clients render the mute icon (server infers session from the connection). */
+    fun sendSelfMute(muted: Boolean) {
+        channel.send(TcpMessageType.UserState, MumbleProtos.UserState.newBuilder().setSelfMute(muted).build())
+    }
+
     fun fail(reason: FailReason, detail: String? = null, cause: Throwable? = null) {
         val failed = ConnectionState.Failed(reason, detail, cause)
         while (true) {

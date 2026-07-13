@@ -55,6 +55,7 @@ object MumbleManager {
     @Synchronized fun setMuted(value: Boolean) {
         _muted.value = value
         active?.setMuted(value)
+        active?.sendSelfMute(value)
     }
 
     // Non-conflated failure events. `state` is a conflated StateFlow and the self-heal below flips
@@ -195,6 +196,7 @@ object MumbleManager {
         }
 
         fun setMuted(value: Boolean) = engine.setMuted(value)
+        fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
 
         fun shutdown() {
             voice.stop()

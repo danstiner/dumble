@@ -138,4 +138,18 @@ class SessionStateMachineTest {
         // 1.5 via v1-only encoding must NOT fail the version gate.
         assertFalse(sm.state.value is ConnectionState.Failed)
     }
+
+    @Test fun sendSelfMuteBroadcastsUserStateTrue() {
+        sm.sendSelfMute(true)
+        val sent = channel.sent.single()
+        assertEquals(TcpMessageType.UserState, sent.first)
+        assertTrue((sent.second as MumbleProtos.UserState).selfMute)
+    }
+
+    @Test fun sendSelfMuteBroadcastsUserStateFalse() {
+        sm.sendSelfMute(false)
+        val sent = channel.sent.single()
+        assertEquals(TcpMessageType.UserState, sent.first)
+        assertFalse((sent.second as MumbleProtos.UserState).selfMute)
+    }
 }
