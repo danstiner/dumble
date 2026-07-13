@@ -24,7 +24,7 @@
     {
       "id": 28,
       "subject": "Task 4: ConnectForm validation + ConnectViewModel",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [26, 27],
       "description": "**Goal:** Pure validate()/toConfig() (blank password → null) + ConnectViewModel (StateFlow form, pre-fill from store, persistAndBuild).\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.ui.*\" → all pass\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ConnectForm.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/ConnectViewModel.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/ConnectFormTest.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/ConnectViewModelTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.ui.*\\\"\", \"acceptanceCriteria\": [\"validate rejects blank host/username and port outside 1..65535\", \"toConfig blank password -> null and trims host/username\", \"ConnectViewModel pre-fills from store, password blank\", \"persistAndBuild saves host/port/username (not password) and returns config\", \"ui.* tests pass\"], \"modelTier\": \"standard\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Install on emulator/device; confirm form-driven connect (no-password + password), wrong-password snackbar, Settings→Echo Test, clean hang-up against a real Mumble server.\n\n**Verify:** ./gradlew :app:installDebug, then walk the criteria on the device (manual; needs user hardware + server).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"./gradlew :app:installDebug\", \"acceptanceCriteria\": [\"installDebug succeeds as me.danielstiner.dumble\", \"Connect form 'Dumble' shows on launch, port pre-fills 64738\", \"valid host+username no-password reaches state=Synchronized with live stats\", \"password server connects; wrong password shows AUTH_REJECT snackbar\", \"gear->Settings->Echo Test opens EchoTestActivity, back returns\", \"Hang Up returns to form and clears the notification\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-13T14:08:04Z"
+  "lastUpdated": "2026-07-13T14:13:19Z"
 }
