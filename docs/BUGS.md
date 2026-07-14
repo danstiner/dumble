@@ -6,6 +6,19 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ## Open
 
+### 🟠 Voice never recovers from TCP tunnel back to UDP (one-line fix known)
+- **Symptom:** once voice falls back to the TCP tunnel (e.g. a transient UDP stall), it stays
+  tunneled for the rest of the session even after the UDP path recovers — higher latency than
+  necessary.
+- **Cause:** `MumbleManager.pingLoop` only sends UDP pings while `selector.mode == UDP`, so after
+  fallback no UDP packets flow. `TransportSelector.evaluate` requires `goodDelta > 0 &&
+  remoteDelta > 0` to return to UDP, but both counters are frozen with no UDP traffic, so recovery
+  never fires. This contradicts `TransportSelector`'s own KDoc ("UDP pings still run while
+  tunneled").
+- **One-line fix:** in `pingLoop`, drop the `selector.mode == VoiceTransportMode.UDP` condition and
+  send UDP pings whenever `udp != null` (keep the null-check). That lets `good`/`remoteGood` advance
+  while tunneled so tunnel→UDP recovery can trigger, matching the KDoc's stated design.
+
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
 - **Symptom:** joining a call with a Bluetooth headset already connected plays audio out
   the phone **speaker**, not the headset.
