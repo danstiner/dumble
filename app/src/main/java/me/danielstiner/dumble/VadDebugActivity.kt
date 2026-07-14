@@ -227,7 +227,7 @@ class VadDebugActivity : AppCompatActivity() {
                         history.push(preF, postF, open, absOpenDb, rnnoiseOn)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
-                        readout.text = "in %+.0f→%+.0f dB  lvl %.2f/%.2f  sent %d".format(
+                        readout.text = "in %+.0f→%+.0f dBFS  lvl %.2f/%.2f  sent %d".format(
                             preDb, postDb, levels[0], levels[1], sent)
                         refreshRoute()   // updates Route button (reflects BT connect/disconnect)
                     }
@@ -242,7 +242,7 @@ class VadDebugActivity : AppCompatActivity() {
     }
 
     private fun thresholdLabel() =
-        "Open threshold: %.0f dB   (detect on %s)".format(absOpenDb, if (rnnoiseOn) "denoised" else "raw")
+        "Open threshold: %.0f dBFS   (detect on %s)".format(absOpenDb, if (rnnoiseOn) "denoised" else "raw")
 
     private fun rmsDbOf(pcm: ShortArray): Double {
         var s = 0.0
