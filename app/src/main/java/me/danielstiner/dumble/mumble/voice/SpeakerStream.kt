@@ -7,7 +7,7 @@ package me.danielstiner.dumble.mumble.voice
  */
 class SpeakerStream(
     private val codec: OpusCodec,
-    private val prebufferSamples: Int = FRAME_SAMPLES_20MS * 2,   // ~40 ms
+    private val prebufferSamples: Int = FRAME_SAMPLES_20MS * 5,   // ~100 ms
     private val reanchorGapSamples: Long = SAMPLE_RATE.toLong(),  // 1 s forward jump → re-anchor
 ) {
     private val buffer = JitterBuffer()
@@ -22,9 +22,9 @@ class SpeakerStream(
     var retired = false; private set
 
     /** Receive thread. Only touches the synchronized JitterBuffer; a slightly stale cursor is safe. */
-    fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean) {
+    fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean): Boolean {
         val cur = cursor
-        buffer.offer(JitterBuffer.Packet(timestampSamples, opus, spanSamples, isTerminator),
+        return buffer.offer(JitterBuffer.Packet(timestampSamples, opus, spanSamples, isTerminator),
             if (cur < 0) 0 else cur)
     }
 

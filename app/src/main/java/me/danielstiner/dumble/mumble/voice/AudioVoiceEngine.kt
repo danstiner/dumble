@@ -41,6 +41,8 @@ class AudioVoiceEngine(
     private val received = java.util.concurrent.atomic.AtomicLong(0)
     private var uplinkBytes = 0L
     private var uplinkFrames = 0
+    @Volatile private var lateDropCount = 0L
+    val lateDrops: Long get() = lateDropCount
 
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
@@ -88,7 +90,8 @@ class AudioVoiceEngine(
             android.util.Log.d("AudioVoiceEngine", "new speaker session=$senderSession (total=${speakers.size + 1})")
             SpeakerStream(codec)
         }
-        stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, isTerminator)
+        val queued = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, isTerminator)
+        if (!queued && !isTerminator) lateDropCount++
         received.incrementAndGet()
     }
 

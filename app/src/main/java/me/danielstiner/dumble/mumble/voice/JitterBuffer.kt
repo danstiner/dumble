@@ -9,7 +9,7 @@ import java.util.TreeMap
  * byte copies only, no decode/alloc under the lock).
  */
 class JitterBuffer(
-    private val highWaterSamples: Int = 9600, // ~200 ms
+    private val highWaterSamples: Int = 28800, // ~600 ms
 ) {
     class Packet(
         val timestampSamples: Long,
@@ -24,17 +24,18 @@ class JitterBuffer(
     @Volatile var terminatorTimestamp: Long? = null
         private set
 
-    @Synchronized fun offer(p: Packet, playoutCursor: Long) {
+    @Synchronized fun offer(p: Packet, playoutCursor: Long): Boolean {
         if (p.isTerminator) terminatorTimestamp = p.timestampSamples
-        if (p.opus.isEmpty()) return                       // terminator / empty → tag only
-        if (p.timestampSamples < playoutCursor) return      // late
-        if (queue.containsKey(p.timestampSamples)) return   // duplicate
+        if (p.opus.isEmpty()) return false                       // terminator / empty → tag only
+        if (p.timestampSamples < playoutCursor) return false      // late
+        if (queue.containsKey(p.timestampSamples)) return false   // duplicate
         queue[p.timestampSamples] = p
         bufferedSpans += p.spanSamples
         while (bufferedSpans > highWaterSamples && queue.size > 1) {
             val dropped = queue.pollFirstEntry().value
             bufferedSpans -= dropped.spanSamples
         }
+        return true
     }
 
     @Synchronized fun peekFirstTimestamp(): Long? = if (queue.isEmpty()) null else queue.firstKey()
