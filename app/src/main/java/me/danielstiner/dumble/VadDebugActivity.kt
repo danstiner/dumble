@@ -83,7 +83,13 @@ class VadDebugActivity : AppCompatActivity() {
         history = LevelHistoryView(this)
         layout.addView(history, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 480
-        ).apply { setMargins(0, 0, 0, 16) })
+        ).apply { setMargins(0, 0, 0, 8) })
+
+        layout.addView(TextView(this).apply {
+            text = "cyan=open target · orange=noise floor · yellow=abs gate · white=raw"
+            textSize = 11f; setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(0, 0, 0, 12)
+        })
 
         gateView = TextView(this).apply {
             text = "—"
@@ -224,11 +230,13 @@ class VadDebugActivity : AppCompatActivity() {
                     val open = d.send
                     val term = d.terminator
                     val preF = preDb.toFloat(); val postF = postDb.toFloat()
-                    val floorDb = detector.noiseFloorDb.toDouble()
+                    val floorF = detector.noiseFloorDb
+                    val floorDb = floorF.toDouble()
+                    val relTargetDb = floorF + gate.openLevel * detector.marginDb  // floor + open margin
                     val snr = postDb - floorDb                     // level relative to the noise floor
                     val postRms = 10.0.pow(postDb / 20.0)          // linear RMS (0..1)
                     runOnUiThread {
-                        history.push(preF, postF, open, absOpenDb, rnnoiseOn)
+                        history.push(preF, postF, open, absOpenDb, floorF, relTargetDb)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
                         readout.text = ("in %+.0f→%+.0f dBFS   %.4f rms\n" +
@@ -272,25 +280,36 @@ class LevelHistoryView(context: Context) : View(context) {
     private val cap = 128
     private val post = FloatArray(cap) { FLOOR }
     private val pre = FloatArray(cap) { FLOOR }
+    private val floor = FloatArray(cap) { FLOOR }
+    private val relTarget = FloatArray(cap) { FLOOR }
     private val open = BooleanArray(cap)
     private var head = 0
     private var thresholdDb = -55f
-    private var detectDenoised = true
     private val bar = Paint()
-    private val preTick = Paint().apply { color = Color.parseColor("#ECEFF1") }  // raw (pre-RNNoise) level
-    private val line = Paint().apply { strokeWidth = 4f }
+    private val preTick = Paint().apply { color = Color.parseColor("#ECEFF1") }        // raw (pre-RNNoise)
+    private val absLine = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 3f }   // abs gate
+    private val floorLine = Paint().apply { color = Color.parseColor("#FF9800"); strokeWidth = 3f }  // noise floor
+    private val relLine = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 3f }    // open target
     private val grid = Paint().apply { color = Color.parseColor("#3A3A3A"); strokeWidth = 1f }
     private val gridLabel = Paint().apply { color = Color.parseColor("#888888"); textSize = 22f }
 
-    fun push(preDb: Float, postDb: Float, isOpen: Boolean, threshold: Float, denoised: Boolean) {
-        pre[head] = preDb; post[head] = postDb; open[head] = isOpen
-        thresholdDb = threshold; detectDenoised = denoised
+    fun push(preDb: Float, postDb: Float, isOpen: Boolean, threshold: Float,
+             floorDb: Float, relTargetDb: Float) {
+        pre[head] = preDb; post[head] = postDb; open[head] = isOpen; thresholdDb = threshold
+        floor[head] = floorDb; relTarget[head] = relTargetDb
         head = (head + 1) % cap
         invalidate()
     }
 
     private fun yOf(db: Float, h: Float) =
         h - ((db.coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR)) * h
+
+    private fun trace(c: Canvas, data: FloatArray, bw: Float, h: Float, paint: Paint) {
+        for (i in 0 until cap - 1) {
+            val a = (head + i) % cap; val b = (head + i + 1) % cap
+            c.drawLine(i * bw + bw / 2f, yOf(data[a], h), (i + 1) * bw + bw / 2f, yOf(data[b], h), paint)
+        }
+    }
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
@@ -307,14 +326,13 @@ class LevelHistoryView(context: Context) : View(context) {
             val postY = yOf(post[idx], h)
             bar.color = if (open[idx]) Color.parseColor("#4CAF50") else Color.parseColor("#5A5A5A")
             c.drawRect(x0, postY, x1, h, bar)
-            // marker at the raw (pre-RNNoise) level; gap above the bar = noise RNNoise removed
             val preY = yOf(pre[idx], h)
-            c.drawRect(x0, preY, x1, preY + 4f, preTick)
+            c.drawRect(x0, preY, x1, preY + 4f, preTick)   // raw pre-RNNoise level
         }
-        // threshold line colored by which signal drives detection: cyan = denoised, yellow = raw
-        line.color = if (detectDenoised) Color.parseColor("#00E5FF") else Color.parseColor("#FFEB3B")
-        val ty = yOf(thresholdDb, h)
-        c.drawLine(0f, ty, w, ty, line)
+        trace(c, floor, bw, h, floorLine)                  // adaptive noise floor (orange)
+        trace(c, relTarget, bw, h, relLine)                // relative open target = floor + margin (cyan)
+        val ty = yOf(thresholdDb, h)                       // absolute gate (yellow, horizontal)
+        c.drawLine(0f, ty, w, ty, absLine)
     }
 
     companion object { const val FLOOR = -90f; const val CEIL = 0f }

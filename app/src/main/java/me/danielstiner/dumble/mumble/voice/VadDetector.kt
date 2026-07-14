@@ -20,7 +20,7 @@ interface VadDetector {
  * drives the floor toward [minDb] and the relative margin then trips on typing / faint sounds.
  */
 class EnergyVadDetector(
-    private val marginDb: Float = 15f,   // dB above floor that maps to level 1.0
+    val marginDb: Float = 15f,           // dB above floor that maps to level 1.0
     var absOpenDb: Float = -55f,         // absolute gate: frames quieter than this are never speech (live-tunable)
     private val riseCoef: Float = 0.02f, // slow: floor creeps up toward louder background
     private val fallCoef: Float = 0.3f,  // fast: floor drops toward quieter background
