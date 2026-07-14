@@ -49,6 +49,8 @@ class VadDebugActivity : AppCompatActivity() {
     private val relMaxDb = 20f
     @Volatile private var relOpenDb = 9f      // dB above the noise floor to open (relative gate)
     @Volatile private var rnnoiseOn = true
+    private val vadNames = arrayOf("Energy", "RNNoise")   // Silero to be added
+    @Volatile private var vadSource = 0                   // index into vadNames; drives the gate
 
     private val detector = EnergyVadDetector()
     private val gate = TransmitGate()
@@ -60,6 +62,7 @@ class VadDebugActivity : AppCompatActivity() {
     private lateinit var thresholdText: TextView
     private lateinit var relText: TextView
     private lateinit var rnnoiseButton: Button
+    private lateinit var vadButton: Button
     private lateinit var routeButton: Button
 
     @Volatile private var sent = 0L
@@ -166,6 +169,15 @@ class VadDebugActivity : AppCompatActivity() {
         }
         layout.addView(rnnoiseButton)
 
+        vadButton = Button(this).apply {
+            text = "VAD: ${vadNames[vadSource]}"
+            setOnClickListener {
+                vadSource = (vadSource + 1) % vadNames.size
+                text = "VAD: ${vadNames[vadSource]}"
+            }
+        }
+        layout.addView(vadButton)
+
         routeButton = Button(this).apply {
             text = "Route: default"
             setOnClickListener { cycleRoute(); refreshRoute() }
@@ -245,10 +257,16 @@ class VadDebugActivity : AppCompatActivity() {
                 if (recorder.read(pcm, CAPTURE_SAMPLES) <= 0) continue
                 val preDb = rmsDbOf(pcm)                        // raw mic
 
+                val doRnnoise = rnnoiseOn || vadSource == 1    // RNNoise VAD needs RNNoise to run
+                var eMax = 0f; var rMax = 0f
                 for (h in 0 until FRAMES_PER_PACKET) {
                     val off = h * FRAME_SAMPLES_10MS
-                    if (rnnoiseOn) suppressor.process(pcm, off, FRAME_SAMPLES_10MS)
-                    levels[h] = detector.level(pcm, off, FRAME_SAMPLES_10MS)
+                    if (doRnnoise) suppressor.process(pcm, off, FRAME_SAMPLES_10MS)
+                    val e = detector.level(pcm, off, FRAME_SAMPLES_10MS)   // always (drives floor/cyan)
+                    val r = if (doRnnoise) suppressor.lastVadProb else 0f
+                    if (e > eMax) eMax = e
+                    if (r > rMax) rMax = r
+                    levels[h] = if (vadSource == 1) r else e               // selected VAD drives the gate
                 }
                 val postDb = rmsDbOf(pcm)                       // after RNNoise (what the VAD sees)
                 val d = gate.update(levels)
@@ -263,13 +281,14 @@ class VadDebugActivity : AppCompatActivity() {
                     val relTargetDb = floorF + gate.openLevel * detector.marginDb  // floor + open margin
                     val snr = postDb - floorDb                     // level relative to the noise floor
                     val postRms = 10.0.pow(postDb / 20.0)          // linear RMS (0..1)
+                    val eM = eMax; val rM = rMax
                     runOnUiThread {
                         history.push(preF, postF, open, absOpenDb, floorF, relTargetDb)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
-                        readout.text = ("in %+.0f→%+.0f dBFS   %.4f rms\n" +
-                            "SNR %+.0f dB (floor %+.0f)   lvl %.2f/%.2f   sent %d").format(
-                            preDb, postDb, postRms, snr, floorDb, levels[0], levels[1], sent)
+                        readout.text = ("in %+.0f→%+.0f dBFS  %.4f rms  SNR %+.0f\n" +
+                            "Energy %.2f   RNNoise %.2f   sent %d").format(
+                            preDb, postDb, postRms, snr, eM, rM, sent)
                         refreshRoute()   // updates Route button (reflects BT connect/disconnect)
                     }
                 }

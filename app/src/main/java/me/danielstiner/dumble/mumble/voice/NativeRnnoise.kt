@@ -6,6 +6,6 @@ object NativeRnnoise {
 
     external fun createState(): Long
     external fun destroyState(state: Long)
-    /** Denoise 480 samples in place starting at pcm[offset]. */
-    external fun processFrame(state: Long, pcm: ShortArray, offset: Int)
+    /** Denoise 480 samples in place starting at pcm[offset]; returns the voice-activity prob (0..1). */
+    external fun processFrame(state: Long, pcm: ShortArray, offset: Int): Float
 }

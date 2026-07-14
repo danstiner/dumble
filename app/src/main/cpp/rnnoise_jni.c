@@ -16,15 +16,16 @@ Java_me_danielstiner_dumble_mumble_voice_NativeRnnoise_destroyState(JNIEnv *env,
 }
 
 /* Denoise 480 samples in place at pcm[off..off+480). RNNoise works on float samples in the
- * int16 range (NOT normalized to [-1,1]). */
-JNIEXPORT void JNICALL
+ * int16 range (NOT normalized to [-1,1]). Returns RNNoise's per-frame voice-activity
+ * probability (0..1). */
+JNIEXPORT jfloat JNICALL
 Java_me_danielstiner_dumble_mumble_voice_NativeRnnoise_processFrame(
         JNIEnv *env, jobject thiz, jlong st, jshortArray arr, jint off) {
-    if (!st) return;
+    if (!st) return 0.0f;
     jshort *pcm = (*env)->GetShortArrayElements(env, arr, NULL);
     float buf[RNN_FRAME];
     for (int i = 0; i < RNN_FRAME; i++) buf[i] = (float) pcm[off + i];
-    rnnoise_process_frame((DenoiseState *)(intptr_t) st, buf, buf);
+    jfloat vadProb = rnnoise_process_frame((DenoiseState *)(intptr_t) st, buf, buf);
     for (int i = 0; i < RNN_FRAME; i++) {
         float v = buf[i];
         if (v > 32767.0f) v = 32767.0f;
@@ -32,4 +33,5 @@ Java_me_danielstiner_dumble_mumble_voice_NativeRnnoise_processFrame(
         pcm[off + i] = (jshort) lrintf(v);
     }
     (*env)->ReleaseShortArrayElements(env, arr, pcm, 0);
+    return vadProb;
 }

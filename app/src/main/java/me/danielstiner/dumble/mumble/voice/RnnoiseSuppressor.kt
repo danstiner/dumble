@@ -11,9 +11,13 @@ class RnnoiseSuppressor : NoiseSuppressor {
         require(it != 0L) { "rnnoise_create failed" }
     }
 
+    /** RNNoise's voice-activity probability (0..1) from the most recent [process] call. */
+    var lastVadProb: Float = 0f
+        private set
+
     override fun process(pcm: ShortArray, off: Int, n: Int) {
         require(n == FRAME_SAMPLES_10MS) { "RNNoise requires 480-sample frames, got $n" }
-        NativeRnnoise.processFrame(state, pcm, off)
+        lastVadProb = NativeRnnoise.processFrame(state, pcm, off)
     }
 
     override fun close() { NativeRnnoise.destroyState(state) }
