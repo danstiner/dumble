@@ -27,6 +27,7 @@ import me.danielstiner.dumble.mumble.voice.RnnoiseSuppressor
 import me.danielstiner.dumble.mumble.voice.TransmitGate
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
@@ -93,7 +94,7 @@ class VadDebugActivity : AppCompatActivity() {
 
         readout = TextView(this).apply {
             text = "Stopped"
-            textSize = 15f; setTextColor(Color.LTGRAY)
+            textSize = 14f; setTextColor(Color.LTGRAY)
             typeface = android.graphics.Typeface.MONOSPACE
             setPadding(0, 0, 0, 24)
         }
@@ -223,12 +224,16 @@ class VadDebugActivity : AppCompatActivity() {
                     val open = d.send
                     val term = d.terminator
                     val preF = preDb.toFloat(); val postF = postDb.toFloat()
+                    val floorDb = detector.noiseFloorDb.toDouble()
+                    val snr = postDb - floorDb                     // level relative to the noise floor
+                    val postRms = 10.0.pow(postDb / 20.0)          // linear RMS (0..1)
                     runOnUiThread {
                         history.push(preF, postF, open, absOpenDb, rnnoiseOn)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
-                        readout.text = "in %+.0f→%+.0f dBFS  lvl %.2f/%.2f  sent %d".format(
-                            preDb, postDb, levels[0], levels[1], sent)
+                        readout.text = ("in %+.0f→%+.0f dBFS   %.4f rms\n" +
+                            "SNR %+.0f dB (floor %+.0f)   lvl %.2f/%.2f   sent %d").format(
+                            preDb, postDb, postRms, snr, floorDb, levels[0], levels[1], sent)
                         refreshRoute()   // updates Route button (reflects BT connect/disconnect)
                     }
                 }
@@ -274,6 +279,8 @@ class LevelHistoryView(context: Context) : View(context) {
     private val bar = Paint()
     private val preTick = Paint().apply { color = Color.parseColor("#ECEFF1") }  // raw (pre-RNNoise) level
     private val line = Paint().apply { strokeWidth = 4f }
+    private val grid = Paint().apply { color = Color.parseColor("#3A3A3A"); strokeWidth = 1f }
+    private val gridLabel = Paint().apply { color = Color.parseColor("#888888"); textSize = 22f }
 
     fun push(preDb: Float, postDb: Float, isOpen: Boolean, threshold: Float, denoised: Boolean) {
         pre[head] = preDb; post[head] = postDb; open[head] = isOpen
@@ -288,6 +295,11 @@ class LevelHistoryView(context: Context) : View(context) {
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
         c.drawColor(Color.parseColor("#1E1E1E"))
+        for (g in intArrayOf(-20, -40, -60, -80)) {   // dBFS gridlines
+            val gy = yOf(g.toFloat(), h)
+            c.drawLine(0f, gy, w, gy, grid)
+            c.drawText("$g", 6f, gy - 4f, gridLabel)
+        }
         val bw = w / cap
         for (i in 0 until cap) {
             val idx = (head + i) % cap                     // oldest -> newest

@@ -29,6 +29,9 @@ class EnergyVadDetector(
 ) : VadDetector {
     private var floorDb = initialFloorDb
 
+    /** Current adaptive noise-floor estimate in dBFS (for diagnostics/tuning UIs). */
+    val noiseFloorDb: Float get() = floorDb
+
     override fun level(pcm: ShortArray, off: Int, n: Int): Float {
         val db = rmsDb(pcm, off, n)
         val above = db - floorDb
