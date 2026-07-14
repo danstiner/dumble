@@ -54,7 +54,7 @@ class VadDebugActivity : AppCompatActivity() {
     @Volatile private var vadSource = 0                   // index into vadNames; drives the gate
     private val rnnMinThr = 0.3f
     private val rnnMaxThr = 0.95f
-    @Volatile private var rnnThreshold = 0.75f            // RNNoise VAD open threshold (prob 0..1)
+    @Volatile private var rnnThreshold = 0.5f             // RNNoise VAD open threshold (prob 0..1)
 
     private val detector = EnergyVadDetector()
     private val gate = TransmitGate()

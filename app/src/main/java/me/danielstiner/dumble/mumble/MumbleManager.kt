@@ -120,7 +120,7 @@ object MumbleManager {
         // gate detector (threshold 0.75). One instance is both the suppressor and the VAD.
         private val rnnoise = RnnoiseSuppressor()
         private val engine = AudioVoiceEngine(
-            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = 0.75f)
+            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = 0.5f)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
