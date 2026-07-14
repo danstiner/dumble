@@ -30,6 +30,8 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   to see whether BT is offered/active at call start; if not, `requestCallEndpointChange` to
   the preferred endpoint (BT > wired) at start, or fix the ordering.
 
+### Connecting bluetooth headset in middle of call does *not* take over audio like it should
+
 ### 🟡 Short final talkspurt whose terminator is also lost can stall (minor, pre-existing)
 - **Symptom:** a very short final talkspurt (fewer samples than the prebuffer) whose
   `is_terminator` frame is *also* lost never plays and the stream never retires until the
@@ -47,6 +49,20 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
 
 ## Fixed
+- **🔴 VAD-gated uplink inaudible to peers — talkspurt wire semantics (#40)** — root cause: our
+  VAD sender (a) **froze `frame_number`** during silence and (b) emitted **empty-payload
+  terminators**. A stock Mumble receiver schedules by *absolute* `frame_number` (so a frozen
+  counter lands resumed talkspurts in the past of a still-alive jitter buffer → dropped as late)
+  and **rejects empty-payload packets** before it ever reads `is_terminator`. Continuous transmit
+  worked; gated did not. Fixed: `frame_number` advances at **wall-clock rate every capture**, and
+  the VAD-close and mute terminators are **real (silent, non-empty) frames**. Source-verified
+  (`AudioInput::encodeAudioFrame` `iFrameCounter`; `AudioOutput::addFrameToBuffer` /
+  `decodeAudio_protobuf` empty-payload rejection). On-device verified (peers hear gated audio).
+  Commit `84238e8`.
+  **Correction:** the #56 entry below and `docs/mumble-protocol.md` say Mumble `frame_number`
+  "pauses/freezes" during silence — that is wrong. It advances at wall-clock rate and only resets
+  after ~5 s of continuous silence. (#56's receiver fix still holds — it re-anchors on gaps/terminators
+  regardless — but the wording should be corrected during cleanup.)
 - **🔴 Received audio drops as "late" — talkspurt/silence handling (#56 part A)** — root cause:
   Mumble `frame_number` pauses during a VAD peer's silence, but our playout cursor advanced at
   wall-clock rate (PLC-on-underrun), so resumed talkspurts landed behind the cursor and
