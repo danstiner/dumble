@@ -1,10 +1,16 @@
 package me.danielstiner.dumble
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -24,17 +30,17 @@ import kotlin.math.log10
 import kotlin.math.sqrt
 
 /**
- * Local VAD gate tuner. Runs the real transmit chain (mic -> RNNoise -> EnergyVadDetector ->
- * TransmitGate) with NO server, and shows live whether the gate opens for the current input.
- * A slider tunes the absolute open threshold (absOpenDb) so it can be dialed in by ear/eye.
- * No playback (avoids feedback) — this is a visual tuner.
+ * Local VAD gate tuner (no server). Runs the real transmit chain
+ * (mic -> RNNoise -> EnergyVadDetector -> TransmitGate) and shows live whether the gate opens.
+ * A slider tunes the absolute open threshold; a dB-history strip visualizes recent input; a
+ * route control cycles Earpiece/Speaker/Bluetooth so audio-route switching (incl. BT) can be
+ * tested. No playback (avoids feedback).
  */
 class VadDebugActivity : AppCompatActivity() {
 
     private val running = AtomicBoolean(false)
     private var thread: Thread? = null
 
-    // Absolute-open-gate slider range, in dB.
     private val minDb = -90f
     private val maxDb = -30f
     @Volatile private var absOpenDb = -55f
@@ -42,12 +48,15 @@ class VadDebugActivity : AppCompatActivity() {
 
     private val detector = EnergyVadDetector()
     private val gate = TransmitGate()
+    private val am by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
+    private lateinit var history: LevelHistoryView
     private lateinit var readout: TextView
     private lateinit var gateView: TextView
     private lateinit var thresholdText: TextView
     private lateinit var startButton: Button
     private lateinit var rnnoiseButton: Button
+    private lateinit var routeButton: Button
 
     @Volatile private var sent = 0L
 
@@ -60,28 +69,33 @@ class VadDebugActivity : AppCompatActivity() {
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
+            setPadding(48, 56, 48, 48)
             setBackgroundColor(Color.parseColor("#121212"))
         }
 
         layout.addView(TextView(this).apply {
             text = "VAD Gate Tuner"
-            textSize = 24f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 32)
+            textSize = 22f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 20)
         })
+
+        history = LevelHistoryView(this)
+        layout.addView(history, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 260
+        ).apply { setMargins(0, 0, 0, 16) })
 
         gateView = TextView(this).apply {
             text = "—"
-            textSize = 40f; gravity = Gravity.CENTER; setPadding(0, 0, 0, 24)
-            setTextColor(Color.GRAY)
+            textSize = 28f; gravity = Gravity.CENTER; setTextColor(Color.GRAY)
+            setPadding(0, 0, 0, 12)
         }
         layout.addView(gateView)
 
         readout = TextView(this).apply {
             text = "Stopped"
-            textSize = 16f; setTextColor(Color.LTGRAY)
+            textSize = 15f; setTextColor(Color.LTGRAY)
             typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(0, 0, 0, 32)
+            setPadding(0, 0, 0, 24)
         }
         layout.addView(readout)
 
@@ -105,7 +119,7 @@ class VadDebugActivity : AppCompatActivity() {
             })
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 8, 0, 48) }
+            ).apply { setMargins(0, 8, 0, 32) }
         })
 
         startButton = Button(this).apply {
@@ -127,6 +141,12 @@ class VadDebugActivity : AppCompatActivity() {
         }
         layout.addView(rnnoiseButton)
 
+        routeButton = Button(this).apply {
+            text = "Route: default"
+            setOnClickListener { cycleRoute(); refreshRoute() }
+        }
+        layout.addView(routeButton)
+
         setContentView(layout)
     }
 
@@ -140,6 +160,8 @@ class VadDebugActivity : AppCompatActivity() {
         sent = 0
         detector.absOpenDb = absOpenDb
         gate.reset()
+        am.mode = AudioManager.MODE_IN_COMMUNICATION   // enable comm-device routing (speaker/BT)
+        refreshRoute()
         startButton.text = "Stop"
         thread = Thread({ loop() }, "vad-debug").apply { isDaemon = true; start() }
     }
@@ -147,8 +169,31 @@ class VadDebugActivity : AppCompatActivity() {
     private fun stop() {
         running.set(false)
         thread?.join(500); thread = null
+        runCatching { am.clearCommunicationDevice(); am.mode = AudioManager.MODE_NORMAL }
         startButton.text = "Start"
         runOnUiThread { gateView.text = "—"; gateView.setTextColor(Color.GRAY); readout.text = "Stopped" }
+    }
+
+    /** Cycle through the currently-available communication devices (earpiece/speaker/BT/wired). */
+    private fun cycleRoute() {
+        val devices = am.availableCommunicationDevices
+        if (devices.isEmpty()) return
+        val currentId = am.communicationDevice?.id
+        val idx = devices.indexOfFirst { it.id == currentId }
+        am.setCommunicationDevice(devices[(idx + 1) % devices.size])
+    }
+
+    private fun refreshRoute() {
+        routeButton.text = "Route: " + (am.communicationDevice?.let { deviceName(it.type) } ?: "default")
+    }
+
+    private fun deviceName(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Earpiece"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET -> "Bluetooth"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+        else -> "type $type"
     }
 
     private fun loop() {
@@ -176,13 +221,17 @@ class VadDebugActivity : AppCompatActivity() {
                 if (tick++ % 3 == 0) {   // ~16 Hz UI
                     val open = d.send
                     val term = d.terminator
+                    val dbF = inputDb.toFloat()
                     runOnUiThread {
+                        history.push(dbF, open, absOpenDb)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
-                        gateView.setTextColor(if (open) Color.parseColor("#4CAF50") else Color.GRAY)
+                        gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
+                        val route = am.communicationDevice?.let { deviceName(it.type) } ?: "default"
                         readout.text = ("in: %+.0f dB   lvl: %.2f / %.2f\n" +
-                            "gate: %s   sent: %d").format(
+                            "gate: %s   sent: %d   route: %s").format(
                             inputDb, levels[0], levels[1],
-                            if (open) "OPEN" else "closed", sent)
+                            if (open) "OPEN" else "closed", sent, route)
+                        refreshRoute()   // reflects BT connect/disconnect while running
                     }
                 }
             }
@@ -200,4 +249,42 @@ class VadDebugActivity : AppCompatActivity() {
     private fun progressToDb(p: Int): Float = minDb + (p / 100f) * (maxDb - minDb)
 
     override fun onDestroy() { super.onDestroy(); stop() }
+
+    companion object { val OPEN_GREEN = Color.parseColor("#4CAF50") }
+}
+
+/** Scrolling strip of recent input dB. Bars are green when the gate was open, gray otherwise;
+ *  a yellow line marks the current open threshold. */
+class LevelHistoryView(context: Context) : View(context) {
+    private val cap = 128
+    private val dbs = FloatArray(cap) { FLOOR }
+    private val open = BooleanArray(cap)
+    private var head = 0
+    private var thresholdDb = -55f
+    private val bar = Paint()
+    private val line = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 3f }
+
+    fun push(db: Float, isOpen: Boolean, threshold: Float) {
+        dbs[head] = db; open[head] = isOpen; thresholdDb = threshold
+        head = (head + 1) % cap
+        invalidate()
+    }
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        c.drawColor(Color.parseColor("#1E1E1E"))
+        val bw = w / cap
+        for (i in 0 until cap) {
+            val idx = (head + i) % cap                     // oldest -> newest
+            val frac = ((dbs[idx].coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR))
+            val barH = frac * h
+            bar.color = if (open[idx]) Color.parseColor("#4CAF50") else Color.parseColor("#5A5A5A")
+            c.drawRect(i * bw, h - barH, (i + 1) * bw - 1f, h, bar)
+        }
+        val tFrac = (thresholdDb.coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR)
+        val ty = h - tFrac * h
+        c.drawLine(0f, ty, w, ty, line)
+    }
+
+    companion object { const val FLOOR = -90f; const val CEIL = 0f }
 }
