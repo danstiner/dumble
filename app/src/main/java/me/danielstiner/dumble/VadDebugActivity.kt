@@ -45,6 +45,9 @@ class VadDebugActivity : AppCompatActivity() {
     private val minDb = -90f
     private val maxDb = -30f
     @Volatile private var absOpenDb = -55f
+    private val relMinDb = 3f
+    private val relMaxDb = 20f
+    @Volatile private var relOpenDb = 9f      // dB above the noise floor to open (relative gate)
     @Volatile private var rnnoiseOn = true
 
     private val detector = EnergyVadDetector()
@@ -55,6 +58,7 @@ class VadDebugActivity : AppCompatActivity() {
     private lateinit var readout: TextView
     private lateinit var gateView: TextView
     private lateinit var thresholdText: TextView
+    private lateinit var relText: TextView
     private lateinit var rnnoiseButton: Button
     private lateinit var routeButton: Button
 
@@ -86,7 +90,7 @@ class VadDebugActivity : AppCompatActivity() {
         ).apply { setMargins(0, 0, 0, 8) })
 
         layout.addView(TextView(this).apply {
-            text = "white=gate(green above) · orange=floor · cyan=rel target · yellow=abs · tick=raw"
+            text = "cyan=rel target · orange=noise floor · yellow=abs gate · tick=raw · green bars=open"
             textSize = 11f; setTextColor(Color.parseColor("#AAAAAA"))
             setPadding(0, 0, 0, 12)
         })
@@ -120,6 +124,29 @@ class VadDebugActivity : AppCompatActivity() {
                     absOpenDb = progressToDb(p)
                     detector.absOpenDb = absOpenDb
                     thresholdText.text = thresholdLabel()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 8, 0, 24) }
+        })
+
+        relText = TextView(this).apply {
+            text = relLabel()
+            setTextColor(Color.WHITE)
+        }
+        layout.addView(relText)
+
+        layout.addView(SeekBar(this).apply {
+            max = 100
+            progress = (((relOpenDb - relMinDb) / (relMaxDb - relMinDb)) * 100f).toInt().coerceIn(0, 100)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    relOpenDb = relMinDb + (p / 100f) * (relMaxDb - relMinDb)
+                    detector.marginDb = relOpenDb / gate.openLevel
+                    relText.text = relLabel()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
@@ -171,6 +198,7 @@ class VadDebugActivity : AppCompatActivity() {
         running.set(true)
         sent = 0
         detector.absOpenDb = absOpenDb
+        detector.marginDb = relOpenDb / gate.openLevel
         gate.reset()
         am.mode = AudioManager.MODE_IN_COMMUNICATION   // enable comm-device routing (speaker/BT)
         refreshRoute()
@@ -257,6 +285,9 @@ class VadDebugActivity : AppCompatActivity() {
     private fun thresholdLabel() =
         "Open threshold: %.0f dBFS   (detect on %s)".format(absOpenDb, if (rnnoiseOn) "denoised" else "raw")
 
+    private fun relLabel() =
+        "Relative threshold: %.0f dB above floor".format(relOpenDb)
+
     private fun rmsDbOf(pcm: ShortArray): Double {
         var s = 0.0
         for (i in 0 until CAPTURE_SAMPLES) { val v = pcm[i].toDouble(); s += v * v }
@@ -287,10 +318,9 @@ class LevelHistoryView(context: Context) : View(context) {
     private var thresholdDb = -55f
     private val bar = Paint()
     private val preTick = Paint().apply { color = Color.parseColor("#BDBDBD") }        // raw (pre-RNNoise)
-    private val absLine = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 2f }   // abs gate
+    private val absLine = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 3f }   // abs gate
     private val floorLine = Paint().apply { color = Color.parseColor("#FF9800"); strokeWidth = 3f }  // noise floor
-    private val relLine = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 2f }    // rel target
-    private val effLine = Paint().apply { color = Color.WHITE; strokeWidth = 5f }       // effective gate (green above)
+    private val relLine = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 3f }    // rel target
     private val grid = Paint().apply { color = Color.parseColor("#3A3A3A"); strokeWidth = 1f }
     private val gridLabel = Paint().apply { color = Color.parseColor("#888888"); textSize = 22f }
 
@@ -334,11 +364,6 @@ class LevelHistoryView(context: Context) : View(context) {
         trace(c, relTarget, bw, h, relLine)                // relative open target = floor + margin (cyan)
         val ty = yOf(thresholdDb, h)                       // absolute gate (yellow, horizontal)
         c.drawLine(0f, ty, w, ty, absLine)
-        for (i in 0 until cap - 1) {                       // effective trigger = max(cyan, yellow); green above THIS
-            val a = (head + i) % cap; val b = (head + i + 1) % cap
-            val ea = maxOf(relTarget[a], thresholdDb); val eb = maxOf(relTarget[b], thresholdDb)
-            c.drawLine(i * bw + bw / 2f, yOf(ea, h), (i + 1) * bw + bw / 2f, yOf(eb, h), effLine)
-        }
     }
 
     companion object { const val FLOOR = -90f; const val CEIL = 0f }
