@@ -19,6 +19,7 @@ class AudioVoiceEngine(
     private val codec: OpusCodec,
     private val recorderFactory: () -> AudioIn = { AndroidAudioIn() },
     private val trackFactory: () -> AudioOut = { AndroidAudioOut() },
+    private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -29,7 +30,10 @@ class AudioVoiceEngine(
     private var wasMuted = false
 
     private val encoder = codec.newEncoder()
-    private val capturePcm = ShortArray(FRAME_SAMPLES_20MS)
+    private val vad: VadDetector = EnergyVadDetector()
+    private val gate = TransmitGate()
+    private val capturePcm = ShortArray(CAPTURE_SAMPLES)
+    private val subLevels = FloatArray(FRAMES_PER_PACKET)
     private var frameNumber = 0L
 
     private var recorder: AudioIn? = null
@@ -57,16 +61,30 @@ class AudioVoiceEngine(
         }
     }
 
-    /** Send thread. Always drains the mic; returns null when muted (after emitting one terminator). */
+    /** Send thread. Drains the mic; gates transmission on voice activity. */
     override fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame? {
         val rec = recorder ?: return null
-        rec.read(capturePcm, FRAME_SAMPLES_20MS)          // capture clock — runs even while muted
+        rec.read(capturePcm, CAPTURE_SAMPLES)             // capture clock — runs even while muted
         if (muted) {
+            gate.reset()                                 // so unmute starts closed
             if (!wasMuted) { wasMuted = true; return VoiceFrame(ByteArray(0), 0, frameNumber, isTerminator = true) }
             return null
         }
         wasMuted = false
-        val opus = encoder.encode(capturePcm, FRAME_SAMPLES_20MS)
+
+        for (i in 0 until FRAMES_PER_PACKET) {
+            val off = i * FRAME_SAMPLES_10MS
+            suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)   // None = no-op (Phase 1)
+            subLevels[i] = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+        }
+        val d = gate.update(subLevels)
+
+        if (d.terminator) {
+            return VoiceFrame(ByteArray(0), 0, frameNumber, isTerminator = true)  // freeze frameNumber
+        }
+        if (!d.send) return null
+
+        val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
         uplinkBytes += opus.size
         if (++uplinkFrames >= 250) {
             val avgBytes = uplinkBytes.toDouble() / uplinkFrames
@@ -74,7 +92,7 @@ class AudioVoiceEngine(
             uplinkBytes = 0; uplinkFrames = 0
         }
         val fn = frameNumber
-        frameNumber += 2                                  // 10 ms units: 20 ms = 2 frames
+        frameNumber += FRAMES_PER_PACKET
         sent++
         _stats.update { it.copy(sent = sent) }
         return VoiceFrame(opus, opus.size, fn)
@@ -139,6 +157,7 @@ class AudioVoiceEngine(
         recorder?.close(); recorder = null
         track?.close(); track = null
         encoder.close()
+        suppressor.close()
     }
 }
 
