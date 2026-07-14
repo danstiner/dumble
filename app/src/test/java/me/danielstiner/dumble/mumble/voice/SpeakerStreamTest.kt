@@ -31,22 +31,70 @@ class SpeakerStreamTest {
         assertTrue(s.decoderCreated)
     }
 
-    @Test fun retiresAfterTerminatorDrains() {
+    @Test fun terminatorBoundaryResetsNotRetires() {
         val s = SpeakerStream(codec, prebufferSamples = 0)
         s.offer(0, encoded(960), 960, false)
         s.offer(960, ByteArray(0), 0, true)             // terminator at 960
         s.fillTick(ShortArray(FRAME_SAMPLES_20MS))      // plays ts 0..960
-        assertFalse(s.fillTick(ShortArray(FRAME_SAMPLES_20MS))) // nothing left, past terminator → idle
-        assertTrue(s.retired)
+        assertFalse(s.fillTick(ShortArray(FRAME_SAMPLES_20MS))) // past terminator → reset (silence)
+        assertFalse("boundary resets in place, does not retire", s.retired)
     }
 
-    @Test fun retiresAfterExtendedDropoutWithoutTerminator() {
-        val s = SpeakerStream(codec, prebufferSamples = 0)
-        s.offer(0, encoded(960), 960, false)                 // one packet, NO terminator
+    @Test fun retiresOnlyAfterLongIdle() {
+        val s = SpeakerStream(codec, prebufferSamples = 0, maxHoldTicks = 3, retireIdleTicks = 3)
+        s.offer(0, encoded(960), 960, false)            // one packet, NO terminator
         val out = ShortArray(FRAME_SAMPLES_20MS)
-        // drain the one real frame, then PLC until the cap trips
-        var idleTicks = 0
-        repeat(30) { if (!s.fillTick(out)) idleTicks++ }
-        assertTrue("stream retires after extended dropout", s.retired)
+        // tick1 decode; ticks 2-4 hold; tick5 reset; then idle ticks accumulate to retire
+        repeat(15) { s.fillTick(out) }
+        assertTrue("retires after sustained silence then long idle", s.retired)
+    }
+
+    @Test fun resumeAfterHoldIsNotLateDropped() {
+        val s = SpeakerStream(codec, prebufferSamples = 0)
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, false)
+        assertTrue(s.fillTick(out))                     // decode ts0 → cursor held at 960
+        assertEquals(-50, out[0].toInt())               // real audio
+        repeat(3) { s.fillTick(out) }                   // live underrun → plcHold ×3, cursor STAYS 960
+        // peer resumes at the continued timestamp (frame_number paused during silence)
+        assertTrue("resume at held cursor is accepted, not late", s.offer(960, encoded(960), 960, false))
+        assertTrue(s.fillTick(out))
+        assertEquals(-50, out[0].toInt())               // resumed talkspurt decodes (not lost)
+    }
+
+    @Test fun terminatorReAnchorsSecondTalkspurtWithPrebuffer() {
+        val s = SpeakerStream(codec, prebufferSamples = FRAME_SAMPLES_20MS * 2)  // 1920
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, false)
+        s.offer(960, encoded(960), 960, true)           // terminated talkspurt 1 (buffered = 1920)
+        repeat(4) { s.fillTick(out) }                   // drains both, resets on past-terminator underrun
+        assertFalse(s.retired)
+        // talkspurt 2: one packet is below prebuffer AND the tag was cleared → must wait
+        s.offer(1920, encoded(960), 960, false)
+        assertFalse("second talkspurt honors prebuffer (tag cleared)", s.fillTick(out))
+        s.offer(2880, encoded(960), 960, false)         // buffered reaches 1920
+        assertTrue(s.fillTick(out))                     // prebuffer met → plays
+    }
+
+    @Test fun shortPauseKeepsDecoderAndStream() {
+        val s = SpeakerStream(codec, prebufferSamples = 0, maxHoldTicks = 10)
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, false)
+        s.fillTick(out)
+        assertTrue(s.decoderCreated)
+        repeat(3) { s.fillTick(out) }                   // short hold, well under maxHoldTicks
+        assertFalse(s.retired)
+        assertTrue(s.decoderCreated)
+        assertTrue(s.offer(960, encoded(960), 960, false))
+    }
+
+    @Test fun measuredHoleIsConcealedThenDecoded() {
+        val s = SpeakerStream(codec, prebufferSamples = 0)
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, false)            // ts 0
+        s.offer(1920, encoded(960), 960, false)         // ts 1920 → ts 960 frame lost (a real hole)
+        assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())  // decode ts0 → cursor 960
+        assertTrue(s.fillTick(out)); assertEquals(0, out[0].toInt())    // measured hole → PLC, cursor → 1920
+        assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())  // ts 1920 due → decodes, not dropped
     }
 }

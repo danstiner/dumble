@@ -8,12 +8,14 @@ package me.danielstiner.dumble.mumble.voice
 class SpeakerStream(
     private val codec: OpusCodec,
     private val prebufferSamples: Int = FRAME_SAMPLES_20MS * 5,   // ~100 ms
-    private val reanchorGapSamples: Long = SAMPLE_RATE.toLong(),  // 1 s forward jump → re-anchor
+    private val reanchorGapSamples: Long = SAMPLE_RATE.toLong(),  // 1 s forward jump → boundary
+    private val maxHoldTicks: Int = 10,                           // ~200 ms held underrun → boundary reset
+    private val retireIdleTicks: Int = 500,                       // ~10 s un-anchored + empty → retire
 ) {
     private val buffer = JitterBuffer()
     @Volatile private var cursor = -1L          // -1 = un-anchored; only fillTick writes it
-    private var consecutivePlc = 0
-    private val maxConsecutivePlc = 10          // ~200 ms of dropout before going idle
+    private var consecutivePlc = 0              // consecutive HELD (live-underrun) ticks
+    private var idleTicks = 0                   // consecutive un-anchored + empty ticks
     private var decoder: OpusDecoder? = null    // playback-thread only
     private val decodeOut = ShortArray(MAX_FRAME_SAMPLES)
     private val fifo = ShortArrayFifo(MAX_FRAME_SAMPLES * 4)
@@ -28,27 +30,29 @@ class SpeakerStream(
             if (cur < 0) 0 else cur)
     }
 
-    /** Playback thread. Fills [out] (960 samples). Returns true if real audio was produced. */
+    /** Playback thread. Fills [out] (960 samples). Returns true if audio was produced. */
     fun fillTick(out: ShortArray): Boolean {
-        if (cursor < 0) {                                       // anchor on the first packet
-            val first = buffer.peekFirstTimestamp() ?: return idleOrRetire()
+        if (cursor < 0) {                                       // un-anchored
+            val first = buffer.peekFirstTimestamp()
+            if (first == null) {                               // idle: nothing to play
+                if (++idleTicks >= retireIdleTicks) retired = true
+                return false                                   // caller ignores `out` when !produced
+            }
+            idleTicks = 0
             if (buffer.bufferedSamples() < prebufferSamples && buffer.terminatorTimestamp == null) return false
             cursor = first
+            consecutivePlc = 0
         }
-        while (fifo.size < FRAME_SAMPLES_20MS) {                // ensure ≥ one 20 ms frame
-            if (consecutivePlc >= maxConsecutivePlc) {
-                if (buffer.isEmpty()) { if (fifo.size == 0) { retired = true; return false } }
-                break
-            }
+        while (fifo.size < FRAME_SAMPLES_20MS) {                // ensure >= one 20 ms frame
             val next = buffer.peekFirstTimestamp()
-            if (next == null) {
-                if (isPastTerminator()) { if (fifo.size == 0) return idleOrRetire() else break }
-                plcStep(); break                                // live underrun → one PLC step
+            if (next == null) {                                // live underrun
+                if (isPastTerminator() || consecutivePlc >= maxHoldTicks) { resetToIdle(); break }
+                plcHold(); break                               // conceal, HOLD cursor
             }
             when {
-                next > cursor + reanchorGapSamples -> { cursor = next; fifo.clear(); consecutivePlc = 0 } // re-anchor
-                next > cursor -> plcStep()                                            // measured hole
-                else -> decodeNext()                                                  // due
+                next > cursor + reanchorGapSamples -> { resetToIdle(); break }  // big jump → boundary
+                next > cursor -> { consecutivePlc = 0; plcAdvance() }           // measured hole
+                else -> decodeNext()                                           // due
             }
         }
         val produced = fifo.size > 0
@@ -66,20 +70,28 @@ class SpeakerStream(
         consecutivePlc = 0
     }
 
-    private fun plcStep() {
+    private fun plcHold() {                 // live underrun — conceal, do NOT advance cursor
         consecutivePlc++
+        val n = ensureDecoder().decode(null, 0, 0, decodeOut, FRAME_SAMPLES_20MS)
+        fifo.push(decodeOut, n)
+    }
+
+    private fun plcAdvance() {              // measured hole — conceal AND advance toward the queued packet
         val n = ensureDecoder().decode(null, 0, 0, decodeOut, FRAME_SAMPLES_20MS)
         fifo.push(decodeOut, n)
         cursor += FRAME_SAMPLES_20MS
     }
 
+    private fun resetToIdle() {             // boundary reset — playback thread only
+        cursor = -1
+        fifo.clear()
+        consecutivePlc = 0
+        buffer.clearTerminator()
+    }
+
     private fun isPastTerminator(): Boolean {
         val t = buffer.terminatorTimestamp ?: return false
         return cursor >= t
-    }
-    private fun idleOrRetire(): Boolean {
-        if (isPastTerminator() && buffer.isEmpty() && fifo.size == 0) retired = true
-        return false
     }
 
     fun close() { decoder?.close(); decoder = null }
