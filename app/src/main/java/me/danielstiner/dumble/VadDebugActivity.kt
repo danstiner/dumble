@@ -86,7 +86,7 @@ class VadDebugActivity : AppCompatActivity() {
         ).apply { setMargins(0, 0, 0, 8) })
 
         layout.addView(TextView(this).apply {
-            text = "cyan=open target · orange=noise floor · yellow=abs gate · white=raw"
+            text = "white=gate(green above) · orange=floor · cyan=rel target · yellow=abs · tick=raw"
             textSize = 11f; setTextColor(Color.parseColor("#AAAAAA"))
             setPadding(0, 0, 0, 12)
         })
@@ -286,10 +286,11 @@ class LevelHistoryView(context: Context) : View(context) {
     private var head = 0
     private var thresholdDb = -55f
     private val bar = Paint()
-    private val preTick = Paint().apply { color = Color.parseColor("#ECEFF1") }        // raw (pre-RNNoise)
-    private val absLine = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 3f }   // abs gate
+    private val preTick = Paint().apply { color = Color.parseColor("#BDBDBD") }        // raw (pre-RNNoise)
+    private val absLine = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 2f }   // abs gate
     private val floorLine = Paint().apply { color = Color.parseColor("#FF9800"); strokeWidth = 3f }  // noise floor
-    private val relLine = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 3f }    // open target
+    private val relLine = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 2f }    // rel target
+    private val effLine = Paint().apply { color = Color.WHITE; strokeWidth = 5f }       // effective gate (green above)
     private val grid = Paint().apply { color = Color.parseColor("#3A3A3A"); strokeWidth = 1f }
     private val gridLabel = Paint().apply { color = Color.parseColor("#888888"); textSize = 22f }
 
@@ -333,6 +334,11 @@ class LevelHistoryView(context: Context) : View(context) {
         trace(c, relTarget, bw, h, relLine)                // relative open target = floor + margin (cyan)
         val ty = yOf(thresholdDb, h)                       // absolute gate (yellow, horizontal)
         c.drawLine(0f, ty, w, ty, absLine)
+        for (i in 0 until cap - 1) {                       // effective trigger = max(cyan, yellow); green above THIS
+            val a = (head + i) % cap; val b = (head + i + 1) % cap
+            val ea = maxOf(relTarget[a], thresholdDb); val eb = maxOf(relTarget[b], thresholdDb)
+            c.drawLine(i * bw + bw / 2f, yOf(ea, h), (i + 1) * bw + bw / 2f, yOf(eb, h), effLine)
+        }
     }
 
     companion object { const val FLOOR = -90f; const val CEIL = 0f }
