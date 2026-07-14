@@ -116,7 +116,7 @@ object MumbleManager {
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
         private val codec = LibOpusCodec()
-        private val engine = AudioVoiceEngine(codec)
+        private val engine = AudioVoiceEngine(codec, suppressor = RnnoiseSuppressor())
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 

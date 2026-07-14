@@ -73,6 +73,23 @@ class AudioVoiceEngineFrameNumberTest {
         assertTrue("mic still drained while muted", fakeIn.reads >= 1)
         e.stop()
     }
+
+    private class RecordingSuppressor : NoiseSuppressor {
+        val calls = mutableListOf<Int>()   // offsets seen
+        override fun process(pcm: ShortArray, off: Int, n: Int) { calls.add(off) }
+        override fun close() {}
+    }
+
+    @Test fun engineDenoisesEachHalfInPlacePerCapture() {
+        val sup = RecordingSuppressor()
+        val e = AudioVoiceEngine(
+            FakeOpusCodec(), { ScriptedAudioIn(List(2) { 8000 }) }, { FakeAudioOut() }, sup,
+        )
+        e.start()
+        e.nextOutgoingFrame(0)                       // one capture
+        assertEquals("two 10 ms sub-frames per capture", listOf(0, FRAME_SAMPLES_10MS), sup.calls)
+        e.stop()
+    }
 }
 
 class FakeAudioOut : AudioOut {
