@@ -57,7 +57,7 @@ fun DumbleApp(
         state is ConnectionState.Synchronized
 
     when {
-        inCall -> {
+        inCall && !showSettings -> {
             val statusText = if (state is ConnectionState.Synchronized) "In Call" else "Connecting…"
             val statsText = "state=${state::class.simpleName} mode=${net.mode}\n" +
                 "net: tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
@@ -69,6 +69,7 @@ fun DumbleApp(
                 onToggleMute = { MumbleManager.setMuted(!muted) },
                 onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 onHangUp = onHangUp,
+                onOpenSettings = { showSettings = true },
             )
         }
         showSettings -> {
