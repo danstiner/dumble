@@ -4,13 +4,13 @@
     {
       "id": 1,
       "subject": "Task 1: JitterBuffer terminator tag (monotonic + clear)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Make the JitterBuffer terminator tag monotonic and add clearTerminator() for boundary resets.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\n\n**Acceptance Criteria:**\n- offer updates terminatorTimestamp only when the incoming terminator ts is >= the current tag (older/reordered terminator ignored)\n- clearTerminator() sets terminatorTimestamp to null\n- all existing JitterBufferTest cases still pass\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"me.danielstiner.dumble.mumble.voice.JitterBufferTest\"\n\n**Steps:** add terminatorTagIsMonotonic + clearTerminatorResetsTag tests; guard the tag set (t==null || ts>=t); add clearTerminator(); run; commit. Full detail: plan Task 1.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"me.danielstiner.dumble.mumble.voice.JitterBufferTest\\\"\", \"acceptanceCriteria\": [\"monotonic terminator tag: older terminator does not lower the tag\",\"clearTerminator() nulls the tag\",\"existing JitterBuffer tests pass\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: SpeakerStream hold-on-underrun + boundary reset",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1
       ],
@@ -19,13 +19,13 @@
     {
       "id": 3,
       "subject": "Task 3: Wire is_terminator through the seam",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Deliver the real Audio.is_terminator flag to the engine, keeping the empty-payload inference for the mute path.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/VoiceEngine.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/VoiceTransport.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/SyntheticVoiceSource.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/VoiceTransportTest.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/SyntheticVoiceSourceTest.kt\n\n**Acceptance Criteria:**\n- onIncomingFrame gains trailing isTerminator: Boolean; all four implementers compile.\n- VoiceTransport.onPlaintext passes audio.isTerminator.\n- AudioVoiceEngine: terminator = isTerminator || length==0; lateDropCount only when not queued and not terminator.\n- New VoiceTransportTest proves Audio{is_terminator=true} reaches the engine as true.\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"me.danielstiner.dumble.mumble.VoiceTransportTest\" --tests \"me.danielstiner.dumble.mumble.SyntheticVoiceSourceTest\"\n\n**Steps:** update interface + 4 implementers + 2 test doubles + 4 SyntheticVoiceSourceTest calls; add passesIsTerminatorThroughOnIncoming; run; commit. Full detail: plan Task 3.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/VoiceEngine.kt\",\"app/src/main/java/me/danielstiner/dumble/mumble/voice/VoiceTransport.kt\",\"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\",\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SyntheticVoiceSource.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/VoiceTransportTest.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/SyntheticVoiceSourceTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"me.danielstiner.dumble.mumble.VoiceTransportTest\\\" --tests \\\"me.danielstiner.dumble.mumble.SyntheticVoiceSourceTest\\\"\", \"acceptanceCriteria\": [\"onIncomingFrame gains isTerminator param; all implementers compile\",\"VoiceTransport passes audio.isTerminator\",\"AudioVoiceEngine ORs isTerminator with length==0\",\"pass-through test: Audio{is_terminator=true} reaches engine as true\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: Decode->mix pipeline tests (gaps/terminators/multi)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -39,10 +39,17 @@
         1,
         2,
         3,
-        4
+        4,
+        6
       ],
       "description": "**Goal:** **USER-ORDERED GATE \u2014 NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in acceptanceCriteria has been re-validated independently, with output captured.\n\nConfirm on a real device that received voice is continuous and lateDrops no longer climbs when a desktop (VAD) Mumble peer speaks over UDP.\n\n**Files:**\n- None (manual on-device verification; uses the existing per-5s diagnostic logs).\n\n**Acceptance Criteria:**\n- Remote desktop-peer speech is continuous/intelligible for >=60s (not mostly-silence).\n- lateDrops stays ~0 and does not climb over the session (was ~30% and climbing).\n- udpAudioRx == voiceRx and decryptFail == 0 in the same stats.\n\n**Verify:** ./gradlew installDebug; adb logcat -c && adb logcat | grep -E \"MumbleManager|AudioVoiceEngine\"; hold a >=60s two-way conversation over UDP with a desktop VAD peer.\n\n**Steps:** ensure Tasks 1-4 merged + tests green; installDebug; logcat; connect w/ desktop VAD peer; converse >=60s; confirm all 3 criteria; record voiceRx/udpAudioRx/lateDrops/decryptFail in the close. Full detail: plan Task 5.\n\n```json:metadata\n{\"files\": [], \"userGate\": true, \"tags\": [\"user-gate\"], \"verifyCommand\": \"adb logcat -c && adb logcat | grep -E \\\"MumbleManager|AudioVoiceEngine\\\"\", \"acceptanceCriteria\": [\"remote desktop-peer speech is continuous/intelligible for >=60s (not mostly-silence)\",\"lateDrops stays ~0 and does not climb over the session\",\"udpAudioRx == voiceRx and decryptFail == 0 in the same stats\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Clear stale terminator tag (review fix)",
+      "status": "completed",
+      "description": "**Goal:** Clear the terminator tag when playback decodes past it (contiguous talkspurt) or when a reordered/duplicate terminator is already behind the playout cursor, preventing a spurious mid-talkspurt resetToIdle. Final-review remediation.\n\n**Files:**\n- app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt\n- app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\n- app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\n- app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\n\n**Acceptance Criteria:**\n- decodeNext clears tag when decoding past it\n- offer ignores terminator with ts<playoutCursor\n- contiguous-terminator mid-talkspurt loss conceals not resets (fails pre-fix)\n- full suite green\n\n**Verify:** ./gradlew testDebugUnitTest\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt\",\"app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest\", \"acceptanceCriteria\": [\"decodeNext clears tag when decoding past it\",\"offer ignores terminator with ts<playoutCursor\",\"contiguous-terminator mid-talkspurt loss conceals not resets\",\"full suite green\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-14T05:44:30Z"
+  "lastUpdated": "2026-07-14T06:36:08Z"
 }
