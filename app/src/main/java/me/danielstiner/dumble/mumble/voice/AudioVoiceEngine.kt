@@ -20,6 +20,8 @@ class AudioVoiceEngine(
     private val recorderFactory: () -> AudioIn = { AndroidAudioIn() },
     private val trackFactory: () -> AudioOut = { AndroidAudioOut() },
     private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
+    private val vad: VadDetector = EnergyVadDetector(),
+    gateOpenLevel: Float = 0.60f,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -30,8 +32,7 @@ class AudioVoiceEngine(
     private var wasMuted = false
 
     private val encoder = codec.newEncoder()
-    private val vad: VadDetector = EnergyVadDetector()
-    private val gate = TransmitGate()
+    private val gate = TransmitGate(openLevel = gateOpenLevel)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private val subLevels = FloatArray(FRAMES_PER_PACKET)
     private var frameNumber = 0L

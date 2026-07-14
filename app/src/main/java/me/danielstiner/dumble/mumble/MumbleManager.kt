@@ -116,7 +116,11 @@ object MumbleManager {
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
         private val codec = LibOpusCodec()
-        private val engine = AudioVoiceEngine(codec, suppressor = RnnoiseSuppressor())
+        // RNNoise does double duty: denoises the uplink AND supplies its VAD probability as the
+        // gate detector (threshold 0.75). One instance is both the suppressor and the VAD.
+        private val rnnoise = RnnoiseSuppressor()
+        private val engine = AudioVoiceEngine(
+            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = 0.75f)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
