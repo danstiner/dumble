@@ -34,6 +34,7 @@ fun DumbleApp(
     val net by MumbleManager.netStats.collectAsStateWithLifecycle()
     val voice by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
+    val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
@@ -76,6 +77,8 @@ fun DumbleApp(
                 onBack = { showSettings = false },
                 onLaunchEchoTest = onLaunchEchoTest,
                 onLaunchVadDebug = onLaunchVadDebug,
+                vadThreshold = vadThreshold,
+                onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
             )
         }
         else -> {

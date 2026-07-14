@@ -52,6 +52,9 @@ class AudioVoiceEngine(
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
 
+    /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
+    fun setVadThreshold(value: Float) { gate.openLevel = value }
+
     override fun start() {
         if (running) return
         running = true
