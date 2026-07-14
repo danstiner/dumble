@@ -59,4 +59,10 @@ class JitterBufferTest {
         b.clearTerminator()
         assertNull(b.terminatorTimestamp)
     }
+
+    @Test fun ignoresTerminatorAlreadyBehindPlayoutCursor() {
+        val b = JitterBuffer()
+        b.offer(pkt(480, span = 0, term = true), playoutCursor = 960)  // terminator already in the past
+        assertNull(b.terminatorTimestamp)
+    }
 }

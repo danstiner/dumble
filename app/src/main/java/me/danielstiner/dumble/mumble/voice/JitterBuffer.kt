@@ -25,7 +25,7 @@ class JitterBuffer(
         private set
 
     @Synchronized fun offer(p: Packet, playoutCursor: Long): Boolean {
-        if (p.isTerminator) {
+        if (p.isTerminator && p.timestampSamples >= playoutCursor) {
             val t = terminatorTimestamp
             if (t == null || p.timestampSamples >= t) terminatorTimestamp = p.timestampSamples
         }

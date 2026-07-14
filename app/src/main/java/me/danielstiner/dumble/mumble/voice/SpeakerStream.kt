@@ -68,6 +68,11 @@ class SpeakerStream(
         fifo.push(decodeOut, n)
         cursor = p.timestampSamples + n
         consecutivePlc = 0
+        // Decoding audio beyond a tagged terminator means the talkspurt continued past it (a new
+        // or contiguous talkspurt) — the tag is stale, so clear it; otherwise a later mid-talkspurt
+        // underrun would fire a spurious boundary reset against the old tag.
+        val term = buffer.terminatorTimestamp
+        if (term != null && p.timestampSamples > term) buffer.clearTerminator()
     }
 
     private fun plcHold() {                 // live underrun — conceal, do NOT advance cursor

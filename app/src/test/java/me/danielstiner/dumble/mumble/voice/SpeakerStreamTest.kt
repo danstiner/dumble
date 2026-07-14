@@ -97,4 +97,19 @@ class SpeakerStreamTest {
         assertTrue(s.fillTick(out)); assertEquals(0, out[0].toInt())    // measured hole → PLC, cursor → 1920
         assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())  // ts 1920 due → decodes, not dropped
     }
+
+    @Test fun contiguousTalkspurtPastTerminatorDoesNotSpuriouslyReset() {
+        val s = SpeakerStream(codec, prebufferSamples = 0)
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, true)             // talkspurt-1 last frame + terminator (tag = 0)
+        s.offer(960, encoded(960), 960, false)          // talkspurt-2 resumes contiguously at ts 960
+        assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())   // decode ts0 (terminator frame), cursor=960
+        assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())   // decode ts960 → clears stale tag, cursor=1920
+        // mid-talkspurt-2 underrun (ts 1920 not yet arrived): must CONCEAL (plcHold), NOT reset
+        assertTrue("mid-talkspurt loss conceals, not resets", s.fillTick(out))
+        assertEquals(0, out[0].toInt())                 // PLC/hold silence, cursor HELD at 1920
+        // resumed frame at the held timestamp is accepted (proves no spurious reset happened)
+        assertTrue("resume accepted (cursor held, not reset)", s.offer(1920, encoded(960), 960, false))
+        assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())
+    }
 }
