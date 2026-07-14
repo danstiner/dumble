@@ -26,9 +26,9 @@ class TransmitGateTest {
         g.update(speech)                                  // open
         // 9 silent captures = 18 ticks < 20 → still transmitting (hangover)
         repeat(9) { assertTrue(g.update(silence).send) }
-        // 10th silent capture: ticks reach 20 → closes this capture → terminator
+        // 10th silent capture: ticks reach 20 → closes → send the real terminator frame
         val closing = g.update(silence)
-        assertFalse(closing.send); assertTrue(closing.terminator)
+        assertTrue(closing.send); assertTrue(closing.terminator)
         // subsequent silence → idle, no repeat terminator
         val idle = g.update(silence)
         assertFalse(idle.send); assertFalse(idle.terminator)

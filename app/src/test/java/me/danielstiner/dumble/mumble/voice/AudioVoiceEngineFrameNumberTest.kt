@@ -38,28 +38,50 @@ class AudioVoiceEngineFrameNumberTest {
         e.stop()
     }
 
-    @Test fun speechThenSilenceEmitsOneTerminatorAndFreezesFrameNumber() {
+    @Test fun speechThenSilenceSendsExactlyOneRealTerminator() {
         // 3 loud captures, then silence long enough to expire the 200 ms (20-tick) hangover.
         val amps = List(3) { 8000 } + List(20) { 0 }
         val e = engine(ScriptedAudioIn(amps))
 
-        var lastSent = -1L
         var terminators = 0
-        var terminatorFrameNumber = -1L
+        var terminatorLen = -1
         var sawNullAfterTerminator = false
         repeat(amps.size) {
             val f = e.nextOutgoingFrame(0)
             when {
                 f == null -> if (terminators > 0) sawNullAfterTerminator = true
-                f.isTerminator -> { terminators++; terminatorFrameNumber = f.frameNumber }
-                else -> lastSent = f.frameNumber
+                f.isTerminator -> { terminators++; terminatorLen = f.length }
+                else -> {}
             }
         }
-        assertTrue("at least the 3 speech frames were sent", lastSent >= 4L)
         assertEquals("exactly one terminator", 1, terminators)
-        assertEquals("terminator freezes frameNumber at the next value after last sent",
-            lastSent + 2L, terminatorFrameNumber)
+        assertTrue("terminator is a real (non-empty) frame, not an empty packet", terminatorLen > 0)
         assertTrue("idle nulls follow the terminator", sawNullAfterTerminator)
+        e.stop()
+    }
+
+    @Test fun frameNumberTracksWallClockAcrossSilence() {
+        // speech, long silence, speech again — the 2nd talkspurt's frameNumber reflects the
+        // wall-clock gap (it does NOT resume right after the 1st), so a Mumble receiver that
+        // schedules by absolute frame_number places it correctly instead of dropping it as late.
+        val amps = List(2) { 8000 } + List(30) { 0 } + List(2) { 8000 }
+        val e = engine(ScriptedAudioIn(amps))
+
+        var lastFirst = -1L
+        var firstSecond = -1L
+        var seenNull = false
+        repeat(amps.size) {
+            val f = e.nextOutgoingFrame(0)
+            when {
+                f == null -> seenNull = true
+                f.isTerminator -> {}
+                seenNull -> { if (firstSecond < 0) firstSecond = f.frameNumber }
+                else -> lastFirst = f.frameNumber
+            }
+        }
+        assertTrue("both talkspurts produced frames", lastFirst >= 0 && firstSecond >= 0)
+        assertTrue("2nd talkspurt frameNumber reflects the wall-clock silence gap, not a +2 resume",
+            firstSecond - lastFirst > 20L)
         e.stop()
     }
 
@@ -69,6 +91,7 @@ class AudioVoiceEngineFrameNumberTest {
         e.start(); e.setMuted(true)
         val first = e.nextOutgoingFrame(0)
         assertTrue("mute emits one terminator", first != null && first.isTerminator)
+        assertTrue("mute terminator is a real (non-empty) frame", first!!.length > 0)
         assertNull("subsequent muted → null", e.nextOutgoingFrame(0))
         assertTrue("mic still drained while muted", fakeIn.reads >= 1)
         e.stop()

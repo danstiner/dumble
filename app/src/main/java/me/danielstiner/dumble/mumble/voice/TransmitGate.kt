@@ -9,8 +9,10 @@ package me.danielstiner.dumble.mumble.voice
  * frames). A single voiced sub-frame in a capture keeps the whole capture transmitting; the
  * silent half rides along as lead-in/tail.
  *
- * send/terminator are mutually exclusive: while transmitting, send=true; on the first capture
- * after transmission fully stops, terminator=true (emit one empty terminator); then idle.
+ * While transmitting, send=true. On the closing capture (transmission just stopped), BOTH
+ * send=true and terminator=true — the closing (silent) frame is sent as a REAL terminator, not
+ * an empty packet (Mumble drops empty-payload packets before reading the terminator flag). Then
+ * idle: send=false, terminator=false.
  */
 class TransmitGate(
     private val openLevel: Float = 0.60f,
@@ -36,7 +38,7 @@ class TransmitGate(
         }
         return when {
             transmitting -> Decision(send = true, terminator = false)
-            wasTransmitting -> Decision(send = false, terminator = true)  // just closed
+            wasTransmitting -> Decision(send = true, terminator = true)   // just closed: send real terminator
             else -> Decision(send = false, terminator = false)
         }
     }
