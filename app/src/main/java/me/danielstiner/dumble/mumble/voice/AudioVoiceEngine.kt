@@ -45,6 +45,7 @@ class AudioVoiceEngine(
     private val received = java.util.concurrent.atomic.AtomicLong(0)
     private var uplinkBytes = 0L
     private var uplinkFrames = 0
+    private var diagTick = 0   // TEMP: RNNoise pre/post RMS diagnostic (#40 debug)
     @Volatile private var lateDropCount = 0L
     val lateDrops: Long get() = lateDropCount
 
@@ -72,10 +73,17 @@ class AudioVoiceEngine(
         }
         wasMuted = false
 
+        val diag = (diagTick++ % 50 == 0)                            // TEMP: ~1/s
+        val preRms = if (diag) frameRms(capturePcm, CAPTURE_SAMPLES) else 0.0
+
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)   // None = no-op (Phase 1)
             subLevels[i] = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+        }
+        if (diag) runCatching {   // runCatching: android.util.Log is unmocked in unit tests
+            android.util.Log.d("AudioVoiceEngine", "vaddiag preRms=%.0f postRms=%.0f lvl0=%.2f lvl1=%.2f"
+                .format(preRms, frameRms(capturePcm, CAPTURE_SAMPLES), subLevels[0], subLevels[1]))
         }
         val d = gate.update(subLevels)
 
@@ -96,6 +104,12 @@ class AudioVoiceEngine(
         sent++
         _stats.update { it.copy(sent = sent) }
         return VoiceFrame(opus, opus.size, fn)
+    }
+
+    private fun frameRms(pcm: ShortArray, n: Int): Double {   // TEMP diagnostic (#40 debug)
+        var s = 0.0
+        for (i in 0 until n) { val v = pcm[i].toDouble(); s += v * v }
+        return kotlin.math.sqrt(s / n)
     }
 
     /** Receive thread — must not block, must not allocate a decoder. */
