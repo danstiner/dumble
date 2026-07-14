@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(dumbleopus C)
+project(dumble C)
 
 include(FetchContent)
 
@@ -22,7 +22,7 @@ FetchContent_MakeAvailable(rnnoise)
 
 file(GLOB RNNOISE_SRC ${rnnoise_SOURCE_DIR}/src/*.c)
 
-add_library(dumbleopus SHARED opus_jni.c rnnoise_jni.c ${RNNOISE_SRC})
-target_include_directories(dumbleopus PRIVATE ${rnnoise_SOURCE_DIR}/include)
-target_link_libraries(dumbleopus opus)
-target_link_options(dumbleopus PRIVATE "-Wl,-z,max-page-size=16384")
+add_library(dumble SHARED opus_jni.c rnnoise_jni.c ${RNNOISE_SRC})
+target_include_directories(dumble PRIVATE ${rnnoise_SOURCE_DIR}/include)
+target_link_libraries(dumble opus)
+target_link_options(dumble PRIVATE "-Wl,-z,max-page-size=16384")

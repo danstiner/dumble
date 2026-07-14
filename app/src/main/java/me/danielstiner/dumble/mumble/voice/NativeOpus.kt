@@ -2,7 +2,7 @@ package me.danielstiner.dumble.mumble.voice
 
 /** Thin JNI binding to libopus (see app/src/main/cpp/opus_jni.c). Handles are opaque pointers. */
 object NativeOpus {
-    init { System.loadLibrary("dumbleopus") }
+    init { System.loadLibrary("dumble") }
 
     external fun createEncoder(sampleRate: Int, channels: Int, application: Int): Long
     external fun configureEncoder(enc: Long, bitrate: Int, complexity: Int): Int

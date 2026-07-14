@@ -2,7 +2,7 @@ package me.danielstiner.dumble.mumble.voice
 
 /** Thin JNI binding to RNNoise (see app/src/main/cpp/rnnoise_jni.c). State is an opaque pointer. */
 object NativeRnnoise {
-    init { System.loadLibrary("dumbleopus") }   // RNNoise is linked into the same shared lib
+    init { System.loadLibrary("dumble") }   // Opus + RNNoise are linked into the same shared lib
 
     external fun createState(): Long
     external fun destroyState(state: Long)
