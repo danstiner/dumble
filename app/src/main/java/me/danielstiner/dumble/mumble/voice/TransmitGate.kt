@@ -15,7 +15,7 @@ package me.danielstiner.dumble.mumble.voice
  * idle: send=false, terminator=false.
  */
 class TransmitGate(
-    val openLevel: Float = 0.60f,
+    var openLevel: Float = 0.60f,         // live-tunable (tuner drives it for the RNNoise threshold)
     private val closeLevel: Float = 0.35f,
     private val maxHoldTicks: Int = 20,   // 20 x 10 ms = 200 ms hangover
 ) {

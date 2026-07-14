@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,16 +52,21 @@ class VadDebugActivity : AppCompatActivity() {
     @Volatile private var rnnoiseOn = true
     private val vadNames = arrayOf("Energy", "RNNoise")   // Silero to be added
     @Volatile private var vadSource = 0                   // index into vadNames; drives the gate
+    private val rnnMinThr = 0.3f
+    private val rnnMaxThr = 0.95f
+    @Volatile private var rnnThreshold = 0.5f             // RNNoise VAD open threshold (prob 0..1)
 
     private val detector = EnergyVadDetector()
     private val gate = TransmitGate()
     private val am by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
     private lateinit var history: LevelHistoryView
+    private lateinit var history2: ProbHistoryView
     private lateinit var readout: TextView
     private lateinit var gateView: TextView
     private lateinit var thresholdText: TextView
     private lateinit var relText: TextView
+    private lateinit var rnnText: TextView
     private lateinit var rnnoiseButton: Button
     private lateinit var vadButton: Button
     private lateinit var routeButton: Button
@@ -93,7 +99,18 @@ class VadDebugActivity : AppCompatActivity() {
         ).apply { setMargins(0, 0, 0, 8) })
 
         layout.addView(TextView(this).apply {
-            text = "cyan=rel target · orange=noise floor · yellow=abs gate · tick=raw · green bars=open"
+            text = "Energy (dBFS): cyan=rel target · orange=noise floor · yellow=abs gate · tick=raw"
+            textSize = 11f; setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(0, 0, 0, 12)
+        })
+
+        history2 = ProbHistoryView(this)
+        layout.addView(history2, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 320
+        ).apply { setMargins(0, 0, 0, 8) })
+
+        layout.addView(TextView(this).apply {
+            text = "RNNoise VAD probability (0–1): cyan=threshold · green bars=above"
             textSize = 11f; setTextColor(Color.parseColor("#AAAAAA"))
             setPadding(0, 0, 0, 12)
         })
@@ -127,6 +144,7 @@ class VadDebugActivity : AppCompatActivity() {
                     absOpenDb = progressToDb(p)
                     detector.absOpenDb = absOpenDb
                     thresholdText.text = thresholdLabel()
+                    // (relative-threshold slider handles marginDb/openLevel via applyGate)
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
@@ -148,7 +166,7 @@ class VadDebugActivity : AppCompatActivity() {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     relOpenDb = relMinDb + (p / 100f) * (relMaxDb - relMinDb)
-                    detector.marginDb = relOpenDb / gate.openLevel
+                    applyGate()
                     relText.text = relLabel()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -156,7 +174,30 @@ class VadDebugActivity : AppCompatActivity() {
             })
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 8, 0, 32) }
+            ).apply { setMargins(0, 8, 0, 24) }
+        })
+
+        rnnText = TextView(this).apply {
+            text = rnnLabel()
+            setTextColor(Color.WHITE)
+        }
+        layout.addView(rnnText)
+
+        layout.addView(SeekBar(this).apply {
+            max = 100
+            progress = (((rnnThreshold - rnnMinThr) / (rnnMaxThr - rnnMinThr)) * 100f).toInt().coerceIn(0, 100)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    rnnThreshold = rnnMinThr + (p / 100f) * (rnnMaxThr - rnnMinThr)
+                    applyGate()
+                    rnnText.text = rnnLabel()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 8, 0, 40) }
         })
 
         rnnoiseButton = Button(this).apply {
@@ -184,7 +225,7 @@ class VadDebugActivity : AppCompatActivity() {
         }
         layout.addView(routeButton)
 
-        setContentView(layout)
+        setContentView(ScrollView(this).apply { addView(layout) })
     }
 
     override fun onResume() {
@@ -210,7 +251,7 @@ class VadDebugActivity : AppCompatActivity() {
         running.set(true)
         sent = 0
         detector.absOpenDb = absOpenDb
-        detector.marginDb = relOpenDb / gate.openLevel
+        applyGate()
         gate.reset()
         am.mode = AudioManager.MODE_IN_COMMUNICATION   // enable comm-device routing (speaker/BT)
         refreshRoute()
@@ -284,6 +325,7 @@ class VadDebugActivity : AppCompatActivity() {
                     val eM = eMax; val rM = rMax
                     runOnUiThread {
                         history.push(preF, postF, open, absOpenDb, floorF, relTargetDb)
+                        history2.push(rM, rnnThreshold)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
                         readout.text = ("in %+.0f→%+.0f dBFS  %.4f rms  SNR %+.0f\n" +
@@ -306,6 +348,17 @@ class VadDebugActivity : AppCompatActivity() {
 
     private fun relLabel() =
         "Relative threshold: %.0f dB above floor".format(relOpenDb)
+
+    private fun rnnLabel() =
+        "RNNoise threshold: %.2f".format(rnnThreshold)
+
+    /** Push the tuner's live thresholds into the shared gate/detector. gate.openLevel doubles as
+     *  the RNNoise probability threshold; marginDb compensates so the energy open point stays at
+     *  floor + relOpenDb regardless of openLevel. */
+    private fun applyGate() {
+        gate.openLevel = rnnThreshold
+        detector.marginDb = relOpenDb / gate.openLevel
+    }
 
     private fun rmsDbOf(pcm: ShortArray): Double {
         var s = 0.0
@@ -386,4 +439,41 @@ class LevelHistoryView(context: Context) : View(context) {
     }
 
     companion object { const val FLOOR = -90f; const val CEIL = 0f }
+}
+
+/** Scrolling strip of a 0..1 probability (RNNoise VAD). Bars green when at/above the threshold line. */
+class ProbHistoryView(context: Context) : View(context) {
+    private val cap = 128
+    private val prob = FloatArray(cap)
+    private var head = 0
+    private var threshold = 0.5f
+    private val bar = Paint()
+    private val line = Paint().apply { color = Color.parseColor("#00E5FF"); strokeWidth = 4f }
+    private val grid = Paint().apply { color = Color.parseColor("#3A3A3A"); strokeWidth = 1f }
+    private val gridLabel = Paint().apply { color = Color.parseColor("#888888"); textSize = 22f }
+
+    fun push(p: Float, thr: Float) {
+        prob[head] = p; threshold = thr
+        head = (head + 1) % cap
+        invalidate()
+    }
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        c.drawColor(Color.parseColor("#1E1E1E"))
+        for (g in floatArrayOf(0.25f, 0.5f, 0.75f)) {
+            val gy = h - g * h
+            c.drawLine(0f, gy, w, gy, grid)
+            c.drawText("%.2f".format(g), 6f, gy - 4f, gridLabel)
+        }
+        val bw = w / cap
+        for (i in 0 until cap) {
+            val idx = (head + i) % cap
+            val p = prob[idx].coerceIn(0f, 1f)
+            bar.color = if (p >= threshold) Color.parseColor("#4CAF50") else Color.parseColor("#5A5A5A")
+            c.drawRect(i * bw, h - p * h, (i + 1) * bw - 1f, h, bar)
+        }
+        val ty = h - threshold.coerceIn(0f, 1f) * h
+        c.drawLine(0f, ty, w, ty, line)
+    }
 }
