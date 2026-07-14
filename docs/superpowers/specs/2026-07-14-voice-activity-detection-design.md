@@ -49,9 +49,14 @@ the existing `AudioVoiceEngine.nextOutgoingFrame()` (voice-send-thread context):
 - **`TransmitGate`** — the state machine. Given the two sub-frame levels of one 20 ms
   capture, returns `Decision(send: Boolean, terminator: Boolean)`.
 
-The seam is deliberately packet-size-independent: the detector and gate operate on 10 ms
-decisions regardless of the wire packet size, so a future switch to 10 ms packets would not
-touch this code.
+The seam is deliberately packet-size-independent. Packet size is a single parameter —
+`framesPerPacket`, N × 10 ms (Phase 1/2 ship N = 2 = 20 ms) — and the detector and gate always
+operate in 10 ms units regardless of it: a capture is N × 480 samples processed as N
+sub-frames, `frameNumber` advances by N per packet, and all gate timing is counted in 10 ms
+ticks (not packets), so it is invariant to packet size. This is deliberate so a future
+configurable packet-size slider (10/20/40/60 ms) is a localized change, not a rewrite (see
+Deferred). We do **not** build any packet-size configuration now (YAGNI) — we only avoid
+hardcoding 20 ms in a way that would force a rewrite later.
 
 ### Integration point
 
@@ -113,17 +118,34 @@ Mirrors Mumble's proven amplitude-mode gate:
 - **Two-threshold hysteresis.** Open when level > `openLevel`; stay open while level >
   `closeLevel`, with `closeLevel < openLevel`. Prevents flutter at the boundary. (Mumble's
   analogous defaults are `fVADmax`/`fVADmin`.)
-- **Hangover.** After the level drops below `closeLevel`, keep transmitting for a hold period
-  of ~200 ms (matching Mumble's master default) before closing. Hangover frames carry real
-  captured audio, so trailing consonants and short inter-word gaps are not chopped.
+- **Hangover (hold timer).** After the level drops below `closeLevel`, keep transmitting for a
+  hold period of ~200 ms (matching Mumble's master `iVoiceHold` default of 20 × 10 ms) before
+  closing. Counted in **10 ms sub-frame ticks, not packets** — the gate ticks its hold counter
+  once per 10 ms sub-frame it consumes, so the hangover *duration* is invariant to packet size.
+  This mirrors Mumble's `iHoldFrames` (a 10 ms-frame counter, which is exactly why Mumble's
+  "audio per packet" setting never changes the hold time). Hangover frames carry real captured
+  audio, so trailing consonants and short inter-word gaps are not chopped. This is a mechanism
+  distinct from the two-threshold hysteresis above: hysteresis gives *level*-based stickiness
+  (stay open while above `closeLevel`); the hold timer gives *time*-based stickiness (stay open
+  for the hold window after the level test has already failed). Verified against Mumble source:
+  the `iHoldFrames` block runs only when the per-frame speech test fails and never consults the
+  thresholds.
 - **Onset.** Open on the first 10 ms sub-frame above `openLevel`. Because detection runs per
   10 ms half, an onset in the second half of a 20 ms capture still sends the whole packet,
   giving ~10 ms of natural lead-in — so no explicit pre-roll/lookahead buffer is needed
   (avoids added latency and buffering).
-- **Per-capture decision.** `update(l0, l1)` treats the capture as speech if **either** 10 ms
-  sub-frame is above the active threshold (open vs. close depending on current state). It
-  returns `send = (open || withinHangover)`, and `terminator = true` exactly on the transition
-  where hangover expires while previously transmitting.
+- **Per-capture decision.** `update(l0, l1)` treats the capture as voiced if `max(l0, l1)`
+  exceeds the active threshold — `openLevel` when the gate is closed, `closeLevel` when it is
+  open. It returns `send = (open || withinHangover)`, and `terminator = true` exactly on the
+  transition where hangover expires while previously transmitting.
+- **Only one sub-frame voiced.** The wire packet is atomic (a single 20 ms Opus encode), so a
+  half-packet cannot be sent; the two sub-verdicts collapse via the `max` rule above.
+  Consequences: an onset in the *second* half (gate closed) opens the gate and sends the whole
+  packet, with the silent first half as ~10 ms of natural lead-in (no onset clip). A silent
+  *second* half at offset (gate open) is sent as the talkspurt tail. A lone quiet sub-frame
+  inside voiced audio keeps `max` above `closeLevel`, so the gate does not flutter closed. The
+  10 ms resolution therefore sharpens edge *timing*, not sub-packet transmission; the silent
+  half that rides along at each edge is ≤10 ms and harmless (it compresses to near-nothing).
 
 ### frameNumber and terminator semantics
 
@@ -149,6 +171,15 @@ solved for the Opus library).
 
 - `RnnoiseSuppressor : NoiseSuppressor` denoises each 480-sample sub-frame **in place** at
   48 kHz — RNNoise's native rate, so no resampling.
+- **Frame alignment is exact, not incidental.** At 48 kHz, 10 ms = 480 samples, and RNNoise's
+  frame is fixed at 480 samples (48 kHz-only). So one 20 ms / 960-sample capture is exactly
+  two RNNoise frames (`[0, 480)` then `[480, 960)`), one RNNoise frame per 10 ms sub-frame,
+  with no remainder — hence no resampling and no bridging ring buffer. This 1:1 match is the
+  reason the sub-processing granularity was chosen at 10 ms.
+- **RNNoise is stateful.** Keep one persistent `DenoiseState` per capture stream and feed it
+  consecutive frames in order (half 0, then half 1, capture after capture); never reset it
+  between frames. This preserves RNNoise's internal pitch/overlap continuity across the two
+  halves and across successive captures. Processing is block-aligned 480-in/480-out.
 - The denoised buffer feeds **both** the `EnergyVadDetector` (cleaner detection, higher SNR)
   and the Opus encoder (cleaner uplink audio). This is the bonus Mumble gets from denoising
   before encode.
@@ -210,8 +241,12 @@ Like feature #56, each phase ends with an on-device check by the user:
   with the receive path. Not used.
 - **RNNoise's own VAD head**, and a **Speex/SNR probability** detector — considered and
   rejected in favor of energy detection on the denoised signal (Mumble-faithful).
-- **10 ms wire packets** — evaluated and rejected for this spec on bandwidth/battery grounds
-  (~+29% uplink overhead); reversible later without touching the VAD seam.
+- **Configurable packet size (10/20/40/60 ms slider)** — not built now: no settings/DataStore
+  plumbing and no runtime switching (YAGNI). But the design is structured for it — packet size
+  is the single `framesPerPacket` parameter (default 2 = 20 ms), the pipeline processes N × 10 ms
+  sub-frames, `frameNumber += N`, and all gate timing is in 10 ms units, so it is
+  packet-size-invariant. Adding a slider later is a localized change, not a rewrite. 20 ms stays
+  the default on bandwidth/battery grounds (10 ms ≈ +29% uplink overhead).
 
 ## Appendix — Mumble source facts (fable-verified)
 
