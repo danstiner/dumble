@@ -17,5 +17,6 @@ interface VoiceEngine {
     fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame?
     /** Must not block; called from UDP receive thread or TCP reader (tunneled). */
     fun onIncomingFrame(opusData: ByteArray, offset: Int, length: Int,
-                        frameNumber: Long, senderSession: Int, arrivalNanos: Long)
+                        frameNumber: Long, senderSession: Int, arrivalNanos: Long,
+                        isTerminator: Boolean)
 }

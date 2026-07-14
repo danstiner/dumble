@@ -73,7 +73,7 @@ class VoiceTransport(
             MumbleCodec.UDP_TYPE_AUDIO -> {
                 val audio = MumbleUdpProtos.Audio.parser().parseFrom(buf, 1, len - 1)
                 engine.onIncomingFrame(audio.opusData.toByteArray(), 0, audio.opusData.size(),
-                    audio.frameNumber, audio.senderSession, arrivalNanos)
+                    audio.frameNumber, audio.senderSession, arrivalNanos, audio.isTerminator)
             }
             MumbleCodec.UDP_TYPE_PING -> {
                 val ping = MumbleUdpProtos.Ping.parser().parseFrom(buf, 1, len - 1)

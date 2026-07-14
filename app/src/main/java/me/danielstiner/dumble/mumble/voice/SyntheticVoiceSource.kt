@@ -71,7 +71,8 @@ class SyntheticVoiceSource(
 
     @Synchronized
     override fun onIncomingFrame(opusData: ByteArray, offset: Int, length: Int,
-                                 frameNumber: Long, senderSession: Int, arrivalNanos: Long) {
+                                 frameNumber: Long, senderSession: Int, arrivalNanos: Long,
+                                 isTerminator: Boolean) {
         if (length < HEADER) return
         // No marker → real voice from another speaker/server, not our loopback echo: ignore it,
         // else its foreign frame_number and opus bytes corrupt the RTT/loss/jitter measurement.

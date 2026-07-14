@@ -82,16 +82,17 @@ class AudioVoiceEngine(
 
     /** Receive thread — must not block, must not allocate a decoder. */
     override fun onIncomingFrame(opusData: ByteArray, offset: Int, length: Int,
-                                 frameNumber: Long, senderSession: Int, arrivalNanos: Long) {
-        val isTerminator = length == 0
+                                 frameNumber: Long, senderSession: Int, arrivalNanos: Long,
+                                 isTerminator: Boolean) {
+        val terminator = isTerminator || length == 0     // keep the empty-payload inference (mute path)
         val copy = if (length == 0) ByteArray(0) else opusData.copyOfRange(offset, offset + length)
         val span = if (length == 0) 0 else codec.packetSamples(copy, 0, copy.size)
         val stream = speakers.computeIfAbsent(senderSession) {
             android.util.Log.d("AudioVoiceEngine", "new speaker session=$senderSession (total=${speakers.size + 1})")
             SpeakerStream(codec)
         }
-        val queued = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, isTerminator)
-        if (!queued && !isTerminator) lateDropCount++
+        val queued = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, terminator)
+        if (!queued && !terminator) lateDropCount++
         received.incrementAndGet()
     }
 

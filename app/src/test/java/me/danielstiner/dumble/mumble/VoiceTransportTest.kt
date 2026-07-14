@@ -24,7 +24,8 @@ class VoiceTransportTest {
             return VoiceFrame(ByteArray(20) { fn.toByte() }, 20, fn)
         }
         override fun onIncomingFrame(opusData: ByteArray, offset: Int, length: Int,
-                                     frameNumber: Long, senderSession: Int, arrivalNanos: Long) {
+                                     frameNumber: Long, senderSession: Int, arrivalNanos: Long,
+                                     isTerminator: Boolean) {
             incoming.add(Triple(frameNumber, senderSession, arrivalNanos))
         }
     }
@@ -94,7 +95,7 @@ class VoiceTransportTest {
                 sent = true
                 return VoiceFrame(ByteArray(0), 0, 4, isTerminator = true)
             }
-            override fun onIncomingFrame(o: ByteArray, off: Int, len: Int, fn: Long, s: Int, a: Long) {}
+            override fun onIncomingFrame(o: ByteArray, off: Int, len: Int, fn: Long, s: Int, a: Long, term: Boolean) {}
         }
         val t = VoiceTransport(engine, { VoiceTransportMode.UDP },
             udpSend = { buf, n -> captured.add(buf.copyOf(n)); true },
@@ -103,5 +104,25 @@ class VoiceTransportTest {
         val wire = captured.first()
         val audio = MumbleUdpProtos.Audio.parser().parseFrom(wire, 1, wire.size - 1)
         assertTrue(audio.isTerminator)
+    }
+
+    @Test fun passesIsTerminatorThroughOnIncoming() {
+        var gotTerminator: Boolean? = null
+        val engine = object : VoiceEngine {
+            override fun start() {}
+            override fun stop() {}
+            override fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame? = null
+            override fun onIncomingFrame(o: ByteArray, off: Int, len: Int, fn: Long, s: Int, a: Long, term: Boolean) {
+                gotTerminator = term
+            }
+        }
+        val vt = VoiceTransport(engine, { VoiceTransportMode.UDP }, { _, _ -> true }, { _, _ -> true })
+        val audio = MumbleUdpProtos.Audio.newBuilder().setSenderSession(1).setFrameNumber(2L)
+            .setIsTerminator(true)
+            .setOpusData(com.google.protobuf.ByteString.copyFrom(ByteArray(4) { 1 })).build()
+        val buf = ByteArray(256)
+        val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_AUDIO, audio, buf)
+        vt.onPlaintext(buf, n, arrivalNanos = 0L)
+        assertEquals(true, gotTerminator)
     }
 }
