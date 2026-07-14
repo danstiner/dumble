@@ -54,11 +54,11 @@ class VadDebugActivity : AppCompatActivity() {
     private lateinit var readout: TextView
     private lateinit var gateView: TextView
     private lateinit var thresholdText: TextView
-    private lateinit var startButton: Button
     private lateinit var rnnoiseButton: Button
     private lateinit var routeButton: Button
 
     @Volatile private var sent = 0L
+    private var askedPermission = false
 
     private val requestPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -81,7 +81,7 @@ class VadDebugActivity : AppCompatActivity() {
 
         history = LevelHistoryView(this)
         layout.addView(history, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 260
+            LinearLayout.LayoutParams.MATCH_PARENT, 480
         ).apply { setMargins(0, 0, 0, 16) })
 
         gateView = TextView(this).apply {
@@ -100,7 +100,7 @@ class VadDebugActivity : AppCompatActivity() {
         layout.addView(readout)
 
         thresholdText = TextView(this).apply {
-            text = "Open threshold: %.0f dB".format(absOpenDb)
+            text = thresholdLabel()
             setTextColor(Color.WHITE)
         }
         layout.addView(thresholdText)
@@ -112,7 +112,7 @@ class VadDebugActivity : AppCompatActivity() {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     absOpenDb = progressToDb(p)
                     detector.absOpenDb = absOpenDb
-                    thresholdText.text = "Open threshold: %.0f dB".format(absOpenDb)
+                    thresholdText.text = thresholdLabel()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
@@ -122,21 +122,12 @@ class VadDebugActivity : AppCompatActivity() {
             ).apply { setMargins(0, 8, 0, 32) }
         })
 
-        startButton = Button(this).apply {
-            text = "Start"
-            setOnClickListener {
-                if (running.get()) stop()
-                else if (hasMic()) start()
-                else requestPermission.launch(Manifest.permission.RECORD_AUDIO)
-            }
-        }
-        layout.addView(startButton)
-
         rnnoiseButton = Button(this).apply {
             text = "RNNoise: ON"
             setOnClickListener {
                 rnnoiseOn = !rnnoiseOn
                 text = if (rnnoiseOn) "RNNoise: ON" else "RNNoise: OFF"
+                thresholdText.text = thresholdLabel()
             }
         }
         layout.addView(rnnoiseButton)
@@ -148,6 +139,20 @@ class VadDebugActivity : AppCompatActivity() {
         layout.addView(routeButton)
 
         setContentView(layout)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        when {
+            hasMic() -> start()
+            !askedPermission -> { askedPermission = true; requestPermission.launch(Manifest.permission.RECORD_AUDIO) }
+            else -> readout.text = "RECORD_AUDIO permission required"
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stop()
     }
 
     private fun hasMic() = ActivityCompat.checkSelfPermission(
@@ -162,16 +167,14 @@ class VadDebugActivity : AppCompatActivity() {
         gate.reset()
         am.mode = AudioManager.MODE_IN_COMMUNICATION   // enable comm-device routing (speaker/BT)
         refreshRoute()
-        startButton.text = "Stop"
         thread = Thread({ loop() }, "vad-debug").apply { isDaemon = true; start() }
     }
 
     private fun stop() {
-        running.set(false)
+        if (!running.getAndSet(false)) return
         thread?.join(500); thread = null
         runCatching { am.clearCommunicationDevice(); am.mode = AudioManager.MODE_NORMAL }
-        startButton.text = "Start"
-        runOnUiThread { gateView.text = "—"; gateView.setTextColor(Color.GRAY); readout.text = "Stopped" }
+        runOnUiThread { gateView.text = "—"; gateView.setTextColor(Color.GRAY) }
     }
 
     /** Cycle through the currently-available communication devices (earpiece/speaker/BT/wired). */
@@ -205,33 +208,28 @@ class VadDebugActivity : AppCompatActivity() {
         try {
             while (running.get()) {
                 if (recorder.read(pcm, CAPTURE_SAMPLES) <= 0) continue
-                var sumSq = 0.0
-                for (i in 0 until CAPTURE_SAMPLES) { val v = pcm[i].toDouble(); sumSq += v * v }
-                val rms = sqrt(sumSq / CAPTURE_SAMPLES)
-                val inputDb = if (rms < 1.0) -96.0 else 20.0 * log10(rms / 32768.0)
+                val preDb = rmsDbOf(pcm)                        // raw mic
 
                 for (h in 0 until FRAMES_PER_PACKET) {
                     val off = h * FRAME_SAMPLES_10MS
                     if (rnnoiseOn) suppressor.process(pcm, off, FRAME_SAMPLES_10MS)
                     levels[h] = detector.level(pcm, off, FRAME_SAMPLES_10MS)
                 }
+                val postDb = rmsDbOf(pcm)                       // after RNNoise (what the VAD sees)
                 val d = gate.update(levels)
                 if (d.send) sent++
 
                 if (tick++ % 3 == 0) {   // ~16 Hz UI
                     val open = d.send
                     val term = d.terminator
-                    val dbF = inputDb.toFloat()
+                    val preF = preDb.toFloat(); val postF = postDb.toFloat()
                     runOnUiThread {
-                        history.push(dbF, open, absOpenDb)
+                        history.push(preF, postF, open, absOpenDb, rnnoiseOn)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
-                        val route = am.communicationDevice?.let { deviceName(it.type) } ?: "default"
-                        readout.text = ("in: %+.0f dB   lvl: %.2f / %.2f\n" +
-                            "gate: %s   sent: %d   route: %s").format(
-                            inputDb, levels[0], levels[1],
-                            if (open) "OPEN" else "closed", sent, route)
-                        refreshRoute()   // reflects BT connect/disconnect while running
+                        readout.text = "in %+.0f→%+.0f dB  lvl %.2f/%.2f  sent %d".format(
+                            preDb, postDb, levels[0], levels[1], sent)
+                        refreshRoute()   // updates Route button (reflects BT connect/disconnect)
                     }
                 }
             }
@@ -241,6 +239,16 @@ class VadDebugActivity : AppCompatActivity() {
             recorder.close()
             suppressor.close()
         }
+    }
+
+    private fun thresholdLabel() =
+        "Open threshold: %.0f dB   (detect on %s)".format(absOpenDb, if (rnnoiseOn) "denoised" else "raw")
+
+    private fun rmsDbOf(pcm: ShortArray): Double {
+        var s = 0.0
+        for (i in 0 until CAPTURE_SAMPLES) { val v = pcm[i].toDouble(); s += v * v }
+        val rms = sqrt(s / CAPTURE_SAMPLES)
+        return if (rms < 1.0) -96.0 else 20.0 * log10(rms / 32768.0)
     }
 
     private fun dbToProgress(db: Float): Int =
@@ -257,18 +265,25 @@ class VadDebugActivity : AppCompatActivity() {
  *  a yellow line marks the current open threshold. */
 class LevelHistoryView(context: Context) : View(context) {
     private val cap = 128
-    private val dbs = FloatArray(cap) { FLOOR }
+    private val post = FloatArray(cap) { FLOOR }
+    private val pre = FloatArray(cap) { FLOOR }
     private val open = BooleanArray(cap)
     private var head = 0
     private var thresholdDb = -55f
+    private var detectDenoised = true
     private val bar = Paint()
-    private val line = Paint().apply { color = Color.parseColor("#FFEB3B"); strokeWidth = 3f }
+    private val preTick = Paint().apply { color = Color.parseColor("#ECEFF1") }  // raw (pre-RNNoise) level
+    private val line = Paint().apply { strokeWidth = 4f }
 
-    fun push(db: Float, isOpen: Boolean, threshold: Float) {
-        dbs[head] = db; open[head] = isOpen; thresholdDb = threshold
+    fun push(preDb: Float, postDb: Float, isOpen: Boolean, threshold: Float, denoised: Boolean) {
+        pre[head] = preDb; post[head] = postDb; open[head] = isOpen
+        thresholdDb = threshold; detectDenoised = denoised
         head = (head + 1) % cap
         invalidate()
     }
+
+    private fun yOf(db: Float, h: Float) =
+        h - ((db.coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR)) * h
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
@@ -276,13 +291,17 @@ class LevelHistoryView(context: Context) : View(context) {
         val bw = w / cap
         for (i in 0 until cap) {
             val idx = (head + i) % cap                     // oldest -> newest
-            val frac = ((dbs[idx].coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR))
-            val barH = frac * h
+            val x0 = i * bw; val x1 = (i + 1) * bw - 1f
+            val postY = yOf(post[idx], h)
             bar.color = if (open[idx]) Color.parseColor("#4CAF50") else Color.parseColor("#5A5A5A")
-            c.drawRect(i * bw, h - barH, (i + 1) * bw - 1f, h, bar)
+            c.drawRect(x0, postY, x1, h, bar)
+            // marker at the raw (pre-RNNoise) level; gap above the bar = noise RNNoise removed
+            val preY = yOf(pre[idx], h)
+            c.drawRect(x0, preY, x1, preY + 4f, preTick)
         }
-        val tFrac = (thresholdDb.coerceIn(FLOOR, CEIL) - FLOOR) / (CEIL - FLOOR)
-        val ty = h - tFrac * h
+        // threshold line colored by which signal drives detection: cyan = denoised, yellow = raw
+        line.color = if (detectDenoised) Color.parseColor("#00E5FF") else Color.parseColor("#FFEB3B")
+        val ty = yOf(thresholdDb, h)
         c.drawLine(0f, ty, w, ty, line)
     }
 
