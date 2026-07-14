@@ -34,7 +34,7 @@
     {
       "id": 5,
       "subject": "Task 5: On-device verify lateDrops~0 vs VAD peer",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         2,
@@ -51,5 +51,5 @@
       "description": "**Goal:** Clear the terminator tag when playback decodes past it (contiguous talkspurt) or when a reordered/duplicate terminator is already behind the playout cursor, preventing a spurious mid-talkspurt resetToIdle. Final-review remediation.\n\n**Files:**\n- app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt\n- app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\n- app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\n- app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\n\n**Acceptance Criteria:**\n- decodeNext clears tag when decoding past it\n- offer ignores terminator with ts<playoutCursor\n- contiguous-terminator mid-talkspurt loss conceals not resets (fails pre-fix)\n- full suite green\n\n**Verify:** ./gradlew testDebugUnitTest\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt\",\"app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterBuffer.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\",\"app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterBufferTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest\", \"acceptanceCriteria\": [\"decodeNext clears tag when decoding past it\",\"offer ignores terminator with ts<playoutCursor\",\"contiguous-terminator mid-talkspurt loss conceals not resets\",\"full suite green\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-14T06:36:08Z"
+  "lastUpdated": "2026-07-14T06:44:46Z"
 }
