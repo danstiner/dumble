@@ -25,7 +25,10 @@ class JitterBuffer(
         private set
 
     @Synchronized fun offer(p: Packet, playoutCursor: Long): Boolean {
-        if (p.isTerminator) terminatorTimestamp = p.timestampSamples
+        if (p.isTerminator) {
+            val t = terminatorTimestamp
+            if (t == null || p.timestampSamples >= t) terminatorTimestamp = p.timestampSamples
+        }
         if (p.opus.isEmpty()) return false                       // terminator / empty → tag only
         if (p.timestampSamples < playoutCursor) return false      // late
         if (queue.containsKey(p.timestampSamples)) return false   // duplicate
@@ -49,4 +52,6 @@ class JitterBuffer(
     @Synchronized fun bufferedSamples(): Int = bufferedSpans
 
     @Synchronized fun isEmpty(): Boolean = queue.isEmpty()
+
+    @Synchronized fun clearTerminator() { terminatorTimestamp = null }
 }

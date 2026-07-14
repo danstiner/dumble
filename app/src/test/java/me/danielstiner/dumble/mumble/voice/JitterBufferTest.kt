@@ -42,4 +42,21 @@ class JitterBufferTest {
         // 1920 > 1000 → oldest (ts 0) dropped
         assertEquals(960, b.pollFirst()!!.timestampSamples)
     }
+
+    @Test fun terminatorTagIsMonotonic() {
+        val b = JitterBuffer()
+        b.offer(pkt(1920, span = 0, term = true), 0)      // tag = 1920
+        b.offer(pkt(960, span = 0, term = true), 0)        // older terminator must NOT lower the tag
+        assertEquals(1920L, b.terminatorTimestamp)
+        b.offer(pkt(2880, span = 0, term = true), 0)       // newer → updates
+        assertEquals(2880L, b.terminatorTimestamp)
+    }
+
+    @Test fun clearTerminatorResetsTag() {
+        val b = JitterBuffer()
+        b.offer(pkt(1920, span = 0, term = true), 0)
+        assertEquals(1920L, b.terminatorTimestamp)
+        b.clearTerminator()
+        assertNull(b.terminatorTimestamp)
+    }
 }
