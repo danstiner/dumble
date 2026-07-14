@@ -13,10 +13,15 @@ interface VadDetector {
  * RMS sits above a slowly-tracked background floor, mapped over [marginDb]. The floor updates
  * only when the sub-frame is NOT speech-like (its level is within the margin), so sustained
  * speech never inflates it — this reproduces Mumble's "don't adapt during speech" without any
- * gate-state coupling. This is the fixed-threshold fallback's adaptive sibling; see the spec.
+ * gate-state coupling.
+ *
+ * An absolute gate [absOpenDb] caps sensitivity: a sub-frame quieter than this in absolute
+ * terms never reads as speech, no matter how low the floor adapted. Without it, a quiet room
+ * drives the floor toward [minDb] and the relative margin then trips on typing / faint sounds.
  */
 class EnergyVadDetector(
     private val marginDb: Float = 15f,   // dB above floor that maps to level 1.0
+    private val absOpenDb: Float = -55f, // absolute gate: frames quieter than this are never speech
     private val riseCoef: Float = 0.02f, // slow: floor creeps up toward louder background
     private val fallCoef: Float = 0.3f,  // fast: floor drops toward quieter background
     private val minDb: Float = -96f,
@@ -31,6 +36,7 @@ class EnergyVadDetector(
             val coef = if (db < floorDb) fallCoef else riseCoef
             floorDb += coef * (db - floorDb)
         }
+        if (db < absOpenDb) return 0f                          // too quiet in absolute terms
         return (above / marginDb).coerceIn(0f, 1f)
     }
 

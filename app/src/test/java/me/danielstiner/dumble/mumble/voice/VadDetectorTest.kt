@@ -29,6 +29,18 @@ class VadDetectorTest {
         assertEquals(0f, d.level(silent, 0, FRAME_SAMPLES_10MS), 0.001f)
     }
 
+    @Test fun faintSoundBelowAbsoluteGateStaysClosed() {
+        val d = EnergyVadDetector()
+        val silent = ShortArray(FRAME_SAMPLES_10MS)
+        repeat(300) { d.level(silent, 0, FRAME_SAMPLES_10MS) }   // floor drops toward minDb
+        // a faint sound (~ -70 dB, RMS ~10) sits well above the adapted floor but below the
+        // absolute open gate → must NOT read as speech (this is the over-sensitivity fix).
+        assertTrue("faint sound below the absolute gate stays closed",
+            d.level(frame(10), 0, FRAME_SAMPLES_10MS) < 0.6f)
+        // normal speech (~ -27 dB) still opens.
+        assertTrue("normal speech opens", d.level(frame(1500), 0, FRAME_SAMPLES_10MS) > 0.9f)
+    }
+
     @Test fun noneSuppressorIsIdentity() {
         val pcm = ShortArray(FRAME_SAMPLES_10MS) { (it % 7 - 3).toShort() }
         val copy = pcm.copyOf()
