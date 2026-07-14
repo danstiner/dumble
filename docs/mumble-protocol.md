@@ -44,9 +44,11 @@ Everything else (ACL, BanList, QueryUsers, PermissionQuery, CodecVersion, UserSt
 RequestBlob, ServerConfig, SuggestConfig, ContextAction*, PluginDataTransmission) is
 optional for basic operation; a client may parse past unneeded types.
 
-TLS: the control connection is TLS from the first byte — contemporary clients and servers
-negotiate **TLS 1.3** where both support it, otherwise TLS 1.2; SSLv3 and TLS 1.0/1.1 are
-disabled in current software. Servers commonly present self-signed certificates and identify
+TLS: the control connection is TLS from the first byte. The protocol pins no specific TLS
+version — implementations request a *minimum* (historically TLS 1.0-or-later; TLS 1.2-or-later
+since Mumble 1.6, which builds on Qt 6.3+) and let the TLS library negotiate the highest mutual
+version, so current peers use **TLS 1.3** in practice. Only the legacy pre-2015 1.2.x series was
+hard-pinned to exactly TLS 1.0. Servers commonly present self-signed certificates and identify
 clients by certificate; clients typically pin the server certificate on first contact
 (trust-on-first-use) rather than requiring a CA chain.
 
