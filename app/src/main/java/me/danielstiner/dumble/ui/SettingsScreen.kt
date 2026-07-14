@@ -24,6 +24,7 @@ import me.danielstiner.dumble.ui.theme.DumbleTheme
 fun SettingsScreen(
     onBack: () -> Unit,
     onLaunchEchoTest: () -> Unit,
+    onLaunchVadDebug: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -43,6 +44,11 @@ fun SettingsScreen(
                 supportingContent = { Text("Local audio loopback debug tool") },
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchEchoTest),
             )
+            ListItem(
+                headlineContent = { Text("VAD Gate Tuner") },
+                supportingContent = { Text("Tune the voice-activity gate live (no server)") },
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchVadDebug),
+            )
         }
     }
 }
@@ -50,5 +56,5 @@ fun SettingsScreen(
 @Preview
 @Composable
 private fun SettingsScreenPreview() {
-    DumbleTheme { SettingsScreen(onBack = {}, onLaunchEchoTest = {}) }
+    DumbleTheme { SettingsScreen(onBack = {}, onLaunchEchoTest = {}, onLaunchVadDebug = {}) }
 }

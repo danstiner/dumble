@@ -22,6 +22,7 @@ fun DumbleApp(
     onConnect: (MumbleServerConfig) -> Unit,
     onHangUp: () -> Unit,
     onLaunchEchoTest: () -> Unit,
+    onLaunchVadDebug: () -> Unit,
 ) {
     val context = LocalContext.current
     val vm: ConnectViewModel = viewModel {
@@ -71,7 +72,11 @@ fun DumbleApp(
         }
         showSettings -> {
             BackHandler { showSettings = false }
-            SettingsScreen(onBack = { showSettings = false }, onLaunchEchoTest = onLaunchEchoTest)
+            SettingsScreen(
+                onBack = { showSettings = false },
+                onLaunchEchoTest = onLaunchEchoTest,
+                onLaunchVadDebug = onLaunchVadDebug,
+            )
         }
         else -> {
             val errors = validate(form)
