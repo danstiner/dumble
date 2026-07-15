@@ -182,6 +182,19 @@ failure to avoid is on the *send* side freezing the counter across silence, or o
 *receive* side letting a stale jitter buffer schedule a resumed talkspurt in its own past —
 either way the resumed audio is dropped as late.
 
+### Speaking ("talking") indication
+
+There is **no "talking" control message** — `UserState` carries no speech-activity field. A client
+shows a remote user as *talking* purely because it is **receiving that user's voice packets**: the
+server stamps `sender_session` on routed audio, and the receiver drives its per-user talking state
+from the decode path (not from any control handler). The indicator **clears on `is_terminator`** (with
+a clean fade), or absent that, a short jitter-buffer starvation timeout (~100 ms+). So a sender makes
+its own talking indicator appear on peers simply by transmitting correctly — a well-sequenced
+`frame_number` and a real terminator are the only requirements. `priority_speaker` and `recording`
+are separate, orthogonal `UserState` flags, not speech activity. (Verified against
+`mumble-voip/mumble`: `ServerHandler::handleVoicePacket` → `AudioOutputSpeech` → `ClientUser::setTalking`;
+end-of-talkspurt via `is_terminator` / `bHasTerminator`, timeout via `iMissCount`.)
+
 ## Pings & statistics
 
 - **TCP `Ping`** — sent by the client on a fixed cadence (conventionally every ~5 s; servers
