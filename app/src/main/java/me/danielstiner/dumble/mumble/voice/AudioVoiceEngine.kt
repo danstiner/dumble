@@ -33,8 +33,8 @@ class AudioVoiceEngine(
 
     private val encoder = codec.newEncoder()
     private val gate = TransmitGate(openLevel = gateOpenLevel)
+    private val processor = TransmitProcessor(suppressor, vad, gate)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
-    private val subLevels = FloatArray(FRAMES_PER_PACKET)
     private var frameNumber = 0L
 
     private var recorder: AudioIn? = null
@@ -92,12 +92,7 @@ class AudioVoiceEngine(
         }
         wasMuted = false
 
-        for (i in 0 until FRAMES_PER_PACKET) {
-            val off = i * FRAME_SAMPLES_10MS
-            suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)   // denoise in place (None = no-op)
-            subLevels[i] = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
-        }
-        val d = gate.update(subLevels)
+        val d = processor.process(capturePcm)             // denoise (in place) → vad → gate, per sub-frame
         if (!d.send) return null                         // idle silence: fn already advanced (wall-clock)
 
         // speech, hangover, or the closing frame — all real frames; d.terminator marks the last.
