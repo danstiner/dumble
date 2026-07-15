@@ -83,5 +83,10 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **#55** notification: show server label & channel (fallback to hostname)
 - **#54** Bluetooth headset not selected as the initial call audio route
 - **#53** evaluate 32 kbps CVBR encoder default
-- **#40** voice-activity detection (transmit mode)
+- **#40 voice-activity detection — LANDED.** RNNoise-denoised uplink gated by RNNoise's own VAD
+  probability (default 0.5, in-app tunable + persisted via Settings → Voice activity). Wall-clock
+  `frame_number` + real terminators (see Fixed). Remaining VAD follow-ups: expand the Voice
+  Activity settings (RNNoise on/off, hangover, VAD-source select), and evaluate **Silero** as a
+  third VAD behind the swappable `VadDetector` seam (the VAD Gate Tuner is the eval bench). Design:
+  `docs/superpowers/specs/2026-07-14-voice-activity-detection-design.md`.
 - Cleanup: remove the per-5 s debugging logs (Ping tick, mic/track state, mix peaks, uplink kbps) now that #56 part A is verified
