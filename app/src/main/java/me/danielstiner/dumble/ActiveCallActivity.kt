@@ -51,6 +51,9 @@ class ActiveCallActivity : ComponentActivity() {
                     onLaunchEchoTest = {
                         startActivity(Intent(this, EchoTestActivity::class.java))
                     },
+                    onLaunchVadDebug = {
+                        startActivity(Intent(this, VadDebugActivity::class.java))
+                    },
                 )
             }
         }

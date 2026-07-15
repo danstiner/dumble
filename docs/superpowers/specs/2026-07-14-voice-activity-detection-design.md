@@ -15,6 +15,21 @@ part A) was built to consume.
   uplink audio as well. This is what Mumble does when RNNoise is enabled: denoise → detect,
   with the VAD level still derived from the (denoised) signal, not RNNoise's own VAD head.
 
+> **As-built corrections (post-implementation).** The shipped code diverged from parts of this
+> design as we learned more on-device. The sections below are the original design; the deltas:
+> - **`frame_number` advances at wall-clock rate, not frozen.** The "frameNumber and terminator
+>   semantics" section below said Mumble's `frame_number` freezes during silence — wrong. Source +
+>   on-device testing showed it advances per 10 ms of elapsed time and resets only after ~5 s of
+>   silence. Our sender was changed to match; freezing it made standard Mumble peers drop resumed
+>   talkspurts as late (commit `84238e8`).
+> - **Terminators are real, non-empty frames.** Mumble drops empty-payload packets before reading
+>   `is_terminator` (as the appendix's terminator fact implies), so the VAD-close and mute
+>   terminators encode a (silent) frame rather than an empty one — the design below chose empty,
+>   which was the bug (commit `84238e8`).
+> - **Production VAD is RNNoise's own probability, not the energy detector.** After A/B evaluation
+>   in the VAD tuner, production gates on RNNoise's per-frame VAD probability (threshold 0.75); the
+>   energy/adaptive-floor detector below is kept for the tuner and as a fallback (commit `acfb485`).
+
 ## User decisions (already made)
 
 - Feature is "voice activity detection" for the **transmit** path (#40).

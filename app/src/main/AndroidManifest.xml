@@ -47,6 +47,11 @@
             android:label="Echo Test"
             android:exported="true" />
 
+        <activity
+            android:name=".VadDebugActivity"
+            android:label="VAD Gate Tuner"
+            android:exported="true" />
+
         <receiver android:name=".telecom.CallActionReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="ACTION_HANGUP" />

@@ -142,20 +142,24 @@ Packets may carry 10, 20, 40, or 60 ms of audio, and the duration may vary packe
 packet; receivers derive each packet's true span from the Opus TOC byte rather than
 assuming a fixed size.
 
-**`frame_number` is a frames-transmitted counter in 10 ms units, not a wall-clock
-timestamp.** It advances by 1 per 10 ms of audio actually sent (so +2 for a 20 ms packet)
-and **freezes while the sender is silent**: a voice-activity-gated sender stops
-transmitting between talkspurts and resumes numbering where it left off. The sample-domain
-timestamp of a packet is `frame_number × 480` samples at 48 kHz. Receiver logic that
-treats `frame_number` as wall-clock time will misplace audio that follows any silence.
+**`frame_number` is a per-10 ms frame counter that tracks wall-clock elapsed time, not just
+transmitted audio.** A VAD-gated sender advances it by 1 for every 10 ms of elapsed audio —
+whether or not that frame is transmitted (so +2 per 20 ms packet, and it keeps climbing
+through a silence gap even though nothing is sent). The first packet of the next talkspurt
+therefore carries a `frame_number` reflecting the whole gap. (Mumble resets it to 0 only
+after a long *continuous* silence — ~5 s.) The sample-domain timestamp of a packet is
+`frame_number × 480` samples at 48 kHz, and receivers schedule by that absolute value. A
+sender that instead *froze* the counter across silence would make resumed talkspurts land in
+the past of a still-live jitter buffer and get dropped as late.
 
 ### Talkspurts, silence, and `is_terminator`
 
 A sender using voice activity detection emits audio in **talkspurts** — runs of
-consecutive frames — separated by silence during which nothing is transmitted and
-`frame_number` does not advance. `is_terminator` is set on the final audio-carrying packet
-of a talkspurt, telling receivers the stream is intentionally pausing (as opposed to
-packet loss).
+consecutive frames — separated by silence during which nothing is transmitted (though
+`frame_number` keeps advancing at wall-clock rate). `is_terminator` is set on the final
+audio-carrying packet of a talkspurt, telling receivers the stream is intentionally pausing
+(as opposed to packet loss). It must ride on a **real, non-empty** frame — a zero-length
+"terminator-only" packet is dropped before the flag is read.
 
 A receiver maintains one jitter-buffered playout stream per `sender_session`. The general
 shape any Mumble receiver needs:
@@ -170,11 +174,13 @@ stateDiagram-v2
     Playing --> Idle: sustained underrun (treat as unsignaled end of talkspurt)
 ```
 
-The key obligation: because `frame_number` freezes across silence, the playout cursor must
-**re-anchor at each talkspurt boundary** instead of advancing at wall-clock rate through
-the gap — otherwise every packet after a silence arrives "in the past" and gets dropped as
-late. `is_terminator` (or, failing that, an underrun timeout) is what marks those
-boundaries.
+The key obligation: since `frame_number` is wall-clock, a receiver places each packet at its
+absolute `frame_number` and uses talkspurt boundaries — `is_terminator`, or a sustained
+underrun — to tell when a stream has ended, tearing down and re-creating the per-sender
+decoder so the next talkspurt starts a fresh jitter buffer anchored to its first packet. The
+failure to avoid is on the *send* side freezing the counter across silence, or on the
+*receive* side letting a stale jitter buffer schedule a resumed talkspurt in its own past —
+either way the resumed audio is dropped as late.
 
 ## Pings & statistics
 

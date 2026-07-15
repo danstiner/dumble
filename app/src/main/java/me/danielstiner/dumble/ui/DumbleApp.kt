@@ -22,6 +22,7 @@ fun DumbleApp(
     onConnect: (MumbleServerConfig) -> Unit,
     onHangUp: () -> Unit,
     onLaunchEchoTest: () -> Unit,
+    onLaunchVadDebug: () -> Unit,
 ) {
     val context = LocalContext.current
     val vm: ConnectViewModel = viewModel {
@@ -33,6 +34,7 @@ fun DumbleApp(
     val net by MumbleManager.netStats.collectAsStateWithLifecycle()
     val voice by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
+    val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
@@ -55,7 +57,7 @@ fun DumbleApp(
         state is ConnectionState.Synchronized
 
     when {
-        inCall -> {
+        inCall && !showSettings -> {
             val statusText = if (state is ConnectionState.Synchronized) "In Call" else "Connecting…"
             val statsText = "state=${state::class.simpleName} mode=${net.mode}\n" +
                 "net: tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
@@ -67,11 +69,18 @@ fun DumbleApp(
                 onToggleMute = { MumbleManager.setMuted(!muted) },
                 onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 onHangUp = onHangUp,
+                onOpenSettings = { showSettings = true },
             )
         }
         showSettings -> {
             BackHandler { showSettings = false }
-            SettingsScreen(onBack = { showSettings = false }, onLaunchEchoTest = onLaunchEchoTest)
+            SettingsScreen(
+                onBack = { showSettings = false },
+                onLaunchEchoTest = onLaunchEchoTest,
+                onLaunchVadDebug = onLaunchVadDebug,
+                vadThreshold = vadThreshold,
+                onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
+            )
         }
         else -> {
             val errors = validate(form)

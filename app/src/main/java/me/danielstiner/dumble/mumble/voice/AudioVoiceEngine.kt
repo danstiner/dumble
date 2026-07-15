@@ -19,6 +19,9 @@ class AudioVoiceEngine(
     private val codec: OpusCodec,
     private val recorderFactory: () -> AudioIn = { AndroidAudioIn() },
     private val trackFactory: () -> AudioOut = { AndroidAudioOut() },
+    private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
+    private val vad: VadDetector = EnergyVadDetector(),
+    gateOpenLevel: Float = 0.60f,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -29,7 +32,9 @@ class AudioVoiceEngine(
     private var wasMuted = false
 
     private val encoder = codec.newEncoder()
-    private val capturePcm = ShortArray(FRAME_SAMPLES_20MS)
+    private val gate = TransmitGate(openLevel = gateOpenLevel)
+    private val capturePcm = ShortArray(CAPTURE_SAMPLES)
+    private val subLevels = FloatArray(FRAMES_PER_PACKET)
     private var frameNumber = 0L
 
     private var recorder: AudioIn? = null
@@ -47,6 +52,9 @@ class AudioVoiceEngine(
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
 
+    /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
+    fun setVadThreshold(value: Float) { gate.openLevel = value }
+
     override fun start() {
         if (running) return
         running = true
@@ -57,27 +65,52 @@ class AudioVoiceEngine(
         }
     }
 
-    /** Send thread. Always drains the mic; returns null when muted (after emitting one terminator). */
+    /**
+     * Send thread. Drains the mic; gates transmission on voice activity.
+     *
+     * `frameNumber` advances at WALL-CLOCK rate (every 20 ms capture, sent or not) — Mumble's
+     * receiver schedules by absolute `frame_number`, so a frozen counter would land resumed
+     * talkspurts in the past of a still-alive jitter buffer and get them dropped as late.
+     * Terminators are REAL (silent, non-empty) frames — Mumble drops empty-payload packets
+     * before the terminator flag is read.
+     */
     override fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame? {
         val rec = recorder ?: return null
-        rec.read(capturePcm, FRAME_SAMPLES_20MS)          // capture clock — runs even while muted
+        rec.read(capturePcm, CAPTURE_SAMPLES)             // capture clock — runs even while muted
+        val fn = frameNumber
+        frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
+
         if (muted) {
-            if (!wasMuted) { wasMuted = true; return VoiceFrame(ByteArray(0), 0, frameNumber, isTerminator = true) }
+            gate.reset()                                 // so unmute starts closed
+            if (!wasMuted) {                             // one real (silent) terminator on mute
+                wasMuted = true
+                java.util.Arrays.fill(capturePcm, 0)
+                val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
+                return VoiceFrame(opus, opus.size, fn, isTerminator = true)
+            }
             return null
         }
         wasMuted = false
-        val opus = encoder.encode(capturePcm, FRAME_SAMPLES_20MS)
+
+        for (i in 0 until FRAMES_PER_PACKET) {
+            val off = i * FRAME_SAMPLES_10MS
+            suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)   // denoise in place (None = no-op)
+            subLevels[i] = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+        }
+        val d = gate.update(subLevels)
+        if (!d.send) return null                         // idle silence: fn already advanced (wall-clock)
+
+        // speech, hangover, or the closing frame — all real frames; d.terminator marks the last.
+        val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
         uplinkBytes += opus.size
         if (++uplinkFrames >= 250) {
             val avgBytes = uplinkBytes.toDouble() / uplinkFrames
             android.util.Log.d("AudioVoiceEngine", "uplink avg=%.1f B/frame ~%.1f kbps".format(avgBytes, avgBytes * 0.4))
             uplinkBytes = 0; uplinkFrames = 0
         }
-        val fn = frameNumber
-        frameNumber += 2                                  // 10 ms units: 20 ms = 2 frames
         sent++
         _stats.update { it.copy(sent = sent) }
-        return VoiceFrame(opus, opus.size, fn)
+        return VoiceFrame(opus, opus.size, fn, isTerminator = d.terminator)
     }
 
     /** Receive thread — must not block, must not allocate a decoder. */
@@ -139,6 +172,7 @@ class AudioVoiceEngine(
         recorder?.close(); recorder = null
         track?.close(); track = null
         encoder.close()
+        suppressor.close()
     }
 }
 

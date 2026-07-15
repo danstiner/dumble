@@ -38,6 +38,7 @@ class SharedPrefsPinStore(context: Context) : PinStore {
  */
 object MumbleManager {
     private const val TAG = "MumbleManager"
+    private const val DEFAULT_VAD_THRESHOLD = 0.5f
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -51,11 +52,23 @@ object MumbleManager {
     val voiceStats: StateFlow<VoiceStats> = _voiceStats.asStateFlow()
     private val _muted = MutableStateFlow(false)
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
+    private val _vadThreshold = MutableStateFlow(DEFAULT_VAD_THRESHOLD)
+    /** RNNoise VAD open threshold (0..1), persisted and applied live to the active call. */
+    val vadThreshold: StateFlow<Float> = _vadThreshold.asStateFlow()
+    private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
         _muted.value = value
         active?.setMuted(value)
         active?.sendSelfMute(value)
+    }
+
+    @Synchronized fun setVadThreshold(value: Float) {
+        val v = value.coerceIn(0.3f, 0.95f)
+        _vadThreshold.value = v
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putFloat("vad_threshold", v)?.apply()
+        active?.setVadThreshold(v)
     }
 
     // Non-conflated failure events. `state` is a conflated StateFlow and the self-heal below flips
@@ -85,7 +98,11 @@ object MumbleManager {
     }
 
     fun init(context: Context) {
-        pinStore = SharedPrefsPinStore(context.applicationContext)
+        val app = context.applicationContext
+        appContext = app
+        pinStore = SharedPrefsPinStore(app)
+        _vadThreshold.value = app.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            .getFloat("vad_threshold", DEFAULT_VAD_THRESHOLD)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -116,7 +133,11 @@ object MumbleManager {
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
         private val codec = LibOpusCodec()
-        private val engine = AudioVoiceEngine(codec)
+        // RNNoise does double duty: denoises the uplink AND supplies its VAD probability as the
+        // gate detector (threshold 0.75). One instance is both the suppressor and the VAD.
+        private val rnnoise = RnnoiseSuppressor()
+        private val engine = AudioVoiceEngine(
+            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -203,6 +224,7 @@ object MumbleManager {
         }
 
         fun setMuted(value: Boolean) = engine.setMuted(value)
+        fun setVadThreshold(value: Float) = engine.setVadThreshold(value)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
 
         fun shutdown() {
