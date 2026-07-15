@@ -6,19 +6,6 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ## Open
 
-### 🟠 Voice never recovers from TCP tunnel back to UDP (one-line fix known)
-- **Symptom:** once voice falls back to the TCP tunnel (e.g. a transient UDP stall), it stays
-  tunneled for the rest of the session even after the UDP path recovers — higher latency than
-  necessary.
-- **Cause:** `MumbleManager.pingLoop` only sends UDP pings while `selector.mode == UDP`, so after
-  fallback no UDP packets flow. `TransportSelector.evaluate` requires `goodDelta > 0 &&
-  remoteDelta > 0` to return to UDP, but both counters are frozen with no UDP traffic, so recovery
-  never fires. This contradicts `TransportSelector`'s own KDoc ("UDP pings still run while
-  tunneled").
-- **One-line fix:** in `pingLoop`, drop the `selector.mode == VoiceTransportMode.UDP` condition and
-  send UDP pings whenever `udp != null` (keep the null-check). That lets `good`/`remoteGood` advance
-  while tunneled so tunnel→UDP recovery can trigger, matching the KDoc's stated design.
-
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
 - **Symptom:** joining a call with a Bluetooth headset already connected plays audio out
   the phone **speaker**, not the headset.
@@ -49,6 +36,17 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
 
 ## Fixed
+- **🟠 Voice never recovered from TCP tunnel back to UDP** — `MumbleManager.pingLoop` gated UDP
+  pings on `selector.mode == UDP`, so once voice fell back to the TCP tunnel no UDP left the client.
+  `TransportSelector` returns to UDP only when BOTH `good` (we decrypt inbound pongs) and
+  `remoteGood` (the server's count of our inbound pings, echoed in its TCP ping reply) advance —
+  with no UDP traffic both froze at 0 and recovery never fired. Regression origin: `f28733e` added
+  the ping-gate while tunneling-by-default; `e7920bf` reverted the default but left the gate. Fixed:
+  send a UDP ping every tick whenever the socket exists (drop the mode check). Recovery contract
+  locked by `TransportSelectorTest.tunnelRequiresBothDeltasToRecover`. **Caveat:** ping-based health
+  can't distinguish a *voice-only* UDP failure (small pings pass, larger voice packets don't) — a
+  pre-existing limitation of the delta policy, not introduced here. **On-device verification pending**
+  (observe recovery after a real UDP stall). Commit `470c129`.
 - **🔴 VAD-gated uplink inaudible to peers — talkspurt wire semantics (#40)** — root cause: our
   VAD sender (a) **froze `frame_number`** during silence and (b) emitted **empty-payload
   terminators**. A stock Mumble receiver schedules by *absolute* `frame_number` (so a frozen
