@@ -197,8 +197,14 @@ object MumbleManager {
                 delay(SessionStateMachine.PING_INTERVAL_MS)
                 try {
                     sm.sendPing()
+                    // Send a UDP ping every tick whenever the UDP socket exists — INCLUDING while
+                    // tunneled. This is what enables tunnel->UDP recovery: TransportSelector only
+                    // returns to UDP when BOTH `good` (we decrypt inbound pongs) and `remoteGood`
+                    // (the server's count of our inbound pings, echoed in its TCP ping reply)
+                    // advance. With no UDP leaving the client while tunneled, both deltas stay
+                    // frozen at 0 and recovery can never fire (matches the selector's KDoc).
                     val u = udp
-                    if (u != null && selector.mode == VoiceTransportMode.UDP) {
+                    if (u != null) {
                         val ping = MumbleUdpProtos.Ping.newBuilder().setTimestamp(System.nanoTime()).build()
                         synchronized(pingBuf) {
                             val n = MumbleCodec.writeUdpPlaintext(MumbleCodec.UDP_TYPE_PING, ping, pingBuf)

@@ -33,6 +33,24 @@ class TransportSelectorTest {
         assertEquals(VoiceTransportMode.UDP, s.mode)
     }
 
+    @Test fun tunnelRequiresBothDeltasToRecover() {
+        val s = TransportSelector(forceTcp = false)
+        // Drive into the tunnel: two stalled ticks while sending.
+        s.evaluate(stats(10, 10), sendingVoice = true)
+        s.evaluate(stats(10, 10), sendingVoice = true)
+        s.evaluate(stats(10, 10), sendingVoice = true)
+        assertEquals(VoiceTransportMode.TCP_TUNNEL, s.mode)
+        // Only downlink flows (good advances, remoteGood frozen) -> no recovery.
+        s.evaluate(stats(15, 10), sendingVoice = true)
+        assertEquals(VoiceTransportMode.TCP_TUNNEL, s.mode)
+        // Only uplink flows (remoteGood advances, good frozen) -> no recovery.
+        s.evaluate(stats(15, 18), sendingVoice = true)
+        assertEquals(VoiceTransportMode.TCP_TUNNEL, s.mode)
+        // Both flow (bidirectional UDP restored, as UDP pings would produce) -> recover.
+        s.evaluate(stats(20, 23), sendingVoice = true)
+        assertEquals(VoiceTransportMode.UDP, s.mode)
+    }
+
     @Test fun noStallDetectionWhenNotSending() {
         val s = TransportSelector(forceTcp = false)
         repeat(5) { s.evaluate(stats(0, 0), sendingVoice = false) }
