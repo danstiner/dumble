@@ -213,6 +213,34 @@ concurrently, integrate the Hold-to-Talk control into that layout instead of the
 implementation plan should keep the call-screen button as the last, thin task so it can be re-homed
 cheaply.
 
+## Research alignment (2025–2026 native-Android VoIP survey)
+
+Reviewed against the state-of-the-art survey (`~/Downloads/compass_artifact_…_text_markdown.md`).
+Spec 1 is a UX/control-flow change and the survey is about DSP, so most of it lands on later
+sub-projects — but two points validate this design, and the rest is recorded here so it reaches the
+right spec:
+
+- **Hysteresis validated.** The survey recommends biasing the VAD toward slightly early opening with
+  hysteresis "open 0.5 / close 0.35" to avoid clipping speech onsets. The gate this spec reuses runs
+  at exactly open 0.5 (the production RNNoise-VAD threshold) / close 0.35 (`TransmitGate.closeLevel`).
+  No change.
+- **Framing validated.** 10 ms processing sub-frames inside 20 ms Opus packets matches the survey's
+  "10 ms APM frames, 20 ms Opus (the VoIP default)."
+- **PTT is orthogonal.** Manual gating sidesteps the false-cutoff-rate concern the survey raises for
+  VAD (target < 1–2 % of utterances); the VAD mode's threshold slider remains our knob for that.
+
+Deferred to the right sub-projects (explicitly **not** spec 1):
+- **Capture source + gain → spec 2 (AGC).** The survey's headline for our "too quiet" problem: prefer
+  an `UNPROCESSED` / `VOICE_RECOGNITION` capture source + a software APM (AEC3 → NS → **AGC2**) over
+  the device-variable platform effects our current `VOICE_COMMUNICATION` source relies on. Spec 2 must
+  weigh this against the cost of losing platform AEC (echo cancellation) and the CPU/latency budget.
+  The load-bearing "RNNoise only attenuates, so there is no makeup gain anywhere" claim in this spec's
+  non-goals will be **fable-verified** when spec 2 makes it load-bearing.
+- **VAD model upgrade → VAD backlog (behind the existing `VadDetector` seam).** The survey rates
+  **TEN VAD** (Apache-2.0, ~0.4 MB, RTF ~0.057 on a Cortex-A53, self-reported better precision/recall
+  than Silero and WebRTC) and **Silero v5** above RNNoise's built-in VAD. Both slot behind the
+  `VadDetector` interface with no change to this spec's gate or selector.
+
 ## Future work
 
 - Hardware-key / headset / Bluetooth PTT that works with the screen off (needs key-event interception
