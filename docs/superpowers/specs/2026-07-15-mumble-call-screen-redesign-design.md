@@ -81,7 +81,8 @@ fixes: **real (non-empty) terminators** (prompt clear + clean fade-out) and **wa
 | Per-channel icons | *no protocol channel icon* | ❌ one generic glyph |
 
 Deafen indicator: `selfDeaf`/`deaf` also available in the model — v1 may show a deafened badge on
-remote users (cheap add) but it is not required.
+remote users (cheap add) but it is not required. **`suppress`** (server-suppressed, can't talk) is
+likewise in the model — v1 folds it into the server-mute (red) badge rather than dropping it silently.
 
 ---
 
@@ -94,23 +95,36 @@ remote users (cheap add) but it is not required.
   set each tick).
 - **Uplink (self):** `selfTransmitting: StateFlow<Boolean>` — true while `nextOutgoingFrame` returns
   a real (non-terminator) send, false on the closing/idle frame, with the same ~200 ms release hold.
-- `MumbleManager` re-exposes both (mapping the engine's flows through the active session, resetting to
-  empty/false when no session).
+- `MumbleManager` re-exposes both, mapping the engine's flows through the active session. **Reset to
+  empty/`false` in `ActiveSession.shutdown()`** — which today resets net/loopback stats but *not*
+  `_voiceStats`, an existing stale-state precedent — so speaking rings / `selfTransmitting=true` can't
+  survive into the next call.
+- **Implementation notes (review):** `SpeakerStream.produced` is true during PLC concealment and
+  false during the ~100 ms prebuffer, so the local indicator onset lags ~100 ms and rides through
+  concealed gaps — **expected**, not a bug to "fix." Emit `speakingSessions` **only on set-change**
+  (the playback thread ticks ~50 Hz on the URGENT_AUDIO thread — no per-tick `Set` allocation /
+  StateFlow write), and drop a session's hold timestamp when its stream retires (`stream.retired`).
 
-### Deafen (`setDeafened(Boolean)`)
-- `MumbleManager.setDeafened(true)`: mute playback output (engine writes silence / `AudioTrack`
-  volume 0 while deafened, but keeps draining streams so jitter buffers stay sane), **imply
-  self-mute** (`setMuted(true)`), and broadcast `UserState{self_deaf = true, self_mute = true}`.
-- `setDeafened(false)`: clear self-deaf and self-mute, broadcast `UserState{self_deaf = false,
-  self_mute = false}`, restore playback.
-- Engine gains `@Volatile deafened` read in `playbackLoop`. New `sm.sendSelfDeaf(...)` alongside the
-  existing `sendSelfMute`.
+### Deafen (`setDeafened(Boolean)`) — hot-mic-safe
+- `setDeafened(true)`: mute playback (engine `@Volatile deafened`; `playbackLoop` writes silence /
+  `AudioTrack` volume 0 but **keeps draining streams** so jitter buffers stay sane), set self-mute,
+  and send **one** `UserState{self_deaf = true, self_mute = true}`.
+- `setDeafened(false)`: clear self-deaf; **auto-unmute only if the deafen set the mute** (Mumble's
+  `bAutoUnmute` — track a `deafenSetMute` flag). A pre-existing *manual* mute survives un-deafen, so a
+  `mute → deafen → un-deafen` sequence never silently opens a live mic. Send one
+  `UserState{self_deaf = false, self_mute = <resulting>}`, restore playback.
+- **One combined broadcast, no double-send:** do *not* route through `setMuted` (which already sends
+  `UserState{self_mute}`) — set `_muted.value` directly and emit a single `UserState`. (Murmur forces
+  `self_mute` on `self_deaf` server-side anyway; we send both explicitly.)
+- New `sm.sendSelfDeaf(...)`, a trivial sibling of the existing `sendSelfMute`.
 
 ### State assembly (`CallScreenState`)
 A pure mapper combines `MumbleModel.state` + `speakingSessions` + `selfTransmitting` + local
 `muted`/`deafened`/`activationMode` into an ordered list of channels, each with an ordered list of
 user view-models (`initial`, `avatarColor`, `name`, `isYou`, `speaking`, `selfMute`, `serverMute`).
-Lives in `DumbleApp` (or a small `CallViewModel`); JVM-unit-testable in isolation.
+**The self row prefers local `muted`/`deafened`/speaking over the echoed model** (the server
+round-trips your `UserState` with a lag; local state is authoritative for your own row). Lives in
+`DumbleApp` (or a small `CallViewModel`); JVM-unit-testable in isolation.
 
 ---
 
@@ -156,13 +170,19 @@ a generic channel glyph, plus the app-bar `headset_mic`.
 
 - **Own row placement:** the design floats "you" at the top of your channel — v1 keeps natural order
   but tags YOU; floating-self is a cheap refinement, not required.
-- **Deafen ↔ mute coupling:** deafen forces mute; un-deafen clears mute. A manual unmute while
-  deafened is disallowed (deafen wins) — the Mute control is disabled/red while deafened.
+- **Deafen ↔ mute coupling (hot-mic-safe):** deafen forces mute; un-deafen unmutes **only if the
+  deafen caused the mute** (a `mute → deafen → un-deafen` sequence must not silently open a live mic).
+  Manual unmute while deafened is disallowed — the Mute control is disabled/red while deafened.
 - **Speaking hold vs terminator:** the ~200 ms hold means the local indicator lingers briefly after a
   talkspurt — matches the design's fade feel and the receiver-side behavior we verified.
 - **Empty/other channels:** channels with no users are hidden (except your own) to match the mock's
   populated look; nesting is flattened.
 - **No session / connecting:** show the connecting state (existing behavior) until `Synchronized`.
+- **`connectedSince` (timer):** `ConnectionState.Synchronized` carries no timestamp and its flow is
+  conflated — capture the time on the *transition* into Synchronized (a watcher in `DumbleApp`), not
+  from the flow value.
+- **Header host fallback:** `MumbleManager` doesn't expose the active config, so the config-host
+  fallback for the header name comes from the connect-form state in `DumbleApp`.
 
 ---
 
@@ -190,6 +210,8 @@ terminator path end-to-end).
 
 - **Spec 1 (activation selector):** this screen is the home for the Hold-to-Talk control (Mute→Talk in
   PTT mode). Spec 1's engine/settings land independently; its call-screen button folds into this
-  layout. Build order: this redesign settles the layout, then spec 1's button slots in.
+  layout. Build order: this redesign settles the layout, then spec 1's button slots in. **If this
+  screen ships before spec 1, default to VAD mode** — the Mute button occupies the slot and
+  `onPttDown`/`onPttUp` are no-ops (no PTT control rendered).
 - **Spec 4 (VAD utterance corpus):** the cross-client speaking-indicator check above is manual;
   spec 4 adds the automated end-to-end assertion that a full utterance passes the gate.

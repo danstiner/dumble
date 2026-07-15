@@ -62,16 +62,21 @@ Fable-verified against the actual `libdumble.so` and the vendored sources (2026-
 ## Architecture
 
 ### 1. Host-native build
-- `app/src/main/cpp/CMakeLists.txt`: guard Android-only pieces behind `if(ANDROID)` — the
-  `find_library(log …)`/liblog link and `-Wl,-z,max-page-size=16384`. In the `else()` (host) branch,
-  `find_package(JNI REQUIRED)` and add its include dirs. Build target `dumble` from the RNNoise
-  sources (FetchContent, same pinned commit) + `rnnoise_jni.c`. **No `-ffast-math`.** (Opus stays
-  Android-only for now; the host lib needs only RNNoise + the shim.)
-- `app/build.gradle.kts`: a `buildHostRnnoise` task invokes `cmake -B build/host-native
-  -DANDROID=OFF …` + `cmake --build`, producing `build/host-native/libdumble.{so,dylib}`. The unit
-  test task depends on it and runs with `jvmArgs("-Djava.library.path=<abs>/build/host-native")`.
-- Consequence: the **production** `NativeRnnoise` (`System.loadLibrary("dumble")`) and
-  `RnnoiseSuppressor` load the host lib **unchanged** in tests — the eval uses the real binding.
+- `app/src/main/cpp/CMakeLists.txt`: guard the **Android-only** pieces behind `if(ANDROID)` — the
+  `-Wl,-z,max-page-size=16384` flag (**must** be guarded: macOS `ld64` rejects `-z`) and the Opus
+  `FetchContent` + `opus_jni.c` + `target_link_libraries(dumble opus)` (Opus isn't needed for VAD
+  eval). In the host branch, `find_package(JNI REQUIRED COMPONENTS Development)` (CMake ≥3.24 — skips
+  AWT) and add its includes. Build target `dumble` from the RNNoise sources (FetchContent, same pinned
+  commit) + `rnnoise_jni.c`. **No `-ffast-math`.**
+- `app/build.gradle.kts`: a `buildHostRnnoise` task invokes `cmake`/`cmake --build` into
+  `build/host-native/` (passing `JAVA_HOME` explicitly and `-DFETCHCONTENT_BASE_DIR=…` so rnnoise
+  isn't re-cloned every configure), producing `libdumble.{so,dylib}`. The unit-test task depends on it
+  and runs with `jvmArgs("-Djava.library.path=<abs>/build/host-native")` (read at JVM fork).
+- Consequence: the **production** `NativeRnnoise`/`RnnoiseSuppressor` load the host lib **unchanged**
+  (`System.loadLibrary("dumble")`) — the eval uses the real binding. (Note `NativeOpus` also
+  `loadLibrary("dumble")`; the lib loads, but an Opus native call would throw `UnsatisfiedLinkError` —
+  harmless, since the eval uses `FakeOpusCodec`; worth a code comment. Build Opus into the host lib too
+  only if encode-path metrics are ever wanted.)
 
 ### 2. `TransmitProcessor` extraction (kept simple)
 Pull the per-capture decision core out of `AudioVoiceEngine.nextOutgoingFrame` into one small class:
@@ -98,7 +103,8 @@ class TransmitProcessor(
 `frameNumber`, Opus encode, and terminator emission stay in the engine** (unchanged behavior). This
 is the natural home for spec 1's activation-mode branch (the `subLevels` source) and spec 2's AGC
 stage — both land here later, in one place, rather than in the engine loop. v1 keeps it minimal
-(suppressor → vad → gate).
+(suppressor → vad → gate). The engine keeps its reference to the gate/processor, so existing knobs
+(`setVadThreshold` → `gate.openLevel`) still forward through it after the extraction.
 
 ### 3. Corpus (`app/src/test/resources/vad-corpus/`)
 - Committed license-clean base speech snippets + noise beds (the ingredients), and the **constructed
@@ -106,9 +112,11 @@ stage — both land here later, in one place, rather than in the engine loop. v1
   ```json
   { "clips": [
     { "file": "clean_contiguous.wav", "sampleRate": 48000,
-      "segments": [ {"startMs": 0, "endMs": 300, "kind": "silence"},
-                    {"startMs": 300, "endMs": 2100, "kind": "speech"} ],
-      "snrDb": null, "category": "clean",
+      "segments": [ {"startMs": 0, "endMs": 400, "kind": "silence"},
+                    {"startMs": 400, "endMs": 1400, "kind": "speech"},
+                    {"startMs": 1400, "endMs": 1700, "kind": "pause"},
+                    {"startMs": 1700, "endMs": 2700, "kind": "speech"} ],
+      "snrDb": null, "category": "clean", "scoreFromMs": 300,
       "thresholds": { "minCoverage": 0.99, "maxMidUtteranceDropoutMs": 0, "maxOnsetMs": 60 } } ] }
   ```
 - A `CorpusBuilder` util constructs each composite from ingredients + programmatic silence/noise so
@@ -117,22 +125,34 @@ stage — both land here later, in one place, rather than in the engine loop. v1
 - Categories that stress the gate: **contiguous speech**, **speech with known intra-utterance pauses**
   (hangover must bridge gaps ≤ its 200 ms window), **quiet-onset speech**, **noisy speech** at known
   SNR, **noise-only** and **pure silence** (false-activation). Plus 1–2 real recordings for realism.
+- **Segment kinds & scoring:** `speech`, `silence`, `noise`, and **`pause`** (an intra-utterance gap
+  the hangover is *meant* to bridge). Coverage counts `speech`; mid-utterance dropouts = `send=false`
+  runs inside a speech span (or a `pause` shorter than the hangover); **false-activation counts only
+  `silence`/`noise` — `pause` captures are exempt** (bridging them is correct). Boundaries snap to the
+  20 ms capture grid (a straddling capture takes its majority-overlap label). Each clip opens with
+  ≥ `scoreFromMs` of its own background so RNNoise (~100–200 ms cold) and the energy floor settle
+  before scoring.
 
 ### 4. `VadEvaluator` + metrics
 Feeds each clip's 20 ms captures through a `TransmitProcessor` (RNNoise host lib + gate), recording
 per-capture `send`/`terminator` and the in-place-denoised PCM. Decisions map onto ground-truth
-segments (20 ms capture granularity — the gate's natural decision unit):
+segments (20 ms capture granularity — the gate's natural decision unit).
+
+**Fresh DSP per clip.** RNNoise's `DenoiseState` and `EnergyVadDetector.floorDb` carry across frames
+by design, so the evaluator builds a **new `TransmitProcessor` (new suppressor + vad + gate) per
+clip** and calls `suppressor.close()` afterward (native state) — otherwise clip N's noise estimate
+contaminates N+1 and metrics become corpus-order-dependent.
 
 | Metric | Definition | Category threshold example |
 |---|---|---|
 | **Speech coverage** | fraction of speech-labeled captures with `send=true` | ≥ 0.99 (clean), ≥ 0.95 (noisy) |
-| **Onset latency** | ms from a speech segment's start to its first `send` | ≤ 60 ms (clean) |
+| **Onset latency** | ms from a speech segment's start to its first `send` capture (capture-start basis, 20 ms resolution) | ≤ 60 ms (clean) |
 | **Hangover/tail** | ms `send` stays true past a speech segment's end | ≥ 100, ≤ ~260 ms |
 | **Mid-utterance dropouts** | count/ms of `send=false` runs *inside* a speech segment after onset | 0 ms (contiguous); ≤ pause length (paused) |
-| **False-activation** | fraction of silence/noise captures with `send=true` | ≤ 0.02 (noise-only) |
-| **Output loudness** | RMS dBFS of the transmitted (gated, denoised) PCM | baseline now; AGC target later |
+| **False-activation** | **openings** (gate-open transitions) over `silence`/`noise` spans — count openings, not a per-capture fraction (one opening costs open+hangover+terminator) | 0 on pure silence; ≤ 1 / 10 s (noise) |
+| **Output loudness** | RMS dBFS over **speech-labeled transmitted** captures only (so a gate/hangover change can't move it at zero gain change) | baseline now; AGC target later |
 | **Level consistency** | stdev of output loudness across clips of differing input level | shrinks under AGC |
-| **Clipping** | count of full-scale samples in transmitted PCM | 0 |
+| **Clipping** | count of full-scale (±32767) samples in transmitted PCM — corpus ingredients must stay below full scale so natural peaks don't false-positive | 0 |
 
 Emits `build/reports/vad-eval/metrics.{json,md}` — a per-clip table for comparing VAD/AGC variants.
 
@@ -163,8 +183,10 @@ Emits `build/reports/vad-eval/metrics.{json,md}` — a per-clip table for compar
   send-decision sequence on one scripted input (guarantees the extraction stayed faithful).
 
 ## Determinism & caveats
-- Metrics-with-epsilon, never bit-equality; no fast-math (both builds). Host RNNoise ≈ Android to
-  ~1e-4 — immaterial except for frames sitting exactly on the threshold, which the epsilon absorbs.
+- **CI is single-platform and bit-deterministic** (it runs only the host build), so cross-build
+  epsilon never enters CI — the ≥0.99-style threshold slack absorbs run-to-run noise. The
+  epsilon-at-threshold / no-`-ffast-math` discipline matters for *offline* host-vs-Android comparison
+  (~1e-4 divergence); both builds keep fast-math off regardless.
 - Corpus is committed (deterministic CI); the builder makes it reproducible, not test-time-random.
 - Thresholds live in the manifest per category so noisy/quiet clips have appropriate bars and a change
   in bar is a reviewable diff.
