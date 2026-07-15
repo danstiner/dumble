@@ -1,0 +1,63 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-15-vad-agc-evaluation-framework.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Extract TransmitProcessor",
+      "status": "pending",
+      "description": "**Goal:** Extract the per-capture denoise\u2192vad\u2192gate core from AudioVoiceEngine.nextOutgoingFrame into a shared TransmitProcessor, with a drift-guard test.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitProcessorTest.kt\n\n**Acceptance Criteria:**\n- process() returns gate Decision + denoises in place\n- engine delegates; setVadThreshold works; subLevels removed\n- drift-guard: engine vs standalone processor decide identically\n- AudioVoiceEngineFrameNumberTest still passes\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*TransmitProcessorTest\" --tests \"*AudioVoiceEngineFrameNumberTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*TransmitProcessorTest\\\" --tests \\\"*AudioVoiceEngineFrameNumberTest\\\"\", \"acceptanceCriteria\": [\"process returns Decision + denoises in place\", \"engine delegates; setVadThreshold works; subLevels removed\", \"drift-guard identical\", \"FrameNumberTest passes\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Host-native RNNoise build",
+      "status": "pending",
+      "description": "**Goal:** Host-rebuild pinned RNNoise + JNI shim so NativeRnnoise loads in JVM tests via -Djava.library.path.\n\n**Files:**\n- Modify: app/src/main/cpp/CMakeLists.txt\n- Modify: app/build.gradle.kts\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/HostRnnoiseLoadTest.kt\n\n**Acceptance Criteria:**\n- buildHostRnnoise produces libdumble.{so,dylib}\n- HostRnnoiseLoadTest: processFrame returns float in [0,1]\n- assembleDebug still succeeds\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*HostRnnoiseLoadTest\" && ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/cpp/CMakeLists.txt\", \"app/build.gradle.kts\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/HostRnnoiseLoadTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*HostRnnoiseLoadTest\\\" && ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"buildHostRnnoise produces libdumble\", \"processFrame returns [0,1]\", \"assembleDebug succeeds\"], \"modelTier\": \"frontier\"}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: WavReader (PCM16)",
+      "status": "pending",
+      "description": "**Goal:** Dependency-free 48kHz mono PCM16 WAV read/write.\n\n**Files:**\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReader.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReaderTest.kt\n\n**Acceptance Criteria:**\n- write then read round-trips a ShortArray exactly\n- read rejects non-PCM16/non-mono clearly\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*WavReaderTest\"\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReader.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReaderTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*WavReaderTest\\\"\", \"acceptanceCriteria\": [\"round-trips exactly\", \"rejects non-PCM16/non-mono\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: CorpusBuilder + speech asset",
+      "status": "pending",
+      "blockedBy": [
+        3
+      ],
+      "description": "**Goal:** Committed public-domain speech ingredient + CorpusBuilder assembling labeled composites (speech/pause/silence/noise) with exact labels.\n\n**Files:**\n- Create asset: app/src/test/resources/vad-corpus/speech_a.wav\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/Corpus.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/CorpusBuilderTest.kt\n\n**Acceptance Criteria:**\n- speech_a.wav is 48kHz mono PCM16, reads non-empty\n- build() returns >=5 clips incl pause + noise-only\n- boundaries snap to 20ms grid, exact by construction\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*CorpusBuilderTest\"\n\n```json:metadata\n{\"files\": [\"app/src/test/resources/vad-corpus/speech_a.wav\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/Corpus.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/CorpusBuilderTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*CorpusBuilderTest\\\"\", \"acceptanceCriteria\": [\"speech_a.wav 48k mono PCM16 non-empty\", \"build() >=5 clips incl pause+noise-only\", \"boundaries on 20ms grid\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: VadEvaluator + EvalReport",
+      "status": "pending",
+      "blockedBy": [
+        1,
+        2,
+        3
+      ],
+      "description": "**Goal:** Run clips through a fresh TransmitProcessor (real host RNNoise + gate); compute VAD + gain metrics vs labels; write report.\n\n**Files:**\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluator.kt\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/EvalReport.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluatorTest.kt\n\n**Acceptance Criteria:**\n- evaluate returns full Metrics\n- fresh RnnoiseSuppressor+gate per clip, close()d\n- scoreDecisions correct on synthetic fixtures\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*VadEvaluatorTest\"\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluator.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/EvalReport.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluatorTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*VadEvaluatorTest\\\"\", \"acceptanceCriteria\": [\"evaluate returns full Metrics\", \"fresh DSP per clip close()d\", \"scoreDecisions correct on fixtures\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: VadEvaluationTest (end-to-end CI gate)",
+      "status": "pending",
+      "blockedBy": [
+        4,
+        5
+      ],
+      "description": "**Goal:** Run the corpus through real RNNoise + gate; assert per-category thresholds (full utterance passes); write report.\n\n**USER-ORDERED GATE \u2014 NON-SKIPPABLE.** Close only after every acceptanceCriteria item is re-validated independently, output captured.\n\n**Files:**\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluationTest.kt\n\n**Acceptance Criteria:**\n- clean_contiguous: coverage>=0.99 AND midDropoutMs==0\n- speech_pause: midDropoutMs==0 (bridges 160ms pause)\n- noise_only: falseOpenings<=1.0 per 10s\n- app/build/reports/vad-eval/metrics.md written per clip\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*VadEvaluationTest\"\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluationTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*VadEvaluationTest\\\"\", \"acceptanceCriteria\": [\"clean_contiguous coverage>=0.99 AND midDropoutMs==0\", \"speech_pause midDropoutMs==0\", \"noise_only falseOpenings<=1.0/10s\", \"metrics.md written per clip\"], \"userGate\": true, \"tags\": [\"user-gate\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Minimal CI workflow",
+      "status": "pending",
+      "blockedBy": [
+        6
+      ],
+      "description": "**Goal:** GitHub Actions workflow running unit suite (host RNNoise build + eval) + upload report.\n\n**Files:**\n- Create: .github/workflows/ci.yml\n\n**Acceptance Criteria:**\n- triggers on push+PR; JDK17 + cmake; runs testDebugUnitTest\n- uploads vad-eval report (if: always())\n- valid YAML\n\n**Verify:** python3 -c \"import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ok')\"\n\n```json:metadata\n{\"files\": [\".github/workflows/ci.yml\"], \"verifyCommand\": \"python3 -c \\\"import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ok')\\\"\", \"acceptanceCriteria\": [\"push+PR; JDK17+cmake; testDebugUnitTest\", \"uploads report if always\", \"valid YAML\"], \"modelTier\": \"standard\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-15T00:00:00Z"
+}
