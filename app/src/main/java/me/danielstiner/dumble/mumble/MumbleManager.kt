@@ -51,6 +51,13 @@ object MumbleManager {
     val loopbackStats: StateFlow<LoopbackStats> = _loopbackStats.asStateFlow()
     private val _voiceStats = MutableStateFlow(VoiceStats())
     val voiceStats: StateFlow<VoiceStats> = _voiceStats.asStateFlow()
+    private val _audioDiagnostics = MutableStateFlow(AudioDiagnostics())
+    /** Read-only transmit-path diagnostics (platform effects + stage levels), live during a call. */
+    val audioDiagnostics: StateFlow<AudioDiagnostics> = _audioDiagnostics.asStateFlow()
+    private val unprocessedSupport: String? by lazy {
+        (appContext?.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)
+            ?.let { PlatformAudioEffects.unprocessedSupported(it) }
+    }
     private val _muted = MutableStateFlow(false)
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
     private val _vadThreshold = MutableStateFlow(DEFAULT_VAD_THRESHOLD)
@@ -220,6 +227,7 @@ object MumbleManager {
             sessionScope.launch { sm.state.collect { _state.value = it } }
             sessionScope.launch { selector.stats.collect { _netStats.value = it } }
             sessionScope.launch { engine.stats.collect { _voiceStats.value = it } }
+            sessionScope.launch { engine.diagnostics.collect { _audioDiagnostics.value = it.copy(unprocessedSupported = unprocessedSupport) } }
             sessionScope.launch {
                 _state.value = ConnectionState.Connecting
                 try {
@@ -291,6 +299,7 @@ object MumbleManager {
             _state.value = ConnectionState.Disconnected
             _netStats.value = NetStats()
             _loopbackStats.value = LoopbackStats()
+            _audioDiagnostics.value = AudioDiagnostics()
         }
     }
 }
