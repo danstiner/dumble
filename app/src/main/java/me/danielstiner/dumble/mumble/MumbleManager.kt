@@ -39,6 +39,7 @@ class SharedPrefsPinStore(context: Context) : PinStore {
 object MumbleManager {
     private const val TAG = "MumbleManager"
     private const val DEFAULT_VAD_THRESHOLD = 0.5f
+    private const val DEFAULT_AGC_TARGET_DBFS = -18f
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -58,6 +59,12 @@ object MumbleManager {
     private val _transmitMode = MutableStateFlow(TransmitMode.VOICE_ACTIVATED)
     /** Voice-activation vs push-to-talk, persisted and applied live to the active call. */
     val transmitMode: StateFlow<TransmitMode> = _transmitMode.asStateFlow()
+    private val _agcTargetDbFs = MutableStateFlow(DEFAULT_AGC_TARGET_DBFS)
+    /** Makeup-gain target loudness (dBFS RMS), persisted and applied live to the active call. */
+    val agcTargetDbFs: StateFlow<Float> = _agcTargetDbFs.asStateFlow()
+    private val _agcEnabled = MutableStateFlow(true)
+    /** Makeup-gain on/off, persisted and applied live to the active call. */
+    val agcEnabled: StateFlow<Boolean> = _agcEnabled.asStateFlow()
     private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
@@ -72,6 +79,21 @@ object MumbleManager {
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
             ?.edit()?.putFloat("vad_threshold", v)?.apply()
         active?.setVadThreshold(v)
+    }
+
+    @Synchronized fun setAgcTargetDbFs(value: Float) {
+        val v = value.coerceIn(-30f, -9f)
+        _agcTargetDbFs.value = v
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putFloat("agc_target_dbfs", v)?.apply()
+        active?.setAgcTargetDbFs(v)
+    }
+
+    @Synchronized fun setAgcEnabled(value: Boolean) {
+        _agcEnabled.value = value
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean("agc_enabled", value)?.apply()
+        active?.setAgcEnabled(value)
     }
 
     @Synchronized fun setTransmitMode(mode: TransmitMode) {
@@ -122,6 +144,8 @@ object MumbleManager {
         val modeName = audioPrefs.getString("transmit_mode", null)
         _transmitMode.value = TransmitMode.entries.firstOrNull { it.name == modeName }
             ?: TransmitMode.VOICE_ACTIVATED
+        _agcTargetDbFs.value = audioPrefs.getFloat("agc_target_dbfs", DEFAULT_AGC_TARGET_DBFS)
+        _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", true)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -157,7 +181,9 @@ object MumbleManager {
         private val rnnoise = RnnoiseSuppressor()
         private val engine = AudioVoiceEngine(
             codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value,
-            initialTransmitMode = _transmitMode.value)
+            initialTransmitMode = _transmitMode.value,
+            initialAgcEnabled = _agcEnabled.value,
+            initialAgcTargetDbFs = _agcTargetDbFs.value)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -251,6 +277,8 @@ object MumbleManager {
 
         fun setMuted(value: Boolean) = engine.setMuted(value)
         fun setVadThreshold(value: Float) = engine.setVadThreshold(value)
+        fun setAgcTargetDbFs(value: Float) = engine.setAgcTargetDbFs(value)
+        fun setAgcEnabled(value: Boolean) = engine.setAgcEnabled(value)
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
