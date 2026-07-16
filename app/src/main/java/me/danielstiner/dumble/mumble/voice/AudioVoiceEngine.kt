@@ -23,6 +23,8 @@ class AudioVoiceEngine(
     private val vad: VadDetector = EnergyVadDetector(),
     gateOpenLevel: Float = 0.60f,
     initialTransmitMode: TransmitMode = TransmitMode.VOICE_ACTIVATED,
+    initialAgcEnabled: Boolean = true,
+    initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -38,7 +40,9 @@ class AudioVoiceEngine(
 
     private val encoder = codec.newEncoder()
     private val gate = TransmitGate(openLevel = gateOpenLevel)
-    private val processor = TransmitProcessor(suppressor, vad, gate)
+    private val gainControl = GainControl(
+        targetDbFs = initialAgcTargetDbFs, enabled = initialAgcEnabled)
+    private val processor = TransmitProcessor(suppressor, vad, gate, gainControl)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
 
@@ -59,6 +63,12 @@ class AudioVoiceEngine(
 
     /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
     fun setVadThreshold(value: Float) { gate.openLevel = value }
+
+    /** Live-adjust the makeup-gain target loudness (dBFS RMS). */
+    fun setAgcTargetDbFs(value: Float) { gainControl.targetDbFs = value }
+
+    /** Live-enable/disable the makeup gain (off = unity passthrough). */
+    fun setAgcEnabled(value: Boolean) { gainControl.enabled = value }
 
     /** Switch transmit mode live. The send thread detects the change and flushes any open
      *  talkspurt; a fresh button press is required after any mode change. */
