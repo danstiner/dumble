@@ -1,0 +1,40 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-16-platform-audio-visibility.md",
+  "tasks": [
+    {
+      "id": 50,
+      "subject": "Task 1: AudioDiagnostics data + dBFS helper",
+      "status": "pending",
+      "description": "**Goal:** JVM-testable diagnostics data types and an RMS→dBFS helper, idle-safe, with post-denoise/attenuation derived.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioDiagnostics.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioDiagnosticsTest.kt\n\n**Acceptance Criteria:**\n- rmsDbFs known levels + -120 silence floor, no NaN/-Inf\n- postDenoiseDbFs == postGainDbFs - agcGainDb\n- rnnoiseAttenuationDb == rawDbFs - postDenoiseDbFs; NaN when idle\n- deterministic, no Android imports\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*AudioDiagnosticsTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioDiagnostics.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioDiagnosticsTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*AudioDiagnosticsTest\\\"\", \"acceptanceCriteria\": [\"rmsDbFs known levels + -120 silence floor\", \"postDenoiseDbFs == postGainDbFs - agcGainDb\", \"rnnoiseAttenuationDb derivation; NaN when idle\", \"deterministic, no Android imports\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 51,
+      "subject": "Task 2: PlatformAudioEffects read-only probe",
+      "status": "pending",
+      "blockedBy": [50],
+      "description": "**Goal:** Probe AEC/NS/AGC state on a capture session read-only (OboeTester's pattern minus the toggle), holding handles for the session and releasing on close.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/PlatformAudioEffects.kt\n\n**Acceptance Criteria:**\n- per-effect isAvailable + create(sessionId) + read getEnabled via .enabled; NO setEnabled in the file\n- handles held as fields; close() releases all null/exception-safe\n- create/getEnabled throw -> enabled=null, no crash\n- companion deviceModel() + unprocessedSupported(AudioManager)\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/PlatformAudioEffects.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"per-effect isAvailable + create + read .enabled; NO setEnabled\", \"handles held; close() releases null/exception-safe\", \"throws -> enabled=null, no crash\", \"companion deviceModel + unprocessedSupported\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 52,
+      "subject": "Task 3: Stage metering + diagnostics StateFlow",
+      "status": "pending",
+      "blockedBy": [50, 51],
+      "description": "**Goal:** TransmitProcessor exposes lastVadProb; AudioIn gains a captureInfo() seam; AndroidAudioIn runs the probe; AudioVoiceEngine measures raw + post-gain RMS periodically and emits diagnostics: StateFlow<AudioDiagnostics>.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineDiagnosticsTest.kt\n\n**Acceptance Criteria:**\n- TransmitProcessor exposes lastVadProb; existing TransmitProcessorTest passes\n- AudioIn.captureInfo()=null default; AndroidAudioIn runs+releases PlatformAudioEffects, returns CaptureInfo\n- engine.diagnostics seeded at start + updated ~every 500ms (raw/post-gain/gainDb/prob/connected)\n- new JVM test: steady capture populates diagnostics, connected=true\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*TransmitProcessorTest\" --tests \"*AudioVoiceEngine*\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineDiagnosticsTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*TransmitProcessorTest\\\" --tests \\\"*AudioVoiceEngine*\\\"\", \"acceptanceCriteria\": [\"TransmitProcessor exposes lastVadProb; existing test passes\", \"AudioIn.captureInfo seam; AndroidAudioIn runs+releases probe\", \"engine.diagnostics seeded + periodic update\", \"new JVM diagnostics test passes\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 53,
+      "subject": "Task 4: MumbleManager audioDiagnostics mirror",
+      "status": "pending",
+      "blockedBy": [52],
+      "description": "**Goal:** MumbleManager mirrors engine.diagnostics as audioDiagnostics: StateFlow, enriched once with the device's unprocessed-source support; reset on disconnect.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\n\n**Acceptance Criteria:**\n- audioDiagnostics StateFlow collected from engine.diagnostics with unprocessedSupported merged\n- unprocessedSupported queried once from appContext AudioManager\n- reset to default on shutdown()\n- compiles; existing tests pass\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest\", \"acceptanceCriteria\": [\"audioDiagnostics collected from engine.diagnostics + unprocessedSupported merged\", \"unprocessedSupported queried once from appContext AudioManager\", \"reset on shutdown()\", \"compiles; existing tests pass\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 54,
+      "subject": "Task 5: Audio-diagnostics screen + nav",
+      "status": "pending",
+      "blockedBy": [53],
+      "description": "**Goal:** A read-only \"Audio diagnostics\" screen (opened from a Settings ListItem) that renders MumbleManager.audioDiagnostics.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/ui/AudioDiagnosticsScreen.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\n\n**Acceptance Criteria:**\n- AudioDiagnosticsScreen shows per-effect available+enabled (Y/N/unknown), unprocessed support, device model, self-report caveat, live raw/post-denoise/post-gain dBFS + RNNoise attenuation + AGC gain + VAD prob\n- SettingsScreen Audio diagnostics ListItem + onOpenDiagnostics param + @Preview updated\n- DumbleApp collects audioDiagnostics + showDiagnostics nav (back to Settings)\n- assembleDebug builds\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/AudioDiagnosticsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"screen shows effects + device caps + caveat + live stage levels\", \"SettingsScreen ListItem + onOpenDiagnostics + @Preview\", \"DumbleApp collects audioDiagnostics + showDiagnostics nav\", \"assembleDebug builds\"], \"modelTier\": \"mechanical\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-16T07:00:00Z"
+}
