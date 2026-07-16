@@ -22,6 +22,7 @@ class AudioVoiceEngine(
     private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
     private val vad: VadDetector = EnergyVadDetector(),
     gateOpenLevel: Float = 0.60f,
+    initialTransmitMode: TransmitMode = TransmitMode.VOICE_ACTIVATED,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -30,6 +31,11 @@ class AudioVoiceEngine(
     @Volatile private var muted = false
     @Volatile private var running = false
     private var wasMuted = false
+    @Volatile private var transmitMode = initialTransmitMode
+    @Volatile private var pttHeld = false
+    @Volatile private var pendingClose = false   // set on a live mode change to flush an open talkspurt
+    private var pttWasSending = false            // PTT release edge tracker
+    private var sending = false                  // last emitted frame was a live (non-terminator) frame
 
     private val encoder = codec.newEncoder()
     private val gate = TransmitGate(openLevel = gateOpenLevel)
@@ -54,6 +60,16 @@ class AudioVoiceEngine(
 
     /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
     fun setVadThreshold(value: Float) { gate.openLevel = value }
+
+    /** Switch transmit mode live. A change flushes any open talkspurt on the next frame. */
+    fun setTransmitMode(mode: TransmitMode) {
+        if (mode == transmitMode) return
+        transmitMode = mode
+        pendingClose = true
+    }
+
+    /** Push-to-talk button state (only meaningful in [TransmitMode.PUSH_TO_TALK]). */
+    fun setPttHeld(value: Boolean) { pttHeld = value }
 
     override fun start() {
         if (running) return
@@ -80,22 +96,60 @@ class AudioVoiceEngine(
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
 
+        // A live transmit-mode change flushes any open talkspurt with one real terminator, so the
+        // far end decodes/flushes instead of waiting on a stream that never resumes in the new mode.
+        if (pendingClose) {
+            pendingClose = false
+            gate.reset(); pttWasSending = false; wasMuted = false
+            if (sending) return terminatorFrame(fn)
+        }
+
         if (muted) {
             gate.reset()                                 // so unmute starts closed
             if (!wasMuted) {                             // one real (silent) terminator on mute
                 wasMuted = true
-                java.util.Arrays.fill(capturePcm, 0)
-                val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
-                return VoiceFrame(opus, opus.size, fn, isTerminator = true)
+                return terminatorFrame(fn)
             }
             return null
         }
         wasMuted = false
 
-        val d = processor.process(capturePcm)             // denoise (in place) → vad → gate, per sub-frame
-        if (!d.send) return null                         // idle silence: fn already advanced (wall-clock)
+        return when (transmitMode) {
+            TransmitMode.VOICE_ACTIVATED -> {
+                val d = processor.process(capturePcm)     // denoise (in place) → vad → gate
+                if (!d.send) { sending = false; return null }
+                encodeAndCount(fn, d.terminator)          // speech / hangover / closing frame
+            }
+            TransmitMode.PUSH_TO_TALK -> {
+                gate.reset()                              // keep the VA gate closed under PTT
+                when {
+                    pttHeld -> {
+                        processor.denoise(capturePcm)     // clean the mic, but do NOT gate
+                        pttWasSending = true
+                        encodeAndCount(fn, terminator = false)
+                    }
+                    pttWasSending -> {                    // release edge → one real terminator
+                        pttWasSending = false
+                        terminatorFrame(fn)
+                    }
+                    else -> { sending = false; null }
+                }
+            }
+        }
+    }
 
-        // speech, hangover, or the closing frame — all real frames; d.terminator marks the last.
+    /** A real (silent, non-empty) terminator frame. Mumble drops empty-payload packets before
+     *  reading the terminator flag, so the closing frame must carry real (silent) Opus bytes. */
+    private fun terminatorFrame(fn: Long): VoiceFrame {
+        sending = false
+        java.util.Arrays.fill(capturePcm, 0)
+        val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
+        return VoiceFrame(opus, opus.size, fn, isTerminator = true)
+    }
+
+    /** Encode the current capture, update uplink stats, and mark send state. */
+    private fun encodeAndCount(fn: Long, terminator: Boolean): VoiceFrame {
+        sending = !terminator
         val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
         uplinkBytes += opus.size
         if (++uplinkFrames >= 250) {
@@ -105,7 +159,7 @@ class AudioVoiceEngine(
         }
         sent++
         _stats.update { it.copy(sent = sent) }
-        return VoiceFrame(opus, opus.size, fn, isTerminator = d.terminator)
+        return VoiceFrame(opus, opus.size, fn, isTerminator = terminator)
     }
 
     /** Receive thread — must not block, must not allocate a decoder. */
