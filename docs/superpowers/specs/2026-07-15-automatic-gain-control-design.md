@@ -1,7 +1,10 @@
 # Automatic Gain Control (transmit path) — Design
 
 **Date:** 2026-07-15
-**Status:** Approved (brainstorm), pending implementation plan
+**Status:** ⚠️ SUPERSEDED by `2026-07-16-automatic-gain-control-design.md` (refined after
+Mumble-source research + the "conventional target + user setting" decision: Phase-0 diagnosis gate and
+`disablePlatformAgc` toggle dropped; a user-facing target slider + on/off toggle added; both-modes +
+bidirectional gain; all load-bearing claims fable-verified). Kept for history.
 **Feature:** Fix the "too quiet" transmit level — **diagnosis-led**. Measure *why* the uplink is quiet
 (what the platform is already doing, and where the level is lost) before adding gain, then apply the
 minimal fix: a **makeup / recovery gain** after RNNoise that complements the platform's own AGC rather
