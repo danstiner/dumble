@@ -1,0 +1,60 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-15-transmit-mode-selector.md",
+  "tasks": [
+    {
+      "id": 36,
+      "subject": "Task 1: TransmitMode enum + denoise()",
+      "status": "pending",
+      "description": "**Goal:** Add the `TransmitMode` enum and a denoise-only path on `TransmitProcessor` (suppressor per 10 ms sub-frame, no VAD, no gate) for the PTT held-audio path.\n\n**Files:**\n- Create: `app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitMode.kt`\n- Modify: `app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt`\n- Test: `app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitProcessorTest.kt`\n\n**Acceptance Criteria:**\n- [ ] `TransmitMode` enum with `VOICE_ACTIVATED` and `PUSH_TO_TALK`.\n- [ ] `TransmitProcessor.denoise(capturePcm)` runs the suppressor once per 10 ms sub-frame; no gate.\n- [ ] Test proves suppressor offsets `0` and `FRAME_SAMPLES_10MS`, gate stays closed.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.mumble.voice.TransmitProcessorTest\"` \u2192 BUILD SUCCESSFUL.\n\n**Steps:** See plan \u00a7Task 1. Create enum; add failing denoise test; add denoise(); pass; commit.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitMode.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitProcessorTest.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.mumble.voice.TransmitProcessorTest\\\"\", \"acceptanceCriteria\": [\"TransmitMode enum with VOICE_ACTIVATED and PUSH_TO_TALK\", \"TransmitProcessor.denoise() runs suppressor per 10ms sub-frame, no gate\", \"test proves suppressor offsets 0 and FRAME_SAMPLES_10MS, gate stays closed\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 37,
+      "subject": "Task 2: Engine push-to-talk transmit logic",
+      "status": "pending",
+      "blockedBy": [
+        36
+      ],
+      "description": "**Goal:** Make `AudioVoiceEngine.nextOutgoingFrame()` honor `TransmitMode`: VA unchanged; PTT denoises and transmits only while `pttHeld`, gate bypassed, one silent terminator on release and on a live mode switch.\n\n**Files:**\n- Modify: `app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt`\n- Test: `app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineTransmitModeTest.kt` (new)\n\n**Acceptance Criteria:**\n- [ ] `initialTransmitMode` ctor param; `setTransmitMode(mode)` + `setPttHeld(value)`.\n- [ ] PTT not held \u2192 `null`.\n- [ ] PTT held \u2192 one non-terminator frame per capture.\n- [ ] PTT release edge \u2192 exactly one terminator (`length>0`), then `null`.\n- [ ] Mid-transmit mode switch \u2192 one closing terminator.\n- [ ] Existing `AudioVoiceEngineFrameNumberTest` still passes.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:testDebugUnitTest --tests \"me.danielstiner.dumble.mumble.voice.AudioVoiceEngine*\"` \u2192 BUILD SUCCESSFUL.\n\n**Steps:** See plan \u00a7Task 2. Add 4 PTT tests; add mode fields/setters (pendingClose, pttWasSending, sending); rewrite nextOutgoingFrame with terminatorFrame/encodeAndCount helpers; full engine suite green; commit.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineTransmitModeTest.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:testDebugUnitTest --tests \\\"me.danielstiner.dumble.mumble.voice.AudioVoiceEngine*\\\"\", \"acceptanceCriteria\": [\"initialTransmitMode ctor param + setTransmitMode/setPttHeld\", \"PTT not held returns null\", \"PTT held returns one non-terminator frame per capture\", \"PTT release emits exactly one real terminator then null\", \"live mode switch mid-transmit emits one closing terminator\", \"existing AudioVoiceEngineFrameNumberTest still green\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 38,
+      "subject": "Task 3: MumbleManager transmit-mode wiring",
+      "status": "pending",
+      "blockedBy": [
+        36,
+        37
+      ],
+      "description": "**Goal:** Persisted `transmitMode` StateFlow on `MumbleManager` (mirrors `vadThreshold`), transient `setPttHeld`, construct engine with loaded mode, clear self-mute on switch to PTT.\n\n**Files:**\n- Modify: `app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt`\n\n**Acceptance Criteria:**\n- [ ] `transmitMode: StateFlow<TransmitMode>`, default VA, loaded from `dumble_audio`/`transmit_mode` in `init()`.\n- [ ] `setTransmitMode(mode)` persists + forwards + `setMuted(false)` on PUSH_TO_TALK.\n- [ ] `setPttHeld(held)` forwards (not persisted).\n- [ ] Engine constructed with `initialTransmitMode = _transmitMode.value`.\n- [ ] `compileDebugKotlin` succeeds.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:compileDebugKotlin` \u2192 BUILD SUCCESSFUL.\n\n**Steps:** See plan \u00a7Task 3. Import TransmitMode; add StateFlow fields; add setters; load in init(); construct engine w/ mode; add ActiveSession delegates; compile; commit.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"transmitMode StateFlow persisted under dumble_audio/transmit_mode, loaded in init()\", \"setTransmitMode persists + forwards + clears self-mute on PUSH_TO_TALK\", \"setPttHeld forwards to active engine (not persisted)\", \"engine constructed with initialTransmitMode = _transmitMode.value\", \"compileDebugKotlin succeeds\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 39,
+      "subject": "Task 4: Settings mode selector",
+      "status": "pending",
+      "blockedBy": [
+        36
+      ],
+      "description": "**Goal:** Add a Transmit-mode radio selector (Voice activity | Push to talk) to `SettingsScreen`; disable + annotate the slider in PTT mode.\n\n**Files:**\n- Modify: `app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt`\n\n**Acceptance Criteria:**\n- [ ] New params `transmitMode` + `onTransmitModeChange`.\n- [ ] Radio group selects VA | PTT and calls `onTransmitModeChange`.\n- [ ] Slider `enabled` only in VA; PTT note shown.\n- [ ] `compileDebugKotlin` + `@Preview` compile.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:compileDebugKotlin` \u2192 BUILD SUCCESSFUL.\n\n**Steps:** See plan \u00a7Task 4. Add imports; add params; add radio group + slider gating; update @Preview; compile; commit.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"SettingsScreen takes transmitMode + onTransmitModeChange\", \"radio group selects Voice activity | Push to talk and calls onTransmitModeChange\", \"slider enabled only in VA mode with PTT-mode annotation\", \"compileDebugKotlin succeeds incl @Preview\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 40,
+      "subject": "Task 5: Call-screen hold-to-talk button",
+      "status": "pending",
+      "blockedBy": [
+        36
+      ],
+      "description": "**Goal:** Hold-to-talk button in `ActiveCallScreen` when mode is PUSH_TO_TALK (replaces Mute chip); VA keeps Mute. Release fires on gesture cancel too.\n\n**Files:**\n- Modify: `app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt`\n\n**Acceptance Criteria:**\n- [ ] New params `transmitMode`, `onPttPress`, `onPttRelease`.\n- [ ] Mute chip only in VA; hold-to-talk button only in PTT.\n- [ ] Press \u2192 `onPttPress`; release/cancel \u2192 `onPttRelease` (`detectTapGestures`+`tryAwaitRelease`).\n- [ ] `compileDebugKotlin` + `@Preview` compile.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:compileDebugKotlin` \u2192 BUILD SUCCESSFUL.\n\n**Steps:** See plan \u00a7Task 5. Add imports; add params; gate Mute chip + add PTT button branch; add PushToTalkButton composable; update @Preview; compile; commit.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"ActiveCallScreen takes transmitMode + onPttPress + onPttRelease\", \"Mute chip only in VA mode; hold-to-talk button only in PTT mode\", \"press fires onPttPress, release/cancel fires onPttRelease via tryAwaitRelease\", \"compileDebugKotlin succeeds incl @Preview\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 41,
+      "subject": "Task 6: DumbleApp wiring",
+      "status": "pending",
+      "blockedBy": [
+        38,
+        39,
+        40
+      ],
+      "description": "**Goal:** Collect `MumbleManager.transmitMode` in `DumbleApp` and wire both screens; complete the feature.\n\n**Files:**\n- Modify: `app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt`\n\n**Acceptance Criteria:**\n- [ ] Collects `MumbleManager.transmitMode`.\n- [ ] `ActiveCallScreen` wired with `transmitMode` + `onPttPress/onPttRelease` \u2192 `setPttHeld`.\n- [ ] `SettingsScreen` wired with `transmitMode` + `onTransmitModeChange` \u2192 `setTransmitMode`.\n- [ ] `assembleDebug` + full unit-test suite green.\n\n**Verify:** `export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; ./gradlew :app:assembleDebug :app:testDebugUnitTest` \u2192 BUILD SUCCESSFUL, all tests pass.\n\n**Steps:** See plan \u00a7Task 6. Add transmitMode collect; wire ActiveCallScreen + SettingsScreen; assembleDebug + tests; commit. (Runs last.)\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"export JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\"; ./gradlew :app:assembleDebug :app:testDebugUnitTest\", \"acceptanceCriteria\": [\"DumbleApp collects MumbleManager.transmitMode\", \"ActiveCallScreen wired with transmitMode + onPttPress/onPttRelease -> setPttHeld\", \"SettingsScreen wired with transmitMode + onTransmitModeChange -> setTransmitMode\", \"assembleDebug + full unit-test suite green\"], \"modelTier\": \"mechanical\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-15T00:00:00Z"
+}
