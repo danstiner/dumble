@@ -78,7 +78,11 @@ class GainControlTest {
     @Test fun appliesOnlyToRequestedOffsetRange() {
         // Offset contract (Task 2 calls with off = i*480): only [off, off+n) is touched.
         val agc = GainControl(targetDbFs = -18f)
-        val s = square(500); repeat(200) { agc.process(s, 0, s.size, 1.0f) } // drive gain above 1.0
+        // Fresh frame each call, as in every other test here — matches the real calling contract
+        // (TransmitProcessor always passes a freshly captured sub-frame; gain never re-processes
+        // its own prior output). Reusing one mutated buffer across calls would instead form an
+        // artificial exponential feedback loop that can't occur in production.
+        repeat(200) { val f = square(500); agc.process(f, 0, f.size, 1.0f) } // drive gain above 1.0
         assertTrue("precondition: gain above unity", agc.gain > 1.0f)
         val buf = ShortArray(960) { 3000 }; val copy = buf.copyOf()
         agc.process(buf, 480, 480, 1.0f)
@@ -102,5 +106,30 @@ class GainControlTest {
             return last
         }
         assertTrue("same input → same output", run().contentEquals(run()))
+    }
+
+    @Test fun gainStaysStableUnderSyllableVaryingInput() {
+        val agc = GainControl(targetDbFs = -18f)
+        // Settle on alternating loud/quiet sub-frames (simulated syllables, same mean level).
+        repeat(600) { i -> val f = square(if (i % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f) }
+        // Over the next 100 alternating frames, the gain must NOT swing syllable-to-syllable.
+        var minG = Float.MAX_VALUE; var maxG = 0f
+        repeat(100) { i ->
+            val f = square(if (i % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f)
+            minG = minOf(minG, agc.gain); maxG = maxOf(maxG, agc.gain)
+        }
+        val swingDb = 20f * kotlin.math.log10(maxG / minG)
+        assertTrue("gain must not hunt syllable-to-syllable (swing=${swingDb}dB)", swingDb < 1.0f)
+    }
+
+    @Test fun convergesToTargetOnSyllableVaryingInput() {
+        val agc = GainControl(targetDbFs = -18f)
+        var sumSq = 0.0; var count = 0L
+        repeat(800) { i ->
+            val f = square(if (i % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f)
+            if (i >= 700) for (v in f) { sumSq += v.toDouble() * v; count++ }   // settled tail only
+        }
+        val outDb = 20.0 * kotlin.math.log10(kotlin.math.sqrt(sumSq / count) / 32768.0)
+        assertEquals("varying-input output converges to target (no undershoot)", -18.0, outDb, 1.5)
     }
 }

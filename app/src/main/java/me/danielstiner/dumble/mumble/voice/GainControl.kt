@@ -7,10 +7,14 @@ import kotlin.math.sqrt
 import kotlin.math.tanh
 
 /**
- * Post-RNNoise makeup gain (transmit path). Adapts a smoothed linear gain toward a target RMS so
- * speech lands at a consistent loudness regardless of device / platform-AGC strength. Applied per
- * 10 ms sub-frame IN PLACE, AFTER RNNoise denoise and BEFORE Opus encode. The transmit gate still
- * decides WHEN to send (from the RNNoise probability, computed pre-gain); this only sets HOW LOUD.
+ * Post-RNNoise makeup gain (transmit path). Adapts a smoothed linear gain toward a target loudness
+ * so speech lands at a consistent level regardless of device / platform-AGC strength. The desired
+ * gain is derived from a SMOOTHED loudness estimate — a mean-square EMA over speech with time
+ * constant [loudnessWindowMs] (~400 ms) — rather than the instantaneous per-sub-frame RMS, so the
+ * gain targets a talkspurt's overall level instead of chasing syllable-to-syllable swings. Applied
+ * per 10 ms sub-frame IN PLACE, AFTER RNNoise denoise and BEFORE Opus encode. The transmit gate
+ * still decides WHEN to send (from the RNNoise probability, computed pre-gain); this only sets HOW
+ * LOUD.
  *
  * Mirrors mainline Mumble's Speex AGC (which also runs after RNNoise): adapt only while speaking —
  * freeze during non-speech, because RNNoise passes very-quiet frames at unity gain, so a running
@@ -32,10 +36,14 @@ class GainControl(
     var decreaseRateDbPerSec: Float = 60f,   // fast down (Mumble: -60 dB/s)
     var adaptSpeechThreshold: Float = 0.5f,  // RNNoise prob to count a sub-frame as speech
     var limiterThreshDbFs: Float = -1.94f,   // matches AudioMixer knee (0.8 * full scale)
+    var loudnessWindowMs: Float = 400f,      // smoothing window for the loudness estimate
 ) {
     /** Current smoothed linear gain (send-thread state). Exposed read-only for tests/diagnostics. */
     var gain: Float = 1f
         private set
+
+    /** Smoothed speech loudness as a mean-square EMA (sample^2). -1 = not yet seeded. */
+    private var smoothedMs: Float = -1f
 
     /**
      * Apply gain to [n] samples at [pcm]+[off], adapting from this sub-frame's RNNoise [speechProb].
@@ -52,10 +60,16 @@ class GainControl(
 
         // Adapt only while speaking; freeze otherwise (RNNoise silence-bypass caveat).
         if (speechProb >= adaptSpeechThreshold) {
-            val rms = rms(pcm, off, n)
-            if (rms > 1f) {
+            val ms = meanSquare(pcm, off, n)
+            if (ms > 1f) {
+                // Track a SMOOTHED loudness (mean-square EMA over speech only) so the gain targets
+                // the talkspurt's overall level rather than chasing per-syllable RMS — mirrors
+                // Mumble's accumulated-loudness AGC, and prevents the undershoot + hunting that
+                // instantaneous-RMS adaptation caused. Seed on the first speech sub-frame.
+                smoothedMs = if (smoothedMs < 0f) ms else smoothedMs + emaAlpha(n) * (ms - smoothedMs)
+                val smoothedRms = sqrt(smoothedMs)
                 val targetRms = FULL_SCALE * dbToRatio(targetDbFs)
-                val desired = (targetRms / rms).coerceIn(minGain, maxGain)
+                val desired = (targetRms / smoothedRms).coerceIn(minGain, maxGain)
                 gain = rateLimit(gain, desired, n)
             }
         }
@@ -79,10 +93,17 @@ class GainControl(
         return dbToRatio(steppedDb)
     }
 
-    private fun rms(pcm: ShortArray, off: Int, n: Int): Float {
+    /** Mean square (energy) of [n] samples at [pcm]+[off]. */
+    private fun meanSquare(pcm: ShortArray, off: Int, n: Int): Float {
         var sumSq = 0.0
         for (i in off until off + n) { val s = pcm[i].toDouble(); sumSq += s * s }
-        return sqrt(sumSq / n).toFloat()
+        return (sumSq / n).toFloat()
+    }
+
+    /** One-pole EMA coefficient for a sub-frame of [n] samples given [loudnessWindowMs]. */
+    private fun emaAlpha(n: Int): Float {
+        val subframeMs = 1000f * n / SAMPLE_RATE
+        return (subframeMs / loudnessWindowMs).coerceIn(0f, 1f)
     }
 
     /** tanh soft knee above [limit], mirroring AudioMixer.finalizeMix. */
