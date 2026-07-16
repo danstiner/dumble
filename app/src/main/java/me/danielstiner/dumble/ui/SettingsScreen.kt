@@ -6,16 +6,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -23,7 +23,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.voice.TransmitMode
@@ -60,26 +59,18 @@ fun SettingsScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("Transmit mode")
-                Column(modifier = Modifier.selectableGroup()) {
-                    TransmitMode.entries.forEach { mode ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = transmitMode == mode,
-                                    onClick = { onTransmitModeChange(mode) },
-                                    role = Role.RadioButton,
-                                )
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    TransmitMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = transmitMode == mode,
+                            onClick = { onTransmitModeChange(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(index, TransmitMode.entries.size),
                         ) {
-                            RadioButton(selected = transmitMode == mode, onClick = null)
                             Text(
                                 when (mode) {
                                     TransmitMode.VOICE_ACTIVATED -> "Voice activity"
                                     TransmitMode.PUSH_TO_TALK -> "Push to talk"
                                 },
-                                modifier = Modifier.padding(start = 8.dp),
                             )
                         }
                     }
