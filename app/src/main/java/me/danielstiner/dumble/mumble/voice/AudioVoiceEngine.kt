@@ -158,7 +158,10 @@ class AudioVoiceEngine(
     /** Sample post-gain level + gain + prob and push a diagnostics update. capturePcm is post-process. */
     private fun pushDiagnostics(rawDb: Float) {
         val postGainDb = rmsDbFs(capturePcm, 0, CAPTURE_SAMPLES)
-        val gainDb = (20.0 * kotlin.math.log10(gainControl.gain.coerceAtLeast(1e-6f).toDouble())).toFloat()
+        // Effective gain: GainControl freezes .gain at its last value when disabled (A/B carry-over)
+        // but applies NONE, so the HUD must treat disabled as unity (0 dB) or post-denoise is offset.
+        val effectiveGain = if (gainControl.enabled) gainControl.gain else 1f
+        val gainDb = (20.0 * kotlin.math.log10(effectiveGain.coerceAtLeast(1e-6f).toDouble())).toFloat()
         _diagnostics.update {
             it.copy(rawDbFs = rawDb, postGainDbFs = postGainDb, agcGainDb = gainDb,
                     vadProb = processor.lastVadProb, connected = true)
