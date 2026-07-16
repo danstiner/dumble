@@ -6,6 +6,12 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ## Open
 
+- Check if we can integrate with Pixel phone's clear calling feature
+- Check if AGC is enabled on the audio path and log / surface it under settings
+- Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
+- Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
+- option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms
+
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
 - **Symptom:** joining a call with a Bluetooth headset already connected plays audio out
   the phone **speaker**, not the headset.
