@@ -42,8 +42,12 @@ class GainControl(
     var gain: Float = 1f
         private set
 
-    /** Smoothed speech loudness as a mean-square EMA (sample^2). -1 = not yet seeded. */
-    private var smoothedMs: Float = -1f
+    /**
+     * Smoothed speech loudness as a mean-square EMA (sample^2); send-thread state. -1 = not yet
+     * seeded. Like [gain], this carries over across disable/re-enable: process() early-returns while
+     * disabled, so the EMA is frozen at its last value and resumes from there on re-enable.
+     */
+    private var smoothedEnergy: Float = -1f
 
     /**
      * Apply gain to [n] samples at [pcm]+[off], adapting from this sub-frame's RNNoise [speechProb].
@@ -60,14 +64,16 @@ class GainControl(
 
         // Adapt only while speaking; freeze otherwise (RNNoise silence-bypass caveat).
         if (speechProb >= adaptSpeechThreshold) {
-            val ms = meanSquare(pcm, off, n)
-            if (ms > 1f) {
+            val meanSq = meanSquare(pcm, off, n)
+            if (meanSq > 1f) {
                 // Track a SMOOTHED loudness (mean-square EMA over speech only) so the gain targets
                 // the talkspurt's overall level rather than chasing per-syllable RMS — mirrors
                 // Mumble's accumulated-loudness AGC, and prevents the undershoot + hunting that
                 // instantaneous-RMS adaptation caused. Seed on the first speech sub-frame.
-                smoothedMs = if (smoothedMs < 0f) ms else smoothedMs + emaAlpha(n) * (ms - smoothedMs)
-                val smoothedRms = sqrt(smoothedMs)
+                smoothedEnergy =
+                    if (smoothedEnergy < 0f) meanSq
+                    else smoothedEnergy + emaAlpha(n) * (meanSq - smoothedEnergy)
+                val smoothedRms = sqrt(smoothedEnergy)
                 val targetRms = FULL_SCALE * dbToRatio(targetDbFs)
                 val desired = (targetRms / smoothedRms).coerceIn(minGain, maxGain)
                 gain = rateLimit(gain, desired, n)

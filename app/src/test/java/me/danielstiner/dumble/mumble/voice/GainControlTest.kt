@@ -109,17 +109,33 @@ class GainControlTest {
     }
 
     @Test fun gainStaysStableUnderSyllableVaryingInput() {
+        // Alternate amplitude over ~200 ms BLOCKS (realistic syllable length, 20 sub-frames/level)
+        // so the loudness EMA window is actually exercised. At per-sub-frame alternation the
+        // (unchanged) rate limiter alone bounds the swing to ~0.1 dB, so that pattern can't tell the
+        // instantaneous-vs-smoothed algorithms apart — this block pattern can.
+        //
+        // Property: after settling, the gain holds a tight band around the mean-energy-derived ideal
+        // (target / sqrt(meanMS) ≈ 0.707 for alternating 8000/2000). The OLD instantaneous-RMS algo
+        // hunts DOWN toward the loud-block peak gain (target / 8000 ≈ 0.516) — its fast-decrease /
+        // slow-increase asymmetry parks it low — so its gain dips below 0.60. The smoothed algo stays.
+        //
+        // Measured (settle 600, window 200 frames): OLD gain span [0.516, 0.680] (min 0.516 < 0.60 →
+        // FAILS); NEW gain span [0.641, 0.800] (fully inside [0.60, 0.85] → PASSES). ~1.9 dB of
+        // separation on the lower bound. (A raw swing threshold does NOT discriminate: OLD 2.40 dB
+        // vs NEW 1.93 dB — hence the band property instead.)
         val agc = GainControl(targetDbFs = -18f)
-        // Settle on alternating loud/quiet sub-frames (simulated syllables, same mean level).
-        repeat(600) { i -> val f = square(if (i % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f) }
-        // Over the next 100 alternating frames, the gain must NOT swing syllable-to-syllable.
+        val blockFrames = 20 // ~200 ms per level
+        repeat(600) { i ->
+            val f = square(if ((i / blockFrames) % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f)
+        }
         var minG = Float.MAX_VALUE; var maxG = 0f
-        repeat(100) { i ->
-            val f = square(if (i % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f)
+        repeat(200) { i ->
+            val f = square(if ((i / blockFrames) % 2 == 0) 8000 else 2000); agc.process(f, 0, f.size, 1.0f)
             minG = minOf(minG, agc.gain); maxG = maxOf(maxG, agc.gain)
         }
-        val swingDb = 20f * kotlin.math.log10(maxG / minG)
-        assertTrue("gain must not hunt syllable-to-syllable (swing=${swingDb}dB)", swingDb < 1.0f)
+        assertTrue("gain must hold a tight band around the mean-energy ideal (~0.707), not hunt down " +
+            "toward the loud-syllable peak gain (settled band=[$minG, $maxG])",
+            minG >= 0.60f && maxG <= 0.85f)
     }
 
     @Test fun convergesToTargetOnSyllableVaryingInput() {
