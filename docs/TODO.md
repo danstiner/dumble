@@ -7,10 +7,20 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 ## Open
 
 - Check if we can integrate with Pixel phone's clear calling feature
-- Check if AGC is enabled on the audio path and log / surface it under settings
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
 - option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms
+
+### UI / settings polish
+- **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
+- **Settings screen: grouping / dividers** — add section headers or dividers between groups of controls (transmit mode / sensitivity / AGC / debug tools) so they read as distinct sections.
+- **Transmit-mode selector as M3 connected button group** — DONE (SingleChoiceSegmentedButtonRow), pending on-device visual check; revisit if the specifically-Expressive `ButtonGroup`/`ToggleButton` variant is wanted.
+
+### Deferred native tasks (consolidated here for single-place tracking)
+- Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)
+- Add noise-only false-activation clip (real MUSAN noise) to the VAD eval corpus (was task #34)
+- Pre-roll buffer to recover clipped onset — revisit when tuning Silero (was task #35)
+- PTT accessibility: TalkBack-operable transmit (hold gesture unusable via screen reader) + `mergeDescendants` polish (was task #42)
 
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
 - **Symptom:** joining a call with a Bluetooth headset already connected plays audio out
@@ -42,6 +52,7 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
 
 ## Fixed
+- **Audio-quality arc (merged to main):** AGC — a smoothed-loudness makeup gain after RNNoise (tunable −18 dBFS target + on/off; matches mainline Mumble's post-denoise AGC); the read-only **Audio diagnostics** screen (platform AEC/NS/AGC state via an OboeTester-style read-only probe + live raw/post-RNNoise/post-gain levels — this closes the former "check if AGC is enabled" open item); and the PTT ↔ voice-activation transmit-mode selector (now an M3 segmented button group).
 - **🟠 Voice never recovered from TCP tunnel back to UDP** — `MumbleManager.pingLoop` gated UDP
   pings on `selector.mode == UDP`, so once voice fell back to the TCP tunnel no UDP left the client.
   `TransportSelector` returns to UDP only when BOTH `good` (we decrypt inbound pongs) and
