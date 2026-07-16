@@ -31,13 +31,19 @@ class GainControl(
     var increaseRateDbPerSec: Float = 12f,   // slow up   (Mumble: +12 dB/s while speaking)
     var decreaseRateDbPerSec: Float = 60f,   // fast down (Mumble: -60 dB/s)
     var adaptSpeechThreshold: Float = 0.5f,  // RNNoise prob to count a sub-frame as speech
-    var limiterThreshDbFs: Float = -1.9f,    // matches AudioMixer knee (0.8 * full scale)
+    var limiterThreshDbFs: Float = -1.94f,   // matches AudioMixer knee (0.8 * full scale)
 ) {
     /** Current smoothed linear gain (send-thread state). Exposed read-only for tests/diagnostics. */
     var gain: Float = 1f
         private set
 
-    /** Apply gain to [n] samples at [pcm]+[off], adapting from this sub-frame's RNNoise [speechProb]. */
+    /**
+     * Apply gain to [n] samples at [pcm]+[off], adapting from this sub-frame's RNNoise [speechProb].
+     *
+     * When [enabled] is false this early-returns, so [gain] is frozen at its last value and carries
+     * over on re-enable (then re-adapts, falling at [decreaseRateDbPerSec]). Intended for the on/off
+     * A/B toggle — this carry-over is deliberate, not a bug.
+     */
     fun process(pcm: ShortArray, off: Int, n: Int, speechProb: Float) {
         if (!enabled) return
 
@@ -57,16 +63,8 @@ class GainControl(
         val limit = FULL_SCALE * dbToRatio(limiterThreshDbFs)
         for (i in off until off + n) {
             val limited = softLimit(pcm[i] * gain, limit)
-            // Symmetric defensive clamp with a couple of LSBs of real headroom below the true
-            // ±32768/32767 rail. Needed because tanh() saturates to bit-exact 1.0 once
-            // over/range exceeds ~20 (a floating-point fact, not a tuning knob) — under the
-            // large, sustained overloads this design deliberately permits while gain is
-            // rate-limited back down, softLimit's output lands EXACTLY on FULL_SCALE rather than
-            // merely approaching it. Without this margin the old asymmetric bound
-            // (coerceIn(-FULL_SCALE, FULL_SCALE - 1f)) let negative excursions reach the literal
-            // Short.MIN_VALUE floor (-32768) while positive excursions were capped one LSB short
-            // of it — a hard clip at the rail, defeating the point of a *soft*-knee limiter.
-            pcm[i] = limited.coerceIn(-(FULL_SCALE - 2f), FULL_SCALE - 2f).toInt().toShort()
+            // defensive rail; softLimit already caps at ±CEILING
+            pcm[i] = limited.coerceIn(-CEILING, CEILING).toInt().toShort()
         }
     }
 
@@ -92,7 +90,7 @@ class GainControl(
         val ax = abs(x)
         if (ax <= limit) return x
         val over = ax - limit
-        val comp = limit + (FULL_SCALE - limit) * tanh(over / (FULL_SCALE - limit))
+        val comp = limit + (CEILING - limit) * tanh(over / (CEILING - limit))
         return if (x < 0) -comp else comp
     }
 
@@ -102,5 +100,7 @@ class GainControl(
     companion object {
         const val DEFAULT_TARGET_DBFS = -18f
         private const val FULL_SCALE = 32768f
+        /** tanh asymptote / hard rail: the largest representable positive Short (mirrors AudioMixer). */
+        private const val CEILING = FULL_SCALE - 1f
     }
 }

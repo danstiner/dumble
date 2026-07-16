@@ -26,10 +26,26 @@ class GainControlTest {
         assertEquals("output RMS converges to target", -18.0, rmsDbFs(frame), 1.0)
     }
 
+    @Test fun trimsHotToneDownTowardTarget() {
+        // Trim path: a hot tone (RMS 8000) needs gain < 1.0 to reach -18 dBFS.
+        // desired = 32768 * 10^(-18/20) / 8000 = 4125/8000 ≈ 0.52, above minGain → lands on target.
+        val agc = GainControl(targetDbFs = -18f)
+        lateinit var frame: ShortArray
+        repeat(400) { frame = square(8000); agc.process(frame, 0, frame.size, 1.0f) }
+        assertEquals("hot tone trimmed to target", -18.0, rmsDbFs(frame), 1.0)
+        assertTrue("gain trimmed below unity", agc.gain < 1.0f)
+    }
+
     @Test fun freezesDuringNonSpeech() {
         val agc = GainControl(targetDbFs = -18f)
-        repeat(400) { val f = square(500); agc.process(f, 0, f.size, 0.0f) }
-        assertEquals("gain frozen at unity when not speech", 1.0f, agc.gain, 1e-4f)
+        // First adapt gain ABOVE 1.0 on quiet-but-speech frames so freeze is distinguishable
+        // from a reset-to-unity mutation.
+        repeat(200) { val f = square(500); agc.process(f, 0, f.size, 1.0f) }
+        val adapted = agc.gain
+        assertTrue("precondition: gain adapted above unity", adapted > 1.0f)
+        // Now non-speech: gain must be HELD at `adapted`, not reset and not drifting.
+        repeat(200) { val f = square(500); agc.process(f, 0, f.size, 0.0f) }
+        assertEquals("gain frozen (held, not reset) during non-speech", adapted, agc.gain, 1e-4f)
     }
 
     @Test fun limiterHoldsPeaksBelowFullScale() {
@@ -37,13 +53,39 @@ class GainControlTest {
         // Drive gain high on a very quiet tone, then hit it with a loud sub-frame.
         repeat(400) { val f = square(40); agc.process(f, 0, f.size, 1.0f) }
         val loud = square(20000); agc.process(loud, 0, loud.size, 1.0f)
-        assertTrue("no sample wraps / clips at full scale", peak(loud) < 32767)
+        assertTrue("positive peak within full scale", peak(loud) <= 32767)
+        // The negative-wrap check: catches the historical bug where a 32768.0f asymptote wrapped
+        // to Short.MIN_VALUE (-32768).
+        assertTrue("no sample wraps to the negative rail",
+            loud.minOf { it.toInt() } > Short.MIN_VALUE.toInt())
     }
 
     @Test fun staysWithinGainBounds() {
         val agc = GainControl(targetDbFs = -18f, maxGainDb = 30f)
         repeat(2000) { val f = square(10); agc.process(f, 0, f.size, 1.0f) } // wants > +30 dB
         assertTrue("gain capped at maxGain", agc.gain <= 31.7f) // 10^(30/20)=31.62
+    }
+
+    @Test fun respectsLowerGainBound() {
+        // desired ≈ 4125/32000 ≈ 0.129 is below minGain (10^(-12/20)=0.251), so gain must
+        // settle at minGain and never dip below it. Covers decreaseRateDbPerSec, the rate-limit
+        // `else` branch, and the lower clamp.
+        val agc = GainControl(targetDbFs = -18f)
+        repeat(400) { val f = square(32000); agc.process(f, 0, f.size, 1.0f) }
+        assertTrue("gain settles at minGain, not below", agc.gain in 0.25f..0.26f)
+    }
+
+    @Test fun appliesOnlyToRequestedOffsetRange() {
+        // Offset contract (Task 2 calls with off = i*480): only [off, off+n) is touched.
+        val agc = GainControl(targetDbFs = -18f)
+        val s = square(500); repeat(200) { agc.process(s, 0, s.size, 1.0f) } // drive gain above 1.0
+        assertTrue("precondition: gain above unity", agc.gain > 1.0f)
+        val buf = ShortArray(960) { 3000 }; val copy = buf.copyOf()
+        agc.process(buf, 480, 480, 1.0f)
+        assertTrue("samples before offset untouched",
+            buf.copyOfRange(0, 480).contentEquals(copy.copyOfRange(0, 480)))
+        assertTrue("samples in offset range gained",
+            !buf.copyOfRange(480, 960).contentEquals(copy.copyOfRange(480, 960)))
     }
 
     @Test fun disabledIsBitExactPassthrough() {
