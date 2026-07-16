@@ -12,8 +12,10 @@ import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 
 /** Abstracts the Android capture device so the engine's logic is JVM-testable. */
-interface AudioIn { fun read(out: ShortArray, n: Int): Int; fun close() }
+interface AudioIn { fun read(out: ShortArray, n: Int): Int; fun close(); fun captureInfo(): CaptureInfo? = null }
 interface AudioOut { fun write(pcm: ShortArray, n: Int); fun close() }
+
+private const val DIAG_INTERVAL = 25   // ~500 ms at 20 ms captures
 
 class AudioVoiceEngine(
     private val codec: OpusCodec,
@@ -29,6 +31,10 @@ class AudioVoiceEngine(
 
     private val _stats = MutableStateFlow(VoiceStats())
     val stats: StateFlow<VoiceStats> = _stats.asStateFlow()
+
+    private val _diagnostics = MutableStateFlow(AudioDiagnostics())
+    val diagnostics: StateFlow<AudioDiagnostics> = _diagnostics.asStateFlow()
+    private var diagTick = 0
 
     @Volatile private var muted = false
     @Volatile private var running = false
@@ -81,6 +87,9 @@ class AudioVoiceEngine(
         if (running) return
         running = true
         recorder = recorderFactory()
+        recorder?.captureInfo()?.let {
+            _diagnostics.value = AudioDiagnostics(effects = it.effects, deviceModel = it.deviceModel, connected = true)
+        }
         track = trackFactory()
         playbackThread = Thread({ playbackLoop() }, "dumble-voice-playback").apply {
             isDaemon = true; priority = Thread.MAX_PRIORITY; start()
@@ -101,6 +110,9 @@ class AudioVoiceEngine(
         rec.read(capturePcm, CAPTURE_SAMPLES)             // capture clock — runs even while muted
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
+
+        val diag = (++diagTick % DIAG_INTERVAL == 0)
+        val rawDb = if (diag) rmsDbFs(capturePcm, 0, CAPTURE_SAMPLES) else 0f
 
         // One consistent read of the UI-written mode for the whole frame (no torn read between the
         // mode-change check and the dispatch below). A live mode change flushes any open talkspurt
@@ -126,6 +138,7 @@ class AudioVoiceEngine(
         return when (mode) {
             TransmitMode.VOICE_ACTIVATED -> {
                 val d = processor.process(capturePcm)     // denoise (in place) → vad → gate
+                if (diag) pushDiagnostics(rawDb)
                 if (!d.send) { sending = false; return null }
                 encodeAndCount(fn, d.terminator)          // speech / hangover / closing frame
             }
@@ -133,11 +146,22 @@ class AudioVoiceEngine(
                 gate.reset()                              // keep the VA gate closed under PTT
                 if (pttHeld) {
                     processor.denoise(capturePcm)         // clean the mic, but do NOT gate
+                    if (diag) pushDiagnostics(rawDb)
                     encodeAndCount(fn, terminator = false)
                 } else if (sending) {                     // release edge → one real terminator
                     terminatorFrame(fn)
                 } else null
             }
+        }
+    }
+
+    /** Sample post-gain level + gain + prob and push a diagnostics update. capturePcm is post-process. */
+    private fun pushDiagnostics(rawDb: Float) {
+        val postGainDb = rmsDbFs(capturePcm, 0, CAPTURE_SAMPLES)
+        val gainDb = (20.0 * kotlin.math.log10(gainControl.gain.coerceAtLeast(1e-6f).toDouble())).toFloat()
+        _diagnostics.update {
+            it.copy(rawDbFs = rawDb, postGainDbFs = postGainDb, agcGainDb = gainDb,
+                    vadProb = processor.lastVadProb, connected = true)
         }
     }
 
@@ -236,6 +260,9 @@ class AndroidAudioIn : AudioIn {
         MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4)).also { it.startRecording() }
+    private val platformEffects = PlatformAudioEffects(record.audioSessionId)
+    override fun captureInfo(): CaptureInfo =
+        CaptureInfo(platformEffects.states, PlatformAudioEffects.deviceModel())
     private var readCount = 0
     override fun read(out: ShortArray, n: Int): Int {
         var off = 0
@@ -252,7 +279,10 @@ class AndroidAudioIn : AudioIn {
         }
         return off
     }
-    override fun close() { runCatching { record.stop() }; record.release() }
+    override fun close() {
+        runCatching { platformEffects.close() }
+        runCatching { record.stop() }; record.release()
+    }
 }
 
 /** Real playback: 48 kHz mono PCM16, VOICE_COMMUNICATION usage. */

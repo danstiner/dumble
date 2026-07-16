@@ -13,6 +13,10 @@ class TransmitProcessor(
 ) {
     private val subLevels = FloatArray(FRAMES_PER_PACKET)
 
+    /** RNNoise probability from the most recent processed sub-frame (diagnostics only). */
+    var lastVadProb: Float = 0f
+        private set
+
     /** Denoise [capturePcm] (CAPTURE_SAMPLES) in place, then decide send/terminator for this capture. */
     fun process(capturePcm: ShortArray): TransmitGate.Decision {
         for (i in 0 until FRAMES_PER_PACKET) {
@@ -24,6 +28,7 @@ class TransmitProcessor(
             subLevels[i] = prob
             gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)    // makeup gain, in place
         }
+        lastVadProb = subLevels[FRAMES_PER_PACKET - 1]
         return gate.update(subLevels)
     }
 
@@ -43,6 +48,7 @@ class TransmitProcessor(
             // skipping it when gain is disabled would drift.
             if (gain.enabled) {
                 val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+                lastVadProb = prob
                 gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)
             }
         }
