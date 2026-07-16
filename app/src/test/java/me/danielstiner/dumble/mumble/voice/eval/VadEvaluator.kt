@@ -70,11 +70,13 @@ object VadEvaluator {
         return Metrics(coverage, onsetMs.coerceAtLeast(0), hangoverMs, midDropMs, falsePer10s, 0.0, 0)
     }
 
-    /** Full DSP evaluation: fresh RNNoise + gate per clip. */
-    fun evaluate(clip: Clip): Metrics {
+    /** Full DSP evaluation: fresh RNNoise + gate per clip, optional makeup gain. */
+    fun evaluate(clip: Clip, gain: GainControl? = null): Metrics {
         val suppressor = RnnoiseSuppressor()
         try {
-            val proc = TransmitProcessor(suppressor, suppressor, TransmitGate())
+            val proc = TransmitProcessor(
+                suppressor, suppressor, TransmitGate(),
+                gain ?: GainControl(enabled = false))
             val caps = clip.pcm.size / CAPTURE_SAMPLES
             val send = BooleanArray(caps)
             var speechSumSq = 0.0; var speechSamples = 0L; var clip16 = 0
