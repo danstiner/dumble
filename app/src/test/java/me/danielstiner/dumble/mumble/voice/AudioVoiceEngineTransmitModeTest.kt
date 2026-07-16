@@ -45,6 +45,20 @@ class AudioVoiceEngineTransmitModeTest {
         e.stop()
     }
 
+    @Test fun muteDuringPttDoesNotDoubleTerminateOnUnmute() {
+        val e = engine(); e.setTransmitMode(TransmitMode.PUSH_TO_TALK)
+        e.setPttHeld(true); repeat(2) { e.nextOutgoingFrame(0) }   // transmitting
+
+        e.setMuted(true)
+        val muteTerm = e.nextOutgoingFrame(0)
+        assertTrue("mute emits one terminator", muteTerm != null && muteTerm.isTerminator)
+
+        e.setPttHeld(false)                                        // released while muted
+        e.setMuted(false)                                          // unmute; no live talkspurt was open
+        assertNull("no spurious second terminator after unmute", e.nextOutgoingFrame(0))
+        e.stop()
+    }
+
     @Test fun switchingToPttMidTalkspurtClosesWithOneTerminator() {
         val e = engine()                       // starts VOICE_ACTIVATED; loud square wave opens gate
         val speech = e.nextOutgoingFrame(0)

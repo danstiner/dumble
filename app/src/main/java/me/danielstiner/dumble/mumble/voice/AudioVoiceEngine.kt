@@ -106,6 +106,7 @@ class AudioVoiceEngine(
 
         if (muted) {
             gate.reset()                                 // so unmute starts closed
+            pttWasSending = false                        // mute already closes any PTT talkspurt; don't re-close on unmute
             if (!wasMuted) {                             // one real (silent) terminator on mute
                 wasMuted = true
                 return terminatorFrame(fn)
