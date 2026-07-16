@@ -38,11 +38,13 @@ fun DumbleApp(
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
+    val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
 
     // Failures arrive on a non-conflated SharedFlow (MumbleManager self-heals Failed -> Disconnected
     // too fast to read off the conflated state flow). Collect it for the whole lifetime of the app.
@@ -60,6 +62,10 @@ fun DumbleApp(
         state is ConnectionState.Synchronized
 
     when {
+        showDiagnostics -> {
+            BackHandler { showDiagnostics = false }
+            AudioDiagnosticsScreen(diagnostics = audioDiagnostics, onBack = { showDiagnostics = false })
+        }
         inCall && !showSettings -> {
             val statusText = if (state is ConnectionState.Synchronized) "In Call" else "Connecting…"
             val statsText = "state=${state::class.simpleName} mode=${net.mode}\n" +
@@ -92,6 +98,7 @@ fun DumbleApp(
                 onAgcEnabledChange = { MumbleManager.setAgcEnabled(it) },
                 agcTargetDbFs = agcTargetDbFs,
                 onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
+                onOpenDiagnostics = { showDiagnostics = true },
             )
         }
         else -> {

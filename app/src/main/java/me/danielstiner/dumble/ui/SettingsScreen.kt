@@ -43,6 +43,7 @@ fun SettingsScreen(
     onAgcEnabledChange: (Boolean) -> Unit,
     agcTargetDbFs: Float,
     onAgcTargetChange: (Float) -> Unit,
+    onOpenDiagnostics: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -123,6 +124,11 @@ fun SettingsScreen(
                 supportingContent = { Text("Tune the voice-activity gate live (no server)") },
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchVadDebug),
             )
+            ListItem(
+                headlineContent = { Text("Audio diagnostics") },
+                supportingContent = { Text("Platform effects + live stage levels (read-only)") },
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDiagnostics),
+            )
         }
     }
 }
@@ -135,6 +141,7 @@ private fun SettingsScreenPreview() {
             transmitMode = TransmitMode.VOICE_ACTIVATED, onTransmitModeChange = {},
             vadThreshold = 0.5f, onVadThresholdChange = {},
             agcEnabled = true, onAgcEnabledChange = {},
-            agcTargetDbFs = -18f, onAgcTargetChange = {})
+            agcTargetDbFs = -18f, onAgcTargetChange = {},
+            onOpenDiagnostics = {})
     }
 }
