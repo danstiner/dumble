@@ -33,4 +33,9 @@ class AudioDiagnosticsTest {
         assertTrue(d.postDenoiseDbFs == Float.NEGATIVE_INFINITY)
         assertTrue(d.rnnoiseAttenuationDb.isNaN())
     }
+
+    @Test fun attenuationIsNaNWhenRawUnknown() {
+        val d = AudioDiagnostics(postGainDbFs = -18f, agcGainDb = 6f)  // rawDbFs defaults to -Infinity
+        assertTrue(d.rnnoiseAttenuationDb.isNaN())
+    }
 }

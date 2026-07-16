@@ -3,6 +3,8 @@ package me.danielstiner.dumble.mumble.voice
 import kotlin.math.log10
 import kotlin.math.sqrt
 
+private const val FULL_SCALE = 32768.0
+
 /** One platform voice effect's state. [enabled] null = available-but-unknown (probe threw). */
 data class EffectState(val kind: String, val available: Boolean, val enabled: Boolean?)
 
@@ -26,18 +28,19 @@ data class AudioDiagnostics(
 ) {
     /** Post-RNNoise (pre-gain) level, derived. */
     val postDenoiseDbFs: Float
-        get() = if (postGainDbFs.isFinite()) postGainDbFs - agcGainDb else postGainDbFs
+        get() = if (postGainDbFs.isFinite() && agcGainDb.isFinite()) postGainDbFs - agcGainDb else Float.NEGATIVE_INFINITY
 
     /** How much RNNoise attenuated the platform-handed signal (raw − post-denoise). */
     val rnnoiseAttenuationDb: Float
         get() = if (rawDbFs.isFinite() && postDenoiseDbFs.isFinite()) rawDbFs - postDenoiseDbFs else Float.NaN
 }
 
-/** RMS of [n] samples at [pcm]+[off] as dBFS (ref 32768); floors at −120 for near-silence. */
+/** RMS of [n] samples at [pcm]+[off] as dBFS (ref 32768); floors at −120 (idle-safe: n<=0/silence → −120). */
 fun rmsDbFs(pcm: ShortArray, off: Int, n: Int): Float {
+    if (n <= 0) return -120f
     var sumSq = 0.0
     for (i in off until off + n) { val s = pcm[i].toDouble(); sumSq += s * s }
     val rms = sqrt(sumSq / n)
-    if (rms < 1.0) return -120f
-    return (20.0 * log10(rms / 32768.0)).toFloat()
+    // rms==0 → log10(0)=-Inf → maxOf floors to -120 (no NaN); real quiet levels pass through.
+    return maxOf((20.0 * log10(rms / FULL_SCALE)).toFloat(), -120f)
 }
