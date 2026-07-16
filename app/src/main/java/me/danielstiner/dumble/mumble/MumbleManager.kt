@@ -55,6 +55,9 @@ object MumbleManager {
     private val _vadThreshold = MutableStateFlow(DEFAULT_VAD_THRESHOLD)
     /** RNNoise VAD open threshold (0..1), persisted and applied live to the active call. */
     val vadThreshold: StateFlow<Float> = _vadThreshold.asStateFlow()
+    private val _transmitMode = MutableStateFlow(TransmitMode.VOICE_ACTIVATED)
+    /** Voice-activation vs push-to-talk, persisted and applied live to the active call. */
+    val transmitMode: StateFlow<TransmitMode> = _transmitMode.asStateFlow()
     private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
@@ -70,6 +73,19 @@ object MumbleManager {
             ?.edit()?.putFloat("vad_threshold", v)?.apply()
         active?.setVadThreshold(v)
     }
+
+    @Synchronized fun setTransmitMode(mode: TransmitMode) {
+        if (mode == _transmitMode.value) return           // no-op on redundant selection
+        _transmitMode.value = mode
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putString("transmit_mode", mode.name)?.apply()
+        // In PTT the hold button is the sole transmit control, so clear any self-mute (this also
+        // broadcasts selfMute=false so other clients stop showing the mute icon).
+        if (mode == TransmitMode.PUSH_TO_TALK) setMuted(false)
+        active?.setTransmitMode(mode)
+    }
+
+    @Synchronized fun setPttHeld(held: Boolean) { active?.setPttHeld(held) }
 
     // Non-conflated failure events. `state` is a conflated StateFlow and the self-heal below flips
     // Failed -> Disconnected almost immediately, so main-thread observers can miss the transient
@@ -101,8 +117,11 @@ object MumbleManager {
         val app = context.applicationContext
         appContext = app
         pinStore = SharedPrefsPinStore(app)
-        _vadThreshold.value = app.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
-            .getFloat("vad_threshold", DEFAULT_VAD_THRESHOLD)
+        val audioPrefs = app.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+        _vadThreshold.value = audioPrefs.getFloat("vad_threshold", DEFAULT_VAD_THRESHOLD)
+        val modeName = audioPrefs.getString("transmit_mode", null)
+        _transmitMode.value = TransmitMode.entries.firstOrNull { it.name == modeName }
+            ?: TransmitMode.VOICE_ACTIVATED
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -137,7 +156,8 @@ object MumbleManager {
         // gate detector (threshold 0.75). One instance is both the suppressor and the VAD.
         private val rnnoise = RnnoiseSuppressor()
         private val engine = AudioVoiceEngine(
-            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value)
+            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value,
+            initialTransmitMode = _transmitMode.value)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -231,6 +251,8 @@ object MumbleManager {
 
         fun setMuted(value: Boolean) = engine.setMuted(value)
         fun setVadThreshold(value: Float) = engine.setVadThreshold(value)
+        fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
+        fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
 
         fun shutdown() {
