@@ -16,6 +16,23 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Settings screen: grouping / dividers** — add section headers or dividers between groups of controls (transmit mode / sensitivity / AGC / debug tools) so they read as distinct sections.
 - **Transmit-mode selector as M3 connected button group** — DONE (SingleChoiceSegmentedButtonRow), pending on-device visual check; revisit if the specifically-Expressive `ButtonGroup`/`ToggleButton` variant is wanted.
 
+### Audio settings (take on next, right after the Bluetooth route-indicator work)
+- **RNNoise enable/disable toggle** — a Settings switch that turns off RNNoise *denoising* while
+  keeping it running for VAD. Design settled (2026-07-16): when disabled, run RNNoise on a **scratch
+  copy** of each 10 ms frame to advance its `DenoiseState` and read `lastVadProb`, then discard the
+  copy — the raw (un-denoised) audio passes through untouched, so voice-activation is byte-identical
+  and needs no re-tuning. Mirror the existing AGC-enable toggle: `denoiseEnabled` flag on
+  `RnnoiseSuppressor`; `engine.setRnnoiseEnabled(...)` live (like `setAgcEnabled`); `_rnnoiseEnabled`
+  StateFlow + `"rnnoise_enabled"` persistence in `MumbleManager`; a Switch in `SettingsScreen`;
+  collect+pass in `DumbleApp`. **Fable-verify before it lands:** feeding RNNoise consecutive
+  scratch-copy frames advances its internal state identically to in-place processing, so the VAD prob
+  + pitch/overlap continuity are unaffected (only the cleaned output is discarded).
+- **Default VAD threshold 0.5 → 0.4** — `MumbleManager.DEFAULT_VAD_THRESHOLD`; also fix the stale
+  `// gate detector (threshold 0.75)` comment at `MumbleManager.kt:187` (the real default is now 0.4).
+- **Default AGC target −18 → −24 dBFS** — `MumbleManager.DEFAULT_AGC_TARGET_DBFS`. Leave
+  `GainControl.DEFAULT_TARGET_DBFS = -18f` (the class/eval-harness default) unless a test asserts the
+  app default.
+
 ### Deferred native tasks (consolidated here for single-place tracking)
 - Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)
 - Add noise-only false-activation clip (real MUSAN noise) to the VAD eval corpus (was task #34)
@@ -23,17 +40,30 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - PTT accessibility: TalkBack-operable transmit (hold gesture unusable via screen reader) + `mergeDescendants` polish (was task #42)
 
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
-- **Symptom:** joining a call with a Bluetooth headset already connected plays audio out
-  the phone **speaker**, not the headset.
-- **Status:** to investigate (2026-07-13).
-- **Likely cause:** we rely on the framework/Telecom to auto-route and only *respond* to
-  Speaker/Earpiece toggles — we never proactively select an initial endpoint; possibly an
-  `AudioTrack`-created-before-route ordering issue (track starts at `onCryptReady`).
-- **Next step (task #54):** log `onAvailableCallEndpointsChanged` / `onCallEndpointChanged`
-  to see whether BT is offered/active at call start; if not, `requestCallEndpointChange` to
-  the preferred endpoint (BT > wired) at start, or fix the ordering.
+- **Symptom (original report):** joining a call with a Bluetooth headset already connected plays
+  received audio out the phone **speaker**, not the headset.
+- **Status:** route indicator shipped (2026-07-16) — awaiting on-device confirmation of the
+  *playout-at-call-start* case (mic capture already works, see below).
+- **Root cause (code-verified):** `CallManager` never proactively selects an endpoint —
+  `onAvailableCallEndpointsChanged` only stores the list; the only `requestCallEndpointChange` is in
+  `setSpeaker()`, which toggles TYPE_SPEAKER↔TYPE_EARPIECE with zero BT/wired awareness.
+- **Shipped as a stopgap + measurement instrument:** a read-only **"Audio route: <device>"** indicator
+  on the current call screen (`CallManager.activeEndpoint` StateFlow → `AudioRoute.label()` pure mapping
+  → `ActiveCallScreen`). This is throwaway — it graduates into a first-class route control in the
+  **call-screen redesign** (`docs/superpowers/specs/2026-07-15-mumble-call-screen-redesign-design.md`,
+  which keeps Speaker as a control but must also show *which device*).
+- **Measure-first follow-up (only if confirmed):** if the indicator reads Speaker/Earpiece with BT
+  connected at call start, add proactive routing — on the first available-endpoints after the call is
+  active, auto-select the preferred endpoint by priority **BT > wired > earpiece** (speaker only on
+  explicit request), and make `setSpeaker(false)` return to the best non-speaker route rather than
+  always earpiece. Brainstormed 2026-07-16; priority **BT > wired** chosen (rarely co-occur). Don't
+  build it until the indicator confirms the framework isn't already routing correctly.
 
 ### Connecting bluetooth headset in middle of call does *not* take over audio like it should
+- **Update (2026-07-16, on-device):** Dan tested connecting a BT headset mid-call — the **mic/capture
+  DID take over** to the headset. So the `MODE_IN_COMMUNICATION` capture path auto-switches without our
+  help. Remaining question: does *playout* also follow mid-call? Confirm with the new route indicator;
+  if playout follows too, this item can close.
 
 ### 🟡 Short final talkspurt whose terminator is also lost can stall (minor, pre-existing)
 - **Symptom:** a very short final talkspurt (fewer samples than the prebuffer) whose

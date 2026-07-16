@@ -33,6 +33,12 @@ object CallManager {
     val isSpeaker: StateFlow<Boolean> = _isSpeaker
     private val _endpoints = MutableStateFlow<List<android.telecom.CallEndpoint>>(emptyList())
 
+    // The currently-active call audio endpoint (BT / wired / earpiece / speaker), surfaced read-only
+    // as a route indicator on the call screen. Reset on teardown so the previous call's route can't
+    // linger into the next one before the framework reports the new active endpoint.
+    private val _activeEndpoint = MutableStateFlow<android.telecom.CallEndpoint?>(null)
+    val activeEndpoint: StateFlow<android.telecom.CallEndpoint?> = _activeEndpoint
+
     private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var bridgeJob: Job? = null
 
@@ -81,6 +87,10 @@ object CallManager {
                     }
                 }
             }
+        } else {
+            _activeEndpoint.value = null
+            _endpoints.value = emptyList()
+            _isSpeaker.value = false
         }
     }
 
@@ -149,6 +159,7 @@ object CallManager {
     fun onAvailableEndpoints(list: List<android.telecom.CallEndpoint>) { _endpoints.value = list }
 
     fun onActiveEndpoint(ep: android.telecom.CallEndpoint) {
+        _activeEndpoint.value = ep
         _isSpeaker.value = ep.endpointType == android.telecom.CallEndpoint.TYPE_SPEAKER
     }
 

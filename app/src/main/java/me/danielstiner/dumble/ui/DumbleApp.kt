@@ -15,6 +15,7 @@ import me.danielstiner.dumble.data.SharedPrefsServerConfigStore
 import me.danielstiner.dumble.mumble.MumbleManager
 import me.danielstiner.dumble.mumble.MumbleServerConfig
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import me.danielstiner.dumble.telecom.AudioRoute
 import me.danielstiner.dumble.telecom.CallManager
 
 @Composable
@@ -40,6 +41,8 @@ fun DumbleApp(
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
+    val activeEndpoint by CallManager.activeEndpoint.collectAsStateWithLifecycle()
+    val activeRouteLabel = activeEndpoint?.let { AudioRoute.label(it.endpointType, it.endpointName) }
     val form by vm.form.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -75,6 +78,7 @@ fun DumbleApp(
             ActiveCallScreen(
                 statusText = statusText, statsText = statsText,
                 muted = muted, speaker = speaker,
+                activeRouteLabel = activeRouteLabel,
                 transmitMode = transmitMode,
                 onPttPress = { MumbleManager.setPttHeld(true) },
                 onPttRelease = { MumbleManager.setPttHeld(false) },

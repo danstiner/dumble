@@ -52,6 +52,7 @@ fun ActiveCallScreen(
     onPttPress: () -> Unit,
     onPttRelease: () -> Unit,
     speaker: Boolean,
+    activeRouteLabel: String?,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onHangUp: () -> Unit,
@@ -77,6 +78,9 @@ fun ActiveCallScreen(
         ) {
             Text(statusText, style = MaterialTheme.typography.headlineSmall)
             Text(statsText, style = MaterialTheme.typography.bodySmall)
+            if (activeRouteLabel != null) {
+                Text("Audio route: $activeRouteLabel", style = MaterialTheme.typography.bodyMedium)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -166,6 +170,7 @@ private fun ActiveCallScreenPreview() {
             onPttPress = {},
             onPttRelease = {},
             speaker = false,
+            activeRouteLabel = "Bluetooth (Pixel Buds Pro)",
             onToggleMute = {},
             onToggleSpeaker = {},
             onHangUp = {},
