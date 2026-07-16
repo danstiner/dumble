@@ -64,4 +64,17 @@ class TransmitProcessorTest {
 
         assertEquals(procDecisions, engineDecisions)
     }
+
+    @Test fun denoiseAppliesEnabledGainAndReadsProbPerSubframe() {
+        val sup = OffsetRecordingSuppressor()
+        val vad = CountingVad()
+        val gate = TransmitGate()
+        val enabledGain = GainControl(enabled = true, targetDbFs = -18f)
+        val proc = TransmitProcessor(sup, vad, gate, enabledGain)
+
+        proc.denoise(ShortArray(CAPTURE_SAMPLES) { 6000 })
+
+        assertEquals("one suppressor call per sub-frame", listOf(0, FRAME_SAMPLES_10MS), sup.offsets)
+        assertEquals("enabled gain reads prob once per sub-frame", FRAMES_PER_PACKET, vad.calls)
+    }
 }

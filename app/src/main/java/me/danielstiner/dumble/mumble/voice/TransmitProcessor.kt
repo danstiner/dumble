@@ -9,6 +9,7 @@ class TransmitProcessor(
     private val suppressor: NoiseSuppressor,
     private val vad: VadDetector,
     val gate: TransmitGate,
+    private val gain: GainControl = GainControl(enabled = false),
 ) {
     private val subLevels = FloatArray(FRAMES_PER_PACKET)
 
@@ -17,19 +18,27 @@ class TransmitProcessor(
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
-            subLevels[i] = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+            val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)  // pre-gain (gate input)
+            subLevels[i] = prob
+            gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)    // makeup gain, in place
         }
         return gate.update(subLevels)
     }
 
     /**
-     * Denoise [capturePcm] (CAPTURE_SAMPLES) in place per 10 ms sub-frame, WITHOUT running VAD or
-     * the gate. Used by the push-to-talk path: the mic is still cleaned, but the transmit decision
-     * is the held button, not voice activity.
+     * Denoise [capturePcm] (CAPTURE_SAMPLES) in place per 10 ms sub-frame, WITHOUT running the gate.
+     * Used by the push-to-talk path. The makeup gain still applies (a quiet talker is quiet in PTT
+     * too); the RNNoise probability it needs is read through [vad] only when the gain is enabled, so
+     * a disabled gain keeps this a pure denoise (no VAD).
      */
     fun denoise(capturePcm: ShortArray) {
         for (i in 0 until FRAMES_PER_PACKET) {
-            suppressor.process(capturePcm, i * FRAME_SAMPLES_10MS, FRAME_SAMPLES_10MS)
+            val off = i * FRAME_SAMPLES_10MS
+            suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
+            if (gain.enabled) {
+                val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+                gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)
+            }
         }
     }
 
