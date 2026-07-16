@@ -17,6 +17,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -38,6 +39,10 @@ fun SettingsScreen(
     onTransmitModeChange: (TransmitMode) -> Unit,
     vadThreshold: Float,
     onVadThresholdChange: (Float) -> Unit,
+    agcEnabled: Boolean,
+    onAgcEnabledChange: (Boolean) -> Unit,
+    agcTargetDbFs: Float,
+    onAgcTargetChange: (Float) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -91,6 +96,22 @@ fun SettingsScreen(
                     if (vaMode) "Higher = transmits only on clearer speech. Applies live to the active call."
                     else "Applies in Voice activity mode.",
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Automatic gain control", modifier = Modifier.weight(1f))
+                    Switch(checked = agcEnabled, onCheckedChange = onAgcEnabledChange)
+                }
+                Text("Transmit loudness: %.0f dBFS".format(agcTargetDbFs))
+                Slider(
+                    value = agcTargetDbFs,
+                    onValueChange = onAgcTargetChange,
+                    valueRange = -30f..-9f,
+                    enabled = agcEnabled,
+                )
+                Text("Higher = louder transmit. Normalizes your level so peers hear you consistently.")
             }
             ListItem(
                 headlineContent = { Text("Echo Test") },
@@ -112,6 +133,8 @@ private fun SettingsScreenPreview() {
     DumbleTheme {
         SettingsScreen(onBack = {}, onLaunchEchoTest = {}, onLaunchVadDebug = {},
             transmitMode = TransmitMode.VOICE_ACTIVATED, onTransmitModeChange = {},
-            vadThreshold = 0.5f, onVadThresholdChange = {})
+            vadThreshold = 0.5f, onVadThresholdChange = {},
+            agcEnabled = true, onAgcEnabledChange = {},
+            agcTargetDbFs = -18f, onAgcTargetChange = {})
     }
 }

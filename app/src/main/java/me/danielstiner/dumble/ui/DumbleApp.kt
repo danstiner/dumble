@@ -36,6 +36,8 @@ fun DumbleApp(
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
+    val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
+    val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
@@ -86,6 +88,10 @@ fun DumbleApp(
                 onTransmitModeChange = { MumbleManager.setTransmitMode(it) },
                 vadThreshold = vadThreshold,
                 onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
+                agcEnabled = agcEnabled,
+                onAgcEnabledChange = { MumbleManager.setAgcEnabled(it) },
+                agcTargetDbFs = agcTargetDbFs,
+                onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
             )
         }
         else -> {
