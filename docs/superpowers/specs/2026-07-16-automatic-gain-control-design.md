@@ -158,7 +158,34 @@ engine → slider in Settings).
 
 `targetDbFs` (−18), `maxGainDb` (+30), `minGainDb` (−12), `increaseRateDbPerSec` (~12),
 `decreaseRateDbPerSec` (~60), `adaptSpeechThreshold` (RNNoise prob, ~0.5), `limiterThreshDbFs` (~−1.9,
-matching the mixer knee).
+matching the mixer knee), `loudnessWindowMs` (~400 — see implementation note).
+
+## Implementation note (added during execution)
+
+**Adapt against a *smoothed* loudness, not the instantaneous sub-frame RMS.** The eval scoreboard
+showed that adapting the gain from the raw per-10 ms-sub-frame RMS makes it chase syllable-to-syllable
+level swings: it undershot the target by ~3 dB *and* hunted (±5–10 dB gain oscillation *within* a
+talkspurt — audible pumping). Fix: `GainControl` tracks a mean-square EMA over speech
+(`loudnessWindowMs` ≈ 400 ms, frozen during non-speech) and derives the desired gain from
+`sqrt(smoothedEnergy)`. This is what mainline Mumble's Speex AGC does (accumulated loudness), and it
+removes both the undershoot and the hunting while keeping the 12/60 dB/s rate limiting. Smoothing the
+*energy* (then `sqrt`) rather than RMS directly avoids a Jensen's-inequality downward bias
+(simulation converges to −18.04 dBFS, effectively unbiased).
+
+**Residual undershoot is rate-limiter convergence-lag, not bias.** On the corpus, whole-clip aggregate
+loudness lands ~1–2 dB below −18 (larger for clips needing a bigger boost — the quiet talker needs
++13.9 dB and lands −20.2), because the slow 12 dB/s increase can't fully close a large gap within a
+short talkspurt before freezing at the next pause. In a multi-minute call this is a one-time onset
+transient; the tunable **target slider absorbs the offset**, and on-device A/B is the final
+calibration. The eval `AgcEvaluationTest` therefore asserts *relative* goals (loudness moves toward
+target, cross-clip spread shrinks from 9.9 dB → ~1 dB, zero clipping) rather than an absolute −18 bar.
+
+**Cascade with the platform AGC (on-device only).** Capture is `VOICE_COMMUNICATION`, so on-device our
+gain stacks on the platform AGC (they're a series cascade — no oscillation, but a quiet-onset can
+compound into a transient overshoot). `increaseRateDbPerSec` is the lever if the on-device A/B shows
+onset overshoot/pumping (slow it to ~6–8); left at Mumble's 12 by default to avoid under-leveling
+weak-platform devices. Android exposes no signal/SNR readout (only effect on/off state), so
+characterizing the platform AGC requires our own pre/post-RNNoise RMS logging (deferred Phase-0).
 
 ## Testing
 
