@@ -35,6 +35,7 @@ fun DumbleApp(
     val voice by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
+    val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val form by vm.form.collectAsStateWithLifecycle()
 
@@ -66,6 +67,9 @@ fun DumbleApp(
             ActiveCallScreen(
                 statusText = statusText, statsText = statsText,
                 muted = muted, speaker = speaker,
+                transmitMode = transmitMode,
+                onPttPress = { MumbleManager.setPttHeld(true) },
+                onPttRelease = { MumbleManager.setPttHeld(false) },
                 onToggleMute = { MumbleManager.setMuted(!muted) },
                 onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 onHangUp = onHangUp,
@@ -78,6 +82,8 @@ fun DumbleApp(
                 onBack = { showSettings = false },
                 onLaunchEchoTest = onLaunchEchoTest,
                 onLaunchVadDebug = onLaunchVadDebug,
+                transmitMode = transmitMode,
+                onTransmitModeChange = { MumbleManager.setTransmitMode(it) },
                 vadThreshold = vadThreshold,
                 onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
             )
