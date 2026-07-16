@@ -31,6 +31,8 @@
 
 **Dependency graph:** T1 → {T2, T4, T5}; T2 → T3; {T3, T4, T5} → T6. After T1, tasks **2, 4, 5 touch disjoint files and may run in parallel**. T3 needs T2's engine setters; T6 is the glue and runs last.
 
+> **Execution note (revised during execution):** Tasks 4, 5, and 6 were **merged into a single UI task** (`SettingsScreen.kt` + `ActiveCallScreen.kt` + `DumbleApp.kt` in one commit). Kotlin compiles the whole module, so adding a required param to a screen breaks `DumbleApp`'s existing call site until T6 rewires it — the three changes cannot compile independently and must land together. The per-file code blocks in Tasks 4/5/6 below are still the source of truth; they are just applied as one task.
+
 **Environment:** Every gradle command needs `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` first.
 
 ---
