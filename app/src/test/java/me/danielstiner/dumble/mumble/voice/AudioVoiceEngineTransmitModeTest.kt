@@ -70,4 +70,34 @@ class AudioVoiceEngineTransmitModeTest {
         assertNull("then PTT idle is silent", e.nextOutgoingFrame(0))
         e.stop()
     }
+
+    @Test fun switchingModeWhileMutedEmitsNoSecondTerminator() {
+        val e = engine()                                   // VA
+        e.setMuted(true)
+        val muteTerm = e.nextOutgoingFrame(0)
+        assertTrue("mute emits one terminator", muteTerm != null && muteTerm.isTerminator)
+        e.setTransmitMode(TransmitMode.PUSH_TO_TALK)        // switch while muted
+        assertNull("no second terminator from a mode switch while muted", e.nextOutgoingFrame(0))
+        e.stop()
+    }
+
+    @Test fun switchingPttToVaMidHoldClosesWithOneTerminator() {
+        val e = engine(); e.setTransmitMode(TransmitMode.PUSH_TO_TALK); e.setPttHeld(true)
+        repeat(2) { e.nextOutgoingFrame(0) }               // transmitting via PTT
+        e.setTransmitMode(TransmitMode.VOICE_ACTIVATED)     // switch mid-hold
+        val closing = e.nextOutgoingFrame(0)
+        assertTrue("PTT→VA switch closes the open talkspurt", closing != null && closing.isTerminator)
+        e.stop()
+    }
+
+    @Test fun frameNumberAdvancesAtWallClockDuringPttIdle() {
+        val e = engine(); e.setTransmitMode(TransmitMode.PUSH_TO_TALK)
+        repeat(5) { e.nextOutgoingFrame(0) }               // idle (not held): null, but clock advances
+        e.setPttHeld(true)
+        val f = e.nextOutgoingFrame(0)
+        assertTrue("first held frame after idle exists", f != null)
+        assertTrue("frameNumber advanced across the 5 idle captures",
+            f!!.frameNumber >= 5L * FRAMES_PER_PACKET)
+        e.stop()
+    }
 }

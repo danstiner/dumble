@@ -33,9 +33,8 @@ class AudioVoiceEngine(
     private var wasMuted = false
     @Volatile private var transmitMode = initialTransmitMode
     @Volatile private var pttHeld = false
-    @Volatile private var pendingClose = false   // set on a live mode change to flush an open talkspurt
-    private var pttWasSending = false            // PTT release edge tracker
-    private var sending = false                  // last emitted frame was a live (non-terminator) frame
+    private var lastMode = initialTransmitMode   // send-thread-only: detects a live mode change
+    private var sending = false                  // send-thread-only: last emitted frame was live (non-terminator)
 
     private val encoder = codec.newEncoder()
     private val gate = TransmitGate(openLevel = gateOpenLevel)
@@ -61,12 +60,9 @@ class AudioVoiceEngine(
     /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
     fun setVadThreshold(value: Float) { gate.openLevel = value }
 
-    /** Switch transmit mode live. A change flushes any open talkspurt on the next frame. */
-    fun setTransmitMode(mode: TransmitMode) {
-        if (mode == transmitMode) return
-        transmitMode = mode
-        pendingClose = true
-    }
+    /** Switch transmit mode live. The send thread detects the change and flushes any open
+     *  talkspurt; a fresh button press is required after any mode change. */
+    fun setTransmitMode(mode: TransmitMode) { transmitMode = mode; pttHeld = false }
 
     /** Push-to-talk button state (only meaningful in [TransmitMode.PUSH_TO_TALK]). */
     fun setPttHeld(value: Boolean) { pttHeld = value }
@@ -96,17 +92,19 @@ class AudioVoiceEngine(
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
 
-        // A live transmit-mode change flushes any open talkspurt with one real terminator, so the
-        // far end decodes/flushes instead of waiting on a stream that never resumes in the new mode.
-        if (pendingClose) {
-            pendingClose = false
-            gate.reset(); pttWasSending = false; wasMuted = false
+        // One consistent read of the UI-written mode for the whole frame (no torn read between the
+        // mode-change check and the dispatch below). A live mode change flushes any open talkspurt
+        // with one real terminator, so the far end decodes/flushes instead of waiting on a stream
+        // that never resumes in the new mode.
+        val mode = transmitMode
+        if (mode != lastMode) {
+            lastMode = mode
+            gate.reset()
             if (sending) return terminatorFrame(fn)
         }
 
         if (muted) {
             gate.reset()                                 // so unmute starts closed
-            pttWasSending = false                        // mute already closes any PTT talkspurt; don't re-close on unmute
             if (!wasMuted) {                             // one real (silent) terminator on mute
                 wasMuted = true
                 return terminatorFrame(fn)
@@ -115,7 +113,7 @@ class AudioVoiceEngine(
         }
         wasMuted = false
 
-        return when (transmitMode) {
+        return when (mode) {
             TransmitMode.VOICE_ACTIVATED -> {
                 val d = processor.process(capturePcm)     // denoise (in place) → vad → gate
                 if (!d.send) { sending = false; return null }
@@ -123,18 +121,12 @@ class AudioVoiceEngine(
             }
             TransmitMode.PUSH_TO_TALK -> {
                 gate.reset()                              // keep the VA gate closed under PTT
-                when {
-                    pttHeld -> {
-                        processor.denoise(capturePcm)     // clean the mic, but do NOT gate
-                        pttWasSending = true
-                        encodeAndCount(fn, terminator = false)
-                    }
-                    pttWasSending -> {                    // release edge → one real terminator
-                        pttWasSending = false
-                        terminatorFrame(fn)
-                    }
-                    else -> { sending = false; null }
-                }
+                if (pttHeld) {
+                    processor.denoise(capturePcm)         // clean the mic, but do NOT gate
+                    encodeAndCount(fn, terminator = false)
+                } else if (sending) {                     // release edge → one real terminator
+                    terminatorFrame(fn)
+                } else null
             }
         }
     }
