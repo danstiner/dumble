@@ -16,23 +16,6 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Settings screen: grouping / dividers** — add section headers or dividers between groups of controls (transmit mode / sensitivity / AGC / debug tools) so they read as distinct sections.
 - **Transmit-mode selector as M3 connected button group** — DONE (SingleChoiceSegmentedButtonRow), pending on-device visual check; revisit if the specifically-Expressive `ButtonGroup`/`ToggleButton` variant is wanted.
 
-### Audio settings (take on next, right after the Bluetooth route-indicator work)
-- **RNNoise enable/disable toggle** — a Settings switch that turns off RNNoise *denoising* while
-  keeping it running for VAD. Design settled (2026-07-16): when disabled, run RNNoise on a **scratch
-  copy** of each 10 ms frame to advance its `DenoiseState` and read `lastVadProb`, then discard the
-  copy — the raw (un-denoised) audio passes through untouched, so voice-activation is byte-identical
-  and needs no re-tuning. Mirror the existing AGC-enable toggle: `denoiseEnabled` flag on
-  `RnnoiseSuppressor`; `engine.setRnnoiseEnabled(...)` live (like `setAgcEnabled`); `_rnnoiseEnabled`
-  StateFlow + `"rnnoise_enabled"` persistence in `MumbleManager`; a Switch in `SettingsScreen`;
-  collect+pass in `DumbleApp`. **Fable-verify before it lands:** feeding RNNoise consecutive
-  scratch-copy frames advances its internal state identically to in-place processing, so the VAD prob
-  + pitch/overlap continuity are unaffected (only the cleaned output is discarded).
-- **Default VAD threshold 0.5 → 0.4** — `MumbleManager.DEFAULT_VAD_THRESHOLD`; also fix the stale
-  `// gate detector (threshold 0.75)` comment at `MumbleManager.kt:187` (the real default is now 0.4).
-- **Default AGC target −18 → −24 dBFS** — `MumbleManager.DEFAULT_AGC_TARGET_DBFS`. Leave
-  `GainControl.DEFAULT_TARGET_DBFS = -18f` (the class/eval-harness default) unless a test asserts the
-  app default.
-
 ### Deferred native tasks (consolidated here for single-place tracking)
 - Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)
 - Add noise-only false-activation clip (real MUSAN noise) to the VAD eval corpus (was task #34)
@@ -82,6 +65,15 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
 
 ## Fixed
+- **RNNoise denoise on/off toggle + default tweaks (2026-07-16):** a Settings switch turns off RNNoise
+  *denoising* while keeping it running for VAD — when off, RNNoise runs on a scratch copy (advancing its
+  `DenoiseState`, yielding the VAD prob) and the raw mic passes through untouched, so voice-activation is
+  byte-identical. Fable-verified bit-identical against the pinned rnnoise (`6cbfd53`/v0.1.1:
+  `rnnoise_process_frame` reads `in` once, never `out`; state + VAD are a pure function of input + prior
+  state) and empirically confirmed by `RnnoiseSuppressorTest` (real host RNNoise, exact VAD-prob equality).
+  Wired like the AGC toggle (`RnnoiseSuppressor.setDenoiseEnabled` → `engine.setRnnoiseEnabled` →
+  `MumbleManager` StateFlow + `"rnnoise_enabled"` persistence → Settings switch). Also flipped the app
+  defaults: VAD threshold 0.5→0.4, AGC target −18→−24 dBFS.
 - **Audio-quality arc (merged to main):** AGC — a smoothed-loudness makeup gain after RNNoise (tunable −18 dBFS target + on/off; matches mainline Mumble's post-denoise AGC); the read-only **Audio diagnostics** screen (platform AEC/NS/AGC state via an OboeTester-style read-only probe + live raw/post-RNNoise/post-gain levels — this closes the former "check if AGC is enabled" open item); and the PTT ↔ voice-activation transmit-mode selector (now an M3 segmented button group).
 - **🟠 Voice never recovered from TCP tunnel back to UDP** — `MumbleManager.pingLoop` gated UDP
   pings on `selector.mode == UDP`, so once voice fell back to the TCP tunnel no UDP left the client.

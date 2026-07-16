@@ -27,6 +27,7 @@ class AudioVoiceEngine(
     initialTransmitMode: TransmitMode = TransmitMode.VOICE_ACTIVATED,
     initialAgcEnabled: Boolean = true,
     initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
+    initialRnnoiseEnabled: Boolean = true,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -52,6 +53,8 @@ class AudioVoiceEngine(
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
 
+    init { suppressor.setDenoiseEnabled(initialRnnoiseEnabled) }
+
     private var recorder: AudioIn? = null
     private var track: AudioOut? = null
     private var playbackThread: Thread? = null
@@ -75,6 +78,9 @@ class AudioVoiceEngine(
 
     /** Live-enable/disable the makeup gain (off = unity passthrough). */
     fun setAgcEnabled(value: Boolean) { gainControl.enabled = value }
+
+    /** Live-enable/disable RNNoise denoising. Off keeps RNNoise running for the VAD but sends raw audio. */
+    fun setRnnoiseEnabled(value: Boolean) { suppressor.setDenoiseEnabled(value) }
 
     /** Switch transmit mode live. The send thread detects the change and flushes any open
      *  talkspurt; a fresh button press is required after any mode change. */

@@ -42,6 +42,8 @@ fun SettingsScreen(
     onAgcEnabledChange: (Boolean) -> Unit,
     agcTargetDbFs: Float,
     onAgcTargetChange: (Float) -> Unit,
+    rnnoiseEnabled: Boolean,
+    onRnnoiseEnabledChange: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
     Scaffold(
@@ -104,6 +106,15 @@ fun SettingsScreen(
                     enabled = agcEnabled,
                 )
                 Text("Higher = louder transmit. Normalizes your level so peers hear you consistently.")
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Noise suppression (RNNoise)", modifier = Modifier.weight(1f))
+                    Switch(checked = rnnoiseEnabled, onCheckedChange = onRnnoiseEnabledChange)
+                }
+                Text("Off sends your raw mic (relies on the phone's own noise removal). Voice activation is unaffected.")
             }
             ListItem(
                 headlineContent = { Text("Echo Test") },
@@ -133,6 +144,7 @@ private fun SettingsScreenPreview() {
             vadThreshold = 0.5f, onVadThresholdChange = {},
             agcEnabled = true, onAgcEnabledChange = {},
             agcTargetDbFs = -18f, onAgcTargetChange = {},
+            rnnoiseEnabled = true, onRnnoiseEnabledChange = {},
             onOpenDiagnostics = {})
     }
 }

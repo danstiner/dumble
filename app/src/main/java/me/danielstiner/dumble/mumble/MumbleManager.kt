@@ -38,8 +38,8 @@ class SharedPrefsPinStore(context: Context) : PinStore {
  */
 object MumbleManager {
     private const val TAG = "MumbleManager"
-    private const val DEFAULT_VAD_THRESHOLD = 0.5f
-    private const val DEFAULT_AGC_TARGET_DBFS = -18f
+    private const val DEFAULT_VAD_THRESHOLD = 0.4f
+    private const val DEFAULT_AGC_TARGET_DBFS = -24f
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -72,6 +72,9 @@ object MumbleManager {
     private val _agcEnabled = MutableStateFlow(true)
     /** Makeup-gain on/off, persisted and applied live to the active call. */
     val agcEnabled: StateFlow<Boolean> = _agcEnabled.asStateFlow()
+    private val _rnnoiseEnabled = MutableStateFlow(true)
+    /** RNNoise denoising on/off (the VAD keeps running regardless), persisted and applied live. */
+    val rnnoiseEnabled: StateFlow<Boolean> = _rnnoiseEnabled.asStateFlow()
     private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
@@ -101,6 +104,13 @@ object MumbleManager {
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
             ?.edit()?.putBoolean("agc_enabled", value)?.apply()
         active?.setAgcEnabled(value)
+    }
+
+    @Synchronized fun setRnnoiseEnabled(value: Boolean) {
+        _rnnoiseEnabled.value = value
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean("rnnoise_enabled", value)?.apply()
+        active?.setRnnoiseEnabled(value)
     }
 
     @Synchronized fun setTransmitMode(mode: TransmitMode) {
@@ -153,6 +163,7 @@ object MumbleManager {
             ?: TransmitMode.VOICE_ACTIVATED
         _agcTargetDbFs.value = audioPrefs.getFloat("agc_target_dbfs", DEFAULT_AGC_TARGET_DBFS)
         _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", true)
+        _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", true)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -183,14 +194,16 @@ object MumbleManager {
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
         private val codec = LibOpusCodec()
-        // RNNoise does double duty: denoises the uplink AND supplies its VAD probability as the
-        // gate detector (threshold 0.75). One instance is both the suppressor and the VAD.
+        // RNNoise does double duty: denoises the uplink AND supplies its VAD probability as the gate
+        // detector. One instance is both the suppressor and the VAD; the denoise half can be toggled
+        // off (VAD keeps running) via setRnnoiseEnabled.
         private val rnnoise = RnnoiseSuppressor()
         private val engine = AudioVoiceEngine(
             codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value,
             initialTransmitMode = _transmitMode.value,
             initialAgcEnabled = _agcEnabled.value,
-            initialAgcTargetDbFs = _agcTargetDbFs.value)
+            initialAgcTargetDbFs = _agcTargetDbFs.value,
+            initialRnnoiseEnabled = _rnnoiseEnabled.value)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -287,6 +300,7 @@ object MumbleManager {
         fun setVadThreshold(value: Float) = engine.setVadThreshold(value)
         fun setAgcTargetDbFs(value: Float) = engine.setAgcTargetDbFs(value)
         fun setAgcEnabled(value: Boolean) = engine.setAgcEnabled(value)
+        fun setRnnoiseEnabled(value: Boolean) = engine.setRnnoiseEnabled(value)
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)

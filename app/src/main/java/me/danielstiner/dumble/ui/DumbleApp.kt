@@ -39,6 +39,7 @@ fun DumbleApp(
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
+    val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val activeEndpoint by CallManager.activeEndpoint.collectAsStateWithLifecycle()
@@ -102,6 +103,8 @@ fun DumbleApp(
                 onAgcEnabledChange = { MumbleManager.setAgcEnabled(it) },
                 agcTargetDbFs = agcTargetDbFs,
                 onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
+                rnnoiseEnabled = rnnoiseEnabled,
+                onRnnoiseEnabledChange = { MumbleManager.setRnnoiseEnabled(it) },
                 onOpenDiagnostics = { showDiagnostics = true },
             )
         }
