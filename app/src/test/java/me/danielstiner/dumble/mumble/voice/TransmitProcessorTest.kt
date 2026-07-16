@@ -4,6 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TransmitProcessorTest {
+    private class OffsetRecordingSuppressor : NoiseSuppressor {
+        val offsets = mutableListOf<Int>()
+        override fun process(pcm: ShortArray, off: Int, n: Int) { offsets.add(off) }
+        override fun close() {}
+    }
+
+    private class CountingVad : VadDetector {
+        var calls = 0
+        override fun level(pcm: ShortArray, off: Int, n: Int): Float { calls++; return 0f }
+    }
+
     private fun captures(amps: List<Int>): List<ShortArray> = amps.map { amp ->
         ShortArray(CAPTURE_SAMPLES) { i -> if (i % 2 == 0) amp.toShort() else (-amp).toShort() }
     }
@@ -15,6 +26,21 @@ class TransmitProcessorTest {
             System.arraycopy(src, 0, out, 0, n); return n
         }
         override fun close() {}
+    }
+
+    @Test fun denoiseRunsSuppressorPerSubframeWithoutGating() {
+        val sup = OffsetRecordingSuppressor()
+        val vad = CountingVad()
+        val gate = TransmitGate()
+        val proc = TransmitProcessor(sup, vad, gate)
+
+        proc.denoise(ShortArray(CAPTURE_SAMPLES))
+
+        assertEquals("one suppressor call per 10 ms sub-frame",
+            listOf(0, FRAME_SAMPLES_10MS), sup.offsets)
+        // denoise must be denoise-ONLY: process() would call vad.level once per sub-frame, so a
+        // zero VAD-call count discriminates denoise() from the full pipeline (and hence no gating).
+        assertEquals("denoise must not run VAD", 0, vad.calls)
     }
 
     @Test fun engineAndProcessorDecideIdentically() {

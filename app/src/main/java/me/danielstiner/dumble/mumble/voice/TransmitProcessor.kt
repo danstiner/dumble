@@ -22,5 +22,16 @@ class TransmitProcessor(
         return gate.update(subLevels)
     }
 
+    /**
+     * Denoise [capturePcm] (CAPTURE_SAMPLES) in place per 10 ms sub-frame, WITHOUT running VAD or
+     * the gate. Used by the push-to-talk path: the mic is still cleaned, but the transmit decision
+     * is the held button, not voice activity.
+     */
+    fun denoise(capturePcm: ShortArray) {
+        for (i in 0 until FRAMES_PER_PACKET) {
+            suppressor.process(capturePcm, i * FRAME_SAMPLES_10MS, FRAME_SAMPLES_10MS)
+        }
+    }
+
     fun reset() = gate.reset()
 }
