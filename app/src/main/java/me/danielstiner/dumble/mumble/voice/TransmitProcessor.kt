@@ -18,6 +18,8 @@ class TransmitProcessor(
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
+            // process() ALWAYS reads vad.level() — the gate needs the pre-gain prob regardless of
+            // gain state (unlike denoise(), which reads it only for the gain).
             val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)  // pre-gain (gate input)
             subLevels[i] = prob
             gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)    // makeup gain, in place
@@ -35,6 +37,10 @@ class TransmitProcessor(
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
+            // NOTE: denoise() reads vad.level() only when gain is enabled — safe only because the
+            // paired VAD (RnnoiseSuppressor) has a side-effect-free level(). Do not wire a stateful
+            // VAD (e.g. EnergyVadDetector) here: its level() mutates the noise floor every call, so
+            // skipping it when gain is disabled would drift.
             if (gain.enabled) {
                 val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
                 gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)

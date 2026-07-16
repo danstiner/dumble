@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.mumble.voice
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TransmitProcessorTest {
@@ -10,9 +11,9 @@ class TransmitProcessorTest {
         override fun close() {}
     }
 
-    private class CountingVad : VadDetector {
+    private class CountingVad(private val prob: Float = 0f) : VadDetector {
         var calls = 0
-        override fun level(pcm: ShortArray, off: Int, n: Int): Float { calls++; return 0f }
+        override fun level(pcm: ShortArray, off: Int, n: Int): Float { calls++; return prob }
     }
 
     private fun captures(amps: List<Int>): List<ShortArray> = amps.map { amp ->
@@ -67,14 +68,15 @@ class TransmitProcessorTest {
 
     @Test fun denoiseAppliesEnabledGainAndReadsProbPerSubframe() {
         val sup = OffsetRecordingSuppressor()
-        val vad = CountingVad()
+        val vad = CountingVad(prob = 1.0f)   // above adaptSpeechThreshold → gain adapts
         val gate = TransmitGate()
         val enabledGain = GainControl(enabled = true, targetDbFs = -18f)
         val proc = TransmitProcessor(sup, vad, gate, enabledGain)
 
-        proc.denoise(ShortArray(CAPTURE_SAMPLES) { 6000 })
+        proc.denoise(ShortArray(CAPTURE_SAMPLES) { 6000 })   // RMS 6000 ≈ -14.7 dBFS, hotter than -18
 
         assertEquals("one suppressor call per sub-frame", listOf(0, FRAME_SAMPLES_10MS), sup.offsets)
         assertEquals("enabled gain reads prob once per sub-frame", FRAMES_PER_PACKET, vad.calls)
+        assertTrue("enabled gain actually adapted (ran gain.process)", enabledGain.gain < 1.0f)
     }
 }
