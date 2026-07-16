@@ -19,7 +19,7 @@
     {
       "id": 38,
       "subject": "Task 3: MumbleManager transmit-mode wiring",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         36,
         37
@@ -29,7 +29,7 @@
     {
       "id": 39,
       "subject": "Task 4: UI selector + PTT button + wiring",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         36,
         38
