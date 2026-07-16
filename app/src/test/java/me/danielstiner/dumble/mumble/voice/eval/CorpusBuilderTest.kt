@@ -1,21 +1,26 @@
 package me.danielstiner.dumble.mumble.voice.eval
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CorpusBuilderTest {
     @Test fun buildsLabeledClips() {
         val clips = CorpusBuilder.build()
-        assertTrue("at least 5 clips", clips.size >= 5)
+        assertTrue("at least 3 real utterance clips", clips.size >= 3)
         for (c in clips) {
             assertTrue("${c.name} has audio", c.pcm.isNotEmpty())
             assertTrue("${c.name} has segments", c.segments.isNotEmpty())
-            for (s in c.segments) {
-                assertTrue("${c.name} start on grid", (s.startMs % 20) == 0)
-                assertTrue("${c.name} end on grid", (s.endMs % 20) == 0)
-            }
+            // Segments are contiguous and cover the clip from 0 (real labels are NOT grid-aligned,
+            // but they must tile the timeline with no gaps or overlaps).
+            assertEquals("${c.name} starts at 0", 0, c.segments.first().startMs)
+            for (i in 1 until c.segments.size)
+                assertEquals("${c.name} segment ${i} contiguous",
+                    c.segments[i - 1].endMs, c.segments[i].startMs)
+            assertTrue("${c.name} scoreFrom within clip", c.scoreFromMs in 0..c.segments.last().endMs)
         }
-        assertTrue("has a paused clip", clips.any { c -> c.segments.any { it.kind == Kind.PAUSE } })
-        assertTrue("has a noise-only clip", clips.any { c -> c.segments.all { it.kind == Kind.NOISE || it.kind == Kind.SILENCE } })
+        assertTrue("has a speech clip", clips.any { c -> c.segments.any { it.kind == Kind.SPEECH } })
+        assertTrue("has a clip with a real pause between regions",
+            clips.any { c -> c.segments.any { it.kind == Kind.PAUSE } })
     }
 }

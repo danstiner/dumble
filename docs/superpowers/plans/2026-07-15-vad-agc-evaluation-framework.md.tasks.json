@@ -4,25 +4,25 @@
     {
       "id": 1,
       "subject": "Task 1: Extract TransmitProcessor",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Extract the per-capture denoise\u2192vad\u2192gate core from AudioVoiceEngine.nextOutgoingFrame into a shared TransmitProcessor, with a drift-guard test.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitProcessorTest.kt\n\n**Acceptance Criteria:**\n- process() returns gate Decision + denoises in place\n- engine delegates; setVadThreshold works; subLevels removed\n- drift-guard: engine vs standalone processor decide identically\n- AudioVoiceEngineFrameNumberTest still passes\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*TransmitProcessorTest\" --tests \"*AudioVoiceEngineFrameNumberTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*TransmitProcessorTest\\\" --tests \\\"*AudioVoiceEngineFrameNumberTest\\\"\", \"acceptanceCriteria\": [\"process returns Decision + denoises in place\", \"engine delegates; setVadThreshold works; subLevels removed\", \"drift-guard identical\", \"FrameNumberTest passes\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: Host-native RNNoise build",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Host-rebuild pinned RNNoise + JNI shim so NativeRnnoise loads in JVM tests via -Djava.library.path.\n\n**Files:**\n- Modify: app/src/main/cpp/CMakeLists.txt\n- Modify: app/build.gradle.kts\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/HostRnnoiseLoadTest.kt\n\n**Acceptance Criteria:**\n- buildHostRnnoise produces libdumble.{so,dylib}\n- HostRnnoiseLoadTest: processFrame returns float in [0,1]\n- assembleDebug still succeeds\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*HostRnnoiseLoadTest\" && ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/cpp/CMakeLists.txt\", \"app/build.gradle.kts\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/HostRnnoiseLoadTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*HostRnnoiseLoadTest\\\" && ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"buildHostRnnoise produces libdumble\", \"processFrame returns [0,1]\", \"assembleDebug succeeds\"], \"modelTier\": \"frontier\"}\n```"
     },
     {
       "id": 3,
       "subject": "Task 3: WavReader (PCM16)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Dependency-free 48kHz mono PCM16 WAV read/write.\n\n**Files:**\n- Create: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReader.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReaderTest.kt\n\n**Acceptance Criteria:**\n- write then read round-trips a ShortArray exactly\n- read rejects non-PCM16/non-mono clearly\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*WavReaderTest\"\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReader.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/WavReaderTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*WavReaderTest\\\"\", \"acceptanceCriteria\": [\"round-trips exactly\", \"rejects non-PCM16/non-mono\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: CorpusBuilder + speech asset",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         3
       ],
@@ -31,7 +31,7 @@
     {
       "id": 5,
       "subject": "Task 5: VadEvaluator + EvalReport",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         2,
@@ -52,12 +52,12 @@
     {
       "id": 7,
       "subject": "Task 7: Minimal CI workflow",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         6
       ],
       "description": "**Goal:** GitHub Actions workflow running unit suite (host RNNoise build + eval) + upload report.\n\n**Files:**\n- Create: .github/workflows/ci.yml\n\n**Acceptance Criteria:**\n- triggers on push+PR; JDK17 + cmake; runs testDebugUnitTest\n- uploads vad-eval report (if: always())\n- valid YAML\n\n**Verify:** python3 -c \"import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ok')\"\n\n```json:metadata\n{\"files\": [\".github/workflows/ci.yml\"], \"verifyCommand\": \"python3 -c \\\"import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ok')\\\"\", \"acceptanceCriteria\": [\"push+PR; JDK17+cmake; testDebugUnitTest\", \"uploads report if always\", \"valid YAML\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-15T00:00:00Z"
+  "lastUpdated": "2026-07-15T10:40:00Z"
 }

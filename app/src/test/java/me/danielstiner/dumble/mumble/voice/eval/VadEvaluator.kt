@@ -50,11 +50,15 @@ object VadEvaluator {
             }
         }
 
+        // Mid-utterance dropout: only SPEECH captures that were NOT sent count. Captures in a
+        // PAUSE (a real gap the gate is allowed to close on) or SILENCE must be excluded, or a
+        // multi-region clip's legit inter-region pauses would be miscounted as dropouts.
         var midDropMs = 0
         if (onsetMs >= 0 && firstSpeech != null) {
             val onsetCap = (firstSpeech.startMs + onsetMs) / CAP_MS
             val lastCap = lastSpeechEnd / CAP_MS
-            for (c in onsetCap until lastCap) if (c in send.indices && !send[c]) midDropMs += CAP_MS
+            for (c in onsetCap until lastCap)
+                if (c in send.indices && !send[c] && labelAt(clip, c) == Kind.SPEECH) midDropMs += CAP_MS
         }
 
         var hangoverMs = 0

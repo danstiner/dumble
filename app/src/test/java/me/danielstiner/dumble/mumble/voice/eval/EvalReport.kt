@@ -6,7 +6,7 @@ object EvalReport {
     fun write(dir: File, results: List<Pair<Clip, Metrics>>) {
         dir.mkdirs()
         val md = buildString {
-            appendLine("| clip | coverage | onsetMs | hangMs | midDropMs | falseOpen/10s | loudnessDbFS | clip |")
+            appendLine("| clip | coverage | onsetMs | hangMs | midDropMs | falseOpen/10s | loudnessDbFS | clipping |")
             appendLine("|---|---|---|---|---|---|---|---|")
             for ((c, m) in results) appendLine(
                 "| ${c.name} | %.3f | %d | %d | %d | %.2f | %.1f | %d |"

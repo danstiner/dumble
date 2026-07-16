@@ -2,14 +2,13 @@ package me.danielstiner.dumble.mumble.voice.eval
 
 import me.danielstiner.dumble.mumble.voice.SAMPLE_RATE
 import java.io.File
-import kotlin.math.sqrt
 
 enum class Kind { SPEECH, PAUSE, SILENCE, NOISE }
 
 data class Segment(val startMs: Int, val endMs: Int, val kind: Kind)
 
 data class Thresholds(
-    val minCoverage: Double = 0.99,
+    val minCoverage: Double = 1.0,
     val maxMidUtteranceDropoutMs: Int = 0,
     val maxOnsetMs: Int = 60,
     val maxFalseOpeningsPer10s: Double = 1.0,
@@ -23,104 +22,102 @@ data class Clip(
     val thresholds: Thresholds,
 )
 
-/** Builds labeled composites from a committed speech ingredient + programmatic silence/noise.
- *  Deterministic (fixed LCG for noise). Labels are exact by construction. */
+/**
+ * Builds the VAD eval corpus from **real recorded speech + human-verified labels** — LibriSpeech
+ * `dev-other` clips (CC BY 4.0; see NOTICE in the corpus dir), resampled to 48 kHz mono, with
+ * Audacity `.manual.txt` region annotations. Ground truth is the human labels — NOT an energy
+ * heuristic — so a gate disagreement means the gate is wrong, not the label.
+ *
+ * ACCEPTANCE MODEL (asymmetric, per user requirement):
+ *  - Every tagged SPEECH region MUST be fully inside gate-open: coverage == 1.0, zero mid-region
+ *    dropout. This is the hard bar.
+ *  - The gate opening slightly BEFORE a region (lead) is fine but should be short — it is pre-roll
+ *    latency. Measured as [Metrics.onsetMs] (late-open, which eats coverage) staying ~0.
+ *  - The gate staying open AFTER a region (hangover) is fine and may be long, even bridging a PAUSE
+ *    into the next region — hence PAUSE captures are exempt from coverage AND false-activation.
+ *  - Only a truly spurious open (gate open in SILENCE not adjacent to speech: preroll, deep trail)
+ *    is a false activation.
+ *
+ * Per clip: a warm-up preroll (tiled from the clip's own pre-speech room tone) is prepended so
+ * RNNoise reaches steady state before the scored onset — a real call pays cold-start latency once,
+ * not once per utterance. Scoring starts after the preroll ([Clip.scoreFromMs]).
+ *
+ * Labels map to segments: each region -> SPEECH; the gap between two regions -> PAUSE; lead/trail
+ * -> SILENCE. Deterministic.
+ */
 object CorpusBuilder {
-    private const val MS = SAMPLE_RATE / 1000
-    private const val GRID_MS = 20
+    private const val MS = SAMPLE_RATE / 1000          // 48 samples per ms
+    private const val CORPUS_DIR = "src/test/resources/LibriSpeech-ASR-corpus"
+    private const val PREROLL_MS = 1000                // RNNoise warm-up before scoring
 
-    private fun speech(): ShortArray =
-        WavReader.read(File("src/test/resources/vad-corpus/speech_a.wav"))
-
-    /** Keep only voiced 10 ms windows (RMS >= [thresh]) so the result is CONTIGUOUS speech —
-     *  strips the TTS inter-sentence pauses that would otherwise make "contiguous" labels false. */
-    private fun voicedOnly(pcm: ShortArray, thresh: Double = 60.0): ShortArray {
-        val win = 10 * MS  // 480 samples = 10 ms
-        val kept = ArrayList<Short>(pcm.size)
-        var i = 0
-        while (i + win <= pcm.size) {
-            var acc = 0.0
-            for (j in i until i + win) acc += pcm[j].toDouble() * pcm[j]
-            if (kotlin.math.sqrt(acc / win) >= thresh) for (j in i until i + win) kept.add(pcm[j])
-            i += win
-        }
-        return kept.toShortArray()
-    }
-
-    private fun silence(ms: Int) = ShortArray(ms * MS)
-
-    private fun noise(ms: Int, amp: Int, seed: Long): ShortArray {
-        var s = seed
-        return ShortArray(ms * MS) {
-            s = s * 6364136223846793005L + 1442695040888963407L
-            (((s ushr 40).toInt() % (2 * amp + 1)) - amp).toShort()
-        }
-    }
-
-    private fun rms(a: ShortArray): Double {
-        if (a.isEmpty()) return 0.0
-        var acc = 0.0; for (v in a) acc += v.toDouble() * v; return sqrt(acc / a.size)
-    }
-
-    private fun addNoise(sig: ShortArray, snrDb: Double, seed: Long): ShortArray {
-        val n = noise(sig.size / MS, 12000, seed)
-        val sPow = rms(sig); val nPow = rms(n).coerceAtLeast(1.0)
-        val scale = (sPow / nPow) / Math.pow(10.0, snrDb / 20.0)
-        return ShortArray(sig.size) { i ->
-            (sig[i] + (n.getOrElse(i) { 0 } * scale)).toInt().coerceIn(-32768, 32767).toShort()
-        }
-    }
-
-    private fun concat(vararg parts: ShortArray): ShortArray {
-        val out = ShortArray(parts.sumOf { it.size }); var o = 0
-        for (p in parts) { System.arraycopy(p, 0, out, o, p.size); o += p.size }
-        return out
-    }
-
+    private fun readWav(base: String) = WavReader.read(File("$CORPUS_DIR/$base.wav"))
+    private fun readLabels(base: String) = Labels.read(File("$CORPUS_DIR/$base.manual.txt"))
     private fun durMs(a: ShortArray) = a.size / MS
 
-    fun build(): List<Clip> {
-        val sp = voicedOnly(speech())
-        val spMs = (durMs(sp) / GRID_MS) * GRID_MS
-        val spTrim = sp.copyOf(spMs * MS)
-
-        val c1 = concat(silence(400), spTrim)
-        val clip1 = Clip("clean_contiguous", c1,
-            listOf(Segment(0, 400, Kind.SILENCE), Segment(400, 400 + spMs, Kind.SPEECH)),
-            scoreFromMs = 300, thresholds = Thresholds())
-
-        val half = spTrim.copyOf((spMs / 2 / GRID_MS) * GRID_MS * MS)
-        val halfMs = durMs(half)
-        val c2 = concat(silence(400), half, silence(160), half)
-        val clip2 = Clip("speech_pause", c2,
-            listOf(
-                Segment(0, 400, Kind.SILENCE),
-                Segment(400, 400 + halfMs, Kind.SPEECH),
-                Segment(400 + halfMs, 560 + halfMs, Kind.PAUSE),
-                Segment(560 + halfMs, 560 + 2 * halfMs, Kind.SPEECH),
-            ),
-            scoreFromMs = 300, thresholds = Thresholds(maxMidUtteranceDropoutMs = 0))
-
-        val quiet = ShortArray(spTrim.size) { (spTrim[it] / 4).toShort() }
-        val c3 = concat(silence(400), quiet)
-        val clip3 = Clip("quiet_onset", c3,
-            listOf(Segment(0, 400, Kind.SILENCE), Segment(400, 400 + spMs, Kind.SPEECH)),
-            scoreFromMs = 300, thresholds = Thresholds(minCoverage = 0.90, maxOnsetMs = 120))
-
-        val noisy = addNoise(concat(silence(400), spTrim), snrDb = 10.0, seed = 42)
-        val clip4 = Clip("noisy_10db", noisy,
-            listOf(Segment(0, 400, Kind.NOISE), Segment(400, 400 + spMs, Kind.SPEECH)),
-            scoreFromMs = 300, thresholds = Thresholds(minCoverage = 0.90))
-
-        val nOnlyMs = 10000
-        val c5 = noise(nOnlyMs, 6000, seed = 7)
-        val clip5 = Clip("noise_only", c5,
-            listOf(Segment(0, nOnlyMs, Kind.NOISE)),
-            // maxFalseOpeningsPer10s: 1.0 -> 2.0. Measured 1.03/10s on this synthetic-noise
-            // clip (seed=7, amp=6000); one spurious open per ~10s of noise-only input is
-            // acceptable and not a real regression risk.
-            scoreFromMs = 300, thresholds = Thresholds(maxFalseOpeningsPer10s = 2.0))
-
-        return listOf(clip1, clip2, clip3, clip4, clip5)
+    /** Tile the clip's own pre-speech lead into a [PREROLL_MS] warm-up (real room tone, not
+     *  zeros, so RNNoise's noise estimate settles the way it would mid-call). */
+    private fun preroll(pcm: ShortArray, firstSpeechMs: Int): ShortArray {
+        val need = PREROLL_MS * MS
+        val leadLen = (firstSpeechMs * MS).coerceIn(0, pcm.size)
+        if (leadLen == 0) return ShortArray(need)           // no lead -> silence
+        return ShortArray(need) { pcm[it % leadLen] }       // tile real background
     }
+
+    /** A real utterance clip: warm-up preroll + full recording, labeled from its `.manual.txt`. */
+    private fun utterance(base: String, thresholds: Thresholds): Clip {
+        val pcm = readWav(base)
+        val regions = readLabels(base)
+        require(regions.isNotEmpty()) { "$base has no labels" }
+
+        val pre = preroll(pcm, regions.first().startMs)
+        val p = durMs(pre)
+        val full = ShortArray(pre.size + pcm.size)
+        System.arraycopy(pre, 0, full, 0, pre.size)
+        System.arraycopy(pcm, 0, full, pre.size, pcm.size)
+
+        val clipMs = durMs(pcm)
+        val segs = ArrayList<Segment>()
+        segs.add(Segment(0, p + regions.first().startMs, Kind.SILENCE))     // preroll + lead
+        for (i in regions.indices) {
+            val r = regions[i]
+            segs.add(Segment(p + r.startMs, p + r.endMs, Kind.SPEECH))
+            if (i + 1 < regions.size)
+                segs.add(Segment(p + r.endMs, p + regions[i + 1].startMs, Kind.PAUSE))
+        }
+        segs.add(Segment(p + regions.last().endMs, p + clipMs, Kind.SILENCE)) // trail
+        return Clip(base, full, segs, scoreFromMs = p, thresholds = thresholds)
+    }
+
+    // Bars encode the acceptance model above and are UNIFORM across clips — a requirement, not a
+    // per-clip tuning knob:
+    //   minCoverage=1.0 + maxMidUtteranceDropoutMs=0  -> every tagged region fully inside gate-open.
+    // These are INTENTIONALLY RED today. Measured coverage is 0.947-0.990: the gate opens 23-78 ms
+    // LATE on region onsets (openLevel doesn't trip until energy builds), clipping the front of each
+    // region. Closing that gap needs a pre-roll buffer that flushes ~80-100 ms of buffered audio
+    // when the gate opens (task #35). This is a TDD target: the test goes green when the gate meets
+    // the requirement, not by loosening the bar.
+    //
+    // maxOnsetMs / maxFalseOpeningsPer10s are LOOSE secondary diagnostics (not the requirement).
+    // onset is already subsumed by coverage=1.0 (full coverage implies onset 0); its bar is kept
+    // slack so the red surfaces only the coverage+dropout requirement, not a redundant onset axis.
+    // maxFalseOpeningsPer10s guards truly-spurious opens (all clips measure 0); hangover bridging
+    // PAUSEs is exempt by construction, and an acceptable short lead-in open is NOT yet distinguished
+    // from a spurious one — revisit when the pre-roll buffer lands and the gate starts opening early.
+    //
+    // TODO(#34): re-add a dedicated noise-only false-activation clip (real MUSAN noise) — the gate
+    // must stay shut on ~10 s of pure non-speech.
+    private val REQUIRE = Thresholds(
+        minCoverage = 1.0, maxMidUtteranceDropoutMs = 0,
+        maxOnsetMs = 100, maxFalseOpeningsPer10s = 5.0)
+
+    fun build(): List<Clip> = listOf(
+        // 3.39s, moderate loudness (-22 dBFS), 2 regions with one real 0.20s pause.
+        utterance("dev-other-116-288045-0000-trim", REQUIRE),
+        // 4.89s, quiet talker (-31.5 dBFS), one continuous region — the sustained-coverage case
+        // and the future AGC loudness target (spec 2).
+        utterance("dev-other-700-122866-0000", REQUIRE),
+        // 8.45s, -24.5 dBFS, 4 regions across 3 real pauses (0.23/0.66/0.51s) — the
+        // hangover-across-pauses case: gate may close in a gap but must re-cover each region.
+        utterance("dev-other-1255-138279-0002", REQUIRE),
+    )
 }
