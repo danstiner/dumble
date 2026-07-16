@@ -23,14 +23,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.voice.TransmitMode
@@ -109,20 +115,32 @@ private fun PushToTalkButton(
     modifier: Modifier = Modifier,
 ) {
     var pressed by remember { mutableStateOf(false) }
+    val currentOnPress by rememberUpdatedState(onPress)
+    val currentOnRelease by rememberUpdatedState(onRelease)
+
+    // Safety net: if this button leaves composition while held (call ends, or the user opens
+    // Settings with a second finger mid-hold), the gesture coroutine is cancelled and its trailing
+    // onRelease() never runs — the engine would stay latched transmitting. Release on dispose
+    // regardless of `pressed` (setPttHeld(false) is idempotent).
+    DisposableEffect(Unit) {
+        onDispose { currentOnRelease() }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(96.dp)
+            .height(96.dp)               // generously sized for a reliable hold-to-talk target
             .clip(MaterialTheme.shapes.large)
+            .semantics { role = Role.Button; contentDescription = "Push to talk" }
             .background(
                 if (pressed) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surfaceVariant
             )
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
-                    pressed = true; onPress()
+                    pressed = true; currentOnPress()
                     tryAwaitRelease()          // suspends until release OR gesture cancel
-                    pressed = false; onRelease()
+                    pressed = false; currentOnRelease()
                 })
             },
         contentAlignment = Alignment.Center,
