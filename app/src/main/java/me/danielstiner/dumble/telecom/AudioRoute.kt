@@ -21,4 +21,15 @@ object AudioRoute {
         CallEndpoint.TYPE_SPEAKER -> "Speaker"
         else -> "Unknown"
     }
+
+    /** Stable route-icon key for the Speaker control (mapped to a Material icon in the UI). */
+    enum class RouteIcon { BLUETOOTH, WIRED, EARPIECE, SPEAKER, UNKNOWN }
+
+    fun icon(type: Int): RouteIcon = when (type) {
+        CallEndpoint.TYPE_BLUETOOTH -> RouteIcon.BLUETOOTH
+        CallEndpoint.TYPE_WIRED_HEADSET -> RouteIcon.WIRED
+        CallEndpoint.TYPE_EARPIECE -> RouteIcon.EARPIECE
+        CallEndpoint.TYPE_SPEAKER -> RouteIcon.SPEAKER
+        else -> RouteIcon.UNKNOWN
+    }
 }

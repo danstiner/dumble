@@ -23,4 +23,12 @@ class AudioRouteTest {
     @Test fun unknownTypeFallsBack() {
         assertEquals("Unknown", AudioRoute.label(999))
     }
+
+    @Test fun iconMapsEachType() {
+        assertEquals(AudioRoute.RouteIcon.BLUETOOTH, AudioRoute.icon(CallEndpoint.TYPE_BLUETOOTH))
+        assertEquals(AudioRoute.RouteIcon.WIRED, AudioRoute.icon(CallEndpoint.TYPE_WIRED_HEADSET))
+        assertEquals(AudioRoute.RouteIcon.EARPIECE, AudioRoute.icon(CallEndpoint.TYPE_EARPIECE))
+        assertEquals(AudioRoute.RouteIcon.SPEAKER, AudioRoute.icon(CallEndpoint.TYPE_SPEAKER))
+        assertEquals(AudioRoute.RouteIcon.UNKNOWN, AudioRoute.icon(999))
+    }
 }
