@@ -75,12 +75,32 @@ object MumbleManager {
     private val _rnnoiseEnabled = MutableStateFlow(true)
     /** RNNoise denoising on/off (the VAD keeps running regardless), persisted and applied live. */
     val rnnoiseEnabled: StateFlow<Boolean> = _rnnoiseEnabled.asStateFlow()
+    private val _deafened = MutableStateFlow(false)
+    /** Self-deafen (mutes playout + implies self-mute), broadcast to peers. */
+    val deafened: StateFlow<Boolean> = _deafened.asStateFlow()
+    private var deafenSetMute = false
+    private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
+    /** Sessions currently producing playout audio (live during a call). */
+    val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
+    private val _selfTransmitting = MutableStateFlow(false)
+    /** True while our uplink is transmitting (live during a call). */
+    val selfTransmitting: StateFlow<Boolean> = _selfTransmitting.asStateFlow()
     private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
         _muted.value = value
         active?.setMuted(value)
         active?.sendSelfMute(value)
+    }
+
+    @Synchronized fun setDeafened(value: Boolean) {
+        val r = DeafenLogic.onSetDeafened(value, _muted.value, deafenSetMute)
+        deafenSetMute = r.deafenSetMute
+        _deafened.value = value
+        _muted.value = r.muted                 // set directly — one combined UserState below, no double-send
+        active?.setDeafened(value)
+        active?.setMuted(r.muted)
+        active?.sendSelfDeaf(value, r.muted)
     }
 
     @Synchronized fun setVadThreshold(value: Float) {
@@ -240,6 +260,8 @@ object MumbleManager {
             sessionScope.launch { sm.state.collect { _state.value = it } }
             sessionScope.launch { selector.stats.collect { _netStats.value = it } }
             sessionScope.launch { engine.stats.collect { _voiceStats.value = it } }
+            sessionScope.launch { engine.speakingSessions.collect { _speakingSessions.value = it } }
+            sessionScope.launch { engine.selfTransmitting.collect { _selfTransmitting.value = it } }
             sessionScope.launch { engine.diagnostics.collect { _audioDiagnostics.value = it.copy(unprocessedSupported = unprocessedSupport) } }
             sessionScope.launch {
                 _state.value = ConnectionState.Connecting
@@ -304,6 +326,8 @@ object MumbleManager {
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
+        fun setDeafened(value: Boolean) = engine.setDeafened(value)
+        fun sendSelfDeaf(deaf: Boolean, mute: Boolean) = sm.sendSelfDeaf(deaf, mute)
 
         fun shutdown() {
             voice.stop()
@@ -314,6 +338,10 @@ object MumbleManager {
             _netStats.value = NetStats()
             _loopbackStats.value = LoopbackStats()
             _audioDiagnostics.value = AudioDiagnostics()
+            _speakingSessions.value = emptySet()
+            _selfTransmitting.value = false
+            _deafened.value = false
+            deafenSetMute = false
         }
     }
 }
