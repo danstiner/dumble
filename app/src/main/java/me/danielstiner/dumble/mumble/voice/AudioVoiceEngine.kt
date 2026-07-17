@@ -74,8 +74,6 @@ class AudioVoiceEngine(
     private val speakers = ConcurrentHashMap<Int, SpeakerStream>()
     @Volatile private var sent = 0L
     private val received = java.util.concurrent.atomic.AtomicLong(0)
-    private var uplinkBytes = 0L
-    private var uplinkFrames = 0
     @Volatile private var lateDropCount = 0L
     val lateDrops: Long get() = lateDropCount
 
@@ -285,12 +283,6 @@ class AudioVoiceEngine(
     private fun encodeBuffer(pcm: ShortArray, fn: Long, terminator: Boolean): VoiceFrame {
         sending = !terminator
         val opus = encoder.encode(pcm, CAPTURE_SAMPLES)
-        uplinkBytes += opus.size
-        if (++uplinkFrames >= 250) {
-            val avgBytes = uplinkBytes.toDouble() / uplinkFrames
-            android.util.Log.d("AudioVoiceEngine", "uplink avg=%.1f B/frame ~%.1f kbps".format(avgBytes, avgBytes * 0.4))
-            uplinkBytes = 0; uplinkFrames = 0
-        }
         sent++
         _stats.update { it.copy(sent = sent) }
         return VoiceFrame(opus, opus.size, fn, isTerminator = terminator)
@@ -373,7 +365,6 @@ class AndroidAudioIn : AudioIn {
     private val platformEffects = PlatformAudioEffects(record.audioSessionId)
     override fun captureInfo(): CaptureInfo =
         CaptureInfo(platformEffects.states, PlatformAudioEffects.deviceModel())
-    private var readCount = 0
     override fun read(out: ShortArray, n: Int): Int {
         var off = 0
         while (off < n) {
@@ -383,9 +374,6 @@ class AndroidAudioIn : AudioIn {
                 break
             }
             off += r
-        }
-        if (readCount++ % 250 == 0) {
-            android.util.Log.d("AudioVoiceEngine", "mic recordingState=${record.recordingState} lastRead=$off")
         }
         return off
     }
@@ -409,14 +397,10 @@ class AndroidAudioOut : AudioOut {
         .setBufferSizeInBytes(maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4))
         .setTransferMode(AudioTrack.MODE_STREAM).build()
         .also { it.play() }
-    private var writeCount = 0
     override fun write(pcm: ShortArray, n: Int) {
         val w = track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING)
         if (w < 0) {
             android.util.Log.w("AudioVoiceEngine", "AudioTrack.write err=$w playState=${track.playState}")
-        }
-        if (writeCount++ % 250 == 0) {
-            android.util.Log.d("AudioVoiceEngine", "spk playState=${track.playState} lastWrite=$w")
         }
     }
     override fun close() { runCatching { track.stop() }; track.release() }

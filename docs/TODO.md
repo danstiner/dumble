@@ -132,10 +132,16 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   (`AudioInput::encodeAudioFrame` `iFrameCounter`; `AudioOutput::addFrameToBuffer` /
   `decodeAudio_protobuf` empty-payload rejection). On-device verified (peers hear gated audio).
   Commit `84238e8`.
-  **Correction:** the #56 entry below and `docs/mumble-protocol.md` say Mumble `frame_number`
-  "pauses/freezes" during silence — that is wrong. It advances at wall-clock rate and only resets
-  after ~5 s of continuous silence. (#56's receiver fix still holds — it re-anchors on gaps/terminators
-  regardless — but the wording should be corrected during cleanup.)
+  **Correction (source re-verified 2026-07-17):** upstream `AudioInput::encodeAudioFrame` runs
+  `iFrameCounter++` as its FIRST statement — *before* the `!bIsSpeech && !bPreviousVoice` early
+  `return` — so Mumble's `frame_number` **advances at wall-clock rate through silence** and resets
+  to 0 only after 500 silent frames (~5 s). `docs/mumble-protocol.md` is already correct.
+  **Still wrong — but NOT a mere word-swap:** the #56 entry below, the talkspurt-silence design
+  spec, and `adaptive-jitter-buffer-design-notes.md` explain the late-drop bug via a *paused* sender
+  ("resumed `ts == cursor` because both sides paused"). That causal story is inconsistent with a
+  wall-clock sender — renaming "pauses"→"advances" leaves them self-contradictory. The fix is
+  on-device-verified (lateDrops ≈ 0), but the *documented reason it works* needs re-derivation
+  (why a wall-clock sender produced `ts < cursor` pre-fix). Flagged for verification before rewrite.
 - **🔴 Received audio drops as "late" — talkspurt/silence handling (#56 part A)** — root cause:
   Mumble `frame_number` pauses during a VAD peer's silence, but our playout cursor advanced at
   wall-clock rate (PLC-on-underrun), so resumed talkspurts landed behind the cursor and
@@ -175,4 +181,8 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   one ~10 s connecting-phase timeout (or a socket read timeout across the handshake) so a slow/unreachable
   server fails fast instead of hanging on "Connecting…". (Reducing the connect constant alone won't help —
   it's already 10 s.)
-- Cleanup: remove the per-5 s debugging logs (Ping tick, mic/track state, mix peaks, uplink kbps) now that #56 part A is verified
+- Cleanup: remove the per-5 s debugging logs — **DONE** (`cleanup/debug-logs`): mic/track state +
+  uplink kbps removed (with their dead counters); "mix peaks" was already gone. **Ping tick kept**
+  deliberately — it is the only surface for remoteGood/mode/decryptFail/udpAudioRx and is still the
+  instrument for the pending UDP→TCP transport-recovery verification (`470c129`); remove it after
+  that verification lands.
