@@ -93,6 +93,7 @@ fun DumbleApp(
             ActiveCallScreen(
                 state = callState,
                 connectedText = connectedText,
+                connecting = connectedSince == null,
                 muted = muted, deafened = deafened, speaker = speaker,
                 routeIcon = routeIcon, routeLabel = activeRouteLabel ?: "Speaker",
                 transmitMode = transmitMode,

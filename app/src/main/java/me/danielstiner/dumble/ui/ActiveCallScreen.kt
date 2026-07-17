@@ -43,6 +43,7 @@ private fun avatarColor(session: Int): Color = avatarPalette[Math.floorMod(sessi
 fun ActiveCallScreen(
     state: CallScreenState,
     connectedText: String,                 // "Connected · 12:34" or "Connecting…"
+    connecting: Boolean,                   // true until the call is synchronized — show a big connecting state
     muted: Boolean,
     deafened: Boolean,
     speaker: Boolean,
@@ -83,10 +84,21 @@ fun ActiveCallScreen(
                 onToggleMute, onToggleDeafen, onToggleSpeaker, onPttPress, onPttRelease, onHangUp)
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
-            state.channels.forEach { ch ->
-                item(key = "ch-${ch.id}") { ChannelHeader(ch) }
-                items(ch.users, key = { "u-${it.session}" }) { u -> UserRow(u) }
+        if (connecting) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(64.dp), strokeWidth = 6.dp)
+                    Text("Connecting…", style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
+                state.channels.forEach { ch ->
+                    item(key = "ch-${ch.id}") { ChannelHeader(ch) }
+                    items(ch.users, key = { "u-${it.session}" }) { u -> UserRow(u) }
+                }
             }
         }
     }
@@ -278,7 +290,7 @@ private fun ActiveCallScreenPreview() {
                 )),
             ),
         )
-        ActiveCallScreen(state, "Connected · 24:32", muted = false, deafened = false, speaker = false,
+        ActiveCallScreen(state, "Connected · 24:32", connecting = false, muted = false, deafened = false, speaker = false,
             routeIcon = AudioRoute.RouteIcon.BLUETOOTH, routeLabel = "Bluetooth",
             transmitMode = TransmitMode.VOICE_ACTIVATED,
             onToggleMute = {}, onToggleDeafen = {}, onToggleSpeaker = {},
