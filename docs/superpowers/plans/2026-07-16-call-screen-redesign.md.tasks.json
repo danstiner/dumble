@@ -55,10 +55,10 @@
     {
       "id": 63,
       "subject": "Task 9: DumbleApp wiring",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [59, 61, 62],
       "description": "**Goal:** Collect model + speaking flows + deafen/route; assemble CallScreenState; connectedSince timer; wire callbacks.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\n\n**Acceptance Criteria:**\n- collects model + speaking flows + deafen + activeEndpoint; assembles CallScreenState\n- connectedSince captured on Synchronized transition; live mm:ss timer\n- route icon/label passed (Speaker fallback); deafen/speaker/ptt/mute/hangup/settings wired\n- assembleDebug builds; nav unchanged\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"collects flows; assembles CallScreenState\", \"connectedSince + live timer\", \"route + callbacks wired\", \"assembleDebug; nav unchanged\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-07-16T12:00:00Z"
+  "lastUpdated": "2026-07-16T18:00:00Z"
 }
