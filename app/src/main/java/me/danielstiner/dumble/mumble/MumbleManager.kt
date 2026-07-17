@@ -46,6 +46,12 @@ object MumbleManager {
     // VOICE_COMMUNICATION AGC/NS, so default AGC off too rather than double-processing.
     private const val DEFAULT_AGC_ENABLED = DEFAULT_RNNOISE_ENABLED
     private const val DEFAULT_PREROLL_MS = 40
+    // Overall deadline for the whole connecting phase (TLS handshake + auth -> ServerSync). The TCP
+    // connect already has its own 10s timeout, but the handshake sets no SO_TIMEOUT and nothing
+    // bounded the auth exchange, so a server that accepts the socket then stalls would hang on
+    // "Connecting…" indefinitely. ~10s overall keeps a healthy connect (well under 2s) unaffected
+    // while failing an unreachable/stalling server fast.
+    private const val CONNECTING_TIMEOUT_MS = 10_000L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -367,6 +373,11 @@ object MumbleManager {
             sessionScope.launch { engine.diagnostics.collect { _audioDiagnostics.value = it.copy(unprocessedSupported = unprocessedSupport) } }
             sessionScope.launch {
                 _state.value = ConnectionState.Connecting
+                // Arm the connecting-phase deadline BEFORE the blocking TCP connect + TLS handshake,
+                // so it also covers a stalled handshake (which has no SO_TIMEOUT). On timeout the
+                // watchdog calls sm.fail(TIMEOUT), which closes tcp — unblocking the handshake and the
+                // reader — and "first failure wins" so a real failure below is never overwritten.
+                sm.armConnectTimeout(sessionScope, CONNECTING_TIMEOUT_MS)
                 try {
                     tcp.connect(config.host, config.port, object : MumbleTcpTransport.Listener {
                         override fun onFrame(frame: TcpFrame) = sm.onFrame(frame)
@@ -375,7 +386,9 @@ object MumbleManager {
                         }
                     })
                 } catch (t: Throwable) {
-                    _state.value = ConnectionState.Failed(classify(t), t.message, t)
+                    // Route through sm.fail (not a direct _state write) so first-failure-wins keeps a
+                    // TIMEOUT the watchdog may have set when its socket-close unblocked this handshake.
+                    sm.fail(classify(t), t.message, t)
                     return@launch
                 }
                 sm.start(config.username, config.password)
