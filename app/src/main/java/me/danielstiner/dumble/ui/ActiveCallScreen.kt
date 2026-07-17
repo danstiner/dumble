@@ -227,7 +227,7 @@ private fun ControlToggle(
         FilledIconToggleButton(
             checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
             modifier = Modifier.fillMaxWidth().height(72.dp),
-            shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill, like the phone app
+            shape = RoundedCornerShape(percent = if (checked) 30 else 50),   // pill; morphs squarer when active
             colors = IconButtonDefaults.filledIconToggleButtonColors(
                 containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
                 contentColor = cs.onSurface,
@@ -254,7 +254,7 @@ private fun RouteControl(
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
             FilledIconButton(
                 onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(72.dp),
-                shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill
+                shape = RoundedCornerShape(percent = if (highlighted) 30 else 50),   // pill; squarer when non-default
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
                     contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
@@ -313,7 +313,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
         })
     } else Modifier
     ControlColumn("Talk", modifier) {
-        Surface(shape = RoundedCornerShape(percent = 50), color = container, contentColor = content,
+        Surface(shape = RoundedCornerShape(percent = if (pressed) 30 else 50), color = container, contentColor = content,
             modifier = Modifier.fillMaxWidth().height(72.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
