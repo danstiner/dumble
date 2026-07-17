@@ -14,7 +14,11 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   Noise suppression, and the debug Tools are wrapped in a collapsible **Advanced** section (collapsed
   by default) in `SettingsScreen`. Split is easily adjusted — move a card out of the `AnimatedVisibility`
   block to promote it. Pending on-device visual check.
-- advanced option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms. once we have it working well maybe we'll replace the current VAD
+- ~~advanced option to use silero for VAD with tunable preroll~~ — **substantially DONE**: Silero is a
+  selectable VAD engine (energy / rnnoise / **silero**) with a live-tunable detection preroll (0–100 ms),
+  persisted + applied mid-call. Shipped **v6** (not v5), and it's co-equal in the picker rather than
+  the default — the only remaining part is the *product decision* to make it the default once it's
+  proven better than RNNoise (an eval/on-device call, tracked under #40 follow-ups).
 - ~~Show when a remote client is deafened~~ — **already implemented** (call-screen redesign): remote
   users render a `HeadsetOff` deaf badge from `u.selfDeaf`/`u.deaf` (`ActiveCallScreen.kt`).
 - Show a more obvious glowing ring around the speaker
@@ -36,9 +40,15 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   to the three `FilledIconToggleButton`s for the native *animated* morph and drop the manual constants.
 
 ### Deferred native tasks (consolidated here for single-place tracking)
-- Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)
-- Add noise-only false-activation clip (real MUSAN noise) to the VAD eval corpus (was task #34)
-- Pre-roll buffer to recover clipped onset — revisit when tuning Silero (was task #35)
+- ~~Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)~~ — **N/A**: the
+  ONNX Silero path doesn't use `speech_pad_ms`; onset latency is handled by the detection-preroll
+  (`LookaheadDelay`) feature instead. Obsolete.
+- Add noise-only false-activation clip (real MUSAN noise) to the VAD eval corpus (was task #34) —
+  **still open** (`Corpus.kt:104` `// TODO(#34)`); the eval scores SILENCE/NOISE segments but has no
+  dedicated MUSAN noise-only clip yet.
+- ~~Pre-roll buffer to recover clipped onset — revisit when tuning Silero (was task #35)~~ — **DONE**:
+  `LookaheadDelay` (K-capture delay ring) + `prerollMs` (persisted, live-applied, 0–100 ms Settings
+  slider) recovers pre-onset audio; K=0 is provable identity.
 - PTT accessibility: TalkBack-operable transmit (hold gesture unusable via screen reader) + `mergeDescendants` polish (was task #42)
 
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
