@@ -110,26 +110,28 @@ git commit -m "build: add material-icons-extended for the call-screen redesign"
 ```kotlin
 package me.danielstiner.dumble.mumble.voice
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+// Semantics: a session is present on the tick it is produced, then held for `holdTicks` further
+// silent ticks, then dropped. So holdTicks=2 → present on the producing tick + 2 held ticks.
 class SpeakingHoldTest {
-    @Test fun heldForHoldTicksAfterLastProduced() {
-        val h = SpeakingHold(holdTicks = 3)
-        assertEquals(setOf(7), h.tick(setOf(7)))       // produced -> present
-        assertEquals(setOf(7), h.tick(emptySet()))     // hold 1
-        assertEquals(setOf(7), h.tick(emptySet()))     // hold 2
-        assertTrue("still held at the edge", h.tick(emptySet()).contains(7)) // hold 3
-        assertFalse("dropped after hold expires", h.tick(emptySet()).contains(7))
+    @Test fun heldForHoldTicksThenDropped() {
+        val h = SpeakingHold(holdTicks = 2)
+        assertTrue(h.tick(setOf(7)).contains(7))     // produced (appearance)
+        assertTrue(h.tick(emptySet()).contains(7))   // hold 1
+        assertTrue(h.tick(emptySet()).contains(7))   // hold 2
+        assertFalse("dropped after holdTicks holds", h.tick(emptySet()).contains(7))
     }
 
     @Test fun refreshExtendsTheHold() {
         val h = SpeakingHold(holdTicks = 2)
-        h.tick(setOf(1)); h.tick(emptySet())
-        assertTrue("refreshed", h.tick(setOf(1)).contains(1))
-        assertTrue(h.tick(emptySet()).contains(1))
+        h.tick(setOf(1))                              // produced
+        h.tick(setOf(1))                              // refreshed -> hold restarts
+        assertTrue(h.tick(emptySet()).contains(1))   // hold 1 after refresh
+        assertTrue(h.tick(emptySet()).contains(1))   // hold 2 after refresh
+        assertFalse(h.tick(emptySet()).contains(1))  // dropped
     }
 
     @Test fun dropRemovesImmediately() {
@@ -139,12 +141,14 @@ class SpeakingHoldTest {
         assertFalse(h.tick(emptySet()).contains(4))
     }
 
-    @Test fun tracksMultipleSessionsIndependently() {
+    @Test fun refreshedSessionOutlivesAnUnrefreshedOne() {
         val h = SpeakingHold(holdTicks = 2)
-        h.tick(setOf(1, 2))
-        assertEquals(setOf(1, 2), h.tick(setOf(1)))    // 2 in hold, 1 refreshed
-        val s = h.tick(emptySet())                     // 1 in hold, 2 expiring
-        assertTrue(s.contains(1)); assertFalse(s.contains(2))
+        h.tick(setOf(1, 2))                          // both produced
+        h.tick(setOf(1))                             // 1 refreshed; 2 keeps aging
+        h.tick(emptySet())                           // both still held
+        val c4 = h.tick(emptySet())
+        assertTrue("refreshed 1 still held", c4.contains(1))
+        assertFalse("unrefreshed 2 already dropped", c4.contains(2))
     }
 }
 ```
@@ -166,16 +170,19 @@ package me.danielstiner.dumble.mumble.voice
 class SpeakingHold(private val holdTicks: Int = SPEAKING_HOLD_TICKS) {
     private val remaining = HashMap<Int, Int>()
 
-    /** Advance one tick with the sessions that produced audio this tick; return the current held set. */
+    /**
+     * Advance one tick with the sessions that produced audio this tick; return the held set. A
+     * produced session is present this tick and for [holdTicks] further silent ticks, then dropped.
+     */
     fun tick(produced: Set<Int>): Set<Int> {
-        val it = remaining.entries.iterator()
+        for (s in produced) remaining[s] = holdTicks   // (re)arm produced sessions to the full hold
+        val present = HashSet(remaining.keys)          // present THIS tick (incl. just-armed)
+        val it = remaining.entries.iterator()          // then age the holds for the next tick
         while (it.hasNext()) {
             val e = it.next()
-            val v = e.value - 1
-            if (v <= 0) it.remove() else e.setValue(v)
+            if (e.value <= 0) it.remove() else e.setValue(e.value - 1)
         }
-        for (s in produced) remaining[s] = holdTicks
-        return HashSet(remaining.keys)
+        return present
     }
 
     /** Forget a session immediately (its stream retired). */

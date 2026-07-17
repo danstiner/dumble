@@ -4,7 +4,7 @@
     {
       "id": 55,
       "subject": "Task 1: material-icons-extended dependency",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Make the extended Material icon set available to Compose.\n\n**Files:**\n- Modify: gradle/libs.versions.toml\n- Modify: app/build.gradle.kts\n\n**Acceptance Criteria:**\n- libs.versions.toml declares androidx-compose-material-icons-extended (BOM-versioned)\n- app/build.gradle.kts adds the implementation\n- extended icons resolve; compileDebugKotlin BUILD SUCCESSFUL\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"gradle/libs.versions.toml\", \"app/build.gradle.kts\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"declares material-icons-extended\", \"adds implementation\", \"compiles\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
