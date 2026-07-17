@@ -154,6 +154,12 @@ class SessionStateMachine(
         channel.send(TcpMessageType.UserState, MumbleProtos.UserState.newBuilder().setSelfMute(muted).build())
     }
 
+    /** Broadcasts self-deaf plus the resulting self-mute in one UserState (server infers session). */
+    fun sendSelfDeaf(deaf: Boolean, mute: Boolean) {
+        channel.send(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSelfDeaf(deaf).setSelfMute(mute).build())
+    }
+
     fun fail(reason: FailReason, detail: String? = null, cause: Throwable? = null) {
         val failed = ConnectionState.Failed(reason, detail, cause)
         while (true) {
