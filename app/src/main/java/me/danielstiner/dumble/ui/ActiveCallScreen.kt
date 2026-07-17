@@ -18,6 +18,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -149,7 +154,8 @@ private fun ControlBar(
         Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 12.dp, horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Top) {
             if (transmitMode == TransmitMode.PUSH_TO_TALK) {
-                HoldToTalkControl(onPttPress, onPttRelease)
+                // Deafen implies self-mute; disable Talk while deafened (same hot-mic guard as Mute).
+                HoldToTalkControl(enabled = !deafened, onPress = onPttPress, onRelease = onPttRelease)
             } else {
                 // Deafen forces mute; disable Mute while deafened so a stray unmute can't reopen a hot mic.
                 ToggleControl(checked = muted, onClick = onToggleMute,
@@ -194,22 +200,27 @@ private fun LeaveControl(onHangUp: () -> Unit) {
 }
 
 @Composable
-private fun HoldToTalkControl(onPress: () -> Unit, onRelease: () -> Unit) {
+private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
     val currentPress by rememberUpdatedState(onPress)
     val currentRelease by rememberUpdatedState(onRelease)
     DisposableEffect(Unit) { onDispose { currentRelease() } }   // release if it leaves composition while held
     val cs = MaterialTheme.colorScheme
+    val container = when { !enabled -> cs.onSurface.copy(alpha = 0.12f); pressed -> cs.primary; else -> cs.secondaryContainer }
+    val content = when { !enabled -> cs.onSurface.copy(alpha = 0.38f); pressed -> cs.onPrimary; else -> cs.onSecondaryContainer }
+    // Raw pointerInput drives press/hold, so the button semantics (role + label, disabled state) must
+    // be set explicitly — a Surface with no onClick isn't exposed as an actionable button to TalkBack.
+    val gesture = if (enabled) Modifier.pointerInput(Unit) {
+        detectTapGestures(onPress = {
+            pressed = true; currentPress(); tryAwaitRelease(); pressed = false; currentRelease()
+        })
+    } else Modifier
     ControlColumn(if (pressed) "Release" else "Talk") {
-        Surface(shape = RoundedCornerShape(20.dp),
-            color = if (pressed) cs.primary else cs.secondaryContainer,
-            contentColor = if (pressed) cs.onPrimary else cs.onSecondaryContainer,
-            modifier = Modifier.size(60.dp).pointerInput(Unit) {
-                detectTapGestures(onPress = {
-                    pressed = true; currentPress(); tryAwaitRelease(); pressed = false; currentRelease()
-                })
+        Surface(shape = RoundedCornerShape(20.dp), color = container, contentColor = content,
+            modifier = Modifier.size(60.dp).then(gesture).semantics {
+                role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Mic, "Push to talk", modifier = Modifier.size(26.dp)) }
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Mic, null, modifier = Modifier.size(26.dp)) }
         }
     }
 }
