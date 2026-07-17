@@ -81,4 +81,17 @@ class AudioVoiceEngineLookaheadTest {
             assertEquals("K>0 frame numbers must stay contiguous", FRAMES_PER_PACKET.toLong(), fns[i] - fns[i - 1])
         }
     }
+
+    @Test fun changingKMidTalkspurtClosesOldStreamWithOneTerminator() {
+        // Continuous speech so the engine is actively `sending`; swapping K live must close the old
+        // delayed stream with a real terminator (not leave `sending` stale-true silently).
+        val e = AudioVoiceEngine(FakeOpusCodec(), { ScriptedAudioIn(List(10) { 8000 }) }, { FakeAudioOut() })
+            .also { it.start() }
+        repeat(3) { assertTrue("speech is transmitting", e.nextOutgoingFrame(0)?.let { !it.isTerminator } == true) }
+        e.setLookaheadMs(40)                                 // K 0 -> 2, deferred to next send-thread tick
+        val closing = e.nextOutgoingFrame(0)
+        e.stop()
+        assertTrue("live K change closes the open stream with one real terminator",
+            closing != null && closing.isTerminator && closing.length > 0)
+    }
 }

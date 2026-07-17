@@ -54,9 +54,11 @@ class AudioVoiceEngine(
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
     @Volatile private var lookahead = LookaheadDelay(initialLookaheadCaptures)
+    @Volatile private var pendingLookaheadCaptures: Int? = null
 
-    /** Live-adjust the onset-recovery lookahead delay (0 = off/identity). 20 ms per capture. */
-    fun setLookaheadMs(ms: Int) { lookahead = LookaheadDelay((ms / 20).coerceAtLeast(0)) }
+    /** Live-adjust the onset-recovery lookahead delay (0 = off/identity). 20 ms per capture.
+     *  Runs on the UI thread: records a pending K, applied (flush + clean close) on the send thread. */
+    fun setLookaheadMs(ms: Int) { pendingLookaheadCaptures = (ms / 20).coerceAtLeast(0) }
 
     init { suppressor.setDenoiseEnabled(initialRnnoiseEnabled) }
 
@@ -147,6 +149,17 @@ class AudioVoiceEngine(
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
 
+        // Apply a pending K change here on the send thread (setLookaheadMs only records it on the UI
+        // thread). Mirror the mode-change flush+terminate so the old delayed stream closes cleanly
+        // instead of leaving `sending` stale-true with buffered captures silently dropped.
+        val pending = pendingLookaheadCaptures
+        if (pending != null && pending != lookahead.k) {
+            pendingLookaheadCaptures = null
+            lookahead.flush()                            // discard old ring's buffered captures
+            lookahead = LookaheadDelay(pending)
+            if (sending) return terminatorFrame(fn)      // close the old delayed stream cleanly
+        }
+
         val diag = (++diagTick % DIAG_INTERVAL == 0)
         val rawDb = if (diag) rmsDbFs(capturePcm, 0, CAPTURE_SAMPLES) else 0f
 
@@ -189,6 +202,9 @@ class AudioVoiceEngine(
                     return encodeAndCount(fn, d.terminator)   // speech / hangover / closing frame
                 }
                 // K>0: feed the live gate-open decision into the delay ring, emit the delayed capture.
+                // Emergent: two talkspurts separated by fewer than K silent captures merge into one
+                // continuous transmission (no intervening terminator) — an accepted consequence of the
+                // OR-window recovery (the ring's send=OR-over-window keeps the bridge frames live).
                 val openLive = d.send && !d.terminator    // real speech this tick (exclude the closing terminator tick)
                 val emit = la.offer(capturePcm, openLive, fn) ?: return null   // priming → nothing out yet
                 if (emit.send) {
