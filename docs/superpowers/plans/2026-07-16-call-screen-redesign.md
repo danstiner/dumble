@@ -150,6 +150,13 @@ class SpeakingHoldTest {
         assertTrue("refreshed 1 still held", c4.contains(1))
         assertFalse("unrefreshed 2 already dropped", c4.contains(2))
     }
+
+    @Test fun clearEmptiesTheSet() {
+        val h = SpeakingHold(holdTicks = 5)
+        h.tick(setOf(1, 2))
+        h.clear()
+        assertTrue(h.tick(emptySet()).isEmpty())
+    }
 }
 ```
 
@@ -205,18 +212,28 @@ import org.junit.Test
 
 class TransmitHoldTest {
     @Test fun trueWhileSendingThenReleasesAfterHold() {
-        val h = TransmitHold(holdTicks = 3)
-        assertTrue(h.update(true))
+        val h = TransmitHold(holdTicks = 2)
+        assertFalse("not held before any send", h.update(false))
+        assertTrue(h.update(true))    // sending
         assertTrue(h.update(false))   // hold 1
         assertTrue(h.update(false))   // hold 2
-        assertFalse("released after hold ticks", h.update(false)) // hold 3 -> 0
+        assertFalse("released after holdTicks holds", h.update(false))
     }
 
     @Test fun sendingRefreshesTheHold() {
         val h = TransmitHold(holdTicks = 2)
-        h.update(true); h.update(false)
-        assertTrue(h.update(true))
-        assertTrue(h.update(false))
+        h.update(true); h.update(false)  // sending, hold 1
+        assertTrue(h.update(true))       // sending again -> refresh
+        assertTrue(h.update(false))      // hold 1 after refresh
+        assertTrue(h.update(false))      // hold 2 after refresh
+        assertFalse(h.update(false))     // released
+    }
+
+    @Test fun clearResetsToNotHeld() {
+        val h = TransmitHold(holdTicks = 5)
+        h.update(true)
+        h.clear()
+        assertFalse(h.update(false))
     }
 }
 ```
@@ -232,15 +249,21 @@ package me.danielstiner.dumble.mumble.voice
  * indicator doesn't flicker between talkspurt frames. Pure, single-threaded (send thread only).
  */
 class TransmitHold(private val holdTicks: Int = TRANSMIT_HOLD_TICKS) {
-    private var remaining = 0
+    private var remaining = -1   // <0 = not held
 
-    /** Advance one capture; [sending] = a real (non-terminator) frame went out this capture. */
+    /**
+     * Advance one capture; [sending] = a real (non-terminator) frame went out this capture. Returns
+     * true on a sending capture and for [holdTicks] further captures after the last send (consistent
+     * with [SpeakingHold]).
+     */
     fun update(sending: Boolean): Boolean {
-        remaining = if (sending) holdTicks else (remaining - 1).coerceAtLeast(0)
-        return remaining > 0
+        if (sending) remaining = holdTicks
+        if (remaining < 0) return false
+        remaining--          // present this capture, then age (holdTicks further after a send)
+        return true
     }
 
-    fun clear() { remaining = 0 }
+    fun clear() { remaining = -1 }
 
     companion object { const val TRANSMIT_HOLD_TICKS = 10 }   // ~200 ms at 20 ms/capture
 }

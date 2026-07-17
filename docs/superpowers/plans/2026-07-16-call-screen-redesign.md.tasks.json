@@ -10,7 +10,7 @@
     {
       "id": 56,
       "subject": "Task 2: Pure release-hold helpers",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Pure JVM-testable SpeakingHold + TransmitHold (~200 ms release hold).\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakingHold.kt\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitHold.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakingHoldTest.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitHoldTest.kt\n\n**Acceptance Criteria:**\n- SpeakingHold holds each session for holdTicks after last produced; drop() immediate\n- TransmitHold true while sending + holdTicks after, then false\n- deterministic, no Android imports\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*SpeakingHoldTest\" --tests \"*TransmitHoldTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakingHold.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitHold.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakingHoldTest.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitHoldTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*SpeakingHoldTest\\\" --tests \\\"*TransmitHoldTest\\\"\", \"acceptanceCriteria\": [\"SpeakingHold hold+drop\", \"TransmitHold hold\", \"pure, no Android\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
