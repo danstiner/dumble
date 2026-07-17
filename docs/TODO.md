@@ -131,6 +131,13 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ## Follow-up features / tasks
 - **#56 part B** adaptive jitter buffer + adaptive playout delay (part A / talkspurt-silence handling has landed) — design notes: `docs/superpowers/adaptive-jitter-buffer-design-notes.md`
+  - **Lower the prebuffer floor 100 ms → ~10 ms** to match Mumble desktop's low-latency default (its
+    Speex jitterbuffer is adaptive; 10 ms is the floor, not a static target). Today
+    `SpeakerStream.prebufferSamples` is a **static** 100 ms (`FRAME_SAMPLES_20MS*5`) and
+    `JitterBuffer.highWaterSamples` a static 600 ms cap — the buffer does **not** grow dynamically.
+    The 100 ms was deliberately raised (`4031812`) to stop late-drop starvation on jittery paths, so
+    this must land *with* adaptive sizing: start ~10–20 ms and grow toward the 600 ms cap on measured
+    jitter / `lateDrops`; a naive static 100→10 would regress that fix.
 - **#55** notification: show server label & channel (fallback to hostname)
 - **#54** Bluetooth headset not selected as the initial call audio route
 - **#53** evaluate 32 kbps CVBR encoder default
