@@ -32,8 +32,6 @@ fun DumbleApp(
 
     val state by MumbleManager.state.collectAsStateWithLifecycle()
     val connection by CallManager.activeConnection.collectAsStateWithLifecycle()
-    val net by MumbleManager.netStats.collectAsStateWithLifecycle()
-    val voice by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
@@ -41,6 +39,10 @@ fun DumbleApp(
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
+    val serverModel by MumbleManager.model.state.collectAsStateWithLifecycle()
+    val speakingSessions by MumbleManager.speakingSessions.collectAsStateWithLifecycle()
+    val selfTransmitting by MumbleManager.selfTransmitting.collectAsStateWithLifecycle()
+    val deafened by MumbleManager.deafened.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val activeEndpoint by CallManager.activeEndpoint.collectAsStateWithLifecycle()
     val activeRouteLabel = activeEndpoint?.let { AudioRoute.label(it.endpointType, it.endpointName) }
@@ -65,26 +67,40 @@ fun DumbleApp(
         state is ConnectionState.Handshaking ||
         state is ConnectionState.Synchronized
 
+    var connectedSince by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(state) {
+        connectedSince = if (state is ConnectionState.Synchronized) {
+            connectedSince ?: System.currentTimeMillis()
+        } else null
+    }
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(connectedSince) {
+        while (connectedSince != null) { nowMillis = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
+    }
+    val connectedText = connectedSince?.let { "Connected · " + formatElapsed(nowMillis - it) } ?: "Connecting…"
+
     when {
         showDiagnostics -> {
             BackHandler { showDiagnostics = false }
             AudioDiagnosticsScreen(diagnostics = audioDiagnostics, onBack = { showDiagnostics = false })
         }
         inCall && !showSettings -> {
-            val statusText = if (state is ConnectionState.Synchronized) "In Call" else "Connecting…"
-            val statsText = "state=${state::class.simpleName} mode=${net.mode}\n" +
-                "net: tcpRtt=%.1fms udpRtt=%.1fms jit=%.2fms".format(net.tcpRttMs, net.udpRttMs, net.udpJitterMs) + "\n" +
-                "voice: sent=${voice.sent} rcvd=${voice.received} lost=${voice.lost} " +
-                "concealed=${voice.concealed} buf=${voice.bufferMs}ms spk=${voice.activeSpeakers}"
+            val callState = buildCallScreenState(
+                serverModel, speakingSessions, selfTransmitting, muted, deafened,
+                configHostFallback = form.host,
+            )
+            val routeIcon = activeEndpoint?.let { AudioRoute.icon(it.endpointType) } ?: AudioRoute.RouteIcon.SPEAKER
             ActiveCallScreen(
-                statusText = statusText, statsText = statsText,
-                muted = muted, speaker = speaker,
-                activeRouteLabel = activeRouteLabel,
+                state = callState,
+                connectedText = connectedText,
+                muted = muted, deafened = deafened, speaker = speaker,
+                routeIcon = routeIcon, routeLabel = activeRouteLabel ?: "Speaker",
                 transmitMode = transmitMode,
+                onToggleMute = { MumbleManager.setMuted(!muted) },
+                onToggleDeafen = { MumbleManager.setDeafened(!deafened) },
+                onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 onPttPress = { MumbleManager.setPttHeld(true) },
                 onPttRelease = { MumbleManager.setPttHeld(false) },
-                onToggleMute = { MumbleManager.setMuted(!muted) },
-                onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 onHangUp = onHangUp,
                 onOpenSettings = { showSettings = true },
             )
@@ -124,4 +140,10 @@ fun DumbleApp(
             )
         }
     }
+}
+
+private fun formatElapsed(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val h = total / 3600; val m = (total % 3600) / 60; val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
