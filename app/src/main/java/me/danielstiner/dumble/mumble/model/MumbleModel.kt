@@ -22,6 +22,7 @@ data class MumbleUser(
     val selfMute: Boolean = false,
     val selfDeaf: Boolean = false,
     val suppress: Boolean = false,
+    val recording: Boolean = false,
 )
 
 data class ServerModel(
@@ -60,6 +61,7 @@ object ModelReducers {
             selfMute = if (msg.hasSelfMute()) msg.selfMute else old?.selfMute ?: false,
             selfDeaf = if (msg.hasSelfDeaf()) msg.selfDeaf else old?.selfDeaf ?: false,
             suppress = if (msg.hasSuppress()) msg.suppress else old?.suppress ?: false,
+            recording = if (msg.hasRecording()) msg.recording else old?.recording ?: false,
         )
         return m.copy(users = m.users + (u.session to u))
     }

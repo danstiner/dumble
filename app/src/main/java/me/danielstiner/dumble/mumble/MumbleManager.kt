@@ -88,6 +88,16 @@ object MumbleManager {
     private var appContext: Context? = null
 
     @Synchronized fun setMuted(value: Boolean) {
+        if (!value && _deafened.value) {
+            // Unmuting while deafened undeafens too (mirrors murmur + desktop: self_mute=false => self_deaf=false).
+            deafenSetMute = false
+            _deafened.value = false
+            _muted.value = false
+            active?.setDeafened(false)
+            active?.setMuted(false)
+            active?.sendSelfDeaf(false, false)
+            return
+        }
         _muted.value = value
         active?.setMuted(value)
         active?.sendSelfMute(value)

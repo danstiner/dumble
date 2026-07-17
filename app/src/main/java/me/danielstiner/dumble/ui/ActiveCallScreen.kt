@@ -95,7 +95,7 @@ fun ActiveCallScreen(
 @Composable
 private fun ChannelHeader(ch: ChannelVm) {
     val color = if (ch.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp),
+    Row(Modifier.fillMaxWidth().padding(start = (16 + ch.depth * 12).dp, end = 16.dp, top = 14.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Filled.Tag, null, modifier = Modifier.size(18.dp), tint = color)
         Text(ch.name.uppercase(), style = MaterialTheme.typography.labelLarge, color = color,
@@ -118,8 +118,17 @@ private fun UserRow(u: UserVm) {
                 }
             }
         },
-        trailingContent = if (u.speaking) {
-            { Icon(Icons.Filled.GraphicEq, "speaking", tint = MaterialTheme.colorScheme.primary) }
+        trailingContent = if (u.recording || u.speaking) {
+            {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (u.recording) Icon(Icons.Filled.FiberManualRecord, "recording",
+                        tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(12.dp))
+                    if (u.speaking) {
+                        if (u.recording) Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Filled.GraphicEq, "speaking", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
         } else null,
     )
 }
@@ -132,12 +141,17 @@ private fun Avatar(u: UserVm) {
             contentAlignment = Alignment.Center) {
             Text(u.initial, color = Color.White, style = MaterialTheme.typography.titleMedium)
         }
-        if (u.selfMute || u.serverMute) {
+        // Badge priority: deaf (can't hear you) over mute. Server-imposed = error/red, self = neutral.
+        val showDeaf = u.serverDeaf || u.selfDeaf
+        val showMute = !showDeaf && (u.serverMute || u.selfMute)
+        if (showDeaf || showMute) {
+            val server = if (showDeaf) u.serverDeaf else u.serverMute
             Box(Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
-                .background(if (u.serverMute) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant),
+                .background(if (server) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.MicOff, "muted", modifier = Modifier.size(11.dp),
-                    tint = if (u.serverMute) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(if (showDeaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
+                    if (showDeaf) "deafened" else "muted", modifier = Modifier.size(11.dp),
+                    tint = if (server) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -157,10 +171,11 @@ private fun ControlBar(
                 // Deafen implies self-mute; disable Talk while deafened (same hot-mic guard as Mute).
                 HoldToTalkControl(enabled = !deafened, onPress = onPttPress, onRelease = onPttRelease)
             } else {
-                // Deafen forces mute; disable Mute while deafened so a stray unmute can't reopen a hot mic.
+                // Mute stays tappable while deafened; tapping Unmute then undeafens too (matches desktop/iOS
+                // + the murmur-enforced self_mute=false => self_deaf=false invariant, handled in setMuted).
                 ToggleControl(checked = muted, onClick = onToggleMute,
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    label = if (muted) "Unmute" else "Mute", danger = true, enabled = !deafened)
+                    label = if (muted) "Unmute" else "Mute", danger = true)
             }
             ToggleControl(checked = deafened, onClick = onToggleDeafen,
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
@@ -190,11 +205,11 @@ private fun ToggleControl(
 
 @Composable
 private fun LeaveControl(onHangUp: () -> Unit) {
-    ControlColumn("Leave") {
+    ControlColumn("Disconnect") {
         Surface(onClick = onHangUp, shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError,
             modifier = Modifier.size(width = 72.dp, height = 60.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.CallEnd, "Leave", modifier = Modifier.size(28.dp)) }
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.CallEnd, "Disconnect", modifier = Modifier.size(28.dp)) }
         }
     }
 }
@@ -249,13 +264,17 @@ private fun ActiveCallScreenPreview() {
         val state = CallScreenState(
             serverName = "Acoustic HQ",
             channels = listOf(
-                ChannelVm(1, "General", isActive = true, users = listOf(
-                    UserVm(10, "C", "citelao", isYou = true, speaking = true, selfMute = false, serverMute = false),
-                    UserVm(11, "A", "AdamTReineke", isYou = false, speaking = false, selfMute = false, serverMute = false),
+                ChannelVm(1, "General", isActive = true, depth = 0, users = listOf(
+                    UserVm(10, "C", "citelao", isYou = true, speaking = true, selfMute = false, serverMute = false,
+                        selfDeaf = false, serverDeaf = false, recording = false),
+                    UserVm(11, "A", "AdamTReineke", isYou = false, speaking = false, selfMute = false, serverMute = false,
+                        selfDeaf = false, serverDeaf = false, recording = false),
                 )),
-                ChannelVm(2, "Gaming", isActive = false, users = listOf(
-                    UserVm(12, "H", "hayden", isYou = false, speaking = true, selfMute = false, serverMute = false),
-                    UserVm(13, "G", "gun", isYou = false, speaking = false, selfMute = true, serverMute = false),
+                ChannelVm(2, "Gaming", isActive = false, depth = 1, users = listOf(
+                    UserVm(12, "H", "hayden", isYou = false, speaking = true, selfMute = false, serverMute = false,
+                        selfDeaf = false, serverDeaf = false, recording = true),
+                    UserVm(13, "G", "gun", isYou = false, speaking = false, selfMute = false, serverMute = false,
+                        selfDeaf = true, serverDeaf = false, recording = false),
                 )),
             ),
         )
