@@ -70,6 +70,33 @@ object VadEvaluator {
         return Metrics(coverage, onsetMs.coerceAtLeast(0), hangoverMs, midDropMs, falsePer10s, 0.0, 0)
     }
 
+    /** Silero VAD over the corpus. denoise=false → Silero sees raw PCM; denoise=true → Silero sees
+     *  RNNoise-denoised PCM. Dedicated loop (NOT TransmitProcessor, whose raw-snapshot always feeds the
+     *  VAD raw). Silero resamples 48k→16k internally. */
+    fun evaluateSilero(clip: Clip, denoise: Boolean, modelBytes: ByteArray): Metrics {
+        val silero = SileroVadDetector(SileroOnnxSession(modelBytes))
+        val rnnoise = if (denoise) RnnoiseSuppressor() else null
+        val gate = TransmitGate()
+        try {
+            val caps = clip.pcm.size / CAPTURE_SAMPLES
+            val send = BooleanArray(caps)
+            val cap = ShortArray(CAPTURE_SAMPLES)
+            val subLevels = FloatArray(FRAMES_PER_PACKET)
+            for (c in 0 until caps) {
+                System.arraycopy(clip.pcm, c * CAPTURE_SAMPLES, cap, 0, CAPTURE_SAMPLES)
+                for (i in 0 until FRAMES_PER_PACKET) {
+                    val off = i * FRAME_SAMPLES_10MS
+                    if (denoise) rnnoise!!.process(cap, off, FRAME_SAMPLES_10MS)   // denoise in place
+                    subLevels[i] = silero.level(cap, off, FRAME_SAMPLES_10MS)      // Silero on (denoised|raw) sub-frame
+                }
+                send[c] = gate.update(subLevels).send
+            }
+            return scoreDecisions(clip, send)
+        } finally {
+            silero.close(); rnnoise?.close()
+        }
+    }
+
     /** Full DSP evaluation: fresh RNNoise + gate per clip, optional makeup gain. */
     fun evaluate(clip: Clip, gain: GainControl? = null): Metrics {
         val suppressor = RnnoiseSuppressor()
