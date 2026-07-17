@@ -45,7 +45,11 @@ fun DumbleApp(
     val deafened by MumbleManager.deafened.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val activeEndpoint by CallManager.activeEndpoint.collectAsStateWithLifecycle()
-    val activeRouteLabel = activeEndpoint?.let { AudioRoute.label(it.endpointType, it.endpointName) }
+    // Prefer the framework's own endpoint name — it's localized to the device language and, for
+    // Bluetooth, is the device name. Fall back to our hardcoded label only if it's ever blank.
+    val activeRouteLabel = activeEndpoint?.let { ep ->
+        ep.endpointName?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.endpointType)
+    }
     val form by vm.form.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
