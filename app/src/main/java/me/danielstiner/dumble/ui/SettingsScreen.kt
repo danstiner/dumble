@@ -3,21 +3,15 @@ package me.danielstiner.dumble.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -29,9 +23,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.ui.theme.DumbleTheme
 
@@ -127,39 +121,27 @@ fun SettingsScreen(
                 }
                 Text("Off sends your raw mic (relies on the phone's own noise removal). Voice activation is unaffected.")
 
-                Text(
-                    "Voice detection engine",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(top = 16.dp),
-                )
+                Text("Voice detection engine", modifier = Modifier.padding(top = 16.dp))
                 val engines = listOf("energy" to "Energy", "rnnoise" to "RNNoise", "silero" to "Silero")
-                Column(Modifier.selectableGroup()) {
-                    engines.forEach { (key, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = vadEngine == key,
-                                    onClick = { onVadEngineChange(key) },
-                                    role = Role.RadioButton,
-                                )
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    engines.forEachIndexed { index, (key, label) ->
+                        SegmentedButton(
+                            selected = vadEngine == key,
+                            onClick = { onVadEngineChange(key) },
+                            shape = SegmentedButtonDefaults.itemShape(index, engines.size),
                         ) {
-                            RadioButton(selected = vadEngine == key, onClick = null)
-                            Spacer(Modifier.width(8.dp))
                             Text(label)
                         }
                     }
                 }
 
                 Text(
-                    "Lookahead delay: $lookaheadMs ms" + if (lookaheadMs == 0) "  (0 = lowest latency)" else "",
+                    "Lookahead delay: $lookaheadMs ms" + if (lookaheadMs == 0) " (0 = lowest latency)" else "",
                     modifier = Modifier.padding(top = 16.dp),
                 )
                 Slider(
                     value = lookaheadMs.toFloat(),
-                    onValueChange = { onLookaheadChange((it / 20f).toInt() * 20) },
+                    onValueChange = { onLookaheadChange((it / 20f).roundToInt() * 20) },
                     valueRange = 0f..100f,
                     steps = 4,
                 )
