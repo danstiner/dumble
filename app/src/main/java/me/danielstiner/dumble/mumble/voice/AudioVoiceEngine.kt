@@ -77,6 +77,14 @@ class AudioVoiceEngine(
     @Volatile private var lateDropCount = 0L
     val lateDrops: Long get() = lateDropCount
 
+    // Late-drop diagnostic (TEMPORARY — remove once the #56 stall-burst mechanism is confirmed on
+    // device). Per fable's verdict a stall-and-burst late is a contiguous-ts run with a descending
+    // lateness staircase after an arrival gap; a (refuted) silence-resume late is an isolated late
+    // whose ts JUMPS by the gap. Only logs on a LATE reject, so it's silent on a healthy path.
+    // See docs/superpowers/adaptive-jitter-buffer-design-notes.md → "Mechanism (fable-verified…)".
+    private class LateDiag { var expectedNextTs = -1L; var lastArrivalNanos = 0L }
+    private val lateDiag = ConcurrentHashMap<Int, LateDiag>()
+
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     /** Sessions currently producing playout audio (with a ~200 ms release hold). */
     val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
@@ -299,10 +307,24 @@ class AudioVoiceEngine(
             android.util.Log.d("AudioVoiceEngine", "new speaker session=$senderSession (total=${speakers.size + 1})")
             SpeakerStream(codec)
         }
-        val result = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, terminator)
+        val tsSamples = frameNumber * FRAME_SAMPLES_10MS
+        val result = stream.offer(tsSamples, copy, span, terminator)
         // Count only genuine late drops (audio behind the playout cursor) — not duplicate/reordered
         // retransmits (DUPLICATE) or tag-only terminators (EMPTY), which are harmless.
-        if (result == JitterBuffer.OfferResult.LATE && !terminator) lateDropCount++
+        if (result == JitterBuffer.OfferResult.LATE && !terminator) {
+            lateDropCount++
+            val d = lateDiag[senderSession]
+            val latenessMs = (stream.playoutCursor() - tsSamples) / 48.0            // 48 samples per ms @48k
+            val gapMs = if (d != null && d.lastArrivalNanos != 0L) (arrivalNanos - d.lastArrivalNanos) / 1e6 else -1.0
+            val contiguous = d != null && d.expectedNextTs >= 0 && tsSamples == d.expectedNextTs
+            android.util.Log.d("LateDiag", "session=$senderSession lateness=%.1fms arrivalGap=%.1fms contiguous=%b ts=$tsSamples"
+                .format(latenessMs, gapMs, contiguous))
+        }
+        if (!terminator) {                                        // track the sender's ts sequence + arrival cadence
+            val d = lateDiag.getOrPut(senderSession) { LateDiag() }
+            d.expectedNextTs = tsSamples + span                   // a stall burst stays contiguous; a silence resume jumps
+            d.lastArrivalNanos = arrivalNanos
+        }
         received.incrementAndGet()
     }
 
@@ -325,7 +347,7 @@ class AudioVoiceEngine(
                     producedSessions.add(session)
                     active++
                 }
-                if (stream.retired) { stream.close(); it.remove(); speakingHold.drop(session) }
+                if (stream.retired) { stream.close(); it.remove(); speakingHold.drop(session); lateDiag.remove(session) }
             }
             AudioMixer.finalizeMix(acc, mix, FRAME_SAMPLES_20MS)
             if (deafened) java.util.Arrays.fill(mix, 0)   // mute playout, streams already drained above
@@ -342,6 +364,7 @@ class AudioVoiceEngine(
         playbackThread = null
         speakers.values.forEach { it.close() }
         speakers.clear()
+        lateDiag.clear()
         _speakingSessions.value = emptySet()
         _selfTransmitting.value = false
         speakingHold.clear()
