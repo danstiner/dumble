@@ -43,6 +43,8 @@ fun SettingsScreen(
     onTransmitModeChange: (TransmitMode) -> Unit,
     vadThreshold: Float,
     onVadThresholdChange: (Float) -> Unit,
+    hysteresisGap: Float,
+    onHysteresisGapChange: (Float) -> Unit,
     agcEnabled: Boolean,
     onAgcEnabledChange: (Boolean) -> Unit,
     agcTargetDbFs: Float,
@@ -135,6 +137,15 @@ fun SettingsScreen(
                             if (vaMode) "Higher = transmits only on clearer speech. Applies live to the active call."
                             else "Applies in Voice activity mode.",
                         )
+
+                        Text("Release margin: %.2f".format(hysteresisGap), modifier = Modifier.padding(top = 16.dp))
+                        Slider(
+                            value = hysteresisGap,
+                            onValueChange = onHysteresisGapChange,
+                            valueRange = 0f..0.3f,
+                            enabled = vaMode,
+                        )
+                        Text("How far the level can drop below the sensitivity threshold before the gate starts to close. Higher = fewer clipped word-endings, holds longer on pauses.")
 
                         Text(
                             "Detection preroll: $prerollMs ms" + if (prerollMs == 0) " (0 = lowest latency)" else "",
@@ -235,6 +246,7 @@ private fun SettingsScreenPreview() {
         SettingsScreen(onBack = {}, onLaunchEchoTest = {}, onLaunchVadDebug = {},
             transmitMode = TransmitMode.VOICE_ACTIVATED, onTransmitModeChange = {},
             vadThreshold = 0.5f, onVadThresholdChange = {},
+            hysteresisGap = 0.15f, onHysteresisGapChange = {},
             agcEnabled = true, onAgcEnabledChange = {},
             agcTargetDbFs = -18f, onAgcTargetChange = {},
             rnnoiseEnabled = true, onRnnoiseEnabledChange = {},

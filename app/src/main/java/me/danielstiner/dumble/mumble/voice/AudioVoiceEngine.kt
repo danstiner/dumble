@@ -24,6 +24,7 @@ class AudioVoiceEngine(
     private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
     private val vad: VadDetector = EnergyVadDetector(),
     gateOpenLevel: Float = 0.60f,
+    gateCloseGap: Float = TransmitGate.DEFAULT_CLOSE_GAP,
     initialTransmitMode: TransmitMode = TransmitMode.VOICE_ACTIVATED,
     initialAgcEnabled: Boolean = true,
     initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
@@ -47,7 +48,7 @@ class AudioVoiceEngine(
     private var sending = false                  // send-thread-only: last emitted frame was live (non-terminator)
 
     private val encoder = codec.newEncoder()
-    private val gate = TransmitGate(openLevel = gateOpenLevel)
+    private val gate = TransmitGate(openLevel = gateOpenLevel, closeGap = gateCloseGap)
     private val gainControl = GainControl(
         targetDbFs = initialAgcTargetDbFs, enabled = initialAgcEnabled)
     private val processor = TransmitProcessor(suppressor, vad, gate, gainControl)
@@ -99,6 +100,10 @@ class AudioVoiceEngine(
 
     /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
     fun setVadThreshold(value: Float) { gate.openLevel = value }
+
+    /** Live-adjust the transmit gate's hysteresis release margin (how far below openLevel the
+     *  close threshold sits). */
+    fun setHysteresisGap(value: Float) { gate.closeGap = value }
 
     /** Live-adjust the makeup-gain target loudness (dBFS RMS). */
     fun setAgcTargetDbFs(value: Float) { gainControl.targetDbFs = value }

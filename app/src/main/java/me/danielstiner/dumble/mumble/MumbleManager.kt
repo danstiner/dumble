@@ -39,6 +39,7 @@ class SharedPrefsPinStore(context: Context) : PinStore {
 object MumbleManager {
     private const val TAG = "MumbleManager"
     private const val DEFAULT_VAD_THRESHOLD = 0.4f
+    private const val DEFAULT_HYSTERESIS_GAP = 0.15f
     private const val DEFAULT_AGC_TARGET_DBFS = -24f
     private const val DEFAULT_RNNOISE_ENABLED = false
     // AGC (makeup gain) follows RNNoise: with RNNoise defaulted off we trust the platform
@@ -68,6 +69,9 @@ object MumbleManager {
     private val _vadThreshold = MutableStateFlow(DEFAULT_VAD_THRESHOLD)
     /** RNNoise VAD open threshold (0..1), persisted and applied live to the active call. */
     val vadThreshold: StateFlow<Float> = _vadThreshold.asStateFlow()
+    private val _hysteresisGap = MutableStateFlow(DEFAULT_HYSTERESIS_GAP)
+    /** Transmit gate hysteresis release margin (0..0.3), persisted and applied live to the active call. */
+    val hysteresisGap: StateFlow<Float> = _hysteresisGap.asStateFlow()
     private val _transmitMode = MutableStateFlow(TransmitMode.VOICE_ACTIVATED)
     /** Voice-activation vs push-to-talk, persisted and applied live to the active call. */
     val transmitMode: StateFlow<TransmitMode> = _transmitMode.asStateFlow()
@@ -130,6 +134,14 @@ object MumbleManager {
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
             ?.edit()?.putFloat("vad_threshold", v)?.apply()
         active?.setVadThreshold(v)
+    }
+
+    @Synchronized fun setHysteresisGap(value: Float) {
+        val v = value.coerceIn(0f, 0.3f)
+        _hysteresisGap.value = v
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putFloat("hysteresis_gap", v)?.apply()
+        active?.setHysteresisGap(v)
     }
 
     @Synchronized fun setAgcTargetDbFs(value: Float) {
@@ -254,6 +266,7 @@ object MumbleManager {
         pinStore = SharedPrefsPinStore(app)
         val audioPrefs = app.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
         _vadThreshold.value = audioPrefs.getFloat("vad_threshold", DEFAULT_VAD_THRESHOLD)
+        _hysteresisGap.value = audioPrefs.getFloat("hysteresis_gap", DEFAULT_HYSTERESIS_GAP)
         val modeName = audioPrefs.getString("transmit_mode", null)
         _transmitMode.value = TransmitMode.entries.firstOrNull { it.name == modeName }
             ?: TransmitMode.VOICE_ACTIVATED
@@ -307,6 +320,7 @@ object MumbleManager {
         }
         private val engine = AudioVoiceEngine(
             codec, suppressor = rnnoise, vad = initialVad, gateOpenLevel = _vadThreshold.value,
+            gateCloseGap = _hysteresisGap.value,
             initialTransmitMode = _transmitMode.value,
             initialAgcEnabled = _agcEnabled.value,
             initialAgcTargetDbFs = _agcTargetDbFs.value,
@@ -408,6 +422,7 @@ object MumbleManager {
 
         fun setMuted(value: Boolean) = engine.setMuted(value)
         fun setVadThreshold(value: Float) = engine.setVadThreshold(value)
+        fun setHysteresisGap(value: Float) = engine.setHysteresisGap(value)
         fun setAgcTargetDbFs(value: Float) = engine.setAgcTargetDbFs(value)
         fun setAgcEnabled(value: Boolean) = engine.setAgcEnabled(value)
         fun setRnnoiseEnabled(value: Boolean) = engine.setRnnoiseEnabled(value)

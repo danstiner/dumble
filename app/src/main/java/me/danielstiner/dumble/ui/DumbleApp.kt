@@ -34,6 +34,7 @@ fun DumbleApp(
     val connection by CallManager.activeConnection.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
+    val hysteresisGap by MumbleManager.hysteresisGap.collectAsStateWithLifecycle()
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
@@ -136,6 +137,8 @@ fun DumbleApp(
                 onTransmitModeChange = { MumbleManager.setTransmitMode(it) },
                 vadThreshold = vadThreshold,
                 onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
+                hysteresisGap = hysteresisGap,
+                onHysteresisGapChange = { MumbleManager.setHysteresisGap(it) },
                 agcEnabled = agcEnabled,
                 onAgcEnabledChange = { MumbleManager.setAgcEnabled(it) },
                 agcTargetDbFs = agcTargetDbFs,

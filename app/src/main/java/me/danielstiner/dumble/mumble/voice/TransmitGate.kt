@@ -17,6 +17,7 @@ package me.danielstiner.dumble.mumble.voice
  */
 class TransmitGate(
     var openLevel: Float = 0.60f,         // live-tunable (the sensitivity threshold)
+    var closeGap: Float = DEFAULT_CLOSE_GAP,   // live-tunable (the hysteresis release margin)
     private val maxHoldTicks: Int = 20,   // 20 x 10 ms = 200 ms hangover
 ) {
     data class Decision(val send: Boolean, val terminator: Boolean)
@@ -24,7 +25,7 @@ class TransmitGate(
     // Stay-open threshold tracks [openLevel] with a fixed hysteresis gap, floored so it never reaches
     // 0 (which would keep the gate open on any non-zero level). Tracking keeps open > close across the
     // whole range — a fixed close would exceed a low openLevel and invert the hysteresis.
-    private val closeLevel: Float get() = (openLevel - CLOSE_GAP).coerceAtLeast(CLOSE_FLOOR)
+    private val closeLevel: Float get() = (openLevel - closeGap).coerceAtLeast(CLOSE_FLOOR)
 
     private var transmitting = false
     private var holdTicks = 0
@@ -51,7 +52,7 @@ class TransmitGate(
     fun reset() { transmitting = false; holdTicks = 0 }
 
     companion object {
-        const val CLOSE_GAP = 0.15f     // close threshold sits this far below openLevel (hysteresis)
+        const val DEFAULT_CLOSE_GAP = 0.15f   // close threshold sits this far below openLevel (hysteresis)
         const val CLOSE_FLOOR = 0.05f   // ...but never below this
     }
 }
