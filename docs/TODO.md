@@ -16,6 +16,11 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
 - **Settings screen: grouping / dividers** — add section headers or dividers between groups of controls (transmit mode / sensitivity / AGC / debug tools) so they read as distinct sections.
 - **Transmit-mode selector as M3 connected button group** — DONE (SingleChoiceSegmentedButtonRow), pending on-device visual check; revisit if the specifically-Expressive `ButtonGroup`/`ToggleButton` variant is wanted.
+- **Call controls: adopt M3 `toggleableShapes()`** — the Mute/Deafen/Speaker toggle shape morph
+  (pill↔squircle) is a manual *instant* swap today (`controlPillShape`/`controlActiveShape` in
+  `ActiveCallScreen.kt`). When `IconButtonDefaults.toggleableShapes()` reaches a **stable** Compose BOM
+  (not in `2026.06.01`; alpha-only as of 2026-07-17), pass `shapes = IconButtonDefaults.toggleableShapes()`
+  to the three `FilledIconToggleButton`s for the native *animated* morph and drop the manual constants.
 
 ### Deferred native tasks (consolidated here for single-place tracking)
 - Reduce Silero label speech_pad_ms (30→10-20ms) for onset latency (was task #33)
