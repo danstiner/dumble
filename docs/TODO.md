@@ -9,9 +9,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - Check if we can integrate with Pixel phone's clear calling feature
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
-- move all non-essential settings under an advanced section in settings. Currently only transmit mode looks essential. That includes the debug pages for echo/VAD tuning/audio diagnostics, those should all be under advanced
+- move all non-essential settings under an advanced section in settings — **DONE**
+  (`advanced-settings-section`): Transmit mode is the only always-visible card; Voice activity, AGC,
+  Noise suppression, and the debug Tools are wrapped in a collapsible **Advanced** section (collapsed
+  by default) in `SettingsScreen`. Split is easily adjusted — move a card out of the `AnimatedVisibility`
+  block to promote it. Pending on-device visual check.
 - advanced option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms. once we have it working well maybe we'll replace the current VAD
-- Show when a remote client is deafened
+- ~~Show when a remote client is deafened~~ — **already implemented** (call-screen redesign): remote
+  users render a `HeadsetOff` deaf badge from `u.selfDeaf`/`u.deaf` (`ActiveCallScreen.kt`).
 - Show a more obvious glowing ring around the speaker
 - Use Ben's algorithm for automatic user icon color based on hash of their name
 - Add chat feature
