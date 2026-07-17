@@ -226,7 +226,7 @@ private fun ControlToggle(
     ControlColumn(label, modifier) {
         FilledIconToggleButton(
             checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(68.dp),
             shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill, like the phone app
             colors = IconButtonDefaults.filledIconToggleButtonColors(
                 containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
@@ -253,7 +253,7 @@ private fun RouteControl(
             // White-ish highlight when on a non-default route (not earpiece); dark/blended otherwise.
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
             FilledIconButton(
-                onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(56.dp),
+                onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(68.dp),
                 shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
@@ -287,7 +287,7 @@ private fun LeaveControl(onHangUp: () -> Unit, modifier: Modifier = Modifier) {
     ControlColumn("Disconnect", modifier) {
         // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
         FilledIconButton(
-            onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(56.dp),
+            onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(68.dp),
             shape = RoundedCornerShape(percent = 50),
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
         ) {
@@ -314,7 +314,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
     } else Modifier
     ControlColumn("Talk", modifier) {
         Surface(shape = RoundedCornerShape(percent = 50), color = container, contentColor = content,
-            modifier = Modifier.fillMaxWidth().height(56.dp).then(gesture).semantics {
+            modifier = Modifier.fillMaxWidth().height(68.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Mic, null, modifier = Modifier.size(26.dp)) }
