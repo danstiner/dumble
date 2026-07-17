@@ -185,30 +185,33 @@ private fun ControlBar(
     onPttPress: () -> Unit, onPttRelease: () -> Unit, onHangUp: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 12.dp, horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Top) {
+        // Buttons fill the row (weight) so they're wider-than-tall pills with minimal dead space and
+        // large touch targets, like the stock phone app.
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 12.dp, horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
             if (transmitMode == TransmitMode.PUSH_TO_TALK) {
                 // Deafen implies self-mute; disable Talk while deafened (same hot-mic guard as Mute).
-                HoldToTalkControl(enabled = !deafened, onPress = onPttPress, onRelease = onPttRelease)
+                HoldToTalkControl(enabled = !deafened, onPress = onPttPress, onRelease = onPttRelease,
+                    modifier = Modifier.weight(1f))
             } else {
                 // Mute stays tappable while deafened; tapping Unmute then undeafens too (matches desktop/iOS
                 // + the murmur-enforced self_mute=false => self_deaf=false invariant, handled in setMuted).
                 ControlToggle(checked = muted, onCheckedChange = { onToggleMute() },
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    label = "Mute", danger = true)   // static name; state shown by highlight + icon
+                    label = "Mute", danger = true, modifier = Modifier.weight(1f))   // static name; state via highlight + icon
             }
             ControlToggle(checked = deafened, onCheckedChange = { onToggleDeafen() },
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
-                label = "Deafen", danger = true)
+                label = "Deafen", danger = true, modifier = Modifier.weight(1f))
             // Headset present → route picker (like the stock phone app); else a plain Speaker toggle.
             if (routeOptions.any { it.icon == AudioRoute.RouteIcon.BLUETOOTH || it.icon == AudioRoute.RouteIcon.WIRED }) {
                 RouteControl(icon = routeIcon, label = routeLabel, options = routeOptions,
-                    activeType = activeRouteType, onSelect = onSelectRoute)
+                    activeType = activeRouteType, onSelect = onSelectRoute, modifier = Modifier.weight(1f))
             } else {
                 ControlToggle(checked = speaker, onCheckedChange = { onToggleSpeaker() },
-                    icon = Icons.Filled.VolumeUp, label = "Speaker", danger = false)
+                    icon = Icons.Filled.VolumeUp, label = "Speaker", danger = false, modifier = Modifier.weight(1f))
             }
-            LeaveControl(onHangUp)
+            LeaveControl(onHangUp, modifier = Modifier.weight(1f))
         }
     }
 }
@@ -217,14 +220,14 @@ private fun ControlBar(
 @Composable
 private fun ControlToggle(
     checked: Boolean, onCheckedChange: (Boolean) -> Unit,
-    icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true,
+    icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true, modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    ControlColumn(label) {
+    ControlColumn(label, modifier) {
         FilledIconToggleButton(
             checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
-            modifier = Modifier.size(60.dp),
-            shape = if (checked) RoundedCornerShape(percent = 35) else CircleShape,   // morph to squircle when active
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill, like the phone app
             colors = IconButtonDefaults.filledIconToggleButtonColors(
                 containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
                 contentColor = cs.onSurface,
@@ -241,17 +244,17 @@ private fun ControlToggle(
 @Composable
 private fun RouteControl(
     icon: AudioRoute.RouteIcon, label: String,
-    options: List<RouteOption>, activeType: Int?, onSelect: (Int) -> Unit,
+    options: List<RouteOption>, activeType: Int?, onSelect: (Int) -> Unit, modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
-    Box {
+    Box(modifier) {
         ControlColumn(label) {
             // White-ish highlight when on a non-default route (not earpiece); dark/blended otherwise.
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
             FilledIconButton(
-                onClick = { expanded = true }, modifier = Modifier.size(60.dp),
-                shape = if (highlighted) RoundedCornerShape(percent = 35) else CircleShape,   // squircle when non-default
+                onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
                     contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
@@ -280,11 +283,11 @@ private fun RouteControl(
 }
 
 @Composable
-private fun LeaveControl(onHangUp: () -> Unit) {
-    ControlColumn("Disconnect") {
+private fun LeaveControl(onHangUp: () -> Unit, modifier: Modifier = Modifier) {
+    ControlColumn("Disconnect", modifier) {
         // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
         FilledIconButton(
-            onClick = onHangUp, modifier = Modifier.size(width = 76.dp, height = 56.dp),
+            onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(percent = 50),
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
         ) {
@@ -294,7 +297,7 @@ private fun LeaveControl(onHangUp: () -> Unit) {
 }
 
 @Composable
-private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: () -> Unit) {
+private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: () -> Unit, modifier: Modifier = Modifier) {
     var pressed by remember { mutableStateOf(false) }
     val currentPress by rememberUpdatedState(onPress)
     val currentRelease by rememberUpdatedState(onRelease)
@@ -309,9 +312,9 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
             pressed = true; currentPress(); tryAwaitRelease(); pressed = false; currentRelease()
         })
     } else Modifier
-    ControlColumn("Talk") {
-        Surface(shape = if (pressed) RoundedCornerShape(percent = 35) else CircleShape, color = container, contentColor = content,
-            modifier = Modifier.size(60.dp).then(gesture).semantics {
+    ControlColumn("Talk", modifier) {
+        Surface(shape = RoundedCornerShape(percent = 50), color = container, contentColor = content,
+            modifier = Modifier.fillMaxWidth().height(56.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Mic, null, modifier = Modifier.size(26.dp)) }
@@ -320,12 +323,12 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
 }
 
 @Composable
-private fun ControlColumn(label: String, content: @Composable () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun ControlColumn(label: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         content()
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 6.dp).widthIn(max = 76.dp))
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
     }
 }
 
