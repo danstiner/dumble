@@ -1020,9 +1020,10 @@ private fun ControlBar(
             if (transmitMode == TransmitMode.PUSH_TO_TALK) {
                 HoldToTalkControl(onPttPress, onPttRelease)
             } else {
+                // Deafen forces mute; disable Mute while deafened so a stray unmute can't reopen a hot mic.
                 ToggleControl(checked = muted, onClick = onToggleMute,
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    label = if (muted) "Unmute" else "Mute", danger = true)
+                    label = if (muted) "Unmute" else "Mute", danger = true, enabled = !deafened)
             }
             ToggleControl(checked = deafened, onClick = onToggleDeafen,
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
@@ -1036,13 +1037,15 @@ private fun ControlBar(
 
 /** A round-rect control tile + caption. `danger` = its "on" state means muted/deafened (error tint). */
 @Composable
-private fun ToggleControl(checked: Boolean, onClick: () -> Unit, icon: ImageVector, label: String, danger: Boolean) {
+private fun ToggleControl(
+    checked: Boolean, onClick: () -> Unit, icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true,
+) {
     val cs = MaterialTheme.colorScheme
     val container = when { danger && checked -> cs.errorContainer; checked -> cs.primary; else -> cs.secondaryContainer }
     val content = when { danger && checked -> cs.onErrorContainer; checked -> cs.onPrimary; else -> cs.onSecondaryContainer }
     ControlColumn(label) {
-        Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = container, contentColor = content,
-            modifier = Modifier.size(60.dp)) {
+        Surface(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(20.dp),
+            color = container, contentColor = content, modifier = Modifier.size(60.dp)) {
             Box(contentAlignment = Alignment.Center) { Icon(icon, label, modifier = Modifier.size(26.dp)) }
         }
     }

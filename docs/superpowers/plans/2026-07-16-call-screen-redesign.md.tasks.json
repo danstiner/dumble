@@ -23,13 +23,13 @@
     {
       "id": 58,
       "subject": "Task 4: SessionStateMachine.sendSelfDeaf",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** sendSelfDeaf(deaf, mute) broadcasts one UserState with self_deaf + self_mute.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\n\n**Acceptance Criteria:**\n- sendSelfDeaf sends one UserState with both fields\n- sendSelfMute unchanged; compiles\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"sendSelfDeaf one UserState both fields\", \"compiles\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 59,
       "subject": "Task 5: MumbleManager deafen + speaking mirror",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [57, 58],
       "description": "**Goal:** Mirror engine speaking flows; hot-mic-safe setDeafened; reset on shutdown.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/DeafenLogic.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/DeafenLogicTest.kt\n\n**Acceptance Criteria:**\n- DeafenLogic hot-mic-safe (manual mute survives; deafen-set mute auto-unmutes)\n- MumbleManager mirrors speakingSessions/selfTransmitting/deafened\n- setDeafened sets _muted directly + one UserState via sendSelfDeaf\n- shutdown resets the new flows\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*DeafenLogicTest\" && JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/DeafenLogic.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/DeafenLogicTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*DeafenLogicTest\\\" && JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"DeafenLogic hot-mic-safe\", \"mirrors speaking/deafen flows\", \"setDeafened single UserState\", \"shutdown resets\"], \"modelTier\": \"standard\"}\n```"
     },
