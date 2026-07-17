@@ -200,3 +200,8 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   deliberately — it is the only surface for remoteGood/mode/decryptFail/udpAudioRx and is still the
   instrument for the pending UDP→TCP transport-recovery verification (`470c129`); remove it after
   that verification lands.
+- Cleanup: remove the temporary **`LateDiag`** log (`AudioVoiceEngine`, gated on LATE rejects) once
+  the #56 stall-and-burst mechanism is confirmed on-device. On-device: watch logcat tag `LateDiag`
+  during a jittery call — a **stall-burst** shows contiguous-ts runs (`contiguous=true`) after an
+  `arrivalGap`, lateness descending ~20 ms per packet; the refuted **silence-resume** would show
+  isolated `contiguous=false` lates whose ts jumps by the gap.

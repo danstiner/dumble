@@ -23,6 +23,10 @@ class SpeakerStream(
     val decoderCreated get() = decoder != null
     var retired = false; private set
 
+    /** Diagnostic read-only accessor: current playout cursor in samples (−1 = un-anchored). Written
+     *  only by the playback thread; a slightly stale read from the receive thread is fine here. */
+    fun playoutCursor(): Long = cursor
+
     /** Receive thread. Only touches the synchronized JitterBuffer; a slightly stale cursor is safe. */
     fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean): JitterBuffer.OfferResult {
         val cur = cursor
