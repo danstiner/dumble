@@ -36,13 +36,13 @@
     {
       "id": 60,
       "subject": "Task 6: Route→icon mapping",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** AudioRoute.RouteIcon enum + icon(type) mapping (pure, JVM-testable).\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/telecom/AudioRoute.kt\n- Test: app/src/test/java/me/danielstiner/dumble/telecom/AudioRouteTest.kt\n\n**Acceptance Criteria:**\n- RouteIcon enum + icon(type) maps each TYPE_* to a stable key; pure, JVM-tested\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*AudioRouteTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/telecom/AudioRoute.kt\", \"app/src/test/java/me/danielstiner/dumble/telecom/AudioRouteTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*AudioRouteTest\\\"\", \"acceptanceCriteria\": [\"RouteIcon + icon(type) mapping, pure JVM-tested\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 61,
       "subject": "Task 7: CallScreenState pure mapper",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Pure mapper: ServerModel + speaking flows + local mute/deafen -> ordered channels/users VMs. No Compose imports.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/ui/CallScreenState.kt\n- Test: app/src/test/java/me/danielstiner/dumble/ui/CallScreenStateTest.kt\n\n**Acceptance Criteria:**\n- users grouped/ordered by channel; empties hidden except yours; flat\n- self floated + YOU tag; server name root-channel then host fallback\n- self row prefers local mute/transmit; serverMute=mute||suppress\n- no Compose imports\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*CallScreenStateTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/CallScreenState.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/CallScreenStateTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*CallScreenStateTest\\\"\", \"acceptanceCriteria\": [\"grouped/ordered channels, empties hidden except yours\", \"self floated + YOU; server name fallback\", \"self row local mute/transmit; serverMute=mute||suppress\", \"no Compose imports\"], \"modelTier\": \"standard\"}\n```"
     },
     {
