@@ -17,6 +17,7 @@ class SileroVadDetector(
     private var held = 0f
 
     override fun level(pcm: ShortArray, off: Int, n: Int): Float {
+        require(n == FRAME_SAMPLES_10MS) { "SileroVadDetector requires 480-sample frames, got $n" }
         val ds = decimator.decimate(pcm, off, n)
         System.arraycopy(ds, 0, ring, ringLen, ds.size)
         ringLen += ds.size
@@ -43,6 +44,6 @@ class SileroVadDetector(
     private companion object {
         const val WINDOW = 512
         const val CONTEXT = 64
-        const val RING_CAP = WINDOW + 160
+        const val RING_CAP = WINDOW + 160   // ringLen < WINDOW before each call (loop postcondition), so one 160-sample chunk always fits
     }
 }
