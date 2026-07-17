@@ -17,7 +17,13 @@ class Decimator(
     private var histPos = 0
     private var phase = 0
 
+    /**
+     * Decimate [n] samples from [pcm] starting at [off], returning n/3 filtered samples.
+     * [n] must be a multiple of 3: the output is sized n/3, but the emitted count also depends
+     * on the carried [phase], so a non-multiple-of-3 [n] can overflow the output buffer.
+     */
     fun decimate(pcm: ShortArray, off: Int, n: Int): FloatArray {
+        require(n % 3 == 0) { "n must be a multiple of 3" }
         val out = FloatArray(n / 3)
         var oi = 0
         for (i in 0 until n) {
