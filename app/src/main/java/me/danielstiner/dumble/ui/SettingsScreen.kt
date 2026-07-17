@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ElevatedCard
@@ -65,37 +67,50 @@ fun SettingsScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
+        ) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                Text("Transmit mode")
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    TransmitMode.entries.forEachIndexed { index, mode ->
-                        SegmentedButton(
-                            selected = transmitMode == mode,
-                            onClick = { onTransmitModeChange(mode) },
-                            shape = SegmentedButtonDefaults.itemShape(index, TransmitMode.entries.size),
-                        ) {
-                            Text(
-                                when (mode) {
-                                    TransmitMode.VOICE_ACTIVATED -> "Voice activity"
-                                    TransmitMode.PUSH_TO_TALK -> "Push to talk"
-                                },
-                            )
+                val vaMode = transmitMode == TransmitMode.VOICE_ACTIVATED
+
+                // Transmit mode
+                Text(
+                    "Transmit mode",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            TransmitMode.entries.forEachIndexed { index, mode ->
+                                SegmentedButton(
+                                    selected = transmitMode == mode,
+                                    onClick = { onTransmitModeChange(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(index, TransmitMode.entries.size),
+                                ) {
+                                    Text(
+                                        when (mode) {
+                                            TransmitMode.VOICE_ACTIVATED -> "Voice activity"
+                                            TransmitMode.PUSH_TO_TALK -> "Push to talk"
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
-                val vaMode = transmitMode == TransmitMode.VOICE_ACTIVATED
-
+                // Voice activity detection
                 Text(
-                    "Voice detection",
+                    "Voice activity detection",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
                 )
                 ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Voice detection engine")
+                        Text("Engine")
                         val engines = listOf("energy" to "Energy", "rnnoise" to "RNNoise", "silero" to "Silero")
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             engines.forEachIndexed { index, (key, label) ->
@@ -135,46 +150,80 @@ fun SettingsScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Automatic gain control", modifier = Modifier.weight(1f))
-                    Switch(checked = agcEnabled, onCheckedChange = onAgcEnabledChange)
-                }
-                Text("Transmit loudness: %.0f dBFS".format(agcTargetDbFs))
-                Slider(
-                    value = agcTargetDbFs,
-                    onValueChange = onAgcTargetChange,
-                    valueRange = -30f..-9f,
-                    enabled = agcEnabled,
+                // Automatic gain control
+                Text(
+                    "Automatic gain control",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
                 )
-                Text("Higher = louder transmit. Normalizes your level so peers hear you consistently.")
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Noise suppression (RNNoise)", modifier = Modifier.weight(1f))
-                    Switch(checked = rnnoiseEnabled, onCheckedChange = onRnnoiseEnabledChange)
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Enabled", modifier = Modifier.weight(1f))
+                            Switch(checked = agcEnabled, onCheckedChange = onAgcEnabledChange)
+                        }
+                        Text("Transmit loudness: %.0f dBFS".format(agcTargetDbFs), modifier = Modifier.padding(top = 16.dp))
+                        Slider(
+                            value = agcTargetDbFs,
+                            onValueChange = onAgcTargetChange,
+                            valueRange = -30f..-9f,
+                            enabled = agcEnabled,
+                        )
+                        Text("Higher = louder transmit. Normalizes your level so peers hear you consistently.")
+                    }
                 }
-                Text("Off sends your raw mic (relies on the phone's own noise removal). Voice activation is unaffected.")
+
+                // Noise suppression (RNNoise)
+                Text(
+                    "Noise suppression (RNNoise)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
+                )
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Enabled", modifier = Modifier.weight(1f))
+                            Switch(checked = rnnoiseEnabled, onCheckedChange = onRnnoiseEnabledChange)
+                        }
+                        Text("Off sends your raw mic (relies on the phone's own noise removal). Voice activation is unaffected.")
+                    }
+                }
+
+                // Tools
+                Text(
+                    "Tools",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
+                )
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        ListItem(
+                            headlineContent = { Text("Echo Test") },
+                            supportingContent = { Text("Local audio loopback debug tool") },
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchEchoTest),
+                        )
+                        ListItem(
+                            headlineContent = { Text("VAD Gate Tuner") },
+                            supportingContent = { Text("Tune the voice-activity gate live (no server)") },
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchVadDebug),
+                        )
+                        ListItem(
+                            headlineContent = { Text("Audio diagnostics") },
+                            supportingContent = { Text("Platform effects + live stage levels (read-only)") },
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDiagnostics),
+                        )
+                    }
+                }
             }
-            ListItem(
-                headlineContent = { Text("Echo Test") },
-                supportingContent = { Text("Local audio loopback debug tool") },
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchEchoTest),
-            )
-            ListItem(
-                headlineContent = { Text("VAD Gate Tuner") },
-                supportingContent = { Text("Tune the voice-activity gate live (no server)") },
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onLaunchVadDebug),
-            )
-            ListItem(
-                headlineContent = { Text("Audio diagnostics") },
-                supportingContent = { Text("Platform effects + live stage levels (read-only)") },
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDiagnostics),
-            )
         }
     }
 }
