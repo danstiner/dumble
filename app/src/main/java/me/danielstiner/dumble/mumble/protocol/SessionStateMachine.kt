@@ -6,9 +6,14 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.util.MumbleLog
 import com.google.protobuf.ByteString
 import com.google.protobuf.MessageLite
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Abstraction over MumbleTcpTransport so the state machine tests with a fake. */
 interface ControlChannel {
@@ -79,6 +84,27 @@ class SessionStateMachine(
             .setUsername(username).setOpus(true)
             .apply { password?.let { setPassword(it) } }.build()
         channel.send(TcpMessageType.Authenticate, auth)
+    }
+
+    /**
+     * Arms a single deadline covering the whole connecting phase — the TLS handshake (which sets
+     * no SO_TIMEOUT) plus the Version/Authenticate -> ServerSync exchange. The caller arms this the
+     * moment connecting begins (before the blocking TCP connect + handshake), so a server that
+     * accepts the socket then stalls can no longer hang the client on "Connecting…" indefinitely.
+     * The TCP connect has its own timeout, but nothing bounded the handshake or the auth exchange.
+     *
+     * If the phase has not reached [ConnectionState.Synchronized] (or already Failed) within
+     * [timeoutMs], we [fail] with [FailReason.TIMEOUT]; [fail] closes the channel, which unblocks
+     * both the blocking handshake and the reader loop, and "first failure wins" so a real failure
+     * that lands first is never overwritten. Reaching any terminal state earlier completes this
+     * coroutine immediately, so a healthy connect leaves no lingering timer. Returns the [Job] so
+     * the caller can cancel it on teardown.
+     */
+    fun armConnectTimeout(scope: CoroutineScope, timeoutMs: Long): Job = scope.launch {
+        val terminal = withTimeoutOrNull(timeoutMs) {
+            state.first { it is ConnectionState.Synchronized || it is ConnectionState.Failed }
+        }
+        if (terminal == null) fail(FailReason.TIMEOUT, "connecting phase exceeded $timeoutMs ms")
     }
 
     fun onFrame(frame: TcpFrame) {

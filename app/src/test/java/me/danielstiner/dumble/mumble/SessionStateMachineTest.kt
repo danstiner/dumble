@@ -6,10 +6,14 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.protocol.*
 import com.google.protobuf.ByteString
 import com.google.protobuf.MessageLite
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SessionStateMachineTest {
     private class FakeChannel : ControlChannel {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()
@@ -151,5 +155,40 @@ class SessionStateMachineTest {
         val sent = channel.sent.single()
         assertEquals(TcpMessageType.UserState, sent.first)
         assertFalse((sent.second as MumbleProtos.UserState).selfMute)
+    }
+
+    // --- Connecting-phase deadline (spans TLS handshake + auth -> ServerSync) ---
+
+    @Test fun connectingPhaseTimesOutToFailedTimeout() = runTest {
+        // Armed the moment connecting begins (before the blocking TCP connect/handshake). No
+        // ServerSync ever arrives — the deadline must elapse and fail the connection.
+        sm.armConnectTimeout(this, timeoutMs = 10_000L)
+        advanceUntilIdle()
+        val s = sm.state.value
+        assertTrue("state=$s", s is ConnectionState.Failed && s.reason == FailReason.TIMEOUT)
+        assertEquals("timeout must close the channel to unblock handshake/reader", 1, channel.closedCount)
+    }
+
+    @Test fun synchronizedBeforeDeadlineDoesNotTimeout() = runTest {
+        val job = sm.armConnectTimeout(this, timeoutMs = 10_000L)
+        sm.start("dan", null)
+        frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(7).build())
+        assertEquals(ConnectionState.Synchronized(7), sm.state.value)
+        advanceUntilIdle()  // the deadline would have elapsed here; the watchdog already completed on Synchronized
+        assertEquals("healthy connect: no timeout, no late overwrite", ConnectionState.Synchronized(7), sm.state.value)
+        assertEquals("no timeout close on a healthy connect", 0, channel.closedCount)
+        assertTrue("watchdog completes as soon as a terminal state is reached", job.isCompleted)
+    }
+
+    @Test fun failedBeforeDeadlineDoesNotAlsoTimeout() = runTest {
+        val job = sm.armConnectTimeout(this, timeoutMs = 10_000L)
+        sm.start("dan", null)
+        frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder().setReason("bad pw").build())
+        val s = sm.state.value
+        assertTrue(s is ConnectionState.Failed && s.reason == FailReason.AUTH_REJECT)
+        advanceUntilIdle()  // the pre-existing failure must win; the deadline must not overwrite it with TIMEOUT
+        val after = sm.state.value
+        assertTrue("first failure wins — stays AUTH_REJECT", after is ConnectionState.Failed && after.reason == FailReason.AUTH_REJECT)
+        assertTrue(job.isCompleted)
     }
 }
