@@ -198,18 +198,18 @@ private fun ControlBar(
                 // + the murmur-enforced self_mute=false => self_deaf=false invariant, handled in setMuted).
                 ControlToggle(checked = muted, onCheckedChange = { onToggleMute() },
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    label = "Mute", danger = true, modifier = Modifier.weight(1f))   // static name; state via highlight + icon
+                    label = "Mute", modifier = Modifier.weight(1f))   // static name; state via highlight + icon
             }
             ControlToggle(checked = deafened, onCheckedChange = { onToggleDeafen() },
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
-                label = "Deafen", danger = true, modifier = Modifier.weight(1f))
+                label = "Deafen", modifier = Modifier.weight(1f))
             // Headset present → route picker (like the stock phone app); else a plain Speaker toggle.
             if (routeOptions.any { it.icon == AudioRoute.RouteIcon.BLUETOOTH || it.icon == AudioRoute.RouteIcon.WIRED }) {
                 RouteControl(icon = routeIcon, label = routeLabel, options = routeOptions,
                     activeType = activeRouteType, onSelect = onSelectRoute, modifier = Modifier.weight(1f))
             } else {
                 ControlToggle(checked = speaker, onCheckedChange = { onToggleSpeaker() },
-                    icon = Icons.Filled.VolumeUp, label = "Speaker", danger = false, modifier = Modifier.weight(1f))
+                    icon = Icons.Filled.VolumeUp, label = "Speaker", modifier = Modifier.weight(1f))
             }
             LeaveControl(onHangUp, modifier = Modifier.weight(1f))
         }
@@ -220,19 +220,19 @@ private fun ControlBar(
 @Composable
 private fun ControlToggle(
     checked: Boolean, onCheckedChange: (Boolean) -> Unit,
-    icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true, modifier: Modifier = Modifier,
+    icon: ImageVector, label: String, enabled: Boolean = true, modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     ControlColumn(label, modifier) {
         FilledIconToggleButton(
             checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(68.dp),
+            modifier = Modifier.fillMaxWidth().height(72.dp),
             shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill, like the phone app
             colors = IconButtonDefaults.filledIconToggleButtonColors(
                 containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
                 contentColor = cs.onSurface,
-                checkedContainerColor = if (danger) cs.errorContainer else cs.inverseSurface,   // active highlight
-                checkedContentColor = if (danger) cs.onErrorContainer else cs.inverseOnSurface,
+                checkedContainerColor = cs.inverseSurface,            // white-ish highlight when active
+                checkedContentColor = cs.inverseOnSurface,
             ),
         ) {
             Icon(icon, label, modifier = Modifier.size(26.dp))
@@ -253,7 +253,7 @@ private fun RouteControl(
             // White-ish highlight when on a non-default route (not earpiece); dark/blended otherwise.
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
             FilledIconButton(
-                onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(68.dp),
+                onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(72.dp),
                 shape = RoundedCornerShape(percent = 50),   // wider-than-tall pill
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
@@ -287,7 +287,7 @@ private fun LeaveControl(onHangUp: () -> Unit, modifier: Modifier = Modifier) {
     ControlColumn("Disconnect", modifier) {
         // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
         FilledIconButton(
-            onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(68.dp),
+            onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(72.dp),
             shape = RoundedCornerShape(percent = 50),
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
         ) {
@@ -314,7 +314,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
     } else Modifier
     ControlColumn("Talk", modifier) {
         Surface(shape = RoundedCornerShape(percent = 50), color = container, contentColor = content,
-            modifier = Modifier.fillMaxWidth().height(68.dp).then(gesture).semantics {
+            modifier = Modifier.fillMaxWidth().height(72.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Mic, null, modifier = Modifier.size(26.dp)) }
