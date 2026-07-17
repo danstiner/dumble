@@ -11,14 +11,42 @@ On-device counters (build with `lateDrops`): `voiceRx` and `udpAudioRx` match 1:
 **`lateDrops` ≈ 30 % of received voice and climbing**, and the user hears mostly silence
 with occasional bursts.
 
-**Mechanism.** Mumble's `frame_number` is a *frames-transmitted* sequence, not a wall-clock
-timestamp. A VAD-based sender (desktop Mumble) **pauses `frame_number` during silence** and
-resumes where it left off. Our `SpeakerStream` playout cursor advances at **wall-clock** rate
-during those pauses (PLC-on-underrun advances the cursor `+960`/tick). So when the peer
-resumes after a short pause (shorter than the 200 ms idle-retire that would recreate/re-anchor
-the stream), the resumed talkspurt's `frame_number × 480` timestamp lands **behind** the
-over-advanced cursor → `JitterBuffer.offer` rejects it (and the rest of the talkspurt) as
-"late." Natural speech is full of sub-200 ms pauses → near-continuous late-drops.
+**Mechanism (corrected 2026-07-17 — supersedes the original "paused sender" account).**
+
+Verified against upstream Mumble source and this repo's code:
+- **The sender does NOT pause `frame_number`.** `AudioInput::encodeAudioFrame` runs
+  `iFrameCounter++` as its first statement, *before* the `!bIsSpeech && !bPreviousVoice` early
+  `return`, so a desktop-Mumble VAD sender's `frame_number` **advances at wall-clock through
+  silence** (resets only after ~500 silent frames ≈ 5 s). The #56 investigation (2026-07-13)
+  predated our own VAD sender (#40, 2026-07-14), so the test peer was a *stock desktop Mumble*
+  client — a wall-clock sender — not our then-frozen counter.
+- **Pre-fix the receiver cursor advanced at wall-clock during silence** (`plcStep` did
+  `cursor += 960` on live underrun), and the playback loop is hard-paced at real-time (it always
+  writes a full 20 ms, so `AudioTrack` never drains → no buffer-refill burst over-advances it).
+
+So the original "both sides paused → `ts == cursor`" story is **wrong**: with a wall-clock sender
+the cursor and the sender advance in lockstep, which cannot by itself produce late drops. Renaming
+"pauses"→"advances" would just make that account self-contradictory.
+
+**Leading hypothesis — prebuffer-cushion consumption (load-bearing; NOT yet fable/empirically
+confirmed, do not finalize the spec on it).** Playout normally runs ~100 ms behind the live edge
+(the prebuffer), so jittered/late packets still land in the cursor's future. On a gap longer than
+that cushion the buffer drains; pre-fix, live underrun kept advancing the cursor at wall-clock
+(`plcStep`) **without re-prebuffering** — a sub-200 ms gap never hits the retire/re-anchor path
+(verified in the pre-fix `fillTick`) — so the stream then runs *cushion-less*, cursor pinned to the
+live edge. A resumed packet was sent one network-latency `L` ago, so it arrives with `ts ≈ liveEdge
+− L < cursor` → rejected late; rejects keep the buffer empty, the cursor keeps tracking the live
+edge, and the cushion never rebuilds until the ~200 ms retire re-anchors + re-prebuffers. That
+self-sustaining cushion-less state — not a paused counter — is the candidate driver of `lateDrops ≈
+30 %`. The fix (hold cursor on live underrun) keeps the cursor at the end of received audio =
+cushion restored; resumed packets then satisfy `ts ≥ cursor` and decode. Matches lateDrops ≈ 0.
+
+**Why this is still a hypothesis:** a back-of-envelope model with typical `L < cushion` does not
+obviously yield a *steady* 30 %, so the exact trigger (gap-length distribution vs cushion, PLC 20 ms
+quantization, jitter tail, or sender/receiver clock drift) is unresolved from static analysis. Decide
+it empirically before rewriting the spec's mechanism: instrument an on-device run to log `resumeTs`
+vs `cursor` per gap, or build a sim harness feeding a wall-clock-sender + latency model through the
+pre-/post-fix `SpeakerStream`.
 
 **This is not primarily a buffer-size problem** — enlarging the prebuffer to 100 ms barely
 moved `lateDrops`. The fix is **re-anchoring the cursor at talkspurt boundaries** and **not
