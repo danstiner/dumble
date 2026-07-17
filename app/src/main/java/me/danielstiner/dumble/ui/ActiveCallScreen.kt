@@ -38,6 +38,9 @@ private val avatarPalette = listOf(
 )
 private fun avatarColor(session: Int): Color = avatarPalette[Math.floorMod(session, avatarPalette.size)]
 
+/** One selectable audio route for the route picker (shown when a headset is connected). */
+data class RouteOption(val type: Int, val icon: AudioRoute.RouteIcon, val label: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActiveCallScreen(
@@ -52,7 +55,10 @@ fun ActiveCallScreen(
     transmitMode: TransmitMode,
     onToggleMute: () -> Unit,
     onToggleDeafen: () -> Unit,
-    onToggleSpeaker: () -> Unit,
+    onToggleSpeaker: () -> Unit,               // no-headset speaker toggle
+    routeOptions: List<RouteOption>,           // available routes for the picker (when a headset is present)
+    activeRouteType: Int?,
+    onSelectRoute: (Int) -> Unit,
     onPttPress: () -> Unit,
     onPttRelease: () -> Unit,
     onHangUp: () -> Unit,
@@ -81,7 +87,8 @@ fun ActiveCallScreen(
         },
         bottomBar = {
             ControlBar(muted, deafened, speaker, routeIcon, routeLabel, transmitMode,
-                onToggleMute, onToggleDeafen, onToggleSpeaker, onPttPress, onPttRelease, onHangUp)
+                onToggleMute, onToggleDeafen, onToggleSpeaker, routeOptions, activeRouteType, onSelectRoute,
+                onPttPress, onPttRelease, onHangUp)
         },
     ) { padding ->
         if (connecting) {
@@ -174,6 +181,7 @@ private fun ControlBar(
     muted: Boolean, deafened: Boolean, speaker: Boolean,
     routeIcon: AudioRoute.RouteIcon, routeLabel: String, transmitMode: TransmitMode,
     onToggleMute: () -> Unit, onToggleDeafen: () -> Unit, onToggleSpeaker: () -> Unit,
+    routeOptions: List<RouteOption>, activeRouteType: Int?, onSelectRoute: (Int) -> Unit,
     onPttPress: () -> Unit, onPttRelease: () -> Unit, onHangUp: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -192,8 +200,14 @@ private fun ControlBar(
             ToggleControl(checked = deafened, onClick = onToggleDeafen,
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
                 label = if (deafened) "Undeafen" else "Deafen", danger = true)
-            ToggleControl(checked = speaker, onClick = onToggleSpeaker,
-                icon = routeIconVector(routeIcon), label = routeLabel, danger = false)
+            // Headset present → route picker (like the stock phone app); else a plain Speaker toggle.
+            if (routeOptions.any { it.icon == AudioRoute.RouteIcon.BLUETOOTH || it.icon == AudioRoute.RouteIcon.WIRED }) {
+                RouteControl(icon = routeIcon, label = routeLabel, options = routeOptions,
+                    activeType = activeRouteType, onSelect = onSelectRoute)
+            } else {
+                ToggleControl(checked = speaker, onClick = onToggleSpeaker,
+                    icon = Icons.Filled.VolumeUp, label = "Speaker", danger = false)
+            }
             LeaveControl(onHangUp)
         }
     }
@@ -205,12 +219,55 @@ private fun ToggleControl(
     checked: Boolean, onClick: () -> Unit, icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
-    val container = when { danger && checked -> cs.errorContainer; checked -> cs.primary; else -> cs.secondaryContainer }
-    val content = when { danger && checked -> cs.onErrorContainer; checked -> cs.onPrimary; else -> cs.onSecondaryContainer }
+    // Inactive tiles blend into the bar (dark in dark theme); active = error (muted/deafened) or a
+    // white-ish inverse highlight (e.g. speaker on) to signal a non-default state.
+    val container = when { danger && checked -> cs.errorContainer; checked -> cs.inverseSurface; else -> cs.surfaceContainerHighest }
+    val content = when { danger && checked -> cs.onErrorContainer; checked -> cs.inverseOnSurface; else -> cs.onSurface }
     ControlColumn(label) {
-        Surface(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(20.dp),
+        Surface(onClick = onClick, enabled = enabled,
+            shape = if (checked) RoundedCornerShape(percent = 35) else CircleShape,   // morph to squircle when active
             color = container, contentColor = content, modifier = Modifier.size(60.dp)) {
             Box(contentAlignment = Alignment.Center) { Icon(icon, label, modifier = Modifier.size(26.dp)) }
+        }
+    }
+}
+
+/** Audio-route picker (shown when a headset is connected) — current device + chevron, tap for a menu. */
+@Composable
+private fun RouteControl(
+    icon: AudioRoute.RouteIcon, label: String,
+    options: List<RouteOption>, activeType: Int?, onSelect: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val cs = MaterialTheme.colorScheme
+    Box {
+        ControlColumn(label) {
+            // White-ish highlight when on a non-default route (not earpiece); dark/blended otherwise.
+            val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
+            Surface(onClick = { expanded = true },
+                shape = if (highlighted) RoundedCornerShape(percent = 35) else CircleShape,   // squircle when non-default
+                color = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
+                contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
+                modifier = Modifier.size(60.dp)) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(routeIconVector(icon), "Audio route", modifier = Modifier.size(22.dp))
+                    Icon(Icons.Filled.ArrowDropDown, null, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = { Text(opt.label) },
+                    onClick = { onSelect(opt.type); expanded = false },
+                    leadingIcon = { Icon(routeIconVector(opt.icon), null) },
+                    trailingIcon = {
+                        if (opt.type == activeType) Icon(Icons.Filled.Check, "selected",
+                            tint = MaterialTheme.colorScheme.primary)
+                    },
+                )
+            }
         }
     }
 }
@@ -218,9 +275,10 @@ private fun ToggleControl(
 @Composable
 private fun LeaveControl(onHangUp: () -> Unit) {
     ControlColumn("Disconnect") {
-        Surface(onClick = onHangUp, shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError,
-            modifier = Modifier.size(width = 72.dp, height = 60.dp)) {
+        // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
+        Surface(onClick = onHangUp, shape = RoundedCornerShape(percent = 50),
+            color = Color(0xFFD32F2F), contentColor = Color.White,
+            modifier = Modifier.size(width = 76.dp, height = 56.dp)) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.CallEnd, "Disconnect", modifier = Modifier.size(28.dp)) }
         }
     }
@@ -233,8 +291,8 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
     val currentRelease by rememberUpdatedState(onRelease)
     DisposableEffect(Unit) { onDispose { currentRelease() } }   // release if it leaves composition while held
     val cs = MaterialTheme.colorScheme
-    val container = when { !enabled -> cs.onSurface.copy(alpha = 0.12f); pressed -> cs.primary; else -> cs.secondaryContainer }
-    val content = when { !enabled -> cs.onSurface.copy(alpha = 0.38f); pressed -> cs.onPrimary; else -> cs.onSecondaryContainer }
+    val container = when { !enabled -> cs.onSurface.copy(alpha = 0.12f); pressed -> cs.inverseSurface; else -> cs.surfaceContainerHighest }
+    val content = when { !enabled -> cs.onSurface.copy(alpha = 0.38f); pressed -> cs.inverseOnSurface; else -> cs.onSurface }
     // Raw pointerInput drives press/hold, so the button semantics (role + label, disabled state) must
     // be set explicitly — a Surface with no onClick isn't exposed as an actionable button to TalkBack.
     val gesture = if (enabled) Modifier.pointerInput(Unit) {
@@ -243,7 +301,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
         })
     } else Modifier
     ControlColumn(if (pressed) "Release" else "Talk") {
-        Surface(shape = RoundedCornerShape(20.dp), color = container, contentColor = content,
+        Surface(shape = if (pressed) RoundedCornerShape(percent = 35) else CircleShape, color = container, contentColor = content,
             modifier = Modifier.size(60.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
@@ -291,9 +349,15 @@ private fun ActiveCallScreenPreview() {
             ),
         )
         ActiveCallScreen(state, "Connected · 24:32", connecting = false, muted = false, deafened = false, speaker = false,
-            routeIcon = AudioRoute.RouteIcon.BLUETOOTH, routeLabel = "Bluetooth",
+            routeIcon = AudioRoute.RouteIcon.BLUETOOTH, routeLabel = "OpenRun by Shokz",
             transmitMode = TransmitMode.VOICE_ACTIVATED,
             onToggleMute = {}, onToggleDeafen = {}, onToggleSpeaker = {},
+            routeOptions = listOf(
+                RouteOption(2, AudioRoute.RouteIcon.BLUETOOTH, "OpenRun by Shokz"),
+                RouteOption(4, AudioRoute.RouteIcon.SPEAKER, "Speaker"),
+                RouteOption(1, AudioRoute.RouteIcon.EARPIECE, "Earpiece"),
+            ),
+            activeRouteType = 2, onSelectRoute = {},
             onPttPress = {}, onPttRelease = {}, onHangUp = {}, onOpenSettings = {})
     }
 }

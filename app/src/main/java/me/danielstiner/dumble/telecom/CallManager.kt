@@ -32,6 +32,8 @@ object CallManager {
     private val _isSpeaker = MutableStateFlow(false)
     val isSpeaker: StateFlow<Boolean> = _isSpeaker
     private val _endpoints = MutableStateFlow<List<android.telecom.CallEndpoint>>(emptyList())
+    /** Available call audio routes (for the route picker when a headset is connected). */
+    val endpoints: StateFlow<List<android.telecom.CallEndpoint>> = _endpoints
 
     // The currently-active call audio endpoint (BT / wired / earpiece / speaker), surfaced read-only
     // as a route indicator on the call screen. Reset on teardown so the previous call's route can't
@@ -163,15 +165,19 @@ object CallManager {
         _isSpeaker.value = ep.endpointType == android.telecom.CallEndpoint.TYPE_SPEAKER
     }
 
-    fun setSpeaker(speaker: Boolean) {
+    /** Route to the first available endpoint of [endpointType] (BT / wired / earpiece / speaker). */
+    fun selectRoute(endpointType: Int) {
         val conn = _activeConnection.value ?: return
-        val target = if (speaker) android.telecom.CallEndpoint.TYPE_SPEAKER
-                     else android.telecom.CallEndpoint.TYPE_EARPIECE
-        val ep = _endpoints.value.firstOrNull { it.endpointType == target } ?: return
+        val ep = _endpoints.value.firstOrNull { it.endpointType == endpointType } ?: return
         conn.requestCallEndpointChange(ep, java.util.concurrent.Executor { it.run() },
             object : android.os.OutcomeReceiver<Void, android.telecom.CallEndpointException> {
                 override fun onResult(result: Void?) {}
                 override fun onError(error: android.telecom.CallEndpointException) {}
             })
     }
+
+    /** Speaker on/off toggle for the no-headset case (earpiece <-> speaker). */
+    fun setSpeaker(speaker: Boolean) = selectRoute(
+        if (speaker) android.telecom.CallEndpoint.TYPE_SPEAKER
+        else android.telecom.CallEndpoint.TYPE_EARPIECE)
 }

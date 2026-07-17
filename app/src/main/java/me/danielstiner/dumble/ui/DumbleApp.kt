@@ -47,6 +47,14 @@ fun DumbleApp(
     val deafened by MumbleManager.deafened.collectAsStateWithLifecycle()
     val speaker by CallManager.isSpeaker.collectAsStateWithLifecycle()
     val activeEndpoint by CallManager.activeEndpoint.collectAsStateWithLifecycle()
+    val endpoints by CallManager.endpoints.collectAsStateWithLifecycle()
+    val routeOptions = endpoints.map { ep ->
+        RouteOption(
+            type = ep.endpointType,
+            icon = AudioRoute.icon(ep.endpointType),
+            label = ep.endpointName?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.endpointType),
+        )
+    }
     // Prefer the framework's own endpoint name — it's localized to the device language and, for
     // Bluetooth, is the device name. Fall back to our hardcoded label only if it's ever blank.
     val activeRouteLabel = activeEndpoint?.let { ep ->
@@ -107,6 +115,9 @@ fun DumbleApp(
                 onToggleMute = { MumbleManager.setMuted(!muted) },
                 onToggleDeafen = { MumbleManager.setDeafened(!deafened) },
                 onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
+                routeOptions = routeOptions,
+                activeRouteType = activeEndpoint?.endpointType,
+                onSelectRoute = { CallManager.selectRoute(it) },
                 onPttPress = { MumbleManager.setPttHeld(true) },
                 onPttRelease = { MumbleManager.setPttHeld(false) },
                 onHangUp = onHangUp,
