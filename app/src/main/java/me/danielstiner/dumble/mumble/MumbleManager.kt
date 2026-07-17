@@ -172,7 +172,7 @@ object MumbleManager {
     /** Build the Silero detector from the bundled asset. Throws-free: returns a [Result]. Shared by
      *  [applyVadEngine] (background) and [ActiveSession.initialVad] (engine construction). */
     private fun buildSileroDetector(): Result<SileroVadDetector> = runCatching {
-        val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
+        val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").use { it.readBytes() }
         SileroVadDetector(SileroOnnxSession(bytes))
     }
 

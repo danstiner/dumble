@@ -19,7 +19,7 @@ open class SileroOnnxSession(modelBytes: ByteArray) {
         OrtSession.SessionOptions().apply { setIntraOpNumThreads(1) })
     private val hasSr = session.inputNames.contains("sr")
     // ORT's OrtSession.close() throws IllegalStateException on a second call. A live VAD switch can
-    // race teardown so two threads (the send-thread detectorToClose drain and stop()) may both close
+    // race teardown so two threads (the send-thread detectorsToClose drain and stop()) may both close
     // this — guard with a CAS so only the first wins and the rest are harmless no-ops.
     private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
 

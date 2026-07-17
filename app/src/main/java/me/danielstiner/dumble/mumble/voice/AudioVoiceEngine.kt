@@ -57,7 +57,7 @@ class AudioVoiceEngine(
     @Volatile private var pendingLookaheadCaptures: Int? = null
     // A swapped-out detector awaiting close on the send thread (never close it on the caller thread —
     // a native ORT session could be torn down mid `level()`). Drained at the top of computeOutgoing().
-    @Volatile private var detectorToClose: VadDetector? = null
+    private val detectorsToClose = java.util.concurrent.ConcurrentLinkedQueue<VadDetector>()
 
     /** Live-adjust the detection preroll (0 = off/identity). 20 ms per capture; drives the
      *  [LookaheadDelay] ring with K = ms/20 captures. Runs on the UI thread: records a pending K,
@@ -113,9 +113,12 @@ class AudioVoiceEngine(
      *  on the SEND thread (see [computeOutgoing]) — closing it here (any caller thread) could tear
      *  down a native ORT session while the send thread is mid `old.level()` → use-after-close. */
     fun setVadDetector(newVad: VadDetector) {
+        if (!running) { (newVad as? SileroVadDetector)?.close(); return }  // engine stopped: don't install, close the built one
         val old = processor.vad
         processor.vad = newVad
-        if (old !== newVad) detectorToClose = old   // send thread closes it once safely past use
+        // A queue (not a single slot) so rapid/concurrent swaps never orphan an intermediate detector.
+        // The send thread drains + closes these once it's safely past using them (see computeOutgoing).
+        if (old !== newVad) detectorsToClose.add(old)
     }
 
     /** Switch transmit mode live. The send thread detects the change and flushes any open
@@ -165,7 +168,7 @@ class AudioVoiceEngine(
         // Close any detector swapped out since the last capture. Safe here: this thread is the only
         // one that calls old.level(), and it has necessarily returned from any prior level() before
         // re-entering computeOutgoing(), so the native session is guaranteed idle.
-        detectorToClose?.let { detectorToClose = null; (it as? SileroVadDetector)?.close() }
+        while (true) { val d = detectorsToClose.poll() ?: break; (d as? SileroVadDetector)?.close() }
 
         // Apply a pending K change here on the send thread (setPrerollMs only records it on the UI
         // thread). Mirror the mode-change flush+terminate so the old delayed stream closes cleanly
@@ -350,7 +353,7 @@ class AudioVoiceEngine(
         encoder.close()
         suppressor.close()
         (processor.vad as? SileroVadDetector)?.close()
-        (detectorToClose as? SileroVadDetector)?.close(); detectorToClose = null
+        while (true) { val d = detectorsToClose.poll() ?: break; (d as? SileroVadDetector)?.close() }
     }
 }
 
