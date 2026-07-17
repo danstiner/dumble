@@ -38,6 +38,12 @@ private val avatarPalette = listOf(
 )
 private fun avatarColor(session: Int): Color = avatarPalette[Math.floorMod(session, avatarPalette.size)]
 
+// Control-button shapes: a wider-than-tall pill by default, morphing squarer when a toggle is active.
+// (M3 Expressive's IconButtonDefaults.toggleableShapes() would encapsulate this, but it isn't in the
+// current Compose BOM.)
+private val controlPillShape = RoundedCornerShape(percent = 50)
+private val controlActiveShape = RoundedCornerShape(percent = 30)
+
 /** One selectable audio route for the route picker (shown when a headset is connected). */
 data class RouteOption(val type: Int, val icon: AudioRoute.RouteIcon, val label: String)
 
@@ -227,7 +233,7 @@ private fun ControlToggle(
         FilledIconToggleButton(
             checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
             modifier = Modifier.fillMaxWidth().height(72.dp),
-            shape = RoundedCornerShape(percent = if (checked) 30 else 50),   // pill; morphs squarer when active
+            shape = if (checked) controlActiveShape else controlPillShape,   // pill -> squarer when active
             colors = IconButtonDefaults.filledIconToggleButtonColors(
                 containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
                 contentColor = cs.onSurface,
@@ -254,7 +260,7 @@ private fun RouteControl(
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
             FilledIconButton(
                 onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(72.dp),
-                shape = RoundedCornerShape(percent = if (highlighted) 30 else 50),   // pill; squarer when non-default
+                shape = if (highlighted) controlActiveShape else controlPillShape,   // squarer when non-default
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
                     contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
@@ -288,7 +294,7 @@ private fun LeaveControl(onHangUp: () -> Unit, modifier: Modifier = Modifier) {
         // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
         FilledIconButton(
             onClick = onHangUp, modifier = Modifier.fillMaxWidth().height(72.dp),
-            shape = RoundedCornerShape(percent = 50),
+            shape = controlPillShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
         ) {
             Icon(Icons.Filled.CallEnd, "Disconnect", modifier = Modifier.size(28.dp))
@@ -313,7 +319,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
         })
     } else Modifier
     ControlColumn("Talk", modifier) {
-        Surface(shape = RoundedCornerShape(percent = if (pressed) 30 else 50), color = container, contentColor = content,
+        Surface(shape = if (pressed) controlActiveShape else controlPillShape, color = container, contentColor = content,
             modifier = Modifier.fillMaxWidth().height(72.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
             }) {
