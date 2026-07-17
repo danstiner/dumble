@@ -47,7 +47,7 @@ class CallNotificationManager(context: Context) {
         notificationManager.createNotificationChannel(incomingChannel)
     }
 
-    fun createNotification(callerName: String, isIncoming: Boolean): Notification {
+    fun createNotification(callerName: String, isIncoming: Boolean, connectedSinceMs: Long? = null): Notification {
         val channelId = if (isIncoming) INCOMING_CHANNEL_ID else ONGOING_CHANNEL_ID
         
         val intent = Intent(appContext, ActiveCallActivity::class.java).apply {
@@ -89,6 +89,13 @@ class CallNotificationManager(context: Context) {
                     hangupPendingIntent
                 )
             )
+            if (connectedSinceMs != null) {
+                // Live-counting chronometer anchored to the moment the call connected, so it
+                // roughly matches the in-app "Connected · MM:SS" timer.
+                builder.setWhen(connectedSinceMs)
+                    .setUsesChronometer(true)
+                    .setShowWhen(true)
+            }
         }
 
         return builder.build()

@@ -44,6 +44,10 @@ object CallManager {
     private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var bridgeJob: Job? = null
 
+    // Wall-clock moment the call reached ConnectionState.Synchronized, used to anchor the
+    // ongoing-call notification's chronometer. Set once per call, reset on teardown.
+    private var connectedSinceMs: Long? = null
+
     fun init(context: Context) {
         appContext = context.applicationContext
         if (notificationManager == null) {
@@ -74,7 +78,13 @@ object CallManager {
                 // Synchronized is a stable state — fine to read off the conflated state flow.
                 launch {
                     MumbleManager.state.collect { s ->
-                        if (s is ConnectionState.Synchronized) connection.setActive()
+                        if (s is ConnectionState.Synchronized) {
+                            if (connectedSinceMs == null) {
+                                connectedSinceMs = System.currentTimeMillis()
+                                updateNotification()
+                            }
+                            connection.setActive()
+                        }
                     }
                 }
                 // Failure teardown MUST use the non-conflated failures flow: the self-heal in
@@ -93,6 +103,7 @@ object CallManager {
             _activeEndpoint.value = null
             _endpoints.value = emptyList()
             _isSpeaker.value = false
+            connectedSinceMs = null
         }
     }
 
@@ -103,7 +114,9 @@ object CallManager {
         if (connection != null) {
             // If the UI is not visible, we treat it as more "urgent" if it's just starting
             // But generally, once a call is active, it uses the ongoing channel.
-            val notification = notificationManager?.createNotification("Dumble User", isIncoming = false)
+            val notification = notificationManager?.createNotification(
+                "Dumble User", isIncoming = false, connectedSinceMs = connectedSinceMs
+            )
             if (notification != null) {
                 if (service != null) {
                     service.startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
@@ -121,6 +134,7 @@ object CallManager {
         MumbleManager.disconnect()
         _activeConnection.value?.onDisconnect()
         _activeConnection.value = null
+        connectedSinceMs = null
         notificationManager?.cancelNotification()
         serviceRef?.get()?.stopForeground(Service.STOP_FOREGROUND_REMOVE)
         exitCallAudio()
