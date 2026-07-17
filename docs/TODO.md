@@ -6,7 +6,19 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ## Open
 
-- Check if we can integrate with Pixel phone's clear calling feature
+- ~~Check if we can integrate with Pixel's Clear Calling~~ — **RESEARCHED 2026-07-17: nothing to
+  build; there is no third-party API.** Clear Calling is a user-toggled system feature (Settings →
+  Sound & vibration → Clear Calling), not an SDK. Scope: **cellular-only on Pixel 7–9** (needs a SIM;
+  explicitly *not* VoIP); **Pixel 10+ (except 10a, Android 16) extends it to VoIP apps**, all
+  on-device. Drumble already meets every prerequisite of a "real" VoIP call — `VOICE_COMMUNICATION`
+  capture, `USAGE_VOICE_COMMUNICATION` playout, `MODE_IN_COMMUNICATION`, and a self-managed
+  `android.telecom` ConnectionService/Connection (`MANAGE_OWN_CALLS`) — so on a Pixel 10+ with Clear
+  Calling on, our calls should be cleaned automatically with **no code change**. Complements our
+  RNNoise-default-off stance (no double-processing conflict). **Unverified** (the exact trigger isn't
+  in developer docs): confirm on a Pixel 10+ by toggling Clear Calling and listening for far-end
+  noise reduction. Adjacent *buildable* item (separate/larger): migrate raw `android.telecom` →
+  **Jetpack Telecom `core-telecom` v1.1.0** for the Android 16.1 native VoIP-visibility features
+  (unified call log in the Phone app, native callback).
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
 - move all non-essential settings under an advanced section in settings — **DONE**
