@@ -63,7 +63,7 @@ class AudioVoiceEngineLookaheadTest {
 
         val e2 = AudioVoiceEngine(
             FakeOpusCodec(), { ScriptedAudioIn(onsetScript) }, { FakeAudioOut() },
-            initialLookaheadCaptures = 2,
+            initialPrerollCaptures = 2,
         ).also { it.start() }
         val got2 = drive(e2, onsetScript.size)
         e2.stop()
@@ -88,7 +88,7 @@ class AudioVoiceEngineLookaheadTest {
         val e = AudioVoiceEngine(FakeOpusCodec(), { ScriptedAudioIn(List(10) { 8000 }) }, { FakeAudioOut() })
             .also { it.start() }
         repeat(3) { assertTrue("speech is transmitting", e.nextOutgoingFrame(0)?.let { !it.isTerminator } == true) }
-        e.setLookaheadMs(40)                                 // K 0 -> 2, deferred to next send-thread tick
+        e.setPrerollMs(40)                                   // K 0 -> 2, deferred to next send-thread tick
         val closing = e.nextOutgoingFrame(0)
         e.stop()
         assertTrue("live K change closes the open stream with one real terminator",

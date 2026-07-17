@@ -47,8 +47,8 @@ fun SettingsScreen(
     onRnnoiseEnabledChange: (Boolean) -> Unit,
     vadEngine: String,
     onVadEngineChange: (String) -> Unit,
-    lookaheadMs: Int,
-    onLookaheadChange: (Int) -> Unit,
+    prerollMs: Int,
+    onPrerollChange: (Int) -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
     Scaffold(
@@ -136,12 +136,12 @@ fun SettingsScreen(
                 }
 
                 Text(
-                    "Lookahead delay: $lookaheadMs ms" + if (lookaheadMs == 0) " (0 = lowest latency)" else "",
+                    "Detection preroll: $prerollMs ms" + if (prerollMs == 0) " (0 = lowest latency)" else "",
                     modifier = Modifier.padding(top = 16.dp),
                 )
                 Slider(
-                    value = lookaheadMs.toFloat(),
-                    onValueChange = { onLookaheadChange((it / 20f).roundToInt() * 20) },
+                    value = prerollMs.toFloat(),
+                    onValueChange = { onPrerollChange((it / 20f).roundToInt() * 20) },
                     valueRange = 0f..100f,
                     steps = 4,
                 )
@@ -177,7 +177,7 @@ private fun SettingsScreenPreview() {
             agcTargetDbFs = -18f, onAgcTargetChange = {},
             rnnoiseEnabled = true, onRnnoiseEnabledChange = {},
             vadEngine = "rnnoise", onVadEngineChange = {},
-            lookaheadMs = 0, onLookaheadChange = {},
+            prerollMs = 0, onPrerollChange = {},
             onOpenDiagnostics = {})
     }
 }

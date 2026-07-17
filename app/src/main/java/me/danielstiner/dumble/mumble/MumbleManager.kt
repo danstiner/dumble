@@ -40,6 +40,11 @@ object MumbleManager {
     private const val TAG = "MumbleManager"
     private const val DEFAULT_VAD_THRESHOLD = 0.4f
     private const val DEFAULT_AGC_TARGET_DBFS = -24f
+    private const val DEFAULT_RNNOISE_ENABLED = false
+    // AGC (makeup gain) follows RNNoise: with RNNoise defaulted off we trust the platform
+    // VOICE_COMMUNICATION AGC/NS, so default AGC off too rather than double-processing.
+    private const val DEFAULT_AGC_ENABLED = DEFAULT_RNNOISE_ENABLED
+    private const val DEFAULT_PREROLL_MS = 40
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -69,18 +74,18 @@ object MumbleManager {
     private val _agcTargetDbFs = MutableStateFlow(DEFAULT_AGC_TARGET_DBFS)
     /** Makeup-gain target loudness (dBFS RMS), persisted and applied live to the active call. */
     val agcTargetDbFs: StateFlow<Float> = _agcTargetDbFs.asStateFlow()
-    private val _agcEnabled = MutableStateFlow(true)
+    private val _agcEnabled = MutableStateFlow(DEFAULT_AGC_ENABLED)
     /** Makeup-gain on/off, persisted and applied live to the active call. */
     val agcEnabled: StateFlow<Boolean> = _agcEnabled.asStateFlow()
-    private val _rnnoiseEnabled = MutableStateFlow(false)
+    private val _rnnoiseEnabled = MutableStateFlow(DEFAULT_RNNOISE_ENABLED)
     /** RNNoise denoising on/off (the VAD keeps running regardless), persisted and applied live. */
     val rnnoiseEnabled: StateFlow<Boolean> = _rnnoiseEnabled.asStateFlow()
     private val _vadEngine = MutableStateFlow("rnnoise")
     /** Which detector drives the transmit gate: "energy" | "rnnoise" | "silero". Persisted, applied live. */
     val vadEngine: StateFlow<String> = _vadEngine.asStateFlow()
-    private val _lookaheadMs = MutableStateFlow(0)
-    /** Onset-recovery lookahead delay in ms (0 = off), persisted and applied live. */
-    val lookaheadMs: StateFlow<Int> = _lookaheadMs.asStateFlow()
+    private val _prerollMs = MutableStateFlow(DEFAULT_PREROLL_MS)
+    /** Onset-recovery detection preroll in ms (0 = off), persisted and applied live. */
+    val prerollMs: StateFlow<Int> = _prerollMs.asStateFlow()
     private val _deafened = MutableStateFlow(false)
     /** Self-deafen (mutes playout + implies self-mute), broadcast to peers. */
     val deafened: StateFlow<Boolean> = _deafened.asStateFlow()
@@ -171,11 +176,11 @@ object MumbleManager {
         SileroVadDetector(SileroOnnxSession(bytes))
     }
 
-    @Synchronized fun setLookaheadMs(ms: Int) {
-        _lookaheadMs.value = ms
+    @Synchronized fun setPrerollMs(ms: Int) {
+        _prerollMs.value = ms
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
-            ?.edit()?.putInt("lookahead_ms", ms)?.apply()
-        active?.setLookaheadMs(ms)
+            ?.edit()?.putInt("preroll_ms", ms)?.apply()
+        active?.setPrerollMs(ms)
     }
 
     /** Build the requested detector on a background thread (asset I/O + native init off the UI thread)
@@ -253,10 +258,10 @@ object MumbleManager {
         _transmitMode.value = TransmitMode.entries.firstOrNull { it.name == modeName }
             ?: TransmitMode.VOICE_ACTIVATED
         _agcTargetDbFs.value = audioPrefs.getFloat("agc_target_dbfs", DEFAULT_AGC_TARGET_DBFS)
-        _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", true)
-        _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", false)
+        _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", DEFAULT_AGC_ENABLED)
+        _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", DEFAULT_RNNOISE_ENABLED)
         _vadEngine.value = audioPrefs.getString("vad_engine", "rnnoise") ?: "rnnoise"
-        _lookaheadMs.value = audioPrefs.getInt("lookahead_ms", 0)
+        _prerollMs.value = audioPrefs.getInt("preroll_ms", DEFAULT_PREROLL_MS)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -306,7 +311,7 @@ object MumbleManager {
             initialAgcEnabled = _agcEnabled.value,
             initialAgcTargetDbFs = _agcTargetDbFs.value,
             initialRnnoiseEnabled = _rnnoiseEnabled.value,
-            initialLookaheadCaptures = _lookaheadMs.value / 20)
+            initialPrerollCaptures = _prerollMs.value / 20)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -407,7 +412,7 @@ object MumbleManager {
         fun setAgcEnabled(value: Boolean) = engine.setAgcEnabled(value)
         fun setRnnoiseEnabled(value: Boolean) = engine.setRnnoiseEnabled(value)
         fun setVadDetector(vad: VadDetector) = engine.setVadDetector(vad)
-        fun setLookaheadMs(ms: Int) = engine.setLookaheadMs(ms)
+        fun setPrerollMs(ms: Int) = engine.setPrerollMs(ms)
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)

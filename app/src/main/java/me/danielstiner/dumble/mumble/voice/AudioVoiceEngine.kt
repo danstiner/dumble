@@ -28,7 +28,7 @@ class AudioVoiceEngine(
     initialAgcEnabled: Boolean = true,
     initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
     initialRnnoiseEnabled: Boolean = true,
-    initialLookaheadCaptures: Int = 0,
+    initialPrerollCaptures: Int = 0,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -53,15 +53,16 @@ class AudioVoiceEngine(
     private val processor = TransmitProcessor(suppressor, vad, gate, gainControl)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
-    @Volatile private var lookahead = LookaheadDelay(initialLookaheadCaptures)
+    @Volatile private var lookahead = LookaheadDelay(initialPrerollCaptures)
     @Volatile private var pendingLookaheadCaptures: Int? = null
     // A swapped-out detector awaiting close on the send thread (never close it on the caller thread —
     // a native ORT session could be torn down mid `level()`). Drained at the top of computeOutgoing().
     @Volatile private var detectorToClose: VadDetector? = null
 
-    /** Live-adjust the onset-recovery lookahead delay (0 = off/identity). 20 ms per capture.
-     *  Runs on the UI thread: records a pending K, applied (flush + clean close) on the send thread. */
-    fun setLookaheadMs(ms: Int) { pendingLookaheadCaptures = (ms / 20).coerceAtLeast(0) }
+    /** Live-adjust the detection preroll (0 = off/identity). 20 ms per capture; drives the
+     *  [LookaheadDelay] ring with K = ms/20 captures. Runs on the UI thread: records a pending K,
+     *  applied (flush + clean close) on the send thread. */
+    fun setPrerollMs(ms: Int) { pendingLookaheadCaptures = (ms / 20).coerceAtLeast(0) }
 
     init { suppressor.setDenoiseEnabled(initialRnnoiseEnabled) }
 
@@ -166,7 +167,7 @@ class AudioVoiceEngine(
         // re-entering computeOutgoing(), so the native session is guaranteed idle.
         detectorToClose?.let { detectorToClose = null; (it as? SileroVadDetector)?.close() }
 
-        // Apply a pending K change here on the send thread (setLookaheadMs only records it on the UI
+        // Apply a pending K change here on the send thread (setPrerollMs only records it on the UI
         // thread). Mirror the mode-change flush+terminate so the old delayed stream closes cleanly
         // instead of leaving `sending` stale-true with buffered captures silently dropped.
         val pending = pendingLookaheadCaptures
