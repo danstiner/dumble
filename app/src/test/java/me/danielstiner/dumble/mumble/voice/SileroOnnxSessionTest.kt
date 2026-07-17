@@ -31,6 +31,14 @@ class SileroOnnxSessionTest {
         val b = session.run(x, SileroOnnxSession.newState())
         assertEquals(a.prob, b.prob, 0f)
     }
+    @Test fun doubleCloseIsSafe() {
+        // ORT's OrtSession.close() throws on a second call; a live VAD switch can race teardown so
+        // two threads may both close this. close() must be idempotent (CAS-guarded) — a second (or
+        // concurrent) close is a harmless no-op, never an IllegalStateException.
+        val s = SileroOnnxSession(modelBytes())
+        s.close()
+        s.close()
+    }
     @Test fun wrongWidthCollapses() {
         // Silero is trained to reject non-speech spectral content, so a synthetic tone never
         // drives it to the high absolute confidence real recorded speech would reach. What it

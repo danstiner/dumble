@@ -56,7 +56,7 @@ open class SileroOnnxSession(modelBytes: ByteArray) {
         }
     }
 
-    fun close() { session.close() }
+    fun close() { if (closed.compareAndSet(false, true)) session.close() }
 
     companion object {
         const val INPUT_WIDTH = 576
