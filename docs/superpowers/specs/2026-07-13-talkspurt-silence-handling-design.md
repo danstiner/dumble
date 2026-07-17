@@ -1,5 +1,14 @@
 # Talkspurt / Silence Handling — Design Spec (feature #56, part A)
 
+> **Correction (2026-07-17) — the §1 root-cause narrative is wrong; the fix is not.** §1 says a
+> desktop-Mumble VAD sender **pauses `frame_number` during silence** (so "both sides paused →
+> `ts == cursor`"). Upstream `AudioInput::encodeAudioFrame` increments `iFrameCounter` *before* its
+> non-speech early return, so `frame_number` actually **advances at wall-clock through silence**
+> (source-verified). The shipped fix (hold the cursor on live underrun) is on-device-verified
+> (lateDrops ≈ 0) and unaffected, but the *reason it works* is under re-investigation. Leading
+> hypothesis: prebuffer-cushion consumption, not a paused counter. See
+> `docs/superpowers/adaptive-jitter-buffer-design-notes.md` → "Mechanism (corrected 2026-07-17)".
+
 **Status:** approved design, fable-reviewed. Basis for the implementation plan.
 **Date:** 2026-07-13
 **Scope:** part **A** only — make received voice continuous across a VAD peer's silences by

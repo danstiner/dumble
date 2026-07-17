@@ -135,20 +135,30 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   `iFrameCounter++` as its FIRST statement — *before* the `!bIsSpeech && !bPreviousVoice` early
   `return` — so Mumble's `frame_number` **advances at wall-clock rate through silence** and resets
   to 0 only after 500 silent frames (~5 s). `docs/mumble-protocol.md` is already correct.
-  **Still wrong — but NOT a mere word-swap:** the #56 entry below, the talkspurt-silence design
-  spec, and `adaptive-jitter-buffer-design-notes.md` explain the late-drop bug via a *paused* sender
-  ("resumed `ts == cursor` because both sides paused"). That causal story is inconsistent with a
-  wall-clock sender — renaming "pauses"→"advances" leaves them self-contradictory. The fix is
-  on-device-verified (lateDrops ≈ 0), but the *documented reason it works* needs re-derivation
-  (why a wall-clock sender produced `ts < cursor` pre-fix). Flagged for verification before rewrite.
-- **🔴 Received audio drops as "late" — talkspurt/silence handling (#56 part A)** — root cause:
-  Mumble `frame_number` pauses during a VAD peer's silence, but our playout cursor advanced at
-  wall-clock rate (PLC-on-underrun), so resumed talkspurts landed behind the cursor and
-  `JitterBuffer` rejected them as "late" (`lateDrops` ~30 % of `voiceRx` and climbing). Fixed by
-  holding the cursor on live underrun, resetting in place at talkspurt boundaries, wiring
-  `is_terminator` through the seam, and clearing the stale terminator tag on contiguous/reordered
-  talkspurts. On-device verified (audio continuous, `lateDrops` ≈ 0). **Part B (adaptive playout
-  delay) remains deferred.** Branch `talkspurt-silence-handling`; design
+  **Mechanism re-derivation (2026-07-17):** the "paused sender" story in the #56 entry / talkspurt
+  spec / adaptive-jitter notes is wrong (a wall-clock sender + wall-clock cursor stay in lockstep).
+  Established by code: pre-fix the receiver cursor advanced at wall-clock on live underrun
+  (`plcStep`), the playback loop is hard-paced (always writes 20 ms → no buffer burst), and the #56
+  test peer was stock desktop Mumble (our VAD sender didn't exist until the next day). **Leading
+  hypothesis:** prebuffer-cushion consumption — a sub-200 ms gap drains the buffer, pre-fix
+  `plcStep` runs the cursor to the live edge *without re-prebuffering*, so resumed packets land ~one
+  network-latency behind the cushion-less cursor and are rejected; the fix (hold cursor) preserves
+  the cushion. **Not yet confirmed** (a `L < cushion` model doesn't obviously give a steady 30 %):
+  needs an instrumented on-device run (log `resumeTs` vs `cursor` per gap) or a sim harness before
+  finalizing. Docs corrected conservatively (verified facts + flagged hypothesis), not rewritten as
+  settled: `adaptive-jitter-buffer-design-notes.md` → "Mechanism (corrected 2026-07-17)" + a banner
+  on the talkspurt spec. `docs/mumble-protocol.md` was already correct.
+- **🔴 Received audio drops as "late" — talkspurt/silence handling (#56 part A)** — symptom:
+  resumed talkspurts landed behind the playout cursor and `JitterBuffer` rejected them as "late"
+  (`lateDrops` ~30 % of `voiceRx` and climbing). Fixed by holding the cursor on live underrun,
+  resetting in place at talkspurt boundaries, wiring `is_terminator` through the seam, and clearing
+  the stale terminator tag on contiguous/reordered talkspurts. On-device verified (audio continuous,
+  `lateDrops` ≈ 0). **Root-cause NOTE (corrected 2026-07-17):** the original "sender pauses
+  `frame_number`" explanation is wrong — a desktop-Mumble sender advances it at wall-clock
+  (source-verified). Leading hypothesis is prebuffer-cushion consumption, pending empirical
+  confirmation — see the mechanism-re-derivation flag under #40 above and
+  `adaptive-jitter-buffer-design-notes.md`. **Part B (adaptive playout delay) remains deferred.**
+  Branch `talkspurt-silence-handling`; design
   `docs/superpowers/specs/2026-07-13-talkspurt-silence-handling-design.md`.
 - Hang-up native crash — Opus encoder freed before the send thread was joined (use-after-free) — `ae378a0`
 - Mute button state desynced across calls (stale singleton vs. fresh engine) — `a03a873`
