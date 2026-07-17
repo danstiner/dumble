@@ -147,4 +147,10 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   Activity settings (RNNoise on/off, hangover, VAD-source select), and evaluate **Silero** as a
   third VAD behind the swappable `VadDetector` seam (the VAD Gate Tuner is the eval bench). Design:
   `docs/superpowers/specs/2026-07-14-voice-activity-detection-design.md`.
+- **Connecting phase feels long — add an overall ~10 s deadline.** The TCP connect timeout is *already*
+  10 s (`MumbleTcpTransport.CONNECT_TIMEOUT_MS`), but `startHandshake()` (TLS) sets **no** `SO_TIMEOUT`,
+  so a stalled handshake can block well past 10 s, and no single deadline spans handshake→auth→sync. Add
+  one ~10 s connecting-phase timeout (or a socket read timeout across the handshake) so a slow/unreachable
+  server fails fast instead of hanging on "Connecting…". (Reducing the connect constant alone won't help —
+  it's already 10 s.)
 - Cleanup: remove the per-5 s debugging logs (Ping tick, mic/track state, mix peaks, uplink kbps) now that #56 part A is verified
