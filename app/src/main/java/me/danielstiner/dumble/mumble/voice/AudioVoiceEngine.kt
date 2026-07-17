@@ -67,6 +67,21 @@ class AudioVoiceEngine(
     @Volatile private var lateDropCount = 0L
     val lateDrops: Long get() = lateDropCount
 
+    private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
+    /** Sessions currently producing playout audio (with a ~200 ms release hold). */
+    val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
+    private val _selfTransmitting = MutableStateFlow(false)
+    /** True while our uplink is sending real (non-terminator) frames (with a ~200 ms release hold). */
+    val selfTransmitting: StateFlow<Boolean> = _selfTransmitting.asStateFlow()
+
+    private val speakingHold = SpeakingHold()   // playback thread only
+    private val transmitHold = TransmitHold()   // send thread only
+    @Volatile private var deafened = false
+
+    /** Live-toggle self-deafen: mutes playout (still draining streams to keep jitter buffers sane). */
+    fun setDeafened(value: Boolean) { deafened = value }
+    internal val isDeafened get() = deafened   // test seam
+
     fun setMuted(value: Boolean) { muted = value }
     val isMuted get() = muted
 
@@ -112,6 +127,14 @@ class AudioVoiceEngine(
      * before the terminator flag is read.
      */
     override fun nextOutgoingFrame(timeoutNanos: Long): VoiceFrame? {
+        val frame = computeOutgoing()
+        val realSend = frame != null && !frame.isTerminator
+        val transmitting = transmitHold.update(realSend)
+        if (transmitting != _selfTransmitting.value) _selfTransmitting.value = transmitting
+        return frame
+    }
+
+    private fun computeOutgoing(): VoiceFrame? {
         val rec = recorder ?: return null
         rec.read(capturePcm, CAPTURE_SAMPLES)             // capture clock — runs even while muted
         val fn = frameNumber
@@ -219,9 +242,10 @@ class AudioVoiceEngine(
         val mix = ShortArray(FRAME_SAMPLES_20MS)
         val acc = IntArray(FRAME_SAMPLES_20MS)
         val speakerOut = ShortArray(FRAME_SAMPLES_20MS)
-        var logTick = 0
+        val producedSessions = HashSet<Int>()
         while (running) {
             java.util.Arrays.fill(acc, 0)
+            producedSessions.clear()
             var active = 0
             val it = speakers.entries.iterator()
             while (it.hasNext()) {
@@ -229,22 +253,17 @@ class AudioVoiceEngine(
                 val produced = stream.fillTick(speakerOut)
                 if (produced) {
                     AudioMixer.accumulate(acc, speakerOut, FRAME_SAMPLES_20MS)
+                    producedSessions.add(session)
                     active++
-                    if (logTick % 50 == 0) {
-                        var peak = 0
-                        for (i in 0 until FRAME_SAMPLES_20MS) {
-                            val a = kotlin.math.abs(speakerOut[i].toInt())
-                            if (a > peak) peak = a
-                        }
-                        android.util.Log.d("AudioVoiceEngine", "mix session=$session peak=$peak active=$active")
-                    }
                 }
-                if (stream.retired) { stream.close(); it.remove() }
+                if (stream.retired) { stream.close(); it.remove(); speakingHold.drop(session) }
             }
             AudioMixer.finalizeMix(acc, mix, FRAME_SAMPLES_20MS)
-            out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle)
+            if (deafened) java.util.Arrays.fill(mix, 0)   // mute playout, streams already drained above
+            out.write(mix, FRAME_SAMPLES_20MS)            // ALWAYS write 20 ms (silence when idle/deafened)
+            val speaking = speakingHold.tick(producedSessions)
+            if (speaking != _speakingSessions.value) _speakingSessions.value = speaking
             _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
-            logTick++
         }
     }
 
@@ -254,6 +273,11 @@ class AudioVoiceEngine(
         playbackThread = null
         speakers.values.forEach { it.close() }
         speakers.clear()
+        _speakingSessions.value = emptySet()
+        _selfTransmitting.value = false
+        speakingHold.clear()
+        transmitHold.clear()
+        deafened = false
         recorder?.close(); recorder = null
         track?.close(); track = null
         encoder.close()
