@@ -29,14 +29,18 @@ open class SileroOnnxSession(modelBytes: ByteArray) {
     fun runRaw(input: FloatArray, state: FloatArray): Result = infer(input, input.size, state)
 
     private fun infer(input: FloatArray, width: Int, state: FloatArray): Result {
-        val inT = OnnxTensor.createTensor(env, FloatBuffer.wrap(input), longArrayOf(1, width.toLong()))
-        val stT = OnnxTensor.createTensor(env, FloatBuffer.wrap(state), longArrayOf(2, 1, 128))
-        val srT = if (hasSr)
-            OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(16000)), longArrayOf()) else null
-        val feeds = HashMap<String, OnnxTensor>().apply {
-            put("input", inT); put("state", stT); if (srT != null) put("sr", srT)
-        }
+        require(state.size == 2 * 1 * 128) { "state must be 256 floats, got ${state.size}" }
+        var inT: OnnxTensor? = null
+        var stT: OnnxTensor? = null
+        var srT: OnnxTensor? = null
         try {
+            inT = OnnxTensor.createTensor(env, FloatBuffer.wrap(input), longArrayOf(1, width.toLong()))
+            stT = OnnxTensor.createTensor(env, FloatBuffer.wrap(state), longArrayOf(2, 1, 128))
+            srT = if (hasSr)
+                OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(16000)), longArrayOf()) else null
+            val feeds = HashMap<String, OnnxTensor>().apply {
+                put("input", inT); put("state", stT); if (srT != null) put("sr", srT)
+            }
             session.run(feeds).use { res ->
                 @Suppress("UNCHECKED_CAST")
                 val prob = (res[0].value as Array<FloatArray>)[0][0]
@@ -44,7 +48,7 @@ open class SileroOnnxSession(modelBytes: ByteArray) {
                 return Result(prob, outState)
             }
         } finally {
-            inT.close(); stT.close(); srT?.close()
+            inT?.close(); stT?.close(); srT?.close()
         }
     }
 
