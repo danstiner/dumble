@@ -195,11 +195,11 @@ private fun ControlBar(
                 // + the murmur-enforced self_mute=false => self_deaf=false invariant, handled in setMuted).
                 ControlToggle(checked = muted, onCheckedChange = { onToggleMute() },
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                    label = if (muted) "Unmute" else "Mute", danger = true)
+                    label = "Mute", danger = true)   // static name; state shown by highlight + icon
             }
             ControlToggle(checked = deafened, onCheckedChange = { onToggleDeafen() },
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
-                label = if (deafened) "Undeafen" else "Deafen", danger = true)
+                label = "Deafen", danger = true)
             // Headset present → route picker (like the stock phone app); else a plain Speaker toggle.
             if (routeOptions.any { it.icon == AudioRoute.RouteIcon.BLUETOOTH || it.icon == AudioRoute.RouteIcon.WIRED }) {
                 RouteControl(icon = routeIcon, label = routeLabel, options = routeOptions,
@@ -309,7 +309,7 @@ private fun HoldToTalkControl(enabled: Boolean, onPress: () -> Unit, onRelease: 
             pressed = true; currentPress(); tryAwaitRelease(); pressed = false; currentRelease()
         })
     } else Modifier
-    ControlColumn(if (pressed) "Release" else "Talk") {
+    ControlColumn("Talk") {
         Surface(shape = if (pressed) RoundedCornerShape(percent = 35) else CircleShape, color = container, contentColor = content,
             modifier = Modifier.size(60.dp).then(gesture).semantics {
                 role = Role.Button; contentDescription = "Push to talk"; if (!enabled) disabled()
