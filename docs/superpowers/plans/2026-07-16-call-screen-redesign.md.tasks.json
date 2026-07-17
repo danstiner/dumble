@@ -1,0 +1,64 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-16-call-screen-redesign.md",
+  "tasks": [
+    {
+      "id": 55,
+      "subject": "Task 1: material-icons-extended dependency",
+      "status": "pending",
+      "description": "**Goal:** Make the extended Material icon set available to Compose.\n\n**Files:**\n- Modify: gradle/libs.versions.toml\n- Modify: app/build.gradle.kts\n\n**Acceptance Criteria:**\n- libs.versions.toml declares androidx-compose-material-icons-extended (BOM-versioned)\n- app/build.gradle.kts adds the implementation\n- extended icons resolve; compileDebugKotlin BUILD SUCCESSFUL\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"gradle/libs.versions.toml\", \"app/build.gradle.kts\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"declares material-icons-extended\", \"adds implementation\", \"compiles\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 56,
+      "subject": "Task 2: Pure release-hold helpers",
+      "status": "pending",
+      "description": "**Goal:** Pure JVM-testable SpeakingHold + TransmitHold (~200 ms release hold).\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakingHold.kt\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitHold.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakingHoldTest.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitHoldTest.kt\n\n**Acceptance Criteria:**\n- SpeakingHold holds each session for holdTicks after last produced; drop() immediate\n- TransmitHold true while sending + holdTicks after, then false\n- deterministic, no Android imports\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*SpeakingHoldTest\" --tests \"*TransmitHoldTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakingHold.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitHold.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakingHoldTest.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/TransmitHoldTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*SpeakingHoldTest\\\" --tests \\\"*TransmitHoldTest\\\"\", \"acceptanceCriteria\": [\"SpeakingHold hold+drop\", \"TransmitHold hold\", \"pure, no Android\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 57,
+      "subject": "Task 3: Engine speaking signals + deafen",
+      "status": "pending",
+      "blockedBy": [56],
+      "description": "**Goal:** AudioVoiceEngine speakingSessions/selfTransmitting StateFlows + deafen playout muting + setDeafened.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSpeakingTest.kt\n\n**Acceptance Criteria:**\n- selfTransmitting tracks real sends with release hold (tested via nextOutgoingFrame)\n- setDeafened toggles isDeafened; playbackLoop zeroes mix when deafened but keeps draining\n- speakingSessions via SpeakingHold, emitted on set-change, drops on retire\n- stop() resets flows/holds/deafened\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*AudioVoiceEngineSpeakingTest\" --tests \"*AudioVoiceEngine*\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSpeakingTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*AudioVoiceEngineSpeakingTest\\\" --tests \\\"*AudioVoiceEngine*\\\"\", \"acceptanceCriteria\": [\"selfTransmitting release hold\", \"deafen mutes mix, keeps draining\", \"speakingSessions via SpeakingHold\", \"stop resets\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 58,
+      "subject": "Task 4: SessionStateMachine.sendSelfDeaf",
+      "status": "pending",
+      "description": "**Goal:** sendSelfDeaf(deaf, mute) broadcasts one UserState with self_deaf + self_mute.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\n\n**Acceptance Criteria:**\n- sendSelfDeaf sends one UserState with both fields\n- sendSelfMute unchanged; compiles\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"sendSelfDeaf one UserState both fields\", \"compiles\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 59,
+      "subject": "Task 5: MumbleManager deafen + speaking mirror",
+      "status": "pending",
+      "blockedBy": [57, 58],
+      "description": "**Goal:** Mirror engine speaking flows; hot-mic-safe setDeafened; reset on shutdown.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/mumble/voice/DeafenLogic.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/DeafenLogicTest.kt\n\n**Acceptance Criteria:**\n- DeafenLogic hot-mic-safe (manual mute survives; deafen-set mute auto-unmutes)\n- MumbleManager mirrors speakingSessions/selfTransmitting/deafened\n- setDeafened sets _muted directly + one UserState via sendSelfDeaf\n- shutdown resets the new flows\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*DeafenLogicTest\" && JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:compileDebugKotlin\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/DeafenLogic.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/DeafenLogicTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*DeafenLogicTest\\\" && JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:compileDebugKotlin\", \"acceptanceCriteria\": [\"DeafenLogic hot-mic-safe\", \"mirrors speaking/deafen flows\", \"setDeafened single UserState\", \"shutdown resets\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 60,
+      "subject": "Task 6: Route→icon mapping",
+      "status": "pending",
+      "description": "**Goal:** AudioRoute.RouteIcon enum + icon(type) mapping (pure, JVM-testable).\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/telecom/AudioRoute.kt\n- Test: app/src/test/java/me/danielstiner/dumble/telecom/AudioRouteTest.kt\n\n**Acceptance Criteria:**\n- RouteIcon enum + icon(type) maps each TYPE_* to a stable key; pure, JVM-tested\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*AudioRouteTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/telecom/AudioRoute.kt\", \"app/src/test/java/me/danielstiner/dumble/telecom/AudioRouteTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*AudioRouteTest\\\"\", \"acceptanceCriteria\": [\"RouteIcon + icon(type) mapping, pure JVM-tested\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 61,
+      "subject": "Task 7: CallScreenState pure mapper",
+      "status": "pending",
+      "description": "**Goal:** Pure mapper: ServerModel + speaking flows + local mute/deafen -> ordered channels/users VMs. No Compose imports.\n\n**Files:**\n- Create: app/src/main/java/me/danielstiner/dumble/ui/CallScreenState.kt\n- Test: app/src/test/java/me/danielstiner/dumble/ui/CallScreenStateTest.kt\n\n**Acceptance Criteria:**\n- users grouped/ordered by channel; empties hidden except yours; flat\n- self floated + YOU tag; server name root-channel then host fallback\n- self row prefers local mute/transmit; serverMute=mute||suppress\n- no Compose imports\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*CallScreenStateTest\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/CallScreenState.kt\", \"app/src/test/java/me/danielstiner/dumble/ui/CallScreenStateTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*CallScreenStateTest\\\"\", \"acceptanceCriteria\": [\"grouped/ordered channels, empties hidden except yours\", \"self floated + YOU; server name fallback\", \"self row local mute/transmit; serverMute=mute||suppress\", \"no Compose imports\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 62,
+      "subject": "Task 8: ActiveCallScreen M3 redesign",
+      "status": "pending",
+      "blockedBy": [55, 60, 61],
+      "description": "**Goal:** Rewrite ActiveCallScreen with standard M3 components + MaterialTheme.colorScheme (Scaffold/TopAppBar/LazyColumn/ListItem/Surface/Badge). Channel tree + Mute/Deafen/Speaker/Leave bar; Mute->Hold-to-Talk in PTT. Theme-adaptive; mock is reference only.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\n\n**Acceptance Criteria:**\n- standard M3 components + colorScheme, theme-adaptive, no hardcoded palette\n- header + channel tree (ListItem rows, avatar, speaking ring, mute/YOU badges)\n- control bar Mute/Deafen/Speaker(route)/Leave; Mute->Hold-to-Talk in PTT\n- @Preview renders; assembleDebug builds\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"M3 components + colorScheme, theme-adaptive\", \"header + channel tree with avatars/badges\", \"control bar + PTT Hold-to-Talk\", \"@Preview + assembleDebug\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 63,
+      "subject": "Task 9: DumbleApp wiring",
+      "status": "pending",
+      "blockedBy": [59, 61, 62],
+      "description": "**Goal:** Collect model + speaking flows + deafen/route; assemble CallScreenState; connectedSince timer; wire callbacks.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\n\n**Acceptance Criteria:**\n- collects model + speaking flows + deafen + activeEndpoint; assembles CallScreenState\n- connectedSince captured on Synchronized transition; live mm:ss timer\n- route icon/label passed (Speaker fallback); deafen/speaker/ptt/mute/hangup/settings wired\n- assembleDebug builds; nav unchanged\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"collects flows; assembles CallScreenState\", \"connectedSince + live timer\", \"route + callbacks wired\", \"assembleDebug; nav unchanged\"], \"modelTier\": \"standard\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-16T12:00:00Z"
+}

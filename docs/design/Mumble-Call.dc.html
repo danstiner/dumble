@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: #DAD4E6; font-family: Roboto, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: #5B4CCB; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  @keyframes ringPulse { 0% { transform: scale(1); opacity: .55; } 70% { transform: scale(1.75); opacity: 0; } 100% { opacity: 0; } }
+  @keyframes eqBar { 0%, 100% { height: 5px; } 50% { height: 15px; } }
+</style>
+</helmet>
+
+<div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px;">
+  <div style="width: 412px; height: 900px; border-radius: 46px; border: 11px solid #101014; background: #FBF8FF; box-shadow: 0 40px 90px rgba(35,20,80,.32); overflow: hidden; position: relative; display: flex; flex-direction: column;">
+
+    <!-- status bar -->
+    <div style="height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; position: relative;">
+      <span style="font-size: 14px; font-weight: 500; color: #1B1B21; letter-spacing: .3px;">9:41</span>
+      <div style="position: absolute; left: 50%; top: 9px; transform: translateX(-50%); width: 11px; height: 11px; border-radius: 50%; background: #101014;"></div>
+      <div style="display: flex; align-items: center; gap: 6px; color: #1B1B21;">
+        <span style="font-family: 'Material Symbols Rounded'; font-size: 17px;">signal_cellular_alt</span>
+        <span style="font-family: 'Material Symbols Rounded'; font-size: 17px;">wifi</span>
+        <span style="font-family: 'Material Symbols Rounded'; font-size: 19px;">battery_full</span>
+      </div>
+    </div>
+
+    <!-- top app bar -->
+    <div style="flex-shrink: 0; padding: 6px 8px 10px 16px; display: flex; align-items: center; gap: 12px;">
+      <div style="width: 46px; height: 46px; border-radius: 15px; background: #E5DEFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <span style="font-family: 'Material Symbols Rounded'; font-size: 26px; color: #17064B; font-variation-settings: 'FILL' 1;">headset_mic</span>
+      </div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 21px; font-weight: 500; color: #1B1B21; line-height: 26px; letter-spacing: .1px;">Acoustic HQ</div>
+        <div style="display: flex; align-items: center; gap: 5px; margin-top: 1px;">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: #2E6B2A; flex-shrink: 0;"></span>
+          <span style="font-size: 13px; color: #48454E; letter-spacing: .2px;">{{ timer }}</span>
+        </div>
+      </div>
+      <div style="width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <span style="font-family: 'Material Symbols Rounded'; font-size: 25px; color: #48454E;">tune</span>
+      </div>
+    </div>
+
+    <!-- channel + speaker list -->
+    <div style="flex: 1; overflow-y: auto; padding: 4px 0 8px;">
+      <sc-for list="{{ channels }}" as="ch" hint-placeholder-count="3">
+        <div style="margin: 6px 12px 2px; border-radius: 22px; padding: 2px 0 6px; background: {{ ch.wrapBg }}; border: {{ ch.wrapBorder }}; cursor: pointer;" onClick="{{ ch.join }}">
+        <div style="padding: 12px 16px 6px; display: flex; align-items: center; gap: 10px;">
+          <span style="font-family: 'Material Symbols Rounded'; font-size: 20px; color: {{ ch.accent }}; font-variation-settings: 'FILL' 1;">{{ ch.icon }}</span>
+          <span style="font-size: 13px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase; color: {{ ch.nameColor }}; flex: 1;">{{ ch.name }}</span>
+        </div>
+
+        <sc-for list="{{ ch.users }}" as="u" hint-placeholder-count="3">
+          <div style="display: flex; align-items: center; gap: 14px; padding: 8px 20px; min-height: 62px;">
+            <!-- avatar -->
+            <div style="position: relative; width: 46px; height: 46px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;">
+              <sc-if value="{{ u.pulseOn }}" hint-placeholder-val="{{ false }}">
+                <div style="position: absolute; inset: 0; border-radius: 50%; border: 2px solid #2E6B2A; animation: ringPulse 1.9s ease-out infinite;"></div>
+              </sc-if>
+              <sc-if value="{{ u.speaking }}" hint-placeholder-val="{{ false }}">
+                <div style="position: absolute; inset: -4px; border-radius: 50%; border: 2.5px solid #2E6B2A; box-shadow: 0 0 12px rgba(46,107,42,.45);"></div>
+              </sc-if>
+              <div style="width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; font-weight: 500; background: {{ u.color }};">{{ u.initial }}</div>
+              <sc-if value="{{ u.muted }}" hint-placeholder-val="{{ false }}">
+                <div style="position: absolute; right: -3px; bottom: -3px; width: 21px; height: 21px; border-radius: 50%; background: {{ u.badgeBg }}; border: 2px solid #FBF8FF; display: flex; align-items: center; justify-content: center;">
+                  <span style="font-family: 'Material Symbols Rounded'; font-size: 13px; color: {{ u.badgeFg }}; font-variation-settings: 'FILL' 1;">{{ u.badgeIcon }}</span>
+                </div>
+              </sc-if>
+            </div>
+
+            <!-- name + status -->
+            <div style="flex: 1; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 16px; font-weight: 500; color: #1B1B21; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ u.name }}</span>
+                <sc-if value="{{ u.you }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #5B4CCB; background: #E5DEFF; padding: 2px 7px; border-radius: 8px;">YOU</span>
+                </sc-if>
+                <sc-if value="{{ u.bot }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #48454E; background: #E8E3F1; padding: 2px 7px; border-radius: 8px;">BOT</span>
+                </sc-if>
+              </div>
+            </div>
+
+            <!-- trailing -->
+            <sc-if value="{{ u.speaking }}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; align-items: flex-end; gap: 3px; height: 18px; width: 22px; justify-content: center;">
+                <div style="width: 3px; border-radius: 2px; background: #2E6B2A; height: 8px; animation: eqBar .9s ease-in-out infinite;"></div>
+                <div style="width: 3px; border-radius: 2px; background: #2E6B2A; height: 14px; animation: eqBar .9s ease-in-out infinite .3s;"></div>
+                <div style="width: 3px; border-radius: 2px; background: #2E6B2A; height: 6px; animation: eqBar .9s ease-in-out infinite .55s;"></div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ u.away }}" hint-placeholder-val="{{ false }}">
+              <span style="font-family: 'Material Symbols Rounded'; font-size: 22px; color: #A7A2B0;">bedtime</span>
+            </sc-if>
+          </div>
+        </sc-for>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- bottom: self + controls -->
+    <div style="flex-shrink: 0; background: #F1ECF8; border-radius: 28px 28px 0 0; padding: 14px 16px 10px;">
+      <!-- control buttons -->
+      <div style="display: flex; align-items: flex-start; justify-content: center; gap: 26px; padding-bottom: 4px;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer;" onClick="{{ toggleMute }}">
+          <div style="width: 64px; height: 64px; border-radius: 22px; display: flex; align-items: center; justify-content: center; background: {{ muteBg }};">
+            <span style="font-family: 'Material Symbols Rounded'; font-size: 28px; color: {{ muteFg }}; font-variation-settings: 'FILL' 1;">{{ muteIcon }}</span>
+          </div>
+          <span style="font-size: 12px; color: #48454E;">{{ muteLabel }}</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer;" onClick="{{ toggleDeafen }}">
+          <div style="width: 64px; height: 64px; border-radius: 22px; display: flex; align-items: center; justify-content: center; background: {{ deafBg }};">
+            <span style="font-family: 'Material Symbols Rounded'; font-size: 28px; color: {{ deafFg }}; font-variation-settings: 'FILL' 1;">{{ deafIcon }}</span>
+          </div>
+          <span style="font-size: 12px; color: #48454E;">{{ deafLabel }}</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+          <div style="width: 72px; height: 64px; border-radius: 22px; display: flex; align-items: center; justify-content: center; background: #BA1A1A; box-shadow: 0 6px 18px rgba(186,26,26,.4);">
+            <span style="font-family: 'Material Symbols Rounded'; font-size: 30px; color: #fff; font-variation-settings: 'FILL' 1;">call_end</span>
+          </div>
+          <span style="font-size: 12px; color: #48454E;">Leave</span>
+        </div>
+      </div>
+
+      <!-- gesture nav -->
+      <div style="display: flex; justify-content: center; padding-top: 8px;">
+        <div style="width: 128px; height: 5px; border-radius: 3px; background: #1B1B21; opacity: .35;"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 476, &quot;height&quot;: 964}, &quot;showSpeakingPulse&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Behavior&quot;}, &quot;callTimer&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Behavior&quot;}}">
+class Component extends DCLogic {
+  state = { muted: false, deafened: false, seconds: 1472 };
+
+  componentDidMount() {
+    if (this.props.callTimer !== false) {
+      this._t = setInterval(() => this.setState(s => ({ seconds: s.seconds + 1 })), 1000);
+    }
+  }
+  componentWillUnmount() { clearInterval(this._t); }
+
+  fmt(t) {
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    const p = n => String(n).padStart(2, '0');
+    return (h ? h + ':' : '') + p(m) + ':' + p(s);
+  }
+
+  renderVals() {
+    const deafened = this.state.deafened;
+    const muted = this.state.muted || deafened;
+    const showPulse = this.props.showSpeakingPulse ?? true;
+
+    const speaker = (o) => ({
+      ...o,
+      pulseOn: !!o.speaking && showPulse,
+      badgeIcon: 'mic_off',
+      badgeBg: o.muteType === 'server' ? '#BA1A1A' : '#E8E3F1',
+      badgeFg: o.muteType === 'server' ? '#FFFFFF' : '#48454E',
+    });
+
+    const activeId = this.state.activeChannel || 'general';
+    const me = {
+      initial: 'C', color: '#17A79A', name: 'citelao', you: true,
+      ...(muted ? { muted: true, muteType: 'self' } : { speaking: true }),
+    };
+
+    const channels = [
+      { id: 'general', icon: 'campaign', name: 'General', users: [
+        { initial: 'A', color: '#5A6BF0', name: 'AdamTReineke' },
+        { initial: 'K', color: '#4CAF50', name: 'kelvinbot', bot: true, muted: true, muteType: 'server' },
+      ] },
+      { id: 'gaming', icon: 'sports_esports', name: 'Gaming', users: [
+        { initial: 'H', color: '#C64AA6', name: 'hayden', speaking: true },
+        { initial: 'G', color: '#C6971F', name: 'gun', muted: true, muteType: 'self' },
+      ] },
+      { id: 'afk', icon: 'bedtime', name: 'AFK', users: [
+        { initial: 'M', color: '#7E8AA0', name: 'mira', away: true },
+      ] },
+    ].map(ch => {
+      const active = ch.id === activeId;
+      const users = (active ? [me, ...ch.users] : ch.users).map(speaker);
+      return {
+        ...ch,
+        users,
+        active,
+        join: () => this.setState({ activeChannel: ch.id }),
+        wrapBg: active ? '#EFE9FA' : 'transparent',
+        wrapBorder: active ? '1.5px solid #D6CCF5' : '1.5px solid transparent',
+        accent: active ? '#5B4CCB' : '#8079A0',
+        nameColor: active ? '#43318F' : '#6B6775',
+      };
+    });
+
+    return {
+      channels,
+      timer: this.props.callTimer === false ? 'Connected' : ('Connected · ' + this.fmt(this.state.seconds)),
+      toggleMute: () => this.setState(s => ({ muted: !s.muted })),
+      muteIcon: muted ? 'mic_off' : 'mic',
+      muteLabel: this.state.muted ? 'Unmute' : 'Mute',
+      muteBg: muted ? '#FFDAD6' : '#E5DEFF',
+      muteFg: muted ? '#8C0009' : '#17064B',
+      toggleDeafen: () => this.setState(s => ({ deafened: !s.deafened })),
+      deafIcon: deafened ? 'headset_off' : 'headphones',
+      deafLabel: deafened ? 'Undeafen' : 'Deafen',
+      deafBg: deafened ? '#FFDAD6' : '#E5DEFF',
+      deafFg: deafened ? '#8C0009' : '#17064B',
+      selfSub: muted ? 'Microphone muted' : 'Transmitting · voice activity',
+      selfSubColor: muted ? '#8C4A00' : '#2E6B2A',
+    };
+  }
+}
+</script>
+</body>
+</html>
