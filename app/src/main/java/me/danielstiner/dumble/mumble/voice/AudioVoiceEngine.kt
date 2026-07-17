@@ -108,6 +108,7 @@ class AudioVoiceEngine(
     override fun start() {
         if (running) return
         running = true
+        vad.reset()
         recorder = recorderFactory()
         recorder?.captureInfo()?.let {
             _diagnostics.value = AudioDiagnostics(effects = it.effects, deviceModel = it.deviceModel, connected = true)
@@ -152,6 +153,7 @@ class AudioVoiceEngine(
         if (mode != lastMode) {
             lastMode = mode
             gate.reset()
+            vad.reset()
             if (sending) return terminatorFrame(fn)
         }
 
@@ -163,7 +165,7 @@ class AudioVoiceEngine(
             }
             return null
         }
-        wasMuted = false
+        if (wasMuted) { vad.reset(); wasMuted = false }   // unmute edge → VAD discontinuity
 
         return when (mode) {
             TransmitMode.VOICE_ACTIVATED -> {
