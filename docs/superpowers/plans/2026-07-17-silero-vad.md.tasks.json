@@ -37,28 +37,28 @@
     {
       "id": 75,
       "subject": "Task 6: MumbleManager engine-select + live-switch + RNNoise default off",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [72, 73, 74],
       "description": "**Goal:** Persist+apply the VAD engine choice, flip RNNoise-denoise default off, hot-swap the detector live via setVadDetector, expose the lookahead setting.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt (setVadDetector)\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt (vad -> @Volatile var)\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSwapTest.kt\n\n**Acceptance Criteria:**\n- vadEngine StateFlow + setVadEngine persisting vad_engine (default rnnoise)\n- rnnoise_enabled default false\n- setVadDetector swaps on running TransmitProcessor + closes old Silero\n- silero load failure keeps current + logs (no crash)\n- setLookaheadMs + lookaheadMs persisted lookahead_ms (default 0)\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*AudioVoiceEngineSwap*\" && ./gradlew assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/TransmitProcessor.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSwapTest.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*AudioVoiceEngineSwap*\\\" && ./gradlew assembleDebug\", \"acceptanceCriteria\": [\"vadEngine flow+setter persisted default rnnoise\", \"rnnoise_enabled default false\", \"setVadDetector swaps + closes old Silero\", \"silero load failure falls back\", \"lookaheadMs persisted default 0\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 76,
       "subject": "Task 7: Settings UI — engine selector + lookahead slider",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [75],
       "description": "**Goal:** Surface the VAD-engine choice and the lookahead-delay in SettingsScreen, wired through DumbleApp.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\n\n**Acceptance Criteria:**\n- Voice detection engine single-choice (Energy/RNNoise/Silero) reflects+sets vadEngine\n- Lookahead slider 0-100ms/20 reflects+sets lookaheadMs; label shows ms + 0=lowest latency\n- DumbleApp collects vadEngine/lookaheadMs, passes state+callbacks\n- assembleDebug succeeds\n\n**Verify:** ./gradlew assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"./gradlew assembleDebug\", \"acceptanceCriteria\": [\"engine single-choice reflects+sets vadEngine\", \"lookahead slider reflects+sets lookaheadMs\", \"DumbleApp collects+passes\", \"assembleDebug succeeds\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 77,
       "subject": "Task 8: VadDebugActivity — add Silero to bench",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [72],
       "description": "**Goal:** Let the VAD debug bench run Silero live alongside Energy and RNNoise.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/VadDebugActivity.kt\n\n**Acceptance Criteria:**\n- vadNames includes Silero; selecting it drives SileroVadDetector live prob\n- session created on start, closed on stop/source-change (no leak)\n- assembleDebug succeeds\n\n**Verify:** ./gradlew assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/VadDebugActivity.kt\"], \"verifyCommand\": \"./gradlew assembleDebug\", \"acceptanceCriteria\": [\"vadNames includes Silero; live prob\", \"session created start / closed stop-source-change\", \"assembleDebug succeeds\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 78,
       "subject": "Task 9: Eval-harness three-way VAD comparison",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [71, 72],
       "description": "**Goal:** Run Silero through the corpus alongside RNNoise, emit a comparative metrics.md to pick the default engine + threshold; Silero reported, not asserted (RNNoise stays the regression guard).\n\n**Files:**\n- Modify: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluator.kt\n- Modify: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluationTest.kt\n- Modify: app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/EvalReport.kt\n\n**Acceptance Criteria:**\n- evaluate accepts detector/suppressor factory; RNNoise path unchanged (default)\n- Silero raw (suppressor=None) + denoised (RnnoiseSuppressor) run same corpus\n- metrics.md gains 3-way per-clip table (coverage/onset/mid-dropout/false-openings)\n- RNNoise asserts pass; Silero reported not asserted\n\n**Verify:** ./gradlew testDebugUnitTest --tests \"*VadEvaluationTest*\"; inspect app/build/reports/vad-eval/metrics.md\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluator.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/VadEvaluationTest.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/eval/EvalReport.kt\"], \"verifyCommand\": \"./gradlew testDebugUnitTest --tests \\\"*VadEvaluationTest*\\\"\", \"acceptanceCriteria\": [\"evaluate accepts factory; RNNoise default unchanged\", \"Silero raw+denoised same corpus\", \"metrics.md 3-way table\", \"RNNoise asserts pass; Silero reported\"], \"modelTier\": \"standard\"}\n```"
     }
