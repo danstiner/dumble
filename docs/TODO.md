@@ -135,28 +135,32 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   `iFrameCounter++` as its FIRST statement — *before* the `!bIsSpeech && !bPreviousVoice` early
   `return` — so Mumble's `frame_number` **advances at wall-clock rate through silence** and resets
   to 0 only after 500 silent frames (~5 s). `docs/mumble-protocol.md` is already correct.
-  **Mechanism re-derivation (2026-07-17):** the "paused sender" story in the #56 entry / talkspurt
-  spec / adaptive-jitter notes is wrong (a wall-clock sender + wall-clock cursor stay in lockstep).
-  Established by code: pre-fix the receiver cursor advanced at wall-clock on live underrun
-  (`plcStep`), the playback loop is hard-paced (always writes 20 ms → no buffer burst), and the #56
-  test peer was stock desktop Mumble (our VAD sender didn't exist until the next day). **Leading
-  hypothesis:** prebuffer-cushion consumption — a sub-200 ms gap drains the buffer, pre-fix
-  `plcStep` runs the cursor to the live edge *without re-prebuffering*, so resumed packets land ~one
-  network-latency behind the cushion-less cursor and are rejected; the fix (hold cursor) preserves
-  the cushion. **Not yet confirmed** (a `L < cushion` model doesn't obviously give a steady 30 %):
-  needs an instrumented on-device run (log `resumeTs` vs `cursor` per gap) or a sim harness before
-  finalizing. Docs corrected conservatively (verified facts + flagged hypothesis), not rewritten as
-  settled: `adaptive-jitter-buffer-design-notes.md` → "Mechanism (corrected 2026-07-17)" + a banner
-  on the talkspurt spec. `docs/mumble-protocol.md` was already correct.
+  **Mechanism re-derivation (2026-07-17, fable-verified):** the "paused sender" story (in the #56
+  entry / talkspurt spec / adaptive-jitter notes) is wrong — a wall-clock sender + wall-clock cursor
+  stay in lockstep. My follow-up guess ("prebuffer-cushion consumption") was **refuted by fable**:
+  wall-clock PLC *preserves* the cushion (playout delay `D = t_wall − cursor` is constant through
+  PLC), so a silence resume is late iff per-packet excess delay `j > C` — independent of gap length,
+  and `j ≈ 0` for a fresh resume → never late; any transient cushion-less state is capped at ≤10
+  drops by retire+re-prebuffer. **Actual driver: stall-and-burst (delay-spike) delivery** — mid-
+  talkspurt audio queued during a *network* stall (Wi-Fi power-save/DTIM, BT-coex, UDP cutout,
+  TCP-tunnel HoL) arrives as a burst; the pre-fix cursor marched through the stall, so everything in
+  the burst older than the cushion is rejected (`drops ≈ (S−C)/20 ms`, recurring → ~15–35 %). Fits
+  all evidence (1:1 arrival, mostly-silence-with-bursts, prebuffer-enlargement barely helped,
+  fix→0). **Analysis-verified, not yet observed live** — decisive on-device test: at each LATE reject
+  log `latenessMs`, inter-arrival gap, and ts-contiguity across the gap (stall-burst = contiguous-ts
+  runs ≤10 with a descending-20ms lateness staircase; refuted silence-resume = isolated lates whose
+  ts jumps by the gap). Docs corrected: `adaptive-jitter-buffer-design-notes.md` → "Mechanism
+  (fable-verified 2026-07-17)" + talkspurt-spec banner. `docs/mumble-protocol.md` was already correct.
 - **🔴 Received audio drops as "late" — talkspurt/silence handling (#56 part A)** — symptom:
   resumed talkspurts landed behind the playout cursor and `JitterBuffer` rejected them as "late"
   (`lateDrops` ~30 % of `voiceRx` and climbing). Fixed by holding the cursor on live underrun,
   resetting in place at talkspurt boundaries, wiring `is_terminator` through the seam, and clearing
   the stale terminator tag on contiguous/reordered talkspurts. On-device verified (audio continuous,
-  `lateDrops` ≈ 0). **Root-cause NOTE (corrected 2026-07-17):** the original "sender pauses
-  `frame_number`" explanation is wrong — a desktop-Mumble sender advances it at wall-clock
-  (source-verified). Leading hypothesis is prebuffer-cushion consumption, pending empirical
-  confirmation — see the mechanism-re-derivation flag under #40 above and
+  `lateDrops` ≈ 0). **Root-cause NOTE (corrected 2026-07-17, fable-verified):** the original "sender
+  pauses `frame_number`" explanation is wrong — a desktop-Mumble sender advances it at wall-clock
+  (source-verified), so silence resumes are essentially never late. Actual driver is stall-and-burst
+  network delivery (mid-talkspurt audio arriving in a burst after a network stall, past the
+  wall-clock-marched cursor) — see the mechanism-re-derivation flag under #40 above and
   `adaptive-jitter-buffer-design-notes.md`. **Part B (adaptive playout delay) remains deferred.**
   Branch `talkspurt-silence-handling`; design
   `docs/superpowers/specs/2026-07-13-talkspurt-silence-handling-design.md`.

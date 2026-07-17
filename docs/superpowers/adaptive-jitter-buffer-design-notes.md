@@ -28,29 +28,54 @@ So the original "both sides paused → `ts == cursor`" story is **wrong**: with 
 the cursor and the sender advance in lockstep, which cannot by itself produce late drops. Renaming
 "pauses"→"advances" would just make that account self-contradictory.
 
-**Leading hypothesis — prebuffer-cushion consumption (load-bearing; NOT yet fable/empirically
-confirmed, do not finalize the spec on it).** Playout normally runs ~100 ms behind the live edge
-(the prebuffer), so jittered/late packets still land in the cursor's future. On a gap longer than
-that cushion the buffer drains; pre-fix, live underrun kept advancing the cursor at wall-clock
-(`plcStep`) **without re-prebuffering** — a sub-200 ms gap never hits the retire/re-anchor path
-(verified in the pre-fix `fillTick`) — so the stream then runs *cushion-less*, cursor pinned to the
-live edge. A resumed packet was sent one network-latency `L` ago, so it arrives with `ts ≈ liveEdge
-− L < cursor` → rejected late; rejects keep the buffer empty, the cursor keeps tracking the live
-edge, and the cushion never rebuilds until the ~200 ms retire re-anchors + re-prebuffers. That
-self-sustaining cushion-less state — not a paused counter — is the candidate driver of `lateDrops ≈
-30 %`. The fix (hold cursor on live underrun) keeps the cursor at the end of received audio =
-cushion restored; resumed packets then satisfy `ts ≥ cursor` and decode. Matches lateDrops ≈ 0.
+**Mechanism (fable-verified 2026-07-17): stall-and-burst (delay-spike) delivery — NOT cushion
+consumption, NOT a paused sender.**
 
-**Why this is still a hypothesis:** a back-of-envelope model with typical `L < cushion` does not
-obviously yield a *steady* 30 %, so the exact trigger (gap-length distribution vs cushion, PLC 20 ms
-quantization, jitter tail, or sender/receiver clock drift) is unresolved from static analysis. Decide
-it empirically before rewriting the spec's mechanism: instrument an on-device run to log `resumeTs`
-vs `cursor` per gap, or build a sim harness feeding a wall-clock-sender + latency model through the
-pre-/post-fix `SpeakerStream`.
+An intermediate guess — "prebuffer-cushion consumption" — was **refuted** by fable. Wall-clock PLC
+*preserves* the cushion, it does not consume it: through both decode and pre-fix `plcStep` the cursor
+advances 960 samples per DAC-paced 20 ms tick = 48000 samples/s — exactly the sender's `iFrameCounter`
+rate — so the playout delay `D = t_wall − cursor` is **constant**, and the cursor stays a fixed cushion
+`C` (~80–100 ms) *behind* the live edge for any silence-gap length. It is never "pinned to the live
+edge"; an empty buffer ≠ zero timing margin. The arithmetic: a packet captured at time τ with excess
+delay `j` over the anchor-baseline latency is late iff **`j > C`** — a per-packet condition with *no
+gap-length term*. A silence resume is captured fresh (`j ≈ 0`) and clears the cursor by `C`, so it is
+essentially never late, for any gap. And even a hypothetical cushion-less state self-limits: after
+`consecutivePlc == 10` (~200 ms) the stream retires, is reaped within one tick, and the next packet
+builds a fresh stream (sentinel cursor 0) that re-prebuffers — capping any episode at ≤10 drops.
+Neither can yield a steady, climbing 30 %. (It also contradicts the observation below that enlarging
+the prebuffer barely moved `lateDrops` — raising `C` would have fixed a cushion-margin bug.)
 
-**This is not primarily a buffer-size problem** — enlarging the prebuffer to 100 ms barely
-moved `lateDrops`. The fix is **re-anchoring the cursor at talkspurt boundaries** and **not
-advancing the cursor at wall-clock through inter-talkspurt silence**.
+**What actually happened:** delayed-burst delivery of **mid-talkspurt** audio during *network* stalls
+— Wi-Fi power-save/DTIM clumping, BT-coexistence, the observed UDP cutout, TCP-tunnel head-of-line —
+not the VAD silence structure. Packets captured *during* a stall are in flight and arrive as a burst
+when the link releases. Pre-fix the cursor marched at wall-clock through the stall (underrun →
+`plcStep`), so at release `cursor = t_release − L − C` and every burst packet with `ts < cursor` — all
+but the newest `C` worth — is rejected late. Per stall of length `S`: `drops ≈ (S − C)/20 ms`, capped
+at 10 by the retire path; with clumped delivery at ~1–2 Hz and `S ≈ 200–350 ms` (textbook power-save/
+coex behavior) the steady rate is ~15–35 %. This fits every observation the silence story could not:
+packets all *arrive* 1:1 (`voiceRx == udpAudioRx`, `decryptFail = 0`, tiny `lost` — delay, not loss);
+"mostly silence with bursts"; the prebuffer 40→100 ms barely moved it (`drops ∝ S − C`, `ΔC ≪ S`); and
+`lateDrops ≈ 0` after the fix.
+
+**Why the fix works (real reason):** holding the cursor on live underrun keeps it at the end of
+received audio through the stall, so the delayed burst arrives at `ts ≥ cursor` and queues (600 ms
+high-water) or, after 10 held ticks, `resetToIdle` un-anchors and accepts everything. The
+talkspurt/silence framing was incidental. (Fable also flagged a secondary pre-fix latent bug the
+restructure removed: a packet arriving in the one tick after `consecutivePlc` hit 10 with a
+*non-empty* buffer could wedge `fillTick` forever — a permanent per-speaker mute with *zero* further
+`lateDrops` — which also contributed to the "mostly silence" symptom.)
+
+**Decisive on-device confirmation (final step — the mechanism is analysis-verified, not yet observed
+live):** at each LATE reject log `latenessMs = (cursor − ts)/48`, the inter-arrival gap for that
+speaker, and whether `ts` is *contiguous* with the pre-gap ts sequence (`arrivalNanos` is already
+plumbed and unused). Stall-burst signature: consecutive-ts runs of up to 10 lates right after an
+arrival gap, `ts` contiguous across the gap, lateness descending ~20 ms per packet (the `S − C`
+staircase). Refuted silence-resume signature: isolated single lates whose `ts` *jumps* by the gap
+length. The ts-contiguity bit discriminates the two per event.
+
+**This is not a buffer-size problem** — enlarging the prebuffer 40→100 ms barely moved `lateDrops`
+(consistent with `drops ∝ S − C`). The cure is **holding the cursor through underruns** so delayed
+real audio still lands at/after it, plus boundary reset/retire hygiene — not a larger static buffer.
 
 ### Fix direction for the silence half
 - **Wire the incoming `is_terminator` flag through the seam.** `VoiceTransport.onPlaintext`
