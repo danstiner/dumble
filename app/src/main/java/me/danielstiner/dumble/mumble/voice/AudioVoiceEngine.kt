@@ -299,8 +299,10 @@ class AudioVoiceEngine(
             android.util.Log.d("AudioVoiceEngine", "new speaker session=$senderSession (total=${speakers.size + 1})")
             SpeakerStream(codec)
         }
-        val queued = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, terminator)
-        if (!queued && !terminator) lateDropCount++
+        val result = stream.offer(frameNumber * FRAME_SAMPLES_10MS, copy, span, terminator)
+        // Count only genuine late drops (audio behind the playout cursor) — not duplicate/reordered
+        // retransmits (DUPLICATE) or tag-only terminators (EMPTY), which are harmless.
+        if (result == JitterBuffer.OfferResult.LATE && !terminator) lateDropCount++
         received.incrementAndGet()
     }
 

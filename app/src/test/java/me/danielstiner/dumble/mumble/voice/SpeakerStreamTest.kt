@@ -57,7 +57,8 @@ class SpeakerStreamTest {
         assertEquals(-50, out[0].toInt())               // real audio
         repeat(3) { s.fillTick(out) }                   // live underrun → plcHold ×3, cursor STAYS 960
         // peer resumes at the continued timestamp (frame_number paused during silence)
-        assertTrue("resume at held cursor is accepted, not late", s.offer(960, encoded(960), 960, false))
+        assertEquals("resume at held cursor is accepted, not late",
+            JitterBuffer.OfferResult.QUEUED, s.offer(960, encoded(960), 960, false))
         assertTrue(s.fillTick(out))
         assertEquals(-50, out[0].toInt())               // resumed talkspurt decodes (not lost)
     }
@@ -85,7 +86,7 @@ class SpeakerStreamTest {
         repeat(3) { s.fillTick(out) }                   // short hold, well under maxHoldTicks
         assertFalse(s.retired)
         assertTrue(s.decoderCreated)
-        assertTrue(s.offer(960, encoded(960), 960, false))
+        assertEquals(JitterBuffer.OfferResult.QUEUED, s.offer(960, encoded(960), 960, false))
     }
 
     @Test fun measuredHoleIsConcealedThenDecoded() {
@@ -109,7 +110,8 @@ class SpeakerStreamTest {
         assertTrue("mid-talkspurt loss conceals, not resets", s.fillTick(out))
         assertEquals(0, out[0].toInt())                 // PLC/hold silence, cursor HELD at 1920
         // resumed frame at the held timestamp is accepted (proves no spurious reset happened)
-        assertTrue("resume accepted (cursor held, not reset)", s.offer(1920, encoded(960), 960, false))
+        assertEquals("resume accepted (cursor held, not reset)",
+            JitterBuffer.OfferResult.QUEUED, s.offer(1920, encoded(960), 960, false))
         assertTrue(s.fillTick(out)); assertEquals(-50, out[0].toInt())
     }
 }

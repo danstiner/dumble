@@ -25,6 +25,18 @@ class JitterBufferTest {
         b.offer(pkt(0), playoutCursor = 480)
         assertNull(b.pollFirst())
     }
+    @Test fun offerResultDistinguishesLateFromDuplicate() {
+        // The lateDrops diagnostic must only count genuine late audio, not harmless duplicate or
+        // tag-only rejects — offer() reports which, so the engine can filter.
+        val b = JitterBuffer()
+        assertEquals(JitterBuffer.OfferResult.QUEUED, b.offer(pkt(960), 0))
+        assertEquals("same ts already queued → duplicate, not late",
+            JitterBuffer.OfferResult.DUPLICATE, b.offer(pkt(960), 0))
+        assertEquals("ts behind the cursor → genuine late drop",
+            JitterBuffer.OfferResult.LATE, b.offer(pkt(480), playoutCursor = 960))
+        assertEquals("empty payload → tag-only, neither late nor duplicate",
+            JitterBuffer.OfferResult.EMPTY, b.offer(pkt(1920, span = 0, term = true), 0))
+    }
     @Test fun terminatorTagsWithoutQueueing() {
         val b = JitterBuffer()
         b.offer(pkt(1920, span = 0, term = true), 0)

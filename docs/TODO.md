@@ -85,13 +85,12 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Note:** pre-existing; #56 part A actually *improves* the common case (a received
   terminator now bypasses the prebuffer gate, so short utterances play immediately).
 
-### 🟡 `lateDropCount` also counts duplicate packets (diagnostic only)
-- **Symptom:** the `lateDrops` stat over-counts — `AudioVoiceEngine` increments it whenever
-  `JitterBuffer.offer` returns false for a non-terminator, which includes duplicate-timestamp
-  packets, not just genuine late drops. Diagnostic metric only; no runtime effect.
-- **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
-
 ## Fixed
+- **🟡 `lateDrops` over-counted duplicates (diagnostic) — FIXED (`latedrops-dup-count`):**
+  `JitterBuffer.offer` now returns an `OfferResult` (`QUEUED`/`LATE`/`DUPLICATE`/`EMPTY`) instead
+  of a bare Boolean, and `AudioVoiceEngine` increments `lateDropCount` only on a genuine `LATE`
+  (audio behind the playout cursor) — not on duplicate/reordered retransmits (`DUPLICATE`) or
+  tag-only terminators (`EMPTY`). Diagnostic metric only; no runtime behavior change.
 - **Call-screen redesign (merged to main 2026-07-16):** replaced the minimal in-call screen with a
   Material 3 screen — server/channel header + connection timer, live channel→user tree (speaking rings,
   self/server mute + deafened + recording badges, YOU tag, self floated, DFS hierarchy + depth indent),
