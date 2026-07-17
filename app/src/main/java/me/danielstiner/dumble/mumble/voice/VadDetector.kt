@@ -6,6 +6,9 @@ import kotlin.math.sqrt
 /** Per-10ms-sub-frame speech level in 0f..1f. Stateful (adaptive). Single-thread (send thread). */
 interface VadDetector {
     fun level(pcm: ShortArray, off: Int, n: Int): Float
+
+    /** Reset any streaming state on a capture discontinuity (start / unmute / mode change). Default no-op. */
+    fun reset() {}
 }
 
 /**
