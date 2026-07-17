@@ -48,7 +48,7 @@
     {
       "id": 62,
       "subject": "Task 8: ActiveCallScreen M3 redesign",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [55, 60, 61],
       "description": "**Goal:** Rewrite ActiveCallScreen with standard M3 components + MaterialTheme.colorScheme (Scaffold/TopAppBar/LazyColumn/ListItem/Surface/Badge). Channel tree + Mute/Deafen/Speaker/Leave bar; Mute->Hold-to-Talk in PTT. Theme-adaptive; mock is reference only.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\n\n**Acceptance Criteria:**\n- standard M3 components + colorScheme, theme-adaptive, no hardcoded palette\n- header + channel tree (ListItem rows, avatar, speaking ring, mute/YOU badges)\n- control bar Mute/Deafen/Speaker(route)/Leave; Mute->Hold-to-Talk in PTT\n- @Preview renders; assembleDebug builds\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:assembleDebug\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"M3 components + colorScheme, theme-adaptive\", \"header + channel tree with avatars/badges\", \"control bar + PTT Hold-to-Talk\", \"@Preview + assembleDebug\"], \"modelTier\": \"standard\"}\n```"
     },
