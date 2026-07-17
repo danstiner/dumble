@@ -215,3 +215,28 @@ terminator path end-to-end).
   `onPttDown`/`onPttUp` are no-ops (no PTT control rendered).
 - **Spec 4 (VAD utterance corpus):** the cross-client speaking-indicator check above is manual;
   spec 4 adds the automated end-to-end assertion that a full utterance passes the gate.
+
+---
+
+## As-built (merged to main 2026-07-16/17)
+
+Implemented via `docs/superpowers/plans/2026-07-16-call-screen-redesign.md`. Notable decisions/deviations
+from the design above:
+
+- **Standard Material 3, not pixel-perfect.** The imported mock is layout/content reference only; the
+  screen uses standard M3 components styled from `MaterialTheme.colorScheme` and is **theme-adaptive**
+  (light/dark), not the mock's fixed light palette. The talking indicator uses `colorScheme.primary`
+  (Mumble's own talking color is blue, so the spec's fixed green had no fidelity basis).
+- **Control bar:** Mute / Deafen / **Speaker** / **Disconnect** (Leave renamed to Mumble's "Disconnect";
+  inline per the mock, not a separate hang-up pill). Speaker reflects the active route via
+  `CallManager.activeEndpoint` + a localized `CallEndpoint.getEndpointName()`.
+- **Fable-compared to the official Mumble desktop (Qt) + iOS clients** (2026-07-16). Fidelity fixes
+  applied on top of the above: remote **deafened** badge (deaf > mute priority), **recording** indicator
+  (`UserState` field 19), **unmute-while-deafened undeafens** (matches desktop + the murmur-enforced
+  `self_mute=false ⇒ self_deaf=false`), **DFS channel ordering + depth indentation** (sibling-relative
+  `(position, name)`), and a folder channel glyph. Deferred (feature-sized): whisper/shout receive
+  distinction, tap-to-join channels, text chat — tracked in `docs/TODO.md` under "Mumble fidelity —
+  deferred".
+- **Prominent full-screen Connecting state** until `Synchronized`.
+- **Net/voice debug stats** (previously an on-call overlay) moved to the read-only **Audio diagnostics**
+  screen.

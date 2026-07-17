@@ -16,12 +16,17 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import me.danielstiner.dumble.mumble.net.NetStats
 import me.danielstiner.dumble.mumble.voice.AudioDiagnostics
+import me.danielstiner.dumble.mumble.voice.VoiceStats
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AudioDiagnosticsScreen(diagnostics: AudioDiagnostics, onBack: () -> Unit) {
+fun AudioDiagnosticsScreen(
+    diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, onBack: () -> Unit,
+) {
     fun db(v: Float) = if (v.isFinite()) "%.1f dBFS".format(v) else "—"
+    fun rtt(v: Double) = if (v >= 0) "%.1f ms".format(v) else "—"
     Scaffold(topBar = {
         TopAppBar(title = { Text("Audio diagnostics") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
@@ -43,6 +48,20 @@ fun AudioDiagnosticsScreen(diagnostics: AudioDiagnostics, onBack: () -> Unit) {
             Text("  RNNoise atten: " + if (diagnostics.rnnoiseAttenuationDb.isNaN()) "—" else "%.1f dB".format(diagnostics.rnnoiseAttenuationDb))
             Text("  AGC gain:      %.1f dB".format(diagnostics.agcGainDb))
             Text("  VAD prob:      %.2f".format(diagnostics.vadProb))
+            Text("")
+            Text("Network")
+            Text("  Transport:  ${net.mode}")
+            Text("  TCP RTT:    " + rtt(net.tcpRttMs))
+            Text("  UDP RTT:    " + rtt(net.udpRttMs))
+            Text("  UDP jitter: %.2f ms".format(net.udpJitterMs))
+            Text("")
+            Text("Voice")
+            Text("  Sent:       ${voice.sent}")
+            Text("  Received:   ${voice.received}")
+            Text("  Lost:       ${voice.lost}")
+            Text("  Concealed:  ${voice.concealed}")
+            Text("  Buffer:     ${voice.bufferMs} ms")
+            Text("  Speakers:   ${voice.activeSpeakers}")
             Text("")
             Text("Effect state is the audiofx self-report; on some devices it may differ from the actual HAL processing. The stage levels are measured.")
         }

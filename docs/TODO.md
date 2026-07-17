@@ -9,7 +9,8 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - Check if we can integrate with Pixel phone's clear calling feature
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
-- option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms
+- move all non-essential settings under an advanced section in settings. Currently only transmit mode looks essential. That includes the debug pages for echo/VAD tuning/audio diagnostics, those should all be under advanced
+- advanced option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms. once we have it working well maybe we'll replace the current VAD
 
 ### UI / settings polish
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
@@ -30,11 +31,10 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Root cause (code-verified):** `CallManager` never proactively selects an endpoint —
   `onAvailableCallEndpointsChanged` only stores the list; the only `requestCallEndpointChange` is in
   `setSpeaker()`, which toggles TYPE_SPEAKER↔TYPE_EARPIECE with zero BT/wired awareness.
-- **Shipped as a stopgap + measurement instrument:** a read-only **"Audio route: <device>"** indicator
-  on the current call screen (`CallManager.activeEndpoint` StateFlow → `AudioRoute.label()` pure mapping
-  → `ActiveCallScreen`). This is throwaway — it graduates into a first-class route control in the
-  **call-screen redesign** (`docs/superpowers/specs/2026-07-15-mumble-call-screen-redesign-design.md`,
-  which keeps Speaker as a control but must also show *which device*).
+- **Measurement instrument (shipped):** the redesigned call screen's **Speaker** control shows the
+  active audio device + route icon (`CallManager.activeEndpoint` → `AudioRoute.icon` + the framework
+  endpoint name). Read it with a BT headset connected at call start to decide whether proactive routing
+  is needed.
 - **Measure-first follow-up (only if confirmed):** if the indicator reads Speaker/Earpiece with BT
   connected at call start, add proactive routing — on the first available-endpoints after the call is
   active, auto-select the preferred endpoint by priority **BT > wired > earpiece** (speaker only on
@@ -65,6 +65,15 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - **Fix (optional):** distinguish late vs duplicate rejects in `JitterBuffer.offer`.
 
 ## Fixed
+- **Call-screen redesign (merged to main 2026-07-16):** replaced the minimal in-call screen with a
+  Material 3 screen — server/channel header + connection timer, live channel→user tree (speaking rings,
+  self/server mute + deafened + recording badges, YOU tag, self floated, DFS hierarchy + depth indent),
+  and a Mute/Deafen/Speaker/Disconnect control bar (Mute→Hold-to-Talk in PTT). Added **self-deafen**
+  (hot-mic-safe, Mumble-faithful), a prominent full-screen **Connecting** state, and localized route
+  labels. Fable-compared to the desktop/iOS clients (deferred items under "Mumble fidelity — deferred").
+  Net/voice debug stats moved into the **Audio diagnostics** screen. Spec:
+  `docs/superpowers/specs/2026-07-15-mumble-call-screen-redesign-design.md`; plan:
+  `docs/superpowers/plans/2026-07-16-call-screen-redesign.md`.
 - **RNNoise denoise on/off toggle + default tweaks (2026-07-16):** a Settings switch turns off RNNoise
   *denoising* while keeping it running for VAD — when off, RNNoise runs on a scratch copy (advancing its
   `DenoiseState`, yielding the VAD prob) and the raw mic passes through untouched, so voice-activation is

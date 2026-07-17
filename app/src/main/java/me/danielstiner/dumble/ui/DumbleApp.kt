@@ -39,6 +39,8 @@ fun DumbleApp(
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
+    val netStats by MumbleManager.netStats.collectAsStateWithLifecycle()
+    val voiceStats by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val serverModel by MumbleManager.model.state.collectAsStateWithLifecycle()
     val speakingSessions by MumbleManager.speakingSessions.collectAsStateWithLifecycle()
     val selfTransmitting by MumbleManager.selfTransmitting.collectAsStateWithLifecycle()
@@ -86,7 +88,8 @@ fun DumbleApp(
     when {
         showDiagnostics -> {
             BackHandler { showDiagnostics = false }
-            AudioDiagnosticsScreen(diagnostics = audioDiagnostics, onBack = { showDiagnostics = false })
+            AudioDiagnosticsScreen(diagnostics = audioDiagnostics, net = netStats, voice = voiceStats,
+                onBack = { showDiagnostics = false })
         }
         inCall && !showSettings -> {
             val callState = buildCallScreenState(

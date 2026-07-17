@@ -109,7 +109,7 @@ private fun ChannelHeader(ch: ChannelVm) {
     val color = if (ch.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     Row(Modifier.fillMaxWidth().padding(start = (16 + ch.depth * 12).dp, end = 16.dp, top = 14.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.Tag, null, modifier = Modifier.size(18.dp), tint = color)
+        Icon(Icons.Filled.Folder, null, modifier = Modifier.size(18.dp), tint = color)
         Text(ch.name.uppercase(), style = MaterialTheme.typography.labelLarge, color = color,
             modifier = Modifier.padding(start = 8.dp))
     }
