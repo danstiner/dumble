@@ -28,6 +28,7 @@ class AudioVoiceEngine(
     initialAgcEnabled: Boolean = true,
     initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
     initialRnnoiseEnabled: Boolean = true,
+    initialLookaheadCaptures: Int = 0,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -52,6 +53,10 @@ class AudioVoiceEngine(
     private val processor = TransmitProcessor(suppressor, vad, gate, gainControl)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
+    @Volatile private var lookahead = LookaheadDelay(initialLookaheadCaptures)
+
+    /** Live-adjust the onset-recovery lookahead delay (0 = off/identity). 20 ms per capture. */
+    fun setLookaheadMs(ms: Int) { lookahead = LookaheadDelay((ms / 20).coerceAtLeast(0)) }
 
     init { suppressor.setDenoiseEnabled(initialRnnoiseEnabled) }
 
@@ -154,6 +159,10 @@ class AudioVoiceEngine(
             lastMode = mode
             gate.reset()
             vad.reset()
+            // Rare transition: discard whatever pre-onset audio is still buffered in the lookahead
+            // ring rather than trying to emit multiple frames from this one nextOutgoingFrame() call.
+            val la = lookahead
+            if (la.k > 0) la.flush()
             if (sending) return terminatorFrame(fn)
         }
 
@@ -161,6 +170,8 @@ class AudioVoiceEngine(
             gate.reset()                                 // so unmute starts closed
             if (!wasMuted) {                             // one real (silent) terminator on mute
                 wasMuted = true
+                val la = lookahead
+                if (la.k > 0) la.flush()                  // discard buffered pre-mute audio (v1, rare)
                 return terminatorFrame(fn)
             }
             return null
@@ -171,8 +182,22 @@ class AudioVoiceEngine(
             TransmitMode.VOICE_ACTIVATED -> {
                 val d = processor.process(capturePcm)     // denoise (in place) → vad → gate
                 if (diag) pushDiagnostics(rawDb)
-                if (!d.send) { sending = false; return null }
-                encodeAndCount(fn, d.terminator)          // speech / hangover / closing frame
+                val la = lookahead
+                if (la.k == 0) {
+                    // IDENTITY PATH — unchanged from today
+                    if (!d.send) { sending = false; return null }
+                    return encodeAndCount(fn, d.terminator)   // speech / hangover / closing frame
+                }
+                // K>0: feed the live gate-open decision into the delay ring, emit the delayed capture.
+                val openLive = d.send && !d.terminator    // real speech this tick (exclude the closing terminator tick)
+                val emit = la.offer(capturePcm, openLive, fn) ?: return null   // priming → nothing out yet
+                if (emit.send) {
+                    encodeBuffer(emit.pcm, emit.frameNumber, terminator = false)   // sets sending=true
+                } else if (sending) {
+                    // delayed stream just closed → one real terminator on the delayed frame
+                    java.util.Arrays.fill(emit.pcm, 0)
+                    encodeBuffer(emit.pcm, emit.frameNumber, terminator = true)    // sets sending=false
+                } else null
             }
             TransmitMode.PUSH_TO_TALK -> {
                 gate.reset()                              // keep the VA gate closed under PTT
@@ -210,9 +235,14 @@ class AudioVoiceEngine(
     }
 
     /** Encode the current capture, update uplink stats, and mark send state. */
-    private fun encodeAndCount(fn: Long, terminator: Boolean): VoiceFrame {
+    private fun encodeAndCount(fn: Long, terminator: Boolean): VoiceFrame =
+        encodeBuffer(capturePcm, fn, terminator)
+
+    /** Encode an arbitrary capture buffer (current or delayed-from-the-lookahead-ring), update
+     *  uplink stats, and mark send state. */
+    private fun encodeBuffer(pcm: ShortArray, fn: Long, terminator: Boolean): VoiceFrame {
         sending = !terminator
-        val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
+        val opus = encoder.encode(pcm, CAPTURE_SAMPLES)
         uplinkBytes += opus.size
         if (++uplinkFrames >= 250) {
             val avgBytes = uplinkBytes.toDouble() / uplinkFrames
