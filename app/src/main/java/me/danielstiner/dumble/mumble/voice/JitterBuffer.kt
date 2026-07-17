@@ -18,27 +18,34 @@ class JitterBuffer(
         val isTerminator: Boolean,
     )
 
+    /**
+     * Why [offer] did not enqueue a packet, so callers can tell a genuine late drop (lost audio)
+     * from a harmless [DUPLICATE] (reordered/retransmitted same timestamp) or an [EMPTY] tag-only
+     * terminator. Only [LATE] should feed the lateDrops diagnostic.
+     */
+    enum class OfferResult { QUEUED, LATE, DUPLICATE, EMPTY }
+
     private val queue = TreeMap<Long, Packet>()
     private var bufferedSpans = 0
 
     @Volatile var terminatorTimestamp: Long? = null
         private set
 
-    @Synchronized fun offer(p: Packet, playoutCursor: Long): Boolean {
+    @Synchronized fun offer(p: Packet, playoutCursor: Long): OfferResult {
         if (p.isTerminator && p.timestampSamples >= playoutCursor) {
             val t = terminatorTimestamp
             if (t == null || p.timestampSamples >= t) terminatorTimestamp = p.timestampSamples
         }
-        if (p.opus.isEmpty()) return false                       // terminator / empty → tag only
-        if (p.timestampSamples < playoutCursor) return false      // late
-        if (queue.containsKey(p.timestampSamples)) return false   // duplicate
+        if (p.opus.isEmpty()) return OfferResult.EMPTY               // terminator / empty → tag only
+        if (p.timestampSamples < playoutCursor) return OfferResult.LATE
+        if (queue.containsKey(p.timestampSamples)) return OfferResult.DUPLICATE
         queue[p.timestampSamples] = p
         bufferedSpans += p.spanSamples
         while (bufferedSpans > highWaterSamples && queue.size > 1) {
             val dropped = queue.pollFirstEntry().value
             bufferedSpans -= dropped.spanSamples
         }
-        return true
+        return OfferResult.QUEUED
     }
 
     @Synchronized fun peekFirstTimestamp(): Long? = if (queue.isEmpty()) null else queue.firstKey()

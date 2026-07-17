@@ -24,7 +24,7 @@ class SpeakerStream(
     var retired = false; private set
 
     /** Receive thread. Only touches the synchronized JitterBuffer; a slightly stale cursor is safe. */
-    fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean): Boolean {
+    fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean): JitterBuffer.OfferResult {
         val cur = cursor
         return buffer.offer(JitterBuffer.Packet(timestampSamples, opus, spanSamples, isTerminator),
             if (cur < 0) 0 else cur)
