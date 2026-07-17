@@ -7,10 +7,13 @@ package me.danielstiner.dumble.mumble.voice
  */
 class TransmitProcessor(
     private val suppressor: NoiseSuppressor,
-    private val vad: VadDetector,
+    vad: VadDetector,
     val gate: TransmitGate,
     private val gain: GainControl = GainControl(enabled = false),
 ) {
+    /** The active VAD detector. Hot-swappable (e.g. [AudioVoiceEngine.setVadDetector]); the send
+     *  thread always reads the current value on its next [process]/[denoise] call. */
+    @Volatile var vad: VadDetector = vad
     private val subLevels = FloatArray(FRAMES_PER_PACKET)
     private val rawFrame = ShortArray(FRAME_SAMPLES_10MS)
 

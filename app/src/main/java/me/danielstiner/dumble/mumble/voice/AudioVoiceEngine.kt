@@ -105,6 +105,13 @@ class AudioVoiceEngine(
     /** Live-enable/disable RNNoise denoising. Off keeps RNNoise running for the VAD but sends raw audio. */
     fun setRnnoiseEnabled(value: Boolean) { suppressor.setDenoiseEnabled(value) }
 
+    /** Hot-swap the VAD detector (built off-thread by the caller). Closes a previous Silero session. */
+    fun setVadDetector(newVad: VadDetector) {
+        val old = processor.vad
+        processor.vad = newVad
+        if (old !== newVad) (old as? SileroVadDetector)?.close()
+    }
+
     /** Switch transmit mode live. The send thread detects the change and flushes any open
      *  talkspurt; a fresh button press is required after any mode change. */
     fun setTransmitMode(mode: TransmitMode) { transmitMode = mode; pttHeld = false }
@@ -115,7 +122,7 @@ class AudioVoiceEngine(
     override fun start() {
         if (running) return
         running = true
-        vad.reset()
+        processor.vad.reset()
         recorder = recorderFactory()
         recorder?.captureInfo()?.let {
             _diagnostics.value = AudioDiagnostics(effects = it.effects, deviceModel = it.deviceModel, connected = true)
@@ -171,7 +178,7 @@ class AudioVoiceEngine(
         if (mode != lastMode) {
             lastMode = mode
             gate.reset()
-            vad.reset()
+            processor.vad.reset()
             // Rare transition: discard whatever pre-onset audio is still buffered in the lookahead
             // ring rather than trying to emit multiple frames from this one nextOutgoingFrame() call.
             val la = lookahead
@@ -189,7 +196,7 @@ class AudioVoiceEngine(
             }
             return null
         }
-        if (wasMuted) { vad.reset(); wasMuted = false }   // unmute edge → VAD discontinuity
+        if (wasMuted) { processor.vad.reset(); wasMuted = false }   // unmute edge → VAD discontinuity
 
         return when (mode) {
             TransmitMode.VOICE_ACTIVATED -> {
@@ -331,6 +338,7 @@ class AudioVoiceEngine(
         track?.close(); track = null
         encoder.close()
         suppressor.close()
+        (processor.vad as? SileroVadDetector)?.close()
     }
 }
 

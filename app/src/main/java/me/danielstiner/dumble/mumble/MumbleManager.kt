@@ -72,9 +72,15 @@ object MumbleManager {
     private val _agcEnabled = MutableStateFlow(true)
     /** Makeup-gain on/off, persisted and applied live to the active call. */
     val agcEnabled: StateFlow<Boolean> = _agcEnabled.asStateFlow()
-    private val _rnnoiseEnabled = MutableStateFlow(true)
+    private val _rnnoiseEnabled = MutableStateFlow(false)
     /** RNNoise denoising on/off (the VAD keeps running regardless), persisted and applied live. */
     val rnnoiseEnabled: StateFlow<Boolean> = _rnnoiseEnabled.asStateFlow()
+    private val _vadEngine = MutableStateFlow("rnnoise")
+    /** Which detector drives the transmit gate: "energy" | "rnnoise" | "silero". Persisted, applied live. */
+    val vadEngine: StateFlow<String> = _vadEngine.asStateFlow()
+    private val _lookaheadMs = MutableStateFlow(0)
+    /** Onset-recovery lookahead delay in ms (0 = off), persisted and applied live. */
+    val lookaheadMs: StateFlow<Int> = _lookaheadMs.asStateFlow()
     private val _deafened = MutableStateFlow(false)
     /** Self-deafen (mutes playout + implies self-mute), broadcast to peers. */
     val deafened: StateFlow<Boolean> = _deafened.asStateFlow()
@@ -143,6 +149,39 @@ object MumbleManager {
         active?.setRnnoiseEnabled(value)
     }
 
+    /** Select which detector drives the transmit gate. Builds a Silero session off the calling
+     *  thread (ONNX session creation is not cheap) before swapping it into the live engine, if any. */
+    @Synchronized fun setVadEngine(engineName: String) {
+        _vadEngine.value = engineName
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putString("vad_engine", engineName)?.apply()
+        applyVadEngine(engineName)
+    }
+
+    @Synchronized fun setLookaheadMs(ms: Int) {
+        _lookaheadMs.value = ms
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putInt("lookahead_ms", ms)?.apply()
+        active?.setLookaheadMs(ms)
+    }
+
+    /** Build the requested detector (off the send thread) and hot-swap it into the live session's
+     *  engine. A Silero load failure keeps the current detector and logs — never crashes. No-op
+     *  (beyond the persisted preference above) when no call is active; the next connect() picks up
+     *  the persisted [_vadEngine] value at construction. */
+    private fun applyVadEngine(engineName: String) {
+        val session = active ?: return
+        val newVad: VadDetector = when (engineName) {
+            "silero" -> runCatching {
+                val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
+                SileroVadDetector(SileroOnnxSession(bytes))
+            }.getOrElse { Log.w(TAG, "Silero load failed; keeping current VAD", it); return }
+            "energy" -> EnergyVadDetector()
+            else -> session.rnnoise   // RNNoise-as-VAD; kept alive for its VAD prob even when denoise is off
+        }
+        session.setVadDetector(newVad)
+    }
+
     @Synchronized fun setTransmitMode(mode: TransmitMode) {
         if (mode == _transmitMode.value) return           // no-op on redundant selection
         _transmitMode.value = mode
@@ -193,7 +232,9 @@ object MumbleManager {
             ?: TransmitMode.VOICE_ACTIVATED
         _agcTargetDbFs.value = audioPrefs.getFloat("agc_target_dbfs", DEFAULT_AGC_TARGET_DBFS)
         _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", true)
-        _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", true)
+        _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", false)
+        _vadEngine.value = audioPrefs.getString("vad_engine", "rnnoise") ?: "rnnoise"
+        _lookaheadMs.value = audioPrefs.getInt("lookahead_ms", 0)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
     }
 
@@ -227,13 +268,22 @@ object MumbleManager {
         // RNNoise does double duty: denoises the uplink AND supplies its VAD probability as the gate
         // detector. One instance is both the suppressor and the VAD; the denoise half can be toggled
         // off (VAD keeps running) via setRnnoiseEnabled.
-        private val rnnoise = RnnoiseSuppressor()
+        val rnnoise = RnnoiseSuppressor()
+        private val initialVad: VadDetector = when (_vadEngine.value) {
+            "silero" -> runCatching {
+                val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
+                SileroVadDetector(SileroOnnxSession(bytes))
+            }.getOrElse { Log.w(TAG, "Silero load failed at connect; falling back to rnnoise", it); rnnoise }
+            "energy" -> EnergyVadDetector()
+            else -> rnnoise
+        }
         private val engine = AudioVoiceEngine(
-            codec, suppressor = rnnoise, vad = rnnoise, gateOpenLevel = _vadThreshold.value,
+            codec, suppressor = rnnoise, vad = initialVad, gateOpenLevel = _vadThreshold.value,
             initialTransmitMode = _transmitMode.value,
             initialAgcEnabled = _agcEnabled.value,
             initialAgcTargetDbFs = _agcTargetDbFs.value,
-            initialRnnoiseEnabled = _rnnoiseEnabled.value)
+            initialRnnoiseEnabled = _rnnoiseEnabled.value,
+            initialLookaheadCaptures = _lookaheadMs.value / 20)
         @Volatile private var udp: MumbleUdpTransport? = null
         private val pingBuf = ByteArray(256)
 
@@ -333,6 +383,8 @@ object MumbleManager {
         fun setAgcTargetDbFs(value: Float) = engine.setAgcTargetDbFs(value)
         fun setAgcEnabled(value: Boolean) = engine.setAgcEnabled(value)
         fun setRnnoiseEnabled(value: Boolean) = engine.setRnnoiseEnabled(value)
+        fun setVadDetector(vad: VadDetector) = engine.setVadDetector(vad)
+        fun setLookaheadMs(ms: Int) = engine.setLookaheadMs(ms)
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
