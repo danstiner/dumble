@@ -25,6 +25,8 @@ import me.danielstiner.dumble.mumble.voice.EnergyVadDetector
 import me.danielstiner.dumble.mumble.voice.FRAMES_PER_PACKET
 import me.danielstiner.dumble.mumble.voice.FRAME_SAMPLES_10MS
 import me.danielstiner.dumble.mumble.voice.RnnoiseSuppressor
+import me.danielstiner.dumble.mumble.voice.SileroOnnxSession
+import me.danielstiner.dumble.mumble.voice.SileroVadDetector
 import me.danielstiner.dumble.mumble.voice.TransmitGate
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
@@ -50,7 +52,7 @@ class VadDebugActivity : AppCompatActivity() {
     private val relMaxDb = 20f
     @Volatile private var relOpenDb = 9f      // dB above the noise floor to open (relative gate)
     @Volatile private var rnnoiseOn = true
-    private val vadNames = arrayOf("Energy", "RNNoise")   // Silero to be added
+    private val vadNames = arrayOf("Energy", "RNNoise", "Silero")
     @Volatile private var vadSource = 0                   // index into vadNames; drives the gate
     private val rnnMinThr = 0.3f
     private val rnnMaxThr = 0.95f
@@ -290,6 +292,8 @@ class VadDebugActivity : AppCompatActivity() {
     private fun loop() {
         val recorder = AndroidAudioIn()
         val suppressor = RnnoiseSuppressor()
+        var sileroDetector: SileroVadDetector? = null
+        var sileroSession: SileroOnnxSession? = null
         val pcm = ShortArray(CAPTURE_SAMPLES)
         val levels = FloatArray(FRAMES_PER_PACKET)
         var tick = 0
@@ -299,15 +303,35 @@ class VadDebugActivity : AppCompatActivity() {
                 val preDb = rmsDbOf(pcm)                        // raw mic
 
                 val doRnnoise = rnnoiseOn || vadSource == 1    // RNNoise VAD needs RNNoise to run
-                var eMax = 0f; var rMax = 0f
+
+                // Manage Silero detector lifecycle
+                val wantSilero = vadSource == 2
+                if (wantSilero && sileroDetector == null) {
+                    sileroSession = SileroOnnxSession(assets.open("silero_vad_16k_op15.onnx").readBytes())
+                    sileroDetector = SileroVadDetector(sileroSession)
+                } else if (!wantSilero && sileroDetector != null) {
+                    sileroDetector.close()
+                    sileroSession?.close()
+                    sileroDetector = null
+                    sileroSession = null
+                }
+
+                var eMax = 0f; var rMax = 0f; var sMax = 0f
                 for (h in 0 until FRAMES_PER_PACKET) {
                     val off = h * FRAME_SAMPLES_10MS
                     if (doRnnoise) suppressor.process(pcm, off, FRAME_SAMPLES_10MS)
                     val e = detector.level(pcm, off, FRAME_SAMPLES_10MS)   // always (drives floor/cyan)
                     val r = if (doRnnoise) suppressor.lastVadProb else 0f
+                    val s = if (sileroDetector != null) sileroDetector.level(pcm, off, FRAME_SAMPLES_10MS) else 0f
                     if (e > eMax) eMax = e
                     if (r > rMax) rMax = r
-                    levels[h] = if (vadSource == 1) r else e               // selected VAD drives the gate
+                    if (s > sMax) sMax = s
+                    levels[h] = when (vadSource) {
+                        0 -> e
+                        1 -> r
+                        2 -> s
+                        else -> e
+                    }
                 }
                 val postDb = rmsDbOf(pcm)                       // after RNNoise (what the VAD sees)
                 val d = gate.update(levels)
@@ -322,15 +346,15 @@ class VadDebugActivity : AppCompatActivity() {
                     val relTargetDb = floorF + gate.openLevel * detector.marginDb  // floor + open margin
                     val snr = postDb - floorDb                     // level relative to the noise floor
                     val postRms = 10.0.pow(postDb / 20.0)          // linear RMS (0..1)
-                    val eM = eMax; val rM = rMax
+                    val eM = eMax; val rM = rMax; val sM = sMax
                     runOnUiThread {
                         history.push(preF, postF, open, absOpenDb, floorF, relTargetDb)
                         history2.push(rM, rnnThreshold)
                         gateView.text = if (open) (if (term) "TERM" else "OPEN") else "closed"
                         gateView.setTextColor(if (open) OPEN_GREEN else Color.GRAY)
                         readout.text = ("in %+.0f→%+.0f dBFS  %.4f rms  SNR %+.0f\n" +
-                            "Energy %.2f   RNNoise %.2f   sent %d").format(
-                            preDb, postDb, postRms, snr, eM, rM, sent)
+                            "Energy %.2f   RNNoise %.2f   Silero %.2f   sent %d").format(
+                            preDb, postDb, postRms, snr, eM, rM, sM, sent)
                         refreshRoute()   // updates Route button (reflects BT connect/disconnect)
                     }
                 }
@@ -340,6 +364,8 @@ class VadDebugActivity : AppCompatActivity() {
         } finally {
             recorder.close()
             suppressor.close()
+            sileroDetector?.close()
+            sileroSession?.close()
         }
     }
 
