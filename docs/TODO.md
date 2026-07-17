@@ -25,7 +25,9 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 
 ### UI / settings polish
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
-- **Settings screen: grouping / dividers** — add section headers or dividers between groups of controls (transmit mode / sensitivity / AGC / debug tools) so they read as distinct sections.
+- ~~**Settings screen: grouping / dividers**~~ — **DONE**: each group is a titled `ElevatedCard`
+  (Transmit mode / Voice activity detection / AGC / Noise suppression / Tools), now under the
+  collapsible Advanced section.
 - **Transmit-mode selector as M3 connected button group** — DONE (SingleChoiceSegmentedButtonRow), pending on-device visual check; revisit if the specifically-Expressive `ButtonGroup`/`ToggleButton` variant is wanted.
 - **Call controls: adopt M3 `toggleableShapes()`** — the Mute/Deafen/Speaker toggle shape morph
   (pill↔squircle) is a manual *instant* swap today (`controlPillShape`/`controlActiveShape` in
