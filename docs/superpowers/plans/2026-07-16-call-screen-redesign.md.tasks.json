@@ -16,7 +16,7 @@
     {
       "id": 57,
       "subject": "Task 3: Engine speaking signals + deafen",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [56],
       "description": "**Goal:** AudioVoiceEngine speakingSessions/selfTransmitting StateFlows + deafen playout muting + setDeafened.\n\n**Files:**\n- Modify: app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\n- Test: app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSpeakingTest.kt\n\n**Acceptance Criteria:**\n- selfTransmitting tracks real sends with release hold (tested via nextOutgoingFrame)\n- setDeafened toggles isDeafened; playbackLoop zeroes mix when deafened but keeps draining\n- speakingSessions via SpeakingHold, emitted on set-change, drops on retire\n- stop() resets flows/holds/deafened\n\n**Verify:** JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew :app:testDebugUnitTest --tests \"*AudioVoiceEngineSpeakingTest\" --tests \"*AudioVoiceEngine*\"\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngineSpeakingTest.kt\"], \"verifyCommand\": \"JAVA_HOME=\\\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\\\" ./gradlew :app:testDebugUnitTest --tests \\\"*AudioVoiceEngineSpeakingTest\\\" --tests \\\"*AudioVoiceEngine*\\\"\", \"acceptanceCriteria\": [\"selfTransmitting release hold\", \"deafen mutes mix, keeps draining\", \"speakingSessions via SpeakingHold\", \"stop resets\"], \"modelTier\": \"standard\"}\n```"
     },

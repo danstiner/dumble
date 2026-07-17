@@ -349,7 +349,6 @@ with:
         val acc = IntArray(FRAME_SAMPLES_20MS)
         val speakerOut = ShortArray(FRAME_SAMPLES_20MS)
         val producedSessions = HashSet<Int>()
-        var logTick = 0
         while (running) {
             java.util.Arrays.fill(acc, 0)
             producedSessions.clear()
@@ -371,7 +370,6 @@ with:
             val speaking = speakingHold.tick(producedSessions)
             if (speaking != _speakingSessions.value) _speakingSessions.value = speaking
             _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
-            logTick++
         }
     }
 ```
