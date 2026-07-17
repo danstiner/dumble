@@ -1,13 +1,17 @@
 # Talkspurt / Silence Handling — Design Spec (feature #56, part A)
 
-> **Correction (2026-07-17) — the §1 root-cause narrative is wrong; the fix is not.** §1 says a
-> desktop-Mumble VAD sender **pauses `frame_number` during silence** (so "both sides paused →
-> `ts == cursor`"). Upstream `AudioInput::encodeAudioFrame` increments `iFrameCounter` *before* its
+> **Correction (2026-07-17, fable-verified) — the §1 root-cause narrative is wrong; the fix is not.**
+> §1 says a desktop-Mumble VAD sender **pauses `frame_number` during silence** (so "both sides paused
+> → `ts == cursor`"). Upstream `AudioInput::encodeAudioFrame` increments `iFrameCounter` *before* its
 > non-speech early return, so `frame_number` actually **advances at wall-clock through silence**
-> (source-verified). The shipped fix (hold the cursor on live underrun) is on-device-verified
-> (lateDrops ≈ 0) and unaffected, but the *reason it works* is under re-investigation. Leading
-> hypothesis: prebuffer-cushion consumption, not a paused counter. See
-> `docs/superpowers/adaptive-jitter-buffer-design-notes.md` → "Mechanism (corrected 2026-07-17)".
+> (source-verified). With a wall-clock sender the playout delay `D = t_wall − cursor` is constant
+> through PLC, so silence resumes are essentially never late — the VAD structure was incidental. The
+> actual driver is **stall-and-burst network delivery**: mid-talkspurt audio queued during a network
+> stall (Wi-Fi power-save, BT-coex, UDP cutout) arrives as a burst, and the pre-fix cursor marched
+> through the stall so everything older than the cushion is rejected late. The shipped fix (hold the
+> cursor on live underrun) is on-device-verified (lateDrops ≈ 0) and works because the delayed burst
+> then lands at/after the held cursor. Full derivation + the decisive on-device signature test:
+> `docs/superpowers/adaptive-jitter-buffer-design-notes.md` → "Mechanism (fable-verified 2026-07-17)".
 
 **Status:** approved design, fable-reviewed. Basis for the implementation plan.
 **Date:** 2026-07-13
