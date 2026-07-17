@@ -19,7 +19,13 @@ class VadEvaluationTest {
     @Test fun corpusMeetsThresholds() {
         val clips = CorpusBuilder.build()
         val results = clips.map { it to VadEvaluator.evaluate(it) }
-        EvalReport.write(File("build/reports/vad-eval"), results)
+
+        // Silero (RAW + RNNoise-denoised) over the same corpus — REPORTED, not asserted. RNNoise
+        // stays the sole regression guard below.
+        val modelBytes = File("src/main/assets/silero_vad_16k_op15.onnx").readBytes()
+        val sileroRaw = clips.map { it to VadEvaluator.evaluateSilero(it, denoise = false, modelBytes) }
+        val sileroDenoised = clips.map { it to VadEvaluator.evaluateSilero(it, denoise = true, modelBytes) }
+        EvalReport.writeComparison(File("build/reports/vad-eval"), results, sileroRaw, sileroDenoised)
 
         for ((c, m) in results) {
             val t = c.thresholds

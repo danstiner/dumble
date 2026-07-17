@@ -7,11 +7,15 @@ package me.danielstiner.dumble.mumble.voice
  */
 class TransmitProcessor(
     private val suppressor: NoiseSuppressor,
-    private val vad: VadDetector,
+    vad: VadDetector,
     val gate: TransmitGate,
     private val gain: GainControl = GainControl(enabled = false),
 ) {
+    /** The active VAD detector. Hot-swappable (e.g. [AudioVoiceEngine.setVadDetector]); the send
+     *  thread always reads the current value on its next [process]/[denoise] call. */
+    @Volatile var vad: VadDetector = vad
     private val subLevels = FloatArray(FRAMES_PER_PACKET)
+    private val rawFrame = ShortArray(FRAME_SAMPLES_10MS)
 
     /** RNNoise probability from the most recent processed sub-frame (diagnostics only). */
     var lastVadProb: Float = 0f
@@ -21,10 +25,11 @@ class TransmitProcessor(
     fun process(capturePcm: ShortArray): TransmitGate.Decision {
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
+            System.arraycopy(capturePcm, off, rawFrame, 0, FRAME_SAMPLES_10MS)   // raw snapshot
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
             // process() ALWAYS reads vad.level() — the gate needs the pre-gain prob regardless of
             // gain state (unlike denoise(), which reads it only for the gain).
-            val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)  // pre-gain (gate input)
+            val prob = vad.level(rawFrame, 0, FRAME_SAMPLES_10MS)                 // VAD on RAW
             subLevels[i] = prob
             gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)    // makeup gain, in place
         }
@@ -41,13 +46,12 @@ class TransmitProcessor(
     fun denoise(capturePcm: ShortArray) {
         for (i in 0 until FRAMES_PER_PACKET) {
             val off = i * FRAME_SAMPLES_10MS
+            System.arraycopy(capturePcm, off, rawFrame, 0, FRAME_SAMPLES_10MS)
             suppressor.process(capturePcm, off, FRAME_SAMPLES_10MS)
-            // NOTE: denoise() reads vad.level() only when gain is enabled — safe only because the
-            // paired VAD (RnnoiseSuppressor) has a side-effect-free level(). Do not wire a stateful
-            // VAD (e.g. EnergyVadDetector) here: its level() mutates the noise floor every call, so
-            // skipping it when gain is disabled would drift.
+            // VAD reads the RAW snapshot (pre-denoise). A stateful VAD (Silero) is fine here IF the
+            // engine resets it on discontinuities; in PTT the gate is unused so a missed advance is benign.
             if (gain.enabled) {
-                val prob = vad.level(capturePcm, off, FRAME_SAMPLES_10MS)
+                val prob = vad.level(rawFrame, 0, FRAME_SAMPLES_10MS)
                 lastVadProb = prob
                 gain.process(capturePcm, off, FRAME_SAMPLES_10MS, prob)
             }

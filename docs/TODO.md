@@ -11,6 +11,12 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
 - move all non-essential settings under an advanced section in settings. Currently only transmit mode looks essential. That includes the debug pages for echo/VAD tuning/audio diagnostics, those should all be under advanced
 - advanced option to use silero v5 for VAD, maybe with tunable preroll ranging from 10-100ms. once we have it working well maybe we'll replace the current VAD
+- Show when a remote client is deafened
+- Show a more obvious glowing ring around the speaker
+- Use Ben's algorithm for automatic user icon color based on hash of their name
+- Add chat feature
+- More similar color scheme to phone app, white buttons with light gray background for the bottom bar
+- Make noise suppression a group button select (native, if supported, and then RNNoise or none)
 
 ### UI / settings polish
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
@@ -31,8 +37,11 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
 - **Symptom (original report):** joining a call with a Bluetooth headset already connected plays
   received audio out the phone **speaker**, not the headset.
-- **Status:** route indicator shipped (2026-07-16) — awaiting on-device confirmation of the
-  *playout-at-call-start* case (mic capture already works, see below).
+- **Status: CONFIRMED on-device (2026-07-17).** Dan joined a call with a BT headset connected —
+  output played through the phone **speaker**, not the headset. The framework does NOT route playout to
+  BT at call start, so the measure-first proactive-routing follow-up below is now warranted — BUT see the
+  route-picker bug directly below: the CallEndpoint *selection* path itself may be broken on-device,
+  which is a prerequisite for any proactive routing.
 - **Root cause (code-verified):** `CallManager` never proactively selects an endpoint —
   `onAvailableCallEndpointsChanged` only stores the list; the only `requestCallEndpointChange` is in
   `setSpeaker()`, which toggles TYPE_SPEAKER↔TYPE_EARPIECE with zero BT/wired awareness.
@@ -46,6 +55,19 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   explicit request), and make `setSpeaker(false)` return to the best non-speaker route rather than
   always earpiece. Brainstormed 2026-07-16; priority **BT > wired** chosen (rarely co-occur). Don't
   build it until the indicator confirms the framework isn't already routing correctly.
+
+### 🔴 Route picker doesn't switch the output device — selecting Earpiece was a no-op (2026-07-17, on-device)
+- **Symptom:** in the in-call route picker, tapping **Earpiece** did not switch output to the earpiece;
+  audio kept playing on the previous device.
+- **Likely shared root with #54:** both point at `CallManager`'s CallEndpoint selection path.
+  `selectRoute(type)` picks the first endpoint of `type` from `_endpoints` and calls
+  `Connection.requestCallEndpointChange(ep, executor, receiver)` where the `OutcomeReceiver`'s
+  `onResult`/`onError` are **empty** — so any failure is a silent no-op.
+- **Investigate:** (1) is a `TYPE_EARPIECE` endpoint actually present in `_endpoints` (else `firstOrNull`
+  → null → nothing happens)? (2) does `requestCallEndpointChange` invoke `onError` (log the
+  `CallEndpointException`)? (3) log the available endpoint types the framework reports. If endpoint
+  selection is broken across the board, the #54 proactive-routing fix cannot work until this does —
+  fix this first.
 
 ### Connecting bluetooth headset in middle of call does *not* take over audio like it should
 - **Update (2026-07-16, on-device):** Dan tested connecting a BT headset mid-call — the **mic/capture
@@ -147,4 +169,10 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   Activity settings (RNNoise on/off, hangover, VAD-source select), and evaluate **Silero** as a
   third VAD behind the swappable `VadDetector` seam (the VAD Gate Tuner is the eval bench). Design:
   `docs/superpowers/specs/2026-07-14-voice-activity-detection-design.md`.
+- **Connecting phase feels long — add an overall ~10 s deadline.** The TCP connect timeout is *already*
+  10 s (`MumbleTcpTransport.CONNECT_TIMEOUT_MS`), but `startHandshake()` (TLS) sets **no** `SO_TIMEOUT`,
+  so a stalled handshake can block well past 10 s, and no single deadline spans handshake→auth→sync. Add
+  one ~10 s connecting-phase timeout (or a socket read timeout across the handshake) so a slow/unreachable
+  server fails fast instead of hanging on "Connecting…". (Reducing the connect constant alone won't help —
+  it's already 10 s.)
 - Cleanup: remove the per-5 s debugging logs (Ping tick, mic/track state, mix peaks, uplink kbps) now that #56 part A is verified

@@ -24,10 +24,12 @@ class AudioVoiceEngine(
     private val suppressor: NoiseSuppressor = NoiseSuppressor.None,
     private val vad: VadDetector = EnergyVadDetector(),
     gateOpenLevel: Float = 0.60f,
+    gateCloseGap: Float = TransmitGate.DEFAULT_CLOSE_GAP,
     initialTransmitMode: TransmitMode = TransmitMode.VOICE_ACTIVATED,
     initialAgcEnabled: Boolean = true,
     initialAgcTargetDbFs: Float = GainControl.DEFAULT_TARGET_DBFS,
     initialRnnoiseEnabled: Boolean = true,
+    initialPrerollCaptures: Int = 0,
 ) : VoiceEngine {
 
     private val _stats = MutableStateFlow(VoiceStats())
@@ -46,12 +48,22 @@ class AudioVoiceEngine(
     private var sending = false                  // send-thread-only: last emitted frame was live (non-terminator)
 
     private val encoder = codec.newEncoder()
-    private val gate = TransmitGate(openLevel = gateOpenLevel)
+    private val gate = TransmitGate(openLevel = gateOpenLevel, closeGap = gateCloseGap)
     private val gainControl = GainControl(
         targetDbFs = initialAgcTargetDbFs, enabled = initialAgcEnabled)
     private val processor = TransmitProcessor(suppressor, vad, gate, gainControl)
     private val capturePcm = ShortArray(CAPTURE_SAMPLES)
     private var frameNumber = 0L
+    @Volatile private var lookahead = LookaheadDelay(initialPrerollCaptures)
+    @Volatile private var pendingLookaheadCaptures: Int? = null
+    // A swapped-out detector awaiting close on the send thread (never close it on the caller thread —
+    // a native ORT session could be torn down mid `level()`). Drained at the top of computeOutgoing().
+    private val detectorsToClose = java.util.concurrent.ConcurrentLinkedQueue<VadDetector>()
+
+    /** Live-adjust the detection preroll (0 = off/identity). 20 ms per capture; drives the
+     *  [LookaheadDelay] ring with K = ms/20 captures. Runs on the UI thread: records a pending K,
+     *  applied (flush + clean close) on the send thread. */
+    fun setPrerollMs(ms: Int) { pendingLookaheadCaptures = (ms / 20).coerceAtLeast(0) }
 
     init { suppressor.setDenoiseEnabled(initialRnnoiseEnabled) }
 
@@ -89,6 +101,10 @@ class AudioVoiceEngine(
     /** Live-adjust the transmit gate's open threshold (the RNNoise VAD probability to open at). */
     fun setVadThreshold(value: Float) { gate.openLevel = value }
 
+    /** Live-adjust the transmit gate's hysteresis release margin (how far below openLevel the
+     *  close threshold sits). */
+    fun setHysteresisGap(value: Float) { gate.closeGap = value }
+
     /** Live-adjust the makeup-gain target loudness (dBFS RMS). */
     fun setAgcTargetDbFs(value: Float) { gainControl.targetDbFs = value }
 
@@ -97,6 +113,18 @@ class AudioVoiceEngine(
 
     /** Live-enable/disable RNNoise denoising. Off keeps RNNoise running for the VAD but sends raw audio. */
     fun setRnnoiseEnabled(value: Boolean) { suppressor.setDenoiseEnabled(value) }
+
+    /** Hot-swap the VAD detector (built off-thread by the caller). The previous detector is closed
+     *  on the SEND thread (see [computeOutgoing]) — closing it here (any caller thread) could tear
+     *  down a native ORT session while the send thread is mid `old.level()` → use-after-close. */
+    fun setVadDetector(newVad: VadDetector) {
+        if (!running) { (newVad as? SileroVadDetector)?.close(); return }  // engine stopped: don't install, close the built one
+        val old = processor.vad
+        processor.vad = newVad
+        // A queue (not a single slot) so rapid/concurrent swaps never orphan an intermediate detector.
+        // The send thread drains + closes these once it's safely past using them (see computeOutgoing).
+        if (old !== newVad) detectorsToClose.add(old)
+    }
 
     /** Switch transmit mode live. The send thread detects the change and flushes any open
      *  talkspurt; a fresh button press is required after any mode change. */
@@ -108,6 +136,7 @@ class AudioVoiceEngine(
     override fun start() {
         if (running) return
         running = true
+        processor.vad.reset()
         recorder = recorderFactory()
         recorder?.captureInfo()?.let {
             _diagnostics.value = AudioDiagnostics(effects = it.effects, deviceModel = it.deviceModel, connected = true)
@@ -141,6 +170,22 @@ class AudioVoiceEngine(
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
 
+        // Close any detector swapped out since the last capture. Safe here: this thread is the only
+        // one that calls old.level(), and it has necessarily returned from any prior level() before
+        // re-entering computeOutgoing(), so the native session is guaranteed idle.
+        while (true) { val d = detectorsToClose.poll() ?: break; (d as? SileroVadDetector)?.close() }
+
+        // Apply a pending K change here on the send thread (setPrerollMs only records it on the UI
+        // thread). Mirror the mode-change flush+terminate so the old delayed stream closes cleanly
+        // instead of leaving `sending` stale-true with buffered captures silently dropped.
+        val pending = pendingLookaheadCaptures
+        if (pending != null && pending != lookahead.k) {
+            pendingLookaheadCaptures = null
+            lookahead.flush()                            // discard old ring's buffered captures
+            lookahead = LookaheadDelay(pending)
+            if (sending) return terminatorFrame(fn)      // close the old delayed stream cleanly
+        }
+
         val diag = (++diagTick % DIAG_INTERVAL == 0)
         val rawDb = if (diag) rmsDbFs(capturePcm, 0, CAPTURE_SAMPLES) else 0f
 
@@ -152,6 +197,11 @@ class AudioVoiceEngine(
         if (mode != lastMode) {
             lastMode = mode
             gate.reset()
+            processor.vad.reset()
+            // Rare transition: discard whatever pre-onset audio is still buffered in the lookahead
+            // ring rather than trying to emit multiple frames from this one nextOutgoingFrame() call.
+            val la = lookahead
+            if (la.k > 0) la.flush()
             if (sending) return terminatorFrame(fn)
         }
 
@@ -159,18 +209,37 @@ class AudioVoiceEngine(
             gate.reset()                                 // so unmute starts closed
             if (!wasMuted) {                             // one real (silent) terminator on mute
                 wasMuted = true
+                val la = lookahead
+                if (la.k > 0) la.flush()                  // discard buffered pre-mute audio (v1, rare)
                 return terminatorFrame(fn)
             }
             return null
         }
-        wasMuted = false
+        if (wasMuted) { processor.vad.reset(); wasMuted = false }   // unmute edge → VAD discontinuity
 
         return when (mode) {
             TransmitMode.VOICE_ACTIVATED -> {
                 val d = processor.process(capturePcm)     // denoise (in place) → vad → gate
                 if (diag) pushDiagnostics(rawDb)
-                if (!d.send) { sending = false; return null }
-                encodeAndCount(fn, d.terminator)          // speech / hangover / closing frame
+                val la = lookahead
+                if (la.k == 0) {
+                    // IDENTITY PATH — unchanged from today
+                    if (!d.send) { sending = false; return null }
+                    return encodeAndCount(fn, d.terminator)   // speech / hangover / closing frame
+                }
+                // K>0: feed the live gate-open decision into the delay ring, emit the delayed capture.
+                // Emergent: two talkspurts separated by fewer than K silent captures merge into one
+                // continuous transmission (no intervening terminator) — an accepted consequence of the
+                // OR-window recovery (the ring's send=OR-over-window keeps the bridge frames live).
+                val openLive = d.send && !d.terminator    // real speech this tick (exclude the closing terminator tick)
+                val emit = la.offer(capturePcm, openLive, fn) ?: return null   // priming → nothing out yet
+                if (emit.send) {
+                    encodeBuffer(emit.pcm, emit.frameNumber, terminator = false)   // sets sending=true
+                } else if (sending) {
+                    // delayed stream just closed → one real terminator on the delayed frame
+                    java.util.Arrays.fill(emit.pcm, 0)
+                    encodeBuffer(emit.pcm, emit.frameNumber, terminator = true)    // sets sending=false
+                } else null
             }
             TransmitMode.PUSH_TO_TALK -> {
                 gate.reset()                              // keep the VA gate closed under PTT
@@ -208,9 +277,14 @@ class AudioVoiceEngine(
     }
 
     /** Encode the current capture, update uplink stats, and mark send state. */
-    private fun encodeAndCount(fn: Long, terminator: Boolean): VoiceFrame {
+    private fun encodeAndCount(fn: Long, terminator: Boolean): VoiceFrame =
+        encodeBuffer(capturePcm, fn, terminator)
+
+    /** Encode an arbitrary capture buffer (current or delayed-from-the-lookahead-ring), update
+     *  uplink stats, and mark send state. */
+    private fun encodeBuffer(pcm: ShortArray, fn: Long, terminator: Boolean): VoiceFrame {
         sending = !terminator
-        val opus = encoder.encode(capturePcm, CAPTURE_SAMPLES)
+        val opus = encoder.encode(pcm, CAPTURE_SAMPLES)
         uplinkBytes += opus.size
         if (++uplinkFrames >= 250) {
             val avgBytes = uplinkBytes.toDouble() / uplinkFrames
@@ -283,6 +357,8 @@ class AudioVoiceEngine(
         track?.close(); track = null
         encoder.close()
         suppressor.close()
+        (processor.vad as? SileroVadDetector)?.close()
+        while (true) { val d = detectorsToClose.poll() ?: break; (d as? SileroVadDetector)?.close() }
     }
 }
 

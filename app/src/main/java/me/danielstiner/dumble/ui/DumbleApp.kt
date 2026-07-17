@@ -34,10 +34,13 @@ fun DumbleApp(
     val connection by CallManager.activeConnection.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
+    val hysteresisGap by MumbleManager.hysteresisGap.collectAsStateWithLifecycle()
     val transmitMode by MumbleManager.transmitMode.collectAsStateWithLifecycle()
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
+    val vadEngine by MumbleManager.vadEngine.collectAsStateWithLifecycle()
+    val prerollMs by MumbleManager.prerollMs.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
     val netStats by MumbleManager.netStats.collectAsStateWithLifecycle()
     val voiceStats by MumbleManager.voiceStats.collectAsStateWithLifecycle()
@@ -134,12 +137,18 @@ fun DumbleApp(
                 onTransmitModeChange = { MumbleManager.setTransmitMode(it) },
                 vadThreshold = vadThreshold,
                 onVadThresholdChange = { MumbleManager.setVadThreshold(it) },
+                hysteresisGap = hysteresisGap,
+                onHysteresisGapChange = { MumbleManager.setHysteresisGap(it) },
                 agcEnabled = agcEnabled,
                 onAgcEnabledChange = { MumbleManager.setAgcEnabled(it) },
                 agcTargetDbFs = agcTargetDbFs,
                 onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
                 rnnoiseEnabled = rnnoiseEnabled,
                 onRnnoiseEnabledChange = { MumbleManager.setRnnoiseEnabled(it) },
+                vadEngine = vadEngine,
+                onVadEngineChange = { MumbleManager.setVadEngine(it) },
+                prerollMs = prerollMs,
+                onPrerollChange = { MumbleManager.setPrerollMs(it) },
                 onOpenDiagnostics = { showDiagnostics = true },
             )
         }

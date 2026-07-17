@@ -120,6 +120,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.protobuf.javalite)
+    implementation(libs.onnxruntime.android)
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
@@ -136,6 +137,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.onnxruntime.jvm)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }
