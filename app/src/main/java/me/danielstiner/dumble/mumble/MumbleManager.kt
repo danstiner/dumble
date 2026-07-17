@@ -129,7 +129,7 @@ object MumbleManager {
     }
 
     @Synchronized fun setVadThreshold(value: Float) {
-        val v = value.coerceIn(0.3f, 0.95f)
+        val v = value.coerceIn(0.1f, 0.9f)
         _vadThreshold.value = v
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
             ?.edit()?.putFloat("vad_threshold", v)?.apply()
