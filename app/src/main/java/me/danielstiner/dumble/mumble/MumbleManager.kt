@@ -183,9 +183,11 @@ object MumbleManager {
      *  [prev] and logs — never crashes, never swaps. No-op (beyond the persisted preference already
      *  written) when no call is active; the next connect() picks up the persisted [_vadEngine] value. */
     private fun applyVadEngine(engineName: String, prev: String) {
-        if (active == null) return   // persist-only; next connect() reads the persisted _vadEngine
-        scope.launch(Dispatchers.IO) {
-            val newVad: VadDetector = when (engineName) {
+        val session = active ?: return   // persist-only; next connect() reads the persisted _vadEngine
+        // Launch on the SESSION's scope so shutdown()'s sessionScope.cancel() cancels an in-flight
+        // switch via structured concurrency (no swap into a torn-down engine).
+        session.sessionScope.launch(Dispatchers.IO) {
+            val built: VadDetector = when (engineName) {
                 "silero" -> buildSileroDetector().getOrElse {
                     Log.w(TAG, "Silero load failed; reverting", it)
                     _vadEngine.value = prev
@@ -193,13 +195,12 @@ object MumbleManager {
                     return@launch
                 }
                 "energy" -> EnergyVadDetector()
-                else -> active?.rnnoise ?: return@launch   // RNNoise-as-VAD; call ended mid-build
+                else -> session.rnnoise   // RNNoise-as-VAD; kept alive for its VAD prob
             }
-            // Re-read `active`: the call may have ended while we built off-thread. setVadDetector is
-            // now safe from any thread (Fix A deferred the old-detector close to the send thread).
-            val session = active
-            if (session != null) session.setVadDetector(newVad)
-            else (newVad as? SileroVadDetector)?.close()   // call gone → don't leak the native session
+            // The call may have ended (or been replaced) while we built off-thread. Bail without
+            // swapping and close any freshly built native session so it isn't leaked.
+            if (!isActive || active !== session) { (built as? SileroVadDetector)?.close(); return@launch }
+            session.setVadDetector(built)
         }
     }
 
@@ -281,7 +282,9 @@ object MumbleManager {
         // cancels this (not the individual jobs list) so every coroutine launched under it —
         // including pingLoop, which is launched later from inside the connect coroutine — is
         // torn down atomically, with no race against late-arriving `jobs +=` appends.
-        private val sessionScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+        // Non-private so applyVadEngine can launch the live VAD-switch build on it — shutdown()'s
+        // sessionScope.cancel() then cancels an in-flight switch (ActiveSession is itself private).
+        val sessionScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         private val crypt = CryptState()
         private val tcp = MumbleTcpTransport(pinStore)
         private val selector = TransportSelector(config.forceTcp)
