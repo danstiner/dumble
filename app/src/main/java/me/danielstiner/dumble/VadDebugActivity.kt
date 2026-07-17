@@ -293,7 +293,6 @@ class VadDebugActivity : AppCompatActivity() {
         val recorder = AndroidAudioIn()
         val suppressor = RnnoiseSuppressor()
         var sileroDetector: SileroVadDetector? = null
-        var sileroSession: SileroOnnxSession? = null
         val pcm = ShortArray(CAPTURE_SAMPLES)
         val levels = FloatArray(FRAMES_PER_PACKET)
         var tick = 0
@@ -307,13 +306,11 @@ class VadDebugActivity : AppCompatActivity() {
                 // Manage Silero detector lifecycle
                 val wantSilero = vadSource == 2
                 if (wantSilero && sileroDetector == null) {
-                    sileroSession = SileroOnnxSession(assets.open("silero_vad_16k_op15.onnx").readBytes())
-                    sileroDetector = SileroVadDetector(sileroSession)
+                    val modelBytes = assets.open("silero_vad_16k_op15.onnx").use { it.readBytes() }
+                    sileroDetector = SileroVadDetector(SileroOnnxSession(modelBytes))
                 } else if (!wantSilero && sileroDetector != null) {
-                    sileroDetector.close()
-                    sileroSession?.close()
+                    sileroDetector.close()   // also closes the underlying ORT session
                     sileroDetector = null
-                    sileroSession = null
                 }
 
                 var eMax = 0f; var rMax = 0f; var sMax = 0f
@@ -364,8 +361,7 @@ class VadDebugActivity : AppCompatActivity() {
         } finally {
             recorder.close()
             suppressor.close()
-            sileroDetector?.close()
-            sileroSession?.close()
+            sileroDetector?.close()   // also closes the underlying ORT session
         }
     }
 
