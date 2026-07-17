@@ -38,6 +38,8 @@ fun DumbleApp(
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
+    val vadEngine by MumbleManager.vadEngine.collectAsStateWithLifecycle()
+    val lookaheadMs by MumbleManager.lookaheadMs.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
     val netStats by MumbleManager.netStats.collectAsStateWithLifecycle()
     val voiceStats by MumbleManager.voiceStats.collectAsStateWithLifecycle()
@@ -140,6 +142,10 @@ fun DumbleApp(
                 onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
                 rnnoiseEnabled = rnnoiseEnabled,
                 onRnnoiseEnabledChange = { MumbleManager.setRnnoiseEnabled(it) },
+                vadEngine = vadEngine,
+                onVadEngineChange = { MumbleManager.setVadEngine(it) },
+                lookaheadMs = lookaheadMs,
+                onLookaheadChange = { MumbleManager.setLookaheadMs(it) },
                 onOpenDiagnostics = { showDiagnostics = true },
             )
         }
