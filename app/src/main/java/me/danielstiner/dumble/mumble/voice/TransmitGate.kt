@@ -3,7 +3,8 @@ package me.danielstiner.dumble.mumble.voice
 /**
  * Turns per-10ms-sub-frame speech levels into one per-capture transmit decision.
  *
- * Two-threshold hysteresis (open at [openLevel], stay open above [closeLevel]) plus a
+ * Two-threshold hysteresis (open at [openLevel], stay open above a close threshold that tracks
+ * [openLevel] with a fixed gap) plus a
  * time-based hangover counted in 10 ms sub-frame ticks ([maxHoldTicks]) — so the hold
  * DURATION is invariant to packet size (mirrors Mumble's iHoldFrames, which counts 10 ms
  * frames). A single voiced sub-frame in a capture keeps the whole capture transmitting; the
@@ -15,11 +16,15 @@ package me.danielstiner.dumble.mumble.voice
  * idle: send=false, terminator=false.
  */
 class TransmitGate(
-    var openLevel: Float = 0.60f,         // live-tunable (tuner drives it for the RNNoise threshold)
-    private val closeLevel: Float = 0.35f,
+    var openLevel: Float = 0.60f,         // live-tunable (the sensitivity threshold)
     private val maxHoldTicks: Int = 20,   // 20 x 10 ms = 200 ms hangover
 ) {
     data class Decision(val send: Boolean, val terminator: Boolean)
+
+    // Stay-open threshold tracks [openLevel] with a fixed hysteresis gap, floored so it never reaches
+    // 0 (which would keep the gate open on any non-zero level). Tracking keeps open > close across the
+    // whole range — a fixed close would exceed a low openLevel and invert the hysteresis.
+    private val closeLevel: Float get() = (openLevel - CLOSE_GAP).coerceAtLeast(CLOSE_FLOOR)
 
     private var transmitting = false
     private var holdTicks = 0
@@ -44,4 +49,9 @@ class TransmitGate(
     }
 
     fun reset() { transmitting = false; holdTicks = 0 }
+
+    companion object {
+        const val CLOSE_GAP = 0.15f     // close threshold sits this far below openLevel (hysteresis)
+        const val CLOSE_FLOOR = 0.05f   // ...but never below this
+    }
 }

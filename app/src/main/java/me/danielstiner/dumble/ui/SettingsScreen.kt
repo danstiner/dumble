@@ -128,7 +128,7 @@ fun SettingsScreen(
                         Slider(
                             value = vadThreshold,
                             onValueChange = onVadThresholdChange,
-                            valueRange = 0.3f..0.95f,
+                            valueRange = 0.1f..0.9f,
                             enabled = vaMode,
                         )
                         Text(

@@ -56,4 +56,22 @@ class TransmitGateTest {
         val d = g.update(silence)
         assertFalse(d.send); assertFalse(d.terminator)
     }
+
+    @Test fun closeThresholdTracksOpenLevelWithGap() {
+        val g = TransmitGate(openLevel = 0.5f)   // closeLevel = 0.5 - 0.15 = 0.35
+        // idle: a level between close (0.35) and open (0.5) must NOT open the gate
+        assertFalse("0.4 < open 0.5 → stays closed", g.update(floatArrayOf(0.4f, 0.4f)).send)
+        g.update(floatArrayOf(0.9f, 0.9f))       // open with a clear level
+        // now transmitting: the same 0.4 (> close 0.35) keeps it fully open
+        assertTrue("0.4 > close 0.35 → stays open", g.update(floatArrayOf(0.4f, 0.4f)).send)
+    }
+
+    @Test fun closeLevelFlooredSoLowOpenLevelStillCloses() {
+        // openLevel 0.1 would compute close = -0.05; the CLOSE_FLOOR (0.05) keeps it positive so the
+        // gate can still close (a non-floored 0 close would hold open on any positive level).
+        val g = TransmitGate(openLevel = 0.1f, maxHoldTicks = 1)
+        g.update(floatArrayOf(0.9f, 0.9f))       // open
+        val d = g.update(floatArrayOf(0.02f, 0.02f))   // below the 0.05 floor → hangover → closes
+        assertTrue("must close (send terminator) — floor keeps close > 0", d.send && d.terminator)
+    }
 }
