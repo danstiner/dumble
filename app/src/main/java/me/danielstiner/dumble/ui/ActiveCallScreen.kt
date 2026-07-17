@@ -193,11 +193,11 @@ private fun ControlBar(
             } else {
                 // Mute stays tappable while deafened; tapping Unmute then undeafens too (matches desktop/iOS
                 // + the murmur-enforced self_mute=false => self_deaf=false invariant, handled in setMuted).
-                ToggleControl(checked = muted, onClick = onToggleMute,
+                ControlToggle(checked = muted, onCheckedChange = { onToggleMute() },
                     icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
                     label = if (muted) "Unmute" else "Mute", danger = true)
             }
-            ToggleControl(checked = deafened, onClick = onToggleDeafen,
+            ControlToggle(checked = deafened, onCheckedChange = { onToggleDeafen() },
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
                 label = if (deafened) "Undeafen" else "Deafen", danger = true)
             // Headset present → route picker (like the stock phone app); else a plain Speaker toggle.
@@ -205,7 +205,7 @@ private fun ControlBar(
                 RouteControl(icon = routeIcon, label = routeLabel, options = routeOptions,
                     activeType = activeRouteType, onSelect = onSelectRoute)
             } else {
-                ToggleControl(checked = speaker, onClick = onToggleSpeaker,
+                ControlToggle(checked = speaker, onCheckedChange = { onToggleSpeaker() },
                     icon = Icons.Filled.VolumeUp, label = "Speaker", danger = false)
             }
             LeaveControl(onHangUp)
@@ -213,21 +213,26 @@ private fun ControlBar(
     }
 }
 
-/** A round-rect control tile + caption. `danger` = its "on" state means muted/deafened (error tint). */
+/** Standard M3 filled icon toggle button + caption. `danger` = its "on" state means muted/deafened (error tint). */
 @Composable
-private fun ToggleControl(
-    checked: Boolean, onClick: () -> Unit, icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true,
+private fun ControlToggle(
+    checked: Boolean, onCheckedChange: (Boolean) -> Unit,
+    icon: ImageVector, label: String, danger: Boolean, enabled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
-    // Inactive tiles blend into the bar (dark in dark theme); active = error (muted/deafened) or a
-    // white-ish inverse highlight (e.g. speaker on) to signal a non-default state.
-    val container = when { danger && checked -> cs.errorContainer; checked -> cs.inverseSurface; else -> cs.surfaceContainerHighest }
-    val content = when { danger && checked -> cs.onErrorContainer; checked -> cs.inverseOnSurface; else -> cs.onSurface }
     ControlColumn(label) {
-        Surface(onClick = onClick, enabled = enabled,
+        FilledIconToggleButton(
+            checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
+            modifier = Modifier.size(60.dp),
             shape = if (checked) RoundedCornerShape(percent = 35) else CircleShape,   // morph to squircle when active
-            color = container, contentColor = content, modifier = Modifier.size(60.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(icon, label, modifier = Modifier.size(26.dp)) }
+            colors = IconButtonDefaults.filledIconToggleButtonColors(
+                containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
+                contentColor = cs.onSurface,
+                checkedContainerColor = if (danger) cs.errorContainer else cs.inverseSurface,   // active highlight
+                checkedContentColor = if (danger) cs.onErrorContainer else cs.inverseOnSurface,
+            ),
+        ) {
+            Icon(icon, label, modifier = Modifier.size(26.dp))
         }
     }
 }
@@ -244,15 +249,17 @@ private fun RouteControl(
         ControlColumn(label) {
             // White-ish highlight when on a non-default route (not earpiece); dark/blended otherwise.
             val highlighted = icon != AudioRoute.RouteIcon.EARPIECE
-            Surface(onClick = { expanded = true },
+            FilledIconButton(
+                onClick = { expanded = true }, modifier = Modifier.size(60.dp),
                 shape = if (highlighted) RoundedCornerShape(percent = 35) else CircleShape,   // squircle when non-default
-                color = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
-                contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
-                modifier = Modifier.size(60.dp)) {
-                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically) {
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
+                    contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
+                ),
+            ) {
+                Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     Icon(routeIconVector(icon), "Audio route", modifier = Modifier.size(22.dp))
-                    Icon(Icons.Filled.ArrowDropDown, null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.ArrowDropDown, null, modifier = Modifier.size(16.dp))   // chevron affordance
                 }
             }
         }
@@ -276,10 +283,12 @@ private fun RouteControl(
 private fun LeaveControl(onHangUp: () -> Unit) {
     ControlColumn("Disconnect") {
         // Fixed deep red like the stock phone app's hang-up (M3 `error` goes light on dark themes).
-        Surface(onClick = onHangUp, shape = RoundedCornerShape(percent = 50),
-            color = Color(0xFFD32F2F), contentColor = Color.White,
-            modifier = Modifier.size(width = 76.dp, height = 56.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.CallEnd, "Disconnect", modifier = Modifier.size(28.dp)) }
+        FilledIconButton(
+            onClick = onHangUp, modifier = Modifier.size(width = 76.dp, height = 56.dp),
+            shape = RoundedCornerShape(percent = 50),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
+        ) {
+            Icon(Icons.Filled.CallEnd, "Disconnect", modifier = Modifier.size(28.dp))
         }
     }
 }
