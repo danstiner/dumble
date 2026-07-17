@@ -149,13 +149,26 @@ object MumbleManager {
         active?.setRnnoiseEnabled(value)
     }
 
-    /** Select which detector drives the transmit gate. Builds a Silero session off the calling
-     *  thread (ONNX session creation is not cheap) before swapping it into the live engine, if any. */
+    /** Select which detector drives the transmit gate. Persists + sets the state optimistically, then
+     *  builds the detector off the UI thread (asset read + native ORT init are tens of ms) and swaps
+     *  it into the live engine. A Silero load failure reverts the pref/state to [prev] — no swap. */
     @Synchronized fun setVadEngine(engineName: String) {
+        val prev = _vadEngine.value
         _vadEngine.value = engineName
+        persistVadEngine(engineName)
+        applyVadEngine(engineName, prev)
+    }
+
+    private fun persistVadEngine(name: String) {
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
-            ?.edit()?.putString("vad_engine", engineName)?.apply()
-        applyVadEngine(engineName)
+            ?.edit()?.putString("vad_engine", name)?.apply()
+    }
+
+    /** Build the Silero detector from the bundled asset. Throws-free: returns a [Result]. Shared by
+     *  [applyVadEngine] (background) and [ActiveSession.initialVad] (engine construction). */
+    private fun buildSileroDetector(): Result<SileroVadDetector> = runCatching {
+        val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
+        SileroVadDetector(SileroOnnxSession(bytes))
     }
 
     @Synchronized fun setLookaheadMs(ms: Int) {
@@ -165,21 +178,29 @@ object MumbleManager {
         active?.setLookaheadMs(ms)
     }
 
-    /** Build the requested detector (off the send thread) and hot-swap it into the live session's
-     *  engine. A Silero load failure keeps the current detector and logs — never crashes. No-op
-     *  (beyond the persisted preference above) when no call is active; the next connect() picks up
-     *  the persisted [_vadEngine] value at construction. */
-    private fun applyVadEngine(engineName: String) {
-        val session = active ?: return
-        val newVad: VadDetector = when (engineName) {
-            "silero" -> runCatching {
-                val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
-                SileroVadDetector(SileroOnnxSession(bytes))
-            }.getOrElse { Log.w(TAG, "Silero load failed; keeping current VAD", it); return }
-            "energy" -> EnergyVadDetector()
-            else -> session.rnnoise   // RNNoise-as-VAD; kept alive for its VAD prob even when denoise is off
+    /** Build the requested detector on a background thread (asset I/O + native init off the UI thread)
+     *  and hot-swap it into the live session's engine. A Silero load failure reverts the pref/state to
+     *  [prev] and logs — never crashes, never swaps. No-op (beyond the persisted preference already
+     *  written) when no call is active; the next connect() picks up the persisted [_vadEngine] value. */
+    private fun applyVadEngine(engineName: String, prev: String) {
+        if (active == null) return   // persist-only; next connect() reads the persisted _vadEngine
+        scope.launch(Dispatchers.IO) {
+            val newVad: VadDetector = when (engineName) {
+                "silero" -> buildSileroDetector().getOrElse {
+                    Log.w(TAG, "Silero load failed; reverting", it)
+                    _vadEngine.value = prev
+                    persistVadEngine(prev)
+                    return@launch
+                }
+                "energy" -> EnergyVadDetector()
+                else -> active?.rnnoise ?: return@launch   // RNNoise-as-VAD; call ended mid-build
+            }
+            // Re-read `active`: the call may have ended while we built off-thread. setVadDetector is
+            // now safe from any thread (Fix A deferred the old-detector close to the send thread).
+            val session = active
+            if (session != null) session.setVadDetector(newVad)
+            else (newVad as? SileroVadDetector)?.close()   // call gone → don't leak the native session
         }
-        session.setVadDetector(newVad)
     }
 
     @Synchronized fun setTransmitMode(mode: TransmitMode) {
@@ -270,10 +291,9 @@ object MumbleManager {
         // off (VAD keeps running) via setRnnoiseEnabled.
         val rnnoise = RnnoiseSuppressor()
         private val initialVad: VadDetector = when (_vadEngine.value) {
-            "silero" -> runCatching {
-                val bytes = appContext!!.assets.open("silero_vad_16k_op15.onnx").readBytes()
-                SileroVadDetector(SileroOnnxSession(bytes))
-            }.getOrElse { Log.w(TAG, "Silero load failed at connect; falling back to rnnoise", it); rnnoise }
+            "silero" -> buildSileroDetector().getOrElse {
+                Log.w(TAG, "Silero load failed at connect; falling back to rnnoise", it); rnnoise
+            }
             "energy" -> EnergyVadDetector()
             else -> rnnoise
         }

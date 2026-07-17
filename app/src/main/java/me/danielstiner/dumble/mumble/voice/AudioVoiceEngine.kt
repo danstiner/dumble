@@ -55,6 +55,9 @@ class AudioVoiceEngine(
     private var frameNumber = 0L
     @Volatile private var lookahead = LookaheadDelay(initialLookaheadCaptures)
     @Volatile private var pendingLookaheadCaptures: Int? = null
+    // A swapped-out detector awaiting close on the send thread (never close it on the caller thread —
+    // a native ORT session could be torn down mid `level()`). Drained at the top of computeOutgoing().
+    @Volatile private var detectorToClose: VadDetector? = null
 
     /** Live-adjust the onset-recovery lookahead delay (0 = off/identity). 20 ms per capture.
      *  Runs on the UI thread: records a pending K, applied (flush + clean close) on the send thread. */
@@ -105,11 +108,13 @@ class AudioVoiceEngine(
     /** Live-enable/disable RNNoise denoising. Off keeps RNNoise running for the VAD but sends raw audio. */
     fun setRnnoiseEnabled(value: Boolean) { suppressor.setDenoiseEnabled(value) }
 
-    /** Hot-swap the VAD detector (built off-thread by the caller). Closes a previous Silero session. */
+    /** Hot-swap the VAD detector (built off-thread by the caller). The previous detector is closed
+     *  on the SEND thread (see [computeOutgoing]) — closing it here (any caller thread) could tear
+     *  down a native ORT session while the send thread is mid `old.level()` → use-after-close. */
     fun setVadDetector(newVad: VadDetector) {
         val old = processor.vad
         processor.vad = newVad
-        if (old !== newVad) (old as? SileroVadDetector)?.close()
+        if (old !== newVad) detectorToClose = old   // send thread closes it once safely past use
     }
 
     /** Switch transmit mode live. The send thread detects the change and flushes any open
@@ -155,6 +160,11 @@ class AudioVoiceEngine(
         rec.read(capturePcm, CAPTURE_SAMPLES)             // capture clock — runs even while muted
         val fn = frameNumber
         frameNumber += FRAMES_PER_PACKET                 // wall-clock: advance every capture
+
+        // Close any detector swapped out since the last capture. Safe here: this thread is the only
+        // one that calls old.level(), and it has necessarily returned from any prior level() before
+        // re-entering computeOutgoing(), so the native session is guaranteed idle.
+        detectorToClose?.let { detectorToClose = null; (it as? SileroVadDetector)?.close() }
 
         // Apply a pending K change here on the send thread (setLookaheadMs only records it on the UI
         // thread). Mirror the mode-change flush+terminate so the old delayed stream closes cleanly
@@ -339,6 +349,7 @@ class AudioVoiceEngine(
         encoder.close()
         suppressor.close()
         (processor.vad as? SileroVadDetector)?.close()
+        (detectorToClose as? SileroVadDetector)?.close(); detectorToClose = null
     }
 }
 
