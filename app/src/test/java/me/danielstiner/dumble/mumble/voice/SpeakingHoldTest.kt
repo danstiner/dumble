@@ -40,4 +40,11 @@ class SpeakingHoldTest {
         assertTrue("refreshed 1 still held", c4.contains(1))
         assertFalse("unrefreshed 2 already dropped", c4.contains(2))
     }
+
+    @Test fun clearEmptiesTheSet() {
+        val h = SpeakingHold(holdTicks = 5)
+        h.tick(setOf(1, 2))
+        h.clear()
+        assertTrue(h.tick(emptySet()).isEmpty())
+    }
 }
