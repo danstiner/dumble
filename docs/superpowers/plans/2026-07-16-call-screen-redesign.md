@@ -313,8 +313,9 @@ git commit -m "feat(voice): pure release-hold helpers for speaking/transmitting 
     private val transmitHold = TransmitHold()   // send thread only
     @Volatile private var deafened = false
 
-    /** Live-toggle self-deafen: mutes playout (still draining streams to keep jitter buffers sane). */
-    fun setDeafened(value: Boolean) { deafened = value }
+    /** Live-toggle self-deafen: mutes playout (still draining streams to keep jitter buffers sane).
+     *  Deafening also drops any held PTT so a later un-deafen can't reopen the mic with no finger on Talk. */
+    fun setDeafened(value: Boolean) { deafened = value; if (value) pttHeld = false }
     internal val isDeafened get() = deafened   // test seam
 ```
 
