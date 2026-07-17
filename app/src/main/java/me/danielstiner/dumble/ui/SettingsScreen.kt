@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -84,20 +86,57 @@ fun SettingsScreen(
                 }
 
                 val vaMode = transmitMode == TransmitMode.VOICE_ACTIVATED
-                Text("Sensitivity threshold: %.2f".format(vadThreshold))
-                Slider(
-                    value = vadThreshold,
-                    onValueChange = onVadThresholdChange,
-                    valueRange = 0.3f..0.95f,
-                    enabled = vaMode,
-                )
+
                 Text(
-                    if (vaMode) "Higher = transmits only on clearer speech. Applies live to the active call."
-                    else "Applies in Voice activity mode.",
+                    "Voice detection",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
                 )
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Voice detection engine")
+                        val engines = listOf("energy" to "Energy", "rnnoise" to "RNNoise", "silero" to "Silero")
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            engines.forEachIndexed { index, (key, label) ->
+                                SegmentedButton(
+                                    selected = vadEngine == key,
+                                    onClick = { onVadEngineChange(key) },
+                                    shape = SegmentedButtonDefaults.itemShape(index, engines.size),
+                                ) {
+                                    Text(label)
+                                }
+                            }
+                        }
+
+                        Text("Sensitivity threshold: %.2f".format(vadThreshold), modifier = Modifier.padding(top = 16.dp))
+                        Slider(
+                            value = vadThreshold,
+                            onValueChange = onVadThresholdChange,
+                            valueRange = 0.3f..0.95f,
+                            enabled = vaMode,
+                        )
+                        Text(
+                            if (vaMode) "Higher = transmits only on clearer speech. Applies live to the active call."
+                            else "Applies in Voice activity mode.",
+                        )
+
+                        Text(
+                            "Detection preroll: $prerollMs ms" + if (prerollMs == 0) " (0 = lowest latency)" else "",
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                        Slider(
+                            value = prerollMs.toFloat(),
+                            onValueChange = { onPrerollChange((it / 20f).roundToInt() * 20) },
+                            valueRange = 0f..100f,
+                            steps = 4,
+                        )
+                        Text("Delays transmit start to capture speech onset before the gate opens. Higher = less clipped words, more latency.")
+                    }
+                }
 
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("Automatic gain control", modifier = Modifier.weight(1f))
@@ -120,32 +159,6 @@ fun SettingsScreen(
                     Switch(checked = rnnoiseEnabled, onCheckedChange = onRnnoiseEnabledChange)
                 }
                 Text("Off sends your raw mic (relies on the phone's own noise removal). Voice activation is unaffected.")
-
-                Text("Voice detection engine", modifier = Modifier.padding(top = 16.dp))
-                val engines = listOf("energy" to "Energy", "rnnoise" to "RNNoise", "silero" to "Silero")
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    engines.forEachIndexed { index, (key, label) ->
-                        SegmentedButton(
-                            selected = vadEngine == key,
-                            onClick = { onVadEngineChange(key) },
-                            shape = SegmentedButtonDefaults.itemShape(index, engines.size),
-                        ) {
-                            Text(label)
-                        }
-                    }
-                }
-
-                Text(
-                    "Detection preroll: $prerollMs ms" + if (prerollMs == 0) " (0 = lowest latency)" else "",
-                    modifier = Modifier.padding(top = 16.dp),
-                )
-                Slider(
-                    value = prerollMs.toFloat(),
-                    onValueChange = { onPrerollChange((it / 20f).roundToInt() * 20) },
-                    valueRange = 0f..100f,
-                    steps = 4,
-                )
-                Text("Delays transmit start to capture speech onset before the gate opens. Higher = less clipped words, more latency.")
             }
             ListItem(
                 headlineContent = { Text("Echo Test") },
