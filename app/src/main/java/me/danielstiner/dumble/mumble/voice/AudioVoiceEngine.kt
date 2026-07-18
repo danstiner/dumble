@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.voice
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,8 +13,8 @@ import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 
 /** Abstracts the Android capture device so the engine's logic is JVM-testable. */
-interface AudioIn { fun read(out: ShortArray, n: Int): Int; fun close(); fun captureInfo(): CaptureInfo? = null }
-interface AudioOut { fun write(pcm: ShortArray, n: Int); fun close() }
+interface AudioIn { fun read(out: ShortArray, n: Int): Int; fun close(); fun captureInfo(): CaptureInfo? = null; fun latencyMs(): Double = Double.NaN }
+interface AudioOut { fun write(pcm: ShortArray, n: Int); fun close(); fun latencyMs(): Double = Double.NaN }
 
 private const val DIAG_INTERVAL = 25   // ~500 ms at 20 ms captures
 
@@ -388,6 +389,12 @@ class AndroidAudioIn : AudioIn {
         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4)).also { it.startRecording() }
     private val platformEffects = PlatformAudioEffects(record.audioSessionId)
+    private var framesRead = 0L
+    private var lastSampleNanos = 0L
+    private val ema = LatencyEma()
+    private val ts = AudioTimestamp()
+    override fun latencyMs(): Double = ema.valueMs
+
     override fun captureInfo(): CaptureInfo =
         CaptureInfo(platformEffects.states, PlatformAudioEffects.deviceModel())
     override fun read(out: ShortArray, n: Int): Int {
@@ -399,6 +406,18 @@ class AndroidAudioIn : AudioIn {
                 break
             }
             off += r
+        }
+        // Sampled once per wrapper read (not per retry) after the loop. If the read stalled (off frozen)
+        // while getTimestamp keeps succeeding, reported latency climbs — an intentional "capture stalled" signal.
+        framesRead += off // mono: 1 short == 1 frame
+        val now = System.nanoTime()
+        if (now - lastSampleNanos >= 1_000_000_000L) {
+            lastSampleNanos = now
+            if (record.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS
+                && now - ts.nanoTime < 2_000_000_000L // skip a stale (stalled) timestamp
+            ) {
+                ema.update(LatencyMath.inputLatencyMs(framesRead, ts.framePosition, ts.nanoTime, now, SAMPLE_RATE))
+            }
         }
         return off
     }
@@ -422,10 +441,22 @@ class AndroidAudioOut : AudioOut {
         .setBufferSizeInBytes(maxOf(minBuf, FRAME_SAMPLES_20MS * 2 * 4))
         .setTransferMode(AudioTrack.MODE_STREAM).build()
         .also { it.play() }
+    private var framesWritten = 0L
+    private var lastSampleNanos = 0L
+    private val ema = LatencyEma()
+    private val ts = AudioTimestamp()
+    override fun latencyMs(): Double = ema.valueMs
+
     override fun write(pcm: ShortArray, n: Int) {
         val w = track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING)
-        if (w < 0) {
-            android.util.Log.w("AudioVoiceEngine", "AudioTrack.write err=$w playState=${track.playState}")
+        if (w < 0) android.util.Log.w("AudioVoiceEngine", "AudioTrack.write err=$w playState=${track.playState}")
+        else framesWritten += w // mono: 1 short == 1 frame
+        val now = System.nanoTime()
+        if (now - lastSampleNanos >= 1_000_000_000L) {
+            lastSampleNanos = now
+            if (track.getTimestamp(ts) && now - ts.nanoTime < 2_000_000_000L) {
+                ema.update(LatencyMath.outputLatencyMs(framesWritten, ts.framePosition, ts.nanoTime, now, SAMPLE_RATE))
+            }
         }
     }
     override fun close() { runCatching { track.stop() }; track.release() }
