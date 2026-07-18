@@ -41,6 +41,9 @@ class AudioVoiceEngine(
 
     private val _latency = MutableStateFlow(LatencyStats())
     val latency: StateFlow<LatencyStats> = _latency.asStateFlow()
+
+    private val _jitter = MutableStateFlow(JitterStats())
+    val jitter: StateFlow<JitterStats> = _jitter.asStateFlow()
     private var diagTick = 0
 
     @Volatile private var muted = false
@@ -365,6 +368,10 @@ class AudioVoiceEngine(
             _latency.value = LatencyStats(
                 captureMs = recorder?.latencyMs() ?: Double.NaN,
                 playoutMs = out.latencyMs(),
+            )
+            _jitter.value = JitterStats(
+                targetMs = speakers.values.maxOfOrNull { it.jitterTargetMs() } ?: 10,
+                p95Ms = speakers.values.maxOfOrNull { it.jitterP95Ms() } ?: 0,
             )
         }
     }

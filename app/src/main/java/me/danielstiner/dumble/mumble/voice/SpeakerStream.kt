@@ -33,6 +33,10 @@ class SpeakerStream(
      *  only by the playback thread; a slightly stale read from the receive thread is fine here. */
     fun playoutCursor(): Long = cursor
 
+    /** Diagnostic read-only: current adaptive prebuffer target / p95 relative delay, in ms. */
+    fun jitterTargetMs(): Int = estimator.targetSamples / 48     // 48 samples/ms
+    fun jitterP95Ms(): Int = estimator.p95Ms
+
     /** Receive thread. Feeds the estimator (every non-empty packet, incl. late) and enqueues. */
     fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean, arrivalNanos: Long): JitterBuffer.OfferResult {
         val cur = cursor
