@@ -179,15 +179,16 @@ object CallManager {
 
     /** User hang-up (call screen / notification action). */
     fun hangUp() {
+        val seq = callSeq
         val scope = controlScope
         if (scope != null) {
             appScope.launch {
                 val res = scope.disconnect(DisconnectCause(DisconnectCause.LOCAL))
                 Log.d(TAG, "user hang-up result=$res")
-                teardown(callSeq)
+                teardown(seq)
             }
         } else {
-            teardown(callSeq) // no active control scope (call never fully started) — clean up anyway
+            teardown(seq) // no active control scope (call never fully started) — clean up anyway
         }
     }
 
