@@ -111,11 +111,12 @@ class DownlinkJitterEstimatorTest {
 
     @Test fun oneOffSpikeIsIgnored() {
         val est = DownlinkJitterEstimator()
-        // 45 steady buckets (advance 200 ms per packet so each lands in its own bucket) + a single 300 ms spike.
+        // 45 STEADY packets 200 ms apart in BOTH rtp and arrival (ts += 9600 = 200 ms, arr += 200 ms) so
+        // each lands in its own bucket with a constant delay, then a single 300 ms spike in one bucket.
         var ts = 0L; var arr = 1_000_000_000L
-        for (k in 0 until 45) { est.onPacket(ts, arr, false); ts += frame; arr += 200 * ms }
+        for (k in 0 until 45) { est.onPacket(ts, arr, false); ts += frame * 10; arr += 200 * ms }
         est.onPacket(ts, arr + 300 * ms, false) // spike in one fresh bucket
-        // p95 over 40 live buckets excludes the top ~2 → target stays at floor.
+        // p95 over 40 live buckets excludes the top ~2 → the lone spike is ignored → target stays at floor.
         assertEquals(DownlinkJitterEstimator.FLOOR_SAMPLES, est.targetSamples)
     }
 
@@ -125,12 +126,13 @@ class DownlinkJitterEstimatorTest {
         assertEquals((DownlinkJitterEstimator.MAX_NS * 48 / ms).toInt(), est.targetSamples) // 400 ms → 19200
     }
 
-    @Test fun windowLocalMinimaCancelsDrift() {
+    @Test fun fixedArrivalOffsetIsCancelled() {
         val est = DownlinkJitterEstimator()
-        // Arrival drifts +1 ms/packet on top of rtp; relative delay is ~0 because the baseline re-bases.
-        feed(est, 60, startTs = 0, startArr = 1_000_000_000L, stepNs = 20 * ms) { k -> k.toLong() * ms }
-        // Within any 200 ms window the drift spread is small (~10 ms across 10 pkts); target stays near floor.
-        assertTrue("target ${est.targetSamples} should be near floor", est.targetSamples <= 10 * 48 + 480)
+        // Steady traffic with a large CONSTANT arrival offset (+5 s): relative delay is 0 because the
+        // window-local baseline subtracts the offset → target stays at the floor. (A realistic ~50 ppm
+        // clock drift over the 8 s window is < 1 sample, so offset-cancellation is the property to test.)
+        feed(est, 60, startTs = 0, startArr = 1_000_000_000L + 5_000 * ms, stepNs = 20 * ms) { 0 }
+        assertEquals(DownlinkJitterEstimator.FLOOR_SAMPLES, est.targetSamples)
     }
 
     @Test fun lateBurstFiresOnThreeLatesInWindow() {
@@ -282,6 +284,10 @@ Claude-Session: https://claude.ai/code/session_01TqQFX1KY7q3eqvRBUoCTNz"
 
 ### Task 2: SpeakerStream — adaptive anchor + PLC deepen valve
 
+> **Note (post-review refinements — the branch commits are authoritative over the code blocks below):** the shipped Task 2 `offer`/valve differ from the sketch here after two review rounds:
+> - **fable code-quality (mutation harness):** the valve also gates on **`!buffer.isEmpty()`** (must not fire during a full underrun — structurally closes the `consecutivePlc` corridor); `resetToIdle()` resets `ticksSinceDeepen = 0`; the weak valve test was replaced by `valveTickInsertsPlcBeforeQueuedFrameAndHoldsCursor` (kills the deleted-valve and counter-coupled mutants).
+> - **fable adversarial (compiled the repo's own code):** two must-fix bugs, both in `offer`: (1) inbound voice arrives on **two threads** (UDP recv + TCP-tunnel IO coroutine) and the server flips downlink transport per-packet → a real data race into the single-writer estimator → **`offer` is now `@Synchronized`**; (2) the frame_number-reset detection now keys on the **inbound-silence ARRIVAL gap** (`arrivalNanos - lastOfferArrivalNanos > RENUMBER_GAP_NANOS` = 4 s) on a QUEUED packet, NOT a backward-ts distance — the ts-distance form missed a renumber after a short (<250 ms) utterance and pinned the whole next spurt +400 ms late. Test: `offerResetsEstimatorAfterLongArrivalGap`.
+
 **Goal:** `SpeakerStream` owns a `DownlinkJitterEstimator`; `offer` gains `arrivalNanos` and feeds it; the anchor gate reads `estimator.targetSamples`; add a `plcDeepen()` valve that deepens on a late-burst without touching the underrun counter.
 
 **Files:**
@@ -291,6 +297,7 @@ Claude-Session: https://claude.ai/code/session_01TqQFX1KY7q3eqvRBUoCTNz"
 **Acceptance Criteria:**
 - [ ] Constructor takes `estimator: DownlinkJitterEstimator = DownlinkJitterEstimator()` and a `targetSamples: () -> Int = { estimator.targetSamples }` supplier seam; the static `prebufferSamples: Int` param is replaced by these two.
 - [ ] `offer(timestampSamples, opus, spanSamples, isTerminator, arrivalNanos)` feeds `estimator.onPacket(ts, arrivalNanos, result == LATE)` for every non-`EMPTY` result, then returns the result.
+- [ ] `offer` resets the estimator (receive thread) on a large backward ts jump (`ts < lastOfferTs - reanchorGapSamples`, a frame_number reset), so a returning speaker's target doesn't pin at MAX. (`reset()` is NOT called from `resetToIdle` — that's the playback thread.)
 - [ ] The anchor gate uses `targetSamples()` instead of the constant.
 - [ ] `fillTick` fires `plcDeepen()` when anchored AND `estimator.lateBurst` AND `bufferedSamples() < targetSamples()` AND ≥ `DEEPEN_INTERVAL_TICKS` (10) since the last deepen; `plcDeepen()` pushes a PLC frame + holds the cursor and does NOT increment `consecutivePlc`.
 - [ ] All existing Part A `SpeakerStreamTest` cases still pass (migrated: `prebufferSamples = N` → `targetSamples = { N }`, and a trailing `arrivalNanos` added to every `offer(...)` call).
@@ -320,10 +327,21 @@ Add near the other fields:
     private var ticksSinceDeepen = DEEPEN_INTERVAL_TICKS   // playback-thread only; allow immediate first deepen
 ```
 
-Rewrite `offer`:
+Add a receive-thread field for frame_number-reset detection, and rewrite `offer`:
 ```kotlin
+    private var lastOfferTs = Long.MIN_VALUE   // receive-thread only: detect frame_number resets
+
     /** Receive thread. Feeds the estimator (every non-empty packet, incl. late) and enqueues. */
     fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean, arrivalNanos: Long): JitterBuffer.OfferResult {
+        // A large BACKWARD ts jump = the sender's frame_number reset (Mumble renumbers after ~5 s silence).
+        // Reset the estimator HERE (receive thread — same thread as onPacket, so it's race-free) so its
+        // d-metric doesn't mix two baselines and pin the target at MAX. A forward gap (packet loss) is fine
+        // and needs no reset. Do NOT call estimator.reset() from resetToIdle() — that's the PLAYBACK thread
+        // and would race the receive-thread bucket arrays.
+        if (lastOfferTs != Long.MIN_VALUE && timestampSamples < lastOfferTs - reanchorGapSamples) {
+            estimator.reset()
+        }
+        lastOfferTs = timestampSamples
         val cur = cursor
         val result = buffer.offer(JitterBuffer.Packet(timestampSamples, opus, spanSamples, isTerminator),
             if (cur < 0) 0 else cur)
