@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.mumble.voice
 
 private const val DEEPEN_INTERVAL_TICKS = 10   // >= 200 ms between valve deepens (20 ms/tick)
-private const val BACKWARD_RESET_GAP_SAMPLES = 12_000   // 250 ms: a ts drop > this on a QUEUED packet = frame_number reset
+private const val RENUMBER_GAP_NANOS = 4_000_000_000L   // 4 s inbound silence ⇒ the sender renumbered frame_number
 
 /**
  * Per-speaker playout. Playback thread calls fillTick(); receive thread calls offer().
@@ -21,7 +21,7 @@ class SpeakerStream(
     private var consecutivePlc = 0              // consecutive HELD (live-underrun) ticks
     private var idleTicks = 0                   // consecutive un-anchored + empty ticks
     private var ticksSinceDeepen = DEEPEN_INTERVAL_TICKS   // playback-thread only; allow immediate first deepen
-    private var lastOfferTs = Long.MIN_VALUE               // receive-thread only: detect frame_number resets
+    private var lastOfferArrivalNanos = Long.MIN_VALUE   // receive-thread only: detect renumber via long silence
     private var decoder: OpusDecoder? = null    // playback-thread only
     private val decodeOut = ShortArray(MAX_FRAME_SAMPLES)
     private val fifo = ShortArrayFifo(MAX_FRAME_SAMPLES * 4)
@@ -37,21 +37,24 @@ class SpeakerStream(
     fun jitterTargetMs(): Int = estimator.targetSamples / 48     // 48 samples/ms
     fun jitterP95Ms(): Int = estimator.p95Ms
 
-    /** Receive thread. Feeds the estimator (every non-empty packet, incl. late) and enqueues. */
+    /** Receive thread(s). Feeds the estimator (every non-empty packet, incl. late) and enqueues.
+     *  @Synchronized: inbound voice can arrive on TWO threads (UDP recv thread + TCP-tunnel IO coroutine)
+     *  and the server flips downlink transport per-packet, so serialize the estimator's single-writer state. */
+    @Synchronized
     fun offer(timestampSamples: Long, opus: ByteArray, spanSamples: Int, isTerminator: Boolean, arrivalNanos: Long): JitterBuffer.OfferResult {
         val cur = cursor
         val result = buffer.offer(JitterBuffer.Packet(timestampSamples, opus, spanSamples, isTerminator),
             if (cur < 0) 0 else cur)
-        // A large BACKWARD ts jump on a freshly-anchoring (QUEUED) packet = the sender's frame_number reset
-        // (Mumble renumbers after ~5 s silence, which has already un-anchored us). Reset the estimator HERE
-        // (receive thread — race-free vs onPacket) so its d-metric doesn't mix two baselines and pin the
-        // target at MAX. QUEUED (not LATE) gates out a mid-spurt straggler; a forward gap (loss) needs no
-        // reset. Do NOT reset from resetToIdle() — that's the PLAYBACK thread.
-        if (result == JitterBuffer.OfferResult.QUEUED && lastOfferTs != Long.MIN_VALUE &&
-            timestampSamples < lastOfferTs - BACKWARD_RESET_GAP_SAMPLES) {
+        // Fix #2: a fresh anchor (QUEUED) after a long ARRIVAL gap = the sender was silent long enough (~5 s)
+        // to renumber frame_number to 0. Reset the estimator so its d-metric doesn't mix the pre/post-renumber
+        // baselines and pin the target at MAX. Use the ARRIVAL gap, not ts-distance: after a SHORT utterance the
+        // ts jump is tiny (= the prior spurt length) but the silence gap is always large — the ts-distance form
+        // missed "yep + 5 s pause" and pinned the whole next spurt +400 ms late.
+        if (result == JitterBuffer.OfferResult.QUEUED && lastOfferArrivalNanos != Long.MIN_VALUE &&
+            arrivalNanos - lastOfferArrivalNanos > RENUMBER_GAP_NANOS) {
             estimator.reset()
         }
-        lastOfferTs = timestampSamples
+        lastOfferArrivalNanos = arrivalNanos
         if (result != JitterBuffer.OfferResult.EMPTY) {
             estimator.onPacket(timestampSamples, arrivalNanos, result == JitterBuffer.OfferResult.LATE)
         }

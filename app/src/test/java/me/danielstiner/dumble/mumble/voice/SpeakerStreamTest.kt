@@ -140,4 +140,19 @@ class SpeakerStreamTest {
         assertEquals("queued frame deferred exactly one tick", -50, out[0].toInt())
         assertEquals(1920L, s.playoutCursor())
     }
+
+    /** offer() resets the estimator after a long inbound-silence gap (frame_number renumber),
+     *  even when the ts jump itself is small. Never fillTick -> cursor stays -1 -> offers are QUEUED. */
+    @Test fun offerResetsEstimatorAfterLongArrivalGap() {
+        val est = DownlinkJitterEstimator()
+        val s = SpeakerStream(codec, estimator = est)
+        var arr = 1_000_000_000L
+        for (k in 0 until 60) {                                   // jittery feed raises the target
+            s.offer(k * 960L, encoded(960), 960, false, arr + if (k == 0) 0L else 120_000_000L)
+            arr += 20_000_000L
+        }
+        assertTrue("target grew above floor", est.targetSamples > DownlinkJitterEstimator.FLOOR_SAMPLES)
+        s.offer(60 * 960L, encoded(960), 960, false, arr + 5_000_000_000L)   // ~5 s later -> renumber -> reset
+        assertEquals(DownlinkJitterEstimator.FLOOR_SAMPLES, est.targetSamples)
+    }
 }
