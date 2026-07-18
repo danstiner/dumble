@@ -35,43 +35,43 @@ class VoicePipelineMixTest {
     }
 
     @Test fun singleSpeakerContiguousFramesMuxCorrectly() {
-        val s = SpeakerStream(codec, prebufferSamples = 0)
-        s.offer(0, frame(), FRAME_SAMPLES_20MS, false)
-        s.offer(960, frame(), FRAME_SAMPLES_20MS, false)
+        val s = SpeakerStream(codec, targetSamples = { 0 })
+        s.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)
+        s.offer(960, frame(), FRAME_SAMPLES_20MS, false, 960L)
         assertPattern(mixTick(listOf(s)), gain = 1)
         assertPattern(mixTick(listOf(s)), gain = 1)
     }
 
     @Test fun gapMuxesToSilenceThenResumes() {
-        val s = SpeakerStream(codec, prebufferSamples = 0)
-        s.offer(0, frame(), FRAME_SAMPLES_20MS, false)
+        val s = SpeakerStream(codec, targetSamples = { 0 })
+        s.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)
         assertEquals(-50, mixTick(listOf(s))[0].toInt())     // real audio
         assertEquals(0, mixTick(listOf(s))[0].toInt())       // underrun → hold → silence
-        s.offer(960, frame(), FRAME_SAMPLES_20MS, false)     // resume at continued timestamp
+        s.offer(960, frame(), FRAME_SAMPLES_20MS, false, 960L)     // resume at continued timestamp
         assertEquals(-50, mixTick(listOf(s))[0].toInt())     // resumed audio present, not lost
     }
 
     @Test fun terminatorEndsTalkspurtInMux() {
-        val s = SpeakerStream(codec, prebufferSamples = 0)
-        s.offer(0, frame(), FRAME_SAMPLES_20MS, true)        // single terminated frame
+        val s = SpeakerStream(codec, targetSamples = { 0 })
+        s.offer(0, frame(), FRAME_SAMPLES_20MS, true, 0L)        // single terminated frame
         assertEquals(-50, mixTick(listOf(s))[0].toInt())     // plays
         assertEquals(0, mixTick(listOf(s))[0].toInt())       // past terminator → reset → silence
     }
 
     @Test fun twoSpeakersMuxAsSum() {
-        val a = SpeakerStream(codec, prebufferSamples = 0)
-        val b = SpeakerStream(codec, prebufferSamples = 0)
-        a.offer(0, frame(), FRAME_SAMPLES_20MS, false)
-        b.offer(0, frame(), FRAME_SAMPLES_20MS, false)
+        val a = SpeakerStream(codec, targetSamples = { 0 })
+        val b = SpeakerStream(codec, targetSamples = { 0 })
+        a.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)
+        b.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)
         assertPattern(mixTick(listOf(a, b)), gain = 2)       // exact integer sum (both under THRESHOLD)
     }
 
     @Test fun twoSpeakersOneInGapMuxesActiveOnly() {
-        val a = SpeakerStream(codec, prebufferSamples = 0)
-        val b = SpeakerStream(codec, prebufferSamples = 0)
-        a.offer(0, frame(), FRAME_SAMPLES_20MS, false)
-        a.offer(960, frame(), FRAME_SAMPLES_20MS, false)
-        b.offer(0, frame(), FRAME_SAMPLES_20MS, false)       // b has only one frame
+        val a = SpeakerStream(codec, targetSamples = { 0 })
+        val b = SpeakerStream(codec, targetSamples = { 0 })
+        a.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)
+        a.offer(960, frame(), FRAME_SAMPLES_20MS, false, 960L)
+        b.offer(0, frame(), FRAME_SAMPLES_20MS, false, 0L)       // b has only one frame
         assertPattern(mixTick(listOf(a, b)), gain = 2)       // tick 1: both active → sum
         assertPattern(mixTick(listOf(a, b)), gain = 1)       // tick 2: b holds (silence) → only a
     }

@@ -312,7 +312,7 @@ class AudioVoiceEngine(
             SpeakerStream(codec)
         }
         val tsSamples = frameNumber * FRAME_SAMPLES_10MS
-        val result = stream.offer(tsSamples, copy, span, terminator)
+        val result = stream.offer(tsSamples, copy, span, terminator, arrivalNanos)
         // Count only genuine late drops (audio behind the playout cursor) — not duplicate/reordered
         // retransmits (DUPLICATE) or tag-only terminators (EMPTY), which are harmless.
         if (result == JitterBuffer.OfferResult.LATE && !terminator) {
