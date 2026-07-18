@@ -38,6 +38,9 @@ class AudioVoiceEngine(
 
     private val _diagnostics = MutableStateFlow(AudioDiagnostics())
     val diagnostics: StateFlow<AudioDiagnostics> = _diagnostics.asStateFlow()
+
+    private val _latency = MutableStateFlow(LatencyStats())
+    val latency: StateFlow<LatencyStats> = _latency.asStateFlow()
     private var diagTick = 0
 
     @Volatile private var muted = false
@@ -356,6 +359,13 @@ class AudioVoiceEngine(
             val speaking = speakingHold.tick(producedSessions)
             if (speaking != _speakingSessions.value) _speakingSessions.value = speaking
             _stats.update { it.copy(received = received.get(), activeSpeakers = active) }
+            // Latency HUD: recorder.latencyMs() read here (playout thread) crosses from the send thread —
+            // safe via LatencyEma's @Volatile. StateFlow conflation + data-class equality throttle emissions
+            // to the EMA's real change rate (~1 Hz) despite the 20 ms poll.
+            _latency.value = LatencyStats(
+                captureMs = recorder?.latencyMs() ?: Double.NaN,
+                playoutMs = out.latencyMs(),
+            )
         }
     }
 
