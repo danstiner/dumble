@@ -18,9 +18,9 @@
 
 The **Audio diagnostics** screen (`AudioDiagnosticsScreen.kt`) already renders:
 - **Network**: `NetStats.mode` / `tcpRttMs` / `udpRttMs` / `udpJitterMs` (from ping/pong).
-- **Voice**: `VoiceStats.sent`/`received`/`lost`/`concealed`/**`bufferMs`** (jitter-buffer depth)/`activeSpeakers`.
+- **Voice**: `VoiceStats.sent`/`received`/`activeSpeakers` are live. **Caveat (verified):** `lost`/`concealed`/**`bufferMs`** are declared and rendered but **never populated** — nothing in `AudioVoiceEngine` writes them, so `Buffer:` shows a constant `0 ms`. Populating the jitter-buffer depth is a **separate, out-of-scope gap**, noted here so the rationale below stays honest.
 
-So the full receive chain's *network* and *jitter-buffer* latency contributors are already visible. The only gap is the two **audio-hardware** latencies:
+So today only *network RTT* is a live latency contributor on the screen; jitter-buffer depth is present-but-dead. The gap this feature fills is the two **audio-hardware** latencies:
 - **Capture latency** — time between a frame arriving at the ADC and the app reading it (`AndroidAudioIn` / `AudioRecord`, `VOICE_COMMUNICATION`, 48 kHz mono PCM16, blocking reads).
 - **Playout latency** — time between the app writing a frame and it being presented at the output (`AndroidAudioOut` / `AudioTrack`, `USAGE_VOICE_COMMUNICATION`, MODE_STREAM, blocking writes).
 
@@ -34,9 +34,9 @@ These are load-bearing and were fact-checked against the AOSP Javadoc (`AudioTim
 2. **`AudioTrack.framePosition` is the low-order 32 bits, in wrapping frame units** (like `getPlaybackHeadPosition()`), *despite the field being a `long`*. It wraps every 2³²/48000 s ≈ **24.85 h**. It MUST be unwrapped/compared modulo 2³² against our 64-bit `framesWritten` counter.
 3. `AudioRecord.getTimestamp(AudioTimestamp, int timebase)` returns **`int`** (`AudioRecord.SUCCESS == 0`, else `ERROR_INVALID_OPERATION`), added in **API 24** (fine at minSdk 34). With `timebase = AudioTimestamp.TIMEBASE_MONOTONIC`, `nanoTime` is the capture time of `framePosition` "at the earliest point available in the capture pipeline". **`AudioRecord.framePosition` uses all 64 bits — no wrap.**
 4. Both timestamps are **best-effort**: "cannot account for any delay unknown to the implementation" — so the reported latency is **pipeline latency, not acoustic latency**, and may under-report downstream/Bluetooth-sink delay. Label it as such; do not claim mouth-to-ear accuracy.
-5. `getTimestamp` may return **unavailable as a steady state**, not just during warmup — some routes never provide timestamps. Treat "no timestamp" as: keep the last EMA value, mark stale; if never available, report `—`.
-6. `AudioTrack.getLatency()` is **`@hide`/`@UnsupportedAppUsage`** — NOT public API at target 34. Do not use or reference it.
-7. Successive short-term timestamp reports are **noise** (docs recommend polling every 10 s–1 min once stable). We sample at **~1 Hz** and **EMA-smooth** (0.9/0.1, matching `SyntheticVoiceSource`/`TransportSelector`).
+5. `getTimestamp` may return **unavailable as a steady state**, not just during warmup — some routes never provide timestamps. Treat "no timestamp" as: keep the last EMA value; if never available, report `—`. Also **discard a *stale* timestamp** (position stalled while wall time advances, e.g. underrun) — see the freshness guard in §4 — rather than folding a hard-clamped 0 into the EMA.
+6. `AudioTrack.getLatency()` is **`@hide`/`@UnsupportedAppUsage`** — NOT public API (targetSdk 36, minSdk 34). Do not use or reference it.
+7. Successive short-term timestamp reports are **noise** (docs recommend polling every 10 s–1 min once stable). We sample at **~1 Hz** and **EMA-smooth** (0.9/0.1, matching `SyntheticVoiceSource`'s `avgRtt`; note `TransportSelector` uses a different RFC3550-style 1/16 jitter smoothing — not the model here).
 8. `read()`/`write()` may return **short** — accumulate their actual return values into the frame counters. `AudioRecord`'s frame count **resets to 0 on `startRecording()` after `stop()`** — counters must reset with the stream (n/a here: streams are recreated per call, so counters start at 0 with the object).
 
 ## Components
@@ -74,24 +74,24 @@ object LatencyMath {
 }
 ```
 
-### 2. `LatencyEma` — pure smoothing + staleness
+### 2. `LatencyEma` — pure smoothing
 
-A tiny stateful holder (no Android deps, JVM-testable): folds each raw sample into an EMA and tracks the last-updated wall time so the consumer can decide staleness. Returns `Double.NaN` until the first sample.
+A tiny stateful holder (no Android deps, JVM-testable): folds each raw sample into an EMA. Returns `Double.NaN` until the first sample. **v1 does not mark values stale** — on a route that stops reporting timestamps the last EMA value simply holds; `—` is shown only if a value was *never* available (stays `NaN`). "stale vs never-available" is thus expressed entirely by `NaN`-until-first-sample plus the ~1 Hz sampler not calling `update()` when `getTimestamp` fails or is stale.
 
 ```kotlin
 class LatencyEma(private val alpha: Double = 0.1) {
-    var valueMs: Double = Double.NaN; private set
+    // @Volatile (kotlin.jvm.Volatile): written on the audio thread, read on the playout/stats thread
+    // (see §4 Threading). A single volatile double is safe (JMM 17.7) and keeps the class JVM-pure.
+    @Volatile var valueMs: Double = Double.NaN; private set
     fun update(sampleMs: Double) {
         valueMs = if (valueMs.isNaN()) sampleMs else valueMs * (1 - alpha) + sampleMs * alpha
     }
 }
 ```
 
-(EMA-only state; "stale vs never-available" is expressed by the value staying `NaN` until the first successful timestamp, and by the ~1 Hz sampler simply not calling `update()` when `getTimestamp` fails — the last EMA persists.)
-
 ### 3. `AudioIn` / `AudioOut` interface — default no-op latency
 
-Add one method with a default so only the Android impls implement it (synthetic/test doubles inherit the default):
+Add one method with a default so only the Android impls implement it (the ~6 test fakes under `app/src/test` inherit the default; `SyntheticVoiceSource` is a `VoiceEngine`, not an `AudioIn`, so it's unaffected). `AudioIn` already has a default method (`captureInfo()`), so this is consistent and breaks nothing:
 
 ```kotlin
 interface AudioIn { /* … existing … */ fun latencyMs(): Double = Double.NaN }
@@ -100,15 +100,15 @@ interface AudioOut { /* … existing … */ fun latencyMs(): Double = Double.NaN
 
 ### 4. `AndroidAudioIn` / `AndroidAudioOut` — wiring
 
-Each gains: a 64-bit frame counter (accumulate the actual `read`/`write` return), a `LatencyEma`, and a `~1 Hz` sampler inside the existing `read()`/`write()` loop:
+Each gains: a 64-bit frame counter (accumulate the actual `read`/`write` return value — they can return short), a `LatencyEma`, and a `~1 Hz` sampler in the **wrapper** `read()`/`write()` method — once per ~20 ms call, NOT inside `AndroidAudioIn.read`'s internal short-read retry loop:
 
 - On each call, add the returned frame count to the counter.
-- If `nowNanos − lastSampleNanos ≥ 1e9`: call `getTimestamp`; on success feed `LatencyMath.{input,output}LatencyMs(...)` → `ema.update(...)`; update `lastSampleNanos` regardless (so a failing route doesn't hot-loop the call).
+- If `nowNanos − lastSampleNanos ≥ 1e9`: call `getTimestamp`; on success **and** if the timestamp is fresh (`nowNanos − ts.nanoTime < 2e9` — else skip; a stalled position would otherwise fold hard-clamped 0s into the EMA) feed `LatencyMath.{input,output}LatencyMs(...)` → `ema.update(...)`. Update `lastSampleNanos` regardless (so a failing route doesn't hot-loop the call).
 - `latencyMs()` returns `ema.valueMs` (may be `NaN`).
 
 `AndroidAudioIn` uses `AudioRecord.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC)` (== `SUCCESS`); `AndroidAudioOut` uses `AudioTrack.getTimestamp(ts)` (== `true`). `nowNanos = System.nanoTime()`.
 
-**Threading:** the counter/EMA are mutated only on the audio (`read`/`write`) thread, but `latencyMs()` is read from the stats-emit thread. Publish the smoothed value through an `@Volatile var latencyMs: Double` that the audio thread writes and `latencyMs()` reads — a single volatile double, no lock needed (last-value-wins is fine for a diagnostic).
+**Threading:** each object's counter + EMA are mutated by a single thread — `AndroidAudioIn` on the capture/send thread, `AndroidAudioOut` on the playout thread. The only cross-thread read is `audioIn.latencyMs()`, read on the playout thread when the engine builds `LatencyStats` (§5); the `@Volatile` on `LatencyEma.valueMs` makes that single-double read safe with no lock (last-value-wins is fine for a diagnostic). `audioOut.latencyMs()` is read on the same playout thread that writes it — trivially safe.
 
 ### 5. `LatencyStats` + flow
 
@@ -119,7 +119,9 @@ data class LatencyStats(
 )
 ```
 
-`AudioVoiceEngine` folds `audioIn.latencyMs()` / `audioOut.latencyMs()` into a `LatencyStats` on its existing periodic stats emit (same cadence as `VoiceStats`). `MumbleManager` exposes `latencyStats: StateFlow<LatencyStats>` (mirrors `netStats`/`voiceStats`); `DumbleApp` collects it and passes it into `AudioDiagnosticsScreen`.
+`AudioVoiceEngine` has **no timer or stats thread** — `VoiceStats` is emitted event-driven (per encoded frame on the send thread; every 20 ms in the playback loop). Fold latency into the **playback-loop tick** (it runs unconditionally every 20 ms while the engine runs): add `_latency = MutableStateFlow(LatencyStats())` to the engine and, each tick, set `_latency.value = LatencyStats(captureMs = audioIn.latencyMs(), playoutMs = audioOut.latencyMs())`. StateFlow conflation + `LatencyStats` data-class equality mean it only actually emits when the EMA-rounded value changes (~1 Hz), so the 20 ms poll is cheap. Reading `audioOut.latencyMs()` here is same-thread with `write()`; `audioIn.latencyMs()` is the one cross-thread read (covered by the `@Volatile` in §2/§4).
+
+`MumbleManager` exposes `latencyStats: StateFlow<LatencyStats>`, mirroring `netStats`/`voiceStats`: a `sessionScope.launch { engine.latency.collect { _latencyStats.value = it } }` in `ActiveSession.start()`. **`ActiveSession.shutdown()` MUST reset `_latencyStats.value = LatencyStats()`** — the flow outlives the session and the diagnostics screen is reachable (via Settings) while disconnected, so without the reset it would show the previous call's latency as if live. (This mirrors the existing `_netStats`/`_audioDiagnostics` resets in `shutdown()`, which currently omit `_voiceStats` — don't copy that omission.) `DumbleApp` collects `latencyStats` and passes it into `AudioDiagnosticsScreen`.
 
 ### 6. `AudioDiagnosticsScreen` — new Latency section
 
@@ -129,7 +131,8 @@ Rendered right after **Network** (so the reader sees capture → jitter buffer �
 Latency
   Capture:  12.3 ms
   Playout:  28.7 ms
-Playout is best-effort pipeline latency (excludes some downstream/Bluetooth delay).
+Both are best-effort pipeline latency — they exclude delay the audio HAL doesn't report
+(e.g. some downstream/Bluetooth path), so this is not acoustic mouth-to-ear latency.
 ```
 
 ## Data flow
@@ -160,7 +163,8 @@ The Android `getTimestamp` wiring is verified **on-device** — the Latency sect
 
 ## Non-goals (v1)
 
-- No summed "end-to-end / mouth-to-ear" number — the components are all on one screen; a naive sum would falsely imply acoustic accuracy the best-effort timestamps don't provide.
+- No summed "end-to-end / mouth-to-ear" number — a naive sum would falsely imply acoustic accuracy the best-effort timestamps don't provide, and the jitter-buffer term isn't even populated yet (see Context). The dev reads the live components individually.
+- Not populating the dead `bufferMs`/`lost`/`concealed` `VoiceStats` fields — a separate gap, called out in Context so this spec's scope stays honest.
 - No changes to the audio capture/playout path, buffer sizes, or the jitter buffer.
 - Not user-facing; no call-screen surface.
 - No `getLatency()` (hidden API) or Oboe migration (separate TODO).
