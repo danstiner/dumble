@@ -21,6 +21,12 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   (unified call log in the Phone app, native callback).
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
+- **Investigate why playback uses 20 ms frames, not 10 ms** — `AudioVoiceEngine.playbackLoop` writes
+  `FRAME_SAMPLES_20MS` per tick and `SpeakerStream`/mixer operate on 20 ms frames; a 10 ms playout tick
+  could roughly halve the playout-side buffering latency. Check the interactions before changing:
+  Opus decode frame size, `SpeakerStream.prebufferSamples` (currently 100 ms), the jitter buffer, and
+  mixer accumulation — all assume 20 ms. Pairs with the new latency-monitoring HUD (measures the payoff)
+  and #56B adaptive jitter buffer.
 - move all non-essential settings under an advanced section in settings — **DONE**
   (`advanced-settings-section`): Transmit mode is the only always-visible card; Voice activity, AGC,
   Noise suppression, and the debug Tools are wrapped in a collapsible **Advanced** section (collapsed
