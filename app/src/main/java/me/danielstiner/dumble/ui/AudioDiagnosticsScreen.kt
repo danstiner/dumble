@@ -18,15 +18,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.net.NetStats
 import me.danielstiner.dumble.mumble.voice.AudioDiagnostics
+import me.danielstiner.dumble.mumble.voice.LatencyStats
 import me.danielstiner.dumble.mumble.voice.VoiceStats
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioDiagnosticsScreen(
-    diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, onBack: () -> Unit,
+    diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, latency: LatencyStats, onBack: () -> Unit,
 ) {
     fun db(v: Float) = if (v.isFinite()) "%.1f dBFS".format(v) else "—"
     fun rtt(v: Double) = if (v >= 0) "%.1f ms".format(v) else "—"
+    fun lat(v: Double) = if (v.isFinite()) "%.1f ms".format(v) else "—"
     Scaffold(topBar = {
         TopAppBar(title = { Text("Audio diagnostics") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
@@ -54,6 +56,11 @@ fun AudioDiagnosticsScreen(
             Text("  TCP RTT:    " + rtt(net.tcpRttMs))
             Text("  UDP RTT:    " + rtt(net.udpRttMs))
             Text("  UDP jitter: %.2f ms".format(net.udpJitterMs))
+            Text("")
+            Text("Latency")
+            Text("  Capture:  " + lat(latency.captureMs))
+            Text("  Playout:  " + lat(latency.playoutMs))
+            Text("  (best-effort pipeline latency — excludes delay the HAL doesn't report, e.g. Bluetooth; not acoustic)")
             Text("")
             Text("Voice")
             Text("  Sent:       ${voice.sent}")
