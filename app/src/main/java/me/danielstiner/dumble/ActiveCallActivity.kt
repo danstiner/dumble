@@ -1,14 +1,8 @@
 package me.danielstiner.dumble
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Bundle
-import android.telecom.PhoneAccount
-import android.telecom.PhoneAccountHandle
-import android.telecom.TelecomManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -17,14 +11,10 @@ import androidx.core.content.ContextCompat
 import me.danielstiner.dumble.mumble.MumbleManager
 import me.danielstiner.dumble.mumble.MumbleServerConfig
 import me.danielstiner.dumble.telecom.CallManager
-import me.danielstiner.dumble.telecom.DumbleConnectionService
 import me.danielstiner.dumble.ui.DumbleApp
 import me.danielstiner.dumble.ui.theme.DumbleTheme
 
 class ActiveCallActivity : ComponentActivity() {
-
-    private lateinit var telecomManager: TelecomManager
-    private lateinit var phoneAccountHandle: PhoneAccountHandle
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -34,13 +24,6 @@ class ActiveCallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         CallManager.init(this)
         MumbleManager.init(this)
-
-        telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-        phoneAccountHandle = PhoneAccountHandle(
-            ComponentName(this, DumbleConnectionService::class.java),
-            "DumbleID",
-        )
-        registerPhoneAccount()
         requestCallPermissions()
 
         setContent {
@@ -79,26 +62,8 @@ class ActiveCallActivity : ComponentActivity() {
             requestCallPermissions()
             return
         }
-        placeTelecomCall()
+        CallManager.startCall()
         MumbleManager.connect(config)
-    }
-
-    private fun placeTelecomCall() {
-        val extras = Bundle().apply {
-            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
-        }
-        try {
-            telecomManager.placeCall(Uri.fromParts("tel", "DumbleUser", null), extras)
-        } catch (_: SecurityException) {
-            // Permission revoked between check and call; the next tap re-requests.
-        }
-    }
-
-    private fun registerPhoneAccount() {
-        val phoneAccount = PhoneAccount.builder(phoneAccountHandle, "Dumble")
-            .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
-            .build()
-        telecomManager.registerPhoneAccount(phoneAccount)
     }
 
     private fun hasRecordAudio(): Boolean =

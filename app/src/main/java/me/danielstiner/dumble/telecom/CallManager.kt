@@ -1,197 +1,212 @@
 package me.danielstiner.dumble.telecom
 
-import android.app.Service
 import android.content.Context
-import android.content.pm.ServiceInfo
-import android.telecom.Connection
+import android.net.Uri
 import android.telecom.DisconnectCause
-import me.danielstiner.dumble.mumble.MumbleManager
-import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import android.util.Log
+import androidx.core.telecom.CallAttributesCompat
+import androidx.core.telecom.CallControlResult
+import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallEndpointCompat
+import androidx.core.telecom.CallsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.lang.ref.WeakReference
+import kotlinx.coroutines.launch
+import me.danielstiner.dumble.mumble.MumbleManager
+import me.danielstiner.dumble.mumble.protocol.ConnectionState
 
+/**
+ * Singleton bridge between the app UI and Jetpack Telecom [CallsManager]. Owns the outgoing Mumble
+ * "call": registers the app with Telecom once per process, launches the [CallsManager.addCall]
+ * coroutine that lives for the call's duration, and mirrors the call's audio endpoints / mute /
+ * Mumble connection-state into StateFlows the call screen observes.
+ *
+ * The library owns audio focus, audio mode (MODE_IN_COMMUNICATION), and foreground-execution
+ * priority (granted while a CallStyle notification is posted). We do NOT touch AudioManager or
+ * startForeground anymore — that would conflict with the library.
+ */
 object CallManager {
-    private val _activeConnection = MutableStateFlow<Connection?>(null)
-    val activeConnection: StateFlow<Connection?> = _activeConnection
+    private const val TAG = "CallManager"
 
+    // The call must outlive the Activity, so this scope is process-scoped (not tied to any UI).
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private var callsManager: CallsManager? = null
     private var notificationManager: CallNotificationManager? = null
-    private var serviceRef: WeakReference<Service>? = null
-    private var isUiVisible = false
-    private var appContext: Context? = null
+    private var registered = false
 
-    private var audioManager: android.media.AudioManager? = null
-    private var focusRequest: android.media.AudioFocusRequest? = null
-    private var priorMode = android.media.AudioManager.MODE_NORMAL
+    // The live call: the addCall coroutine + the CallControlScope handle used to drive the call.
+    private var callJob: Job? = null
+    @Volatile private var controlScope: CallControlScope? = null
+    private var tornDown = true
+
+    // Wall-clock moment the call reached Synchronized; anchors the notification chronometer.
+    private var connectedSinceMs: Long? = null
+
+    private var isUiVisible = false
+
+    private val _callActive = MutableStateFlow(false)
+    /** True while a Telecom call is registered — drives the in-call UI (replaces the old Connection). */
+    val callActive: StateFlow<Boolean> = _callActive
 
     private val _isSpeaker = MutableStateFlow(false)
     val isSpeaker: StateFlow<Boolean> = _isSpeaker
-    private val _endpoints = MutableStateFlow<List<android.telecom.CallEndpoint>>(emptyList())
+
+    private val _endpoints = MutableStateFlow<List<CallEndpointCompat>>(emptyList())
     /** Available call audio routes (for the route picker when a headset is connected). */
-    val endpoints: StateFlow<List<android.telecom.CallEndpoint>> = _endpoints
+    val endpoints: StateFlow<List<CallEndpointCompat>> = _endpoints
 
     // The currently-active call audio endpoint (BT / wired / earpiece / speaker), surfaced read-only
     // as a route indicator on the call screen. Reset on teardown so the previous call's route can't
     // linger into the next one before the framework reports the new active endpoint.
-    private val _activeEndpoint = MutableStateFlow<android.telecom.CallEndpoint?>(null)
-    val activeEndpoint: StateFlow<android.telecom.CallEndpoint?> = _activeEndpoint
-
-    private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var bridgeJob: Job? = null
-
-    // Wall-clock moment the call reached ConnectionState.Synchronized, used to anchor the
-    // ongoing-call notification's chronometer. Set once per call, reset on teardown.
-    private var connectedSinceMs: Long? = null
+    private val _activeEndpoint = MutableStateFlow<CallEndpointCompat?>(null)
+    val activeEndpoint: StateFlow<CallEndpointCompat?> = _activeEndpoint
 
     fun init(context: Context) {
-        appContext = context.applicationContext
-        if (notificationManager == null) {
-            notificationManager = CallNotificationManager(context.applicationContext)
-        }
-        if (context is Service) {
-            serviceRef = WeakReference(context)
-        }
+        val app = context.applicationContext
+        if (callsManager == null) callsManager = CallsManager(app)
+        if (notificationManager == null) notificationManager = CallNotificationManager(app)
     }
 
     fun setUiVisible(visible: Boolean) {
         isUiVisible = visible
-        // If the user just left the app during a call, make sure the notification is prominent
-        val connection = _activeConnection.value
-        if (!visible && connection != null) {
-            updateNotification()
-        }
+        // The CallStyle notification is posted for the whole call (it's what grants foreground
+        // priority), so leaving the app needs no extra action — the notification is already up.
     }
 
-    fun setConnection(connection: Connection?) {
-        _activeConnection.value = connection
-        updateNotification()
-
-        bridgeJob?.cancel()
-        if (connection != null) {
-            appContext?.let { enterCallAudio(it) }
-            bridgeJob = bridgeScope.launch {
-                // Synchronized is a stable state — fine to read off the conflated state flow.
-                launch {
-                    MumbleManager.state.collect { s ->
-                        if (s is ConnectionState.Synchronized) {
-                            if (connectedSinceMs == null) {
+    /** Start the outgoing Mumble call: register once, then launch the addCall coroutine. */
+    fun startCall() {
+        val cm = callsManager ?: run { Log.e(TAG, "startCall before init"); return }
+        if (callJob?.isActive == true) { Log.w(TAG, "startCall while a call is active"); return }
+        ensureRegistered(cm)
+        tornDown = false
+        callJob = appScope.launch {
+            try {
+                cm.addCall(
+                    CallAttributesCompat(
+                        displayName = "Dumble",
+                        address = Uri.fromParts("tel", "DumbleUser", null),
+                        direction = CallAttributesCompat.DIRECTION_OUTGOING,
+                        callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+                        // Default callCapabilities (SUPPORTS_SET_INACTIVE) already lets the framework
+                        // hold/resume the call around a system interruption (e.g. an incoming cellular
+                        // call), so onSetInactive/onSetActive below work without an explicit flag.
+                    ),
+                    onAnswer = { /* n/a: outgoing call, never rings */ },
+                    // System-initiated end: after this returns the block's scope is cancelled ->
+                    // the finally below runs teardown().
+                    onDisconnect = { cause -> Log.d(TAG, "system onDisconnect: $cause") },
+                    onSetActive = { Log.d(TAG, "onSetActive (resumed from hold)") },
+                    onSetInactive = { Log.d(TAG, "onSetInactive (held)") },
+                ) {
+                    controlScope = this
+                    _callActive.value = true
+                    // Outgoing, no ringing -> go active immediately so MODE_IN_COMMUNICATION is set
+                    // around AudioVoiceEngine start; post the required CallStyle notification within 5s.
+                    launch {
+                        val res = setActive()
+                        Log.d(TAG, "setActive result=$res")
+                        postCallNotification()
+                    }
+                    launch { availableEndpoints.collect { _endpoints.value = it } }
+                    launch { currentCallEndpoint.collect { onActiveEndpoint(it) } }
+                    // System/hardware mute (BT-headset button, system call controls) -> mute in Mumble
+                    // (broadcasts self_mute). One-way; the app's own Mute button is unaffected.
+                    launch { isMuted.collect { MumbleManager.setMuted(it) } }
+                    launch {
+                        MumbleManager.state.collect { s ->
+                            if (s is ConnectionState.Synchronized && connectedSinceMs == null) {
                                 connectedSinceMs = System.currentTimeMillis()
-                                updateNotification()
+                                postCallNotification() // re-post with the chronometer anchor
                             }
-                            connection.setActive()
+                        }
+                    }
+                    // Failure teardown MUST use the non-conflated failures flow: MumbleManager self-heals
+                    // Failed -> Disconnected too fast for a conflated collector to observe.
+                    launch {
+                        MumbleManager.failures.collect {
+                            val res = disconnect(DisconnectCause(DisconnectCause.ERROR))
+                            Log.d(TAG, "disconnect(ERROR) on Mumble failure result=$res")
                         }
                     }
                 }
-                // Failure teardown MUST use the non-conflated failures flow: the self-heal in
-                // MumbleManager flips Failed -> Disconnected too fast for a conflated collector to
-                // observe, which would otherwise strand this connection (never destroyed).
-                launch {
-                    MumbleManager.failures.collect {
-                        connection.setDisconnected(DisconnectCause(DisconnectCause.ERROR))
-                        connection.destroy()
-                        exitCallAudio()
-                        setConnection(null)
-                    }
-                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "addCall failed", t)
+            } finally {
+                teardown()
             }
-        } else {
-            _activeEndpoint.value = null
-            _endpoints.value = emptyList()
-            _isSpeaker.value = false
-            connectedSinceMs = null
         }
     }
 
-    private fun updateNotification() {
-        val connection = _activeConnection.value
-        val service = serviceRef?.get()
-
-        if (connection != null) {
-            // If the UI is not visible, we treat it as more "urgent" if it's just starting
-            // But generally, once a call is active, it uses the ongoing channel.
-            val notification = notificationManager?.createNotification(
-                "Dumble User", isIncoming = false, connectedSinceMs = connectedSinceMs
-            )
-            if (notification != null) {
-                if (service != null) {
-                    service.startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-                } else {
-                    notificationManager?.showNotification(notification)
-                }
-            }
-        } else {
-            notificationManager?.cancelNotification()
-            service?.stopForeground(Service.STOP_FOREGROUND_REMOVE)
-        }
+    private fun ensureRegistered(cm: CallsManager) {
+        if (registered) return
+        cm.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+        registered = true
     }
 
+    private fun postCallNotification() {
+        val nm = notificationManager ?: return
+        nm.showNotification(
+            nm.createNotification("Dumble User", isIncoming = false, connectedSinceMs = connectedSinceMs)
+        )
+    }
+
+    /** User hang-up (call screen / notification action). */
     fun disconnect() {
-        MumbleManager.disconnect()
-        _activeConnection.value?.onDisconnect()
-        _activeConnection.value = null
-        connectedSinceMs = null
-        notificationManager?.cancelNotification()
-        serviceRef?.get()?.stopForeground(Service.STOP_FOREGROUND_REMOVE)
-        exitCallAudio()
-    }
-
-    private fun enterCallAudio(context: Context) {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-        audioManager = am
-        priorMode = am.mode
-        am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
-        android.util.Log.d("CallManager", "mode set to MODE_IN_COMMUNICATION am.mode=${am.mode}")
-        val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(android.media.AudioAttributes.Builder()
-                .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setOnAudioFocusChangeListener { focusChange ->
-                android.util.Log.w("CallManager", "AUDIOFOCUS change=$focusChange")
+        val scope = controlScope
+        if (scope != null) {
+            appScope.launch {
+                val res = scope.disconnect(DisconnectCause(DisconnectCause.LOCAL))
+                Log.d(TAG, "user disconnect result=$res") // block ends -> finally -> teardown
             }
-            .build()
-        val res = am.requestAudioFocus(req)
-        android.util.Log.d("CallManager", "requestAudioFocus result=$res mode=${am.mode}")
-        focusRequest = req
-        logAecAvailability()
+        } else {
+            teardown() // no active control scope (call never fully started) — clean up anyway
+        }
     }
 
-    private fun exitCallAudio() {
-        val am = audioManager ?: return
-        focusRequest?.let { am.abandonAudioFocusRequest(it) }; focusRequest = null
-        am.mode = priorMode
-        audioManager = null
+    /** Single idempotent cleanup all disconnect paths converge on. */
+    private fun teardown() {
+        if (tornDown) return
+        tornDown = true
+        MumbleManager.disconnect()
+        notificationManager?.cancelNotification()
+        controlScope = null
+        _callActive.value = false
+        _endpoints.value = emptyList()
+        _activeEndpoint.value = null
+        _isSpeaker.value = false
+        connectedSinceMs = null
+        callJob?.cancel()
+        callJob = null
     }
 
-    private fun logAecAvailability() {
-        android.util.Log.d("CallManager",
-            "AEC available=${android.media.audiofx.AcousticEchoCanceler.isAvailable()}")
-    }
-
-    fun onAvailableEndpoints(list: List<android.telecom.CallEndpoint>) { _endpoints.value = list }
-
-    fun onActiveEndpoint(ep: android.telecom.CallEndpoint) {
+    private fun onActiveEndpoint(ep: CallEndpointCompat) {
         _activeEndpoint.value = ep
-        _isSpeaker.value = ep.endpointType == android.telecom.CallEndpoint.TYPE_SPEAKER
+        _isSpeaker.value = ep.type == CallEndpointCompat.TYPE_SPEAKER
     }
 
     /** Route to the first available endpoint of [endpointType] (BT / wired / earpiece / speaker). */
     fun selectRoute(endpointType: Int) {
-        val conn = _activeConnection.value ?: return
-        val ep = _endpoints.value.firstOrNull { it.endpointType == endpointType } ?: return
-        conn.requestCallEndpointChange(ep, java.util.concurrent.Executor { it.run() },
-            object : android.os.OutcomeReceiver<Void, android.telecom.CallEndpointException> {
-                override fun onResult(result: Void?) {}
-                override fun onError(error: android.telecom.CallEndpointException) {}
-            })
+        val scope = controlScope ?: return
+        val ep = _endpoints.value.firstOrNull { it.type == endpointType } ?: return
+        appScope.launch {
+            // Surfaced (parity with today's silent no-op, but now attributable — the later #59 fix
+            // consumes this error).
+            when (val res = scope.requestEndpointChange(ep)) {
+                is CallControlResult.Error ->
+                    Log.w(TAG, "requestEndpointChange type=$endpointType error=${res.errorCode}")
+                is CallControlResult.Success ->
+                    Log.d(TAG, "requestEndpointChange type=$endpointType ok")
+            }
+        }
     }
 
     /** Speaker on/off toggle for the no-headset case (earpiece <-> speaker). */
     fun setSpeaker(speaker: Boolean) = selectRoute(
-        if (speaker) android.telecom.CallEndpoint.TYPE_SPEAKER
-        else android.telecom.CallEndpoint.TYPE_EARPIECE)
+        if (speaker) CallEndpointCompat.TYPE_SPEAKER else CallEndpointCompat.TYPE_EARPIECE
+    )
 }

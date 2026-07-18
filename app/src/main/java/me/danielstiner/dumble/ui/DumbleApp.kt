@@ -31,7 +31,7 @@ fun DumbleApp(
     }
 
     val state by MumbleManager.state.collectAsStateWithLifecycle()
-    val connection by CallManager.activeConnection.collectAsStateWithLifecycle()
+    val callActive by CallManager.callActive.collectAsStateWithLifecycle()
     val muted by MumbleManager.muted.collectAsStateWithLifecycle()
     val vadThreshold by MumbleManager.vadThreshold.collectAsStateWithLifecycle()
     val hysteresisGap by MumbleManager.hysteresisGap.collectAsStateWithLifecycle()
@@ -53,15 +53,15 @@ fun DumbleApp(
     val endpoints by CallManager.endpoints.collectAsStateWithLifecycle()
     val routeOptions = endpoints.map { ep ->
         RouteOption(
-            type = ep.endpointType,
-            icon = AudioRoute.icon(ep.endpointType),
-            label = ep.endpointName?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.endpointType),
+            type = ep.type,
+            icon = AudioRoute.icon(ep.type),
+            label = ep.name.toString().trim().takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.type),
         )
     }
     // Prefer the framework's own endpoint name — it's localized to the device language and, for
     // Bluetooth, is the device name. Fall back to our hardcoded label only if it's ever blank.
     val activeRouteLabel = activeEndpoint?.let { ep ->
-        ep.endpointName?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.endpointType)
+        ep.name.toString().trim().takeIf { it.isNotEmpty() } ?: AudioRoute.label(ep.type)
     }
     val form by vm.form.collectAsStateWithLifecycle()
 
@@ -79,7 +79,7 @@ fun DumbleApp(
         }
     }
 
-    val inCall = connection != null ||
+    val inCall = callActive ||
         state is ConnectionState.Connecting ||
         state is ConnectionState.Handshaking ||
         state is ConnectionState.Synchronized
@@ -107,7 +107,7 @@ fun DumbleApp(
                 serverModel, speakingSessions, selfTransmitting, muted, deafened,
                 configHostFallback = form.host,
             )
-            val routeIcon = activeEndpoint?.let { AudioRoute.icon(it.endpointType) } ?: AudioRoute.RouteIcon.SPEAKER
+            val routeIcon = activeEndpoint?.let { AudioRoute.icon(it.type) } ?: AudioRoute.RouteIcon.SPEAKER
             ActiveCallScreen(
                 state = callState,
                 connectedText = connectedText,
@@ -119,7 +119,7 @@ fun DumbleApp(
                 onToggleDeafen = { MumbleManager.setDeafened(!deafened) },
                 onToggleSpeaker = { CallManager.setSpeaker(!speaker) },
                 routeOptions = routeOptions,
-                activeRouteType = activeEndpoint?.endpointType,
+                activeRouteType = activeEndpoint?.type,
                 onSelectRoute = { CallManager.selectRoute(it) },
                 onPttPress = { MumbleManager.setPttHeld(true) },
                 onPttRelease = { MumbleManager.setPttHeld(false) },

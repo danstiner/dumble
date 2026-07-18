@@ -21,17 +21,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Dumble">
 
-        <service
-            android:name=".telecom.DumbleConnectionService"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
-            android:foregroundServiceType="phoneCall"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.telecom.ConnectionService" />
-            </intent-filter>
-        </service>
-
         <activity
             android:name=".ActiveCallActivity"
             android:exported="true"
