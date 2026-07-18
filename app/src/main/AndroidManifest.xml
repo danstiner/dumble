@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:allowBackup="true"
@@ -46,6 +47,13 @@
                 <action android:name="ACTION_HANGUP" />
             </intent-filter>
         </receiver>
+
+        <!-- Carries the ongoing-call CallStyle notification + microphone foreground type for the call's
+             lifetime. core-telecom 1.0.0 does not provide a foreground service itself. -->
+        <service
+            android:name=".telecom.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
     </application>
 

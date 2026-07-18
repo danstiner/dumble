@@ -56,14 +56,23 @@ Android 16.1, so they are **out of scope** here.
   `BIND_TELECOM_CONNECTION_SERVICE` + the `android.telecom.ConnectionService` intent-filter.
 - `CallManager.enterCallAudio()` / `exitCallAudio()` (the `MODE_IN_COMMUNICATION` + audio-focus block)
   — **required** removal; the library owns audio focus/mode and manual management now conflicts.
-- `CallManager`'s manual `startForeground(...)` in `updateNotification` — the library owns the FGS.
+- `CallManager`'s manual `startForeground(...)` in `updateNotification`.
+
+  > **CORRECTED (on-device, 2026-07-17):** the original claim — "the library owns the FGS" — is **false**,
+  > verified against the 1.0.0 AAR (no foreground-service or notification code) and a device crash
+  > (`IllegalArgumentException: CallStyle notifications must be for a foreground service …`). core-telecom
+  > grants foreground *procstate* only. Android rejects the `CallStyle` notification (and cuts background
+  > mic on API 34+) without a real foreground *service*, so a minimal `CallForegroundService` (type
+  > `microphone`) was reintroduced to carry the notification for the call's lifetime. See
+  > `CallForegroundService.kt`; `CallManager` drives its `start`/`stop` from the same paths that used to
+  > post/cancel the notification.
 
 **Added:**
 - Gradle dependency `androidx.core:core-telecom:1.0.0`.
 
 **Changed — `CallManager` stays the singleton bridge**, restructured around `CallsManager`:
 - Owns a `CallsManager` instance and an **app-level `CoroutineScope`** (the call must outlive the
-  Activity; the library owns the FGS, so no dedicated Service is needed).
+  Activity; foreground state is carried by a dedicated `CallForegroundService` — see the CORRECTED note above).
 - `registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)` once (guarded so it runs a single time
   per process).
 - `startCall()` launches, on the app scope, a `callJob` that runs:

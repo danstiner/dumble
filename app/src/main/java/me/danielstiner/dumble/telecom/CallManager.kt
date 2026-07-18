@@ -27,9 +27,10 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionState
  * coroutine that lives for the call's duration, and mirrors the call's audio endpoints / mute /
  * Mumble connection-state into StateFlows the call screen observes.
  *
- * The library owns audio focus, audio mode (MODE_IN_COMMUNICATION), and foreground-execution
- * priority (granted while a CallStyle notification is posted). We do NOT touch AudioManager or
- * startForeground anymore — that would conflict with the library.
+ * The library owns audio focus and audio mode (MODE_IN_COMMUNICATION), so we do NOT touch AudioManager.
+ * It also grants the process foreground *procstate*, but NOT a foreground *service* — and Android
+ * rejects a CallStyle notification (and cuts background mic on API 34+) without one. So we run our own
+ * [CallForegroundService] for the call's lifetime to carry the notification and microphone FGS type.
  *
  * Lifecycle note (core-telecom 1.0.0): addCall wraps the block in a coroutineScope whose children are
  * the launched collectors below; those collectors are infinite, so addCall does NOT return on its own
@@ -44,7 +45,7 @@ object CallManager {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var callsManager: CallsManager? = null
-    private var notificationManager: CallNotificationManager? = null
+    private var appContext: Context? = null
     private var registered = false
 
     private var callJob: Job? = null
@@ -76,8 +77,8 @@ object CallManager {
 
     fun init(context: Context) {
         val app = context.applicationContext
+        appContext = app
         if (callsManager == null) callsManager = CallsManager(app)
-        if (notificationManager == null) notificationManager = CallNotificationManager(app)
     }
 
     fun setUiVisible(visible: Boolean) {
@@ -117,11 +118,12 @@ object CallManager {
                     controlScope = this
                     _callActive.value = true
                     // Outgoing, no ringing -> go active immediately so MODE_IN_COMMUNICATION is set
-                    // around AudioVoiceEngine start. On success post the CallStyle notification (within
-                    // 5s); on failure the "call" would have no audio focus/mode, so end it instead.
+                    // around AudioVoiceEngine start. On success bring up the call foreground service
+                    // (owns the CallStyle notification + microphone FGS type); on failure the "call"
+                    // would have no audio focus/mode, so end it instead.
                     launch {
                         when (val res = setActive()) {
-                            is CallControlResult.Success -> postCallNotification()
+                            is CallControlResult.Success -> startCallForeground()
                             is CallControlResult.Error -> {
                                 Log.w(TAG, "setActive failed error=${res.errorCode}; disconnecting")
                                 disconnect(DisconnectCause(DisconnectCause.ERROR))
@@ -140,7 +142,7 @@ object CallManager {
                         MumbleManager.state.collect { s ->
                             if (s is ConnectionState.Synchronized && connectedSinceMs == null) {
                                 connectedSinceMs = System.currentTimeMillis()
-                                postCallNotification() // re-post with the chronometer anchor
+                                startCallForeground() // refresh the FGS notification with the chronometer anchor
                             }
                         }
                     }
@@ -170,11 +172,19 @@ object CallManager {
         registered = true
     }
 
-    private fun postCallNotification() {
-        val nm = notificationManager ?: return
-        nm.showNotification(
-            nm.createNotification("Dumble User", isIncoming = false, connectedSinceMs = connectedSinceMs)
-        )
+    /**
+     * Bring up (or refresh) the call foreground service that owns the CallStyle notification. core-telecom
+     * grants foreground procstate but no foreground *service*, and Android rejects a CallStyle notification
+     * without one — so this is what makes the notification post at all (and enables background mic). A
+     * foreground-start failure must never tear down a live call, hence the catch.
+     */
+    private fun startCallForeground() {
+        val ctx = appContext ?: return
+        try {
+            CallForegroundService.start(ctx, connectedSinceMs = connectedSinceMs)
+        } catch (t: Throwable) {
+            Log.e(TAG, "starting call foreground service failed", t)
+        }
     }
 
     /** User hang-up (call screen / notification action). */
@@ -198,7 +208,7 @@ object CallManager {
         if (seq != callSeq || tornDown) return
         tornDown = true
         MumbleManager.disconnect()
-        notificationManager?.cancelNotification()
+        appContext?.let { CallForegroundService.stop(it) }
         controlScope = null
         _callActive.value = false
         _endpoints.value = emptyList()

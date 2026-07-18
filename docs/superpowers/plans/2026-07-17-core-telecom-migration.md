@@ -27,6 +27,8 @@
 - `CallAttributesCompat(displayName: CharSequence, address: Uri, @Direction direction: Int, @CallType callType: Int = CALL_TYPE_AUDIO_CALL, @CallCapability callCapabilities: Int = SUPPORTS_SET_INACTIVE, …)`. DIRECTION_OUTGOING=2, CALL_TYPE_AUDIO_CALL=1. **The default `callCapabilities = SUPPORTS_SET_INACTIVE`** already advertises the hold/resume capability, so the retained `onSetInactive`/`onSetActive` interruption path works at the default — no explicit capability flag needed.
 - Foreground service: the library grants foreground-execution priority **while the app posts a `Notification.CallStyle` notification** (via `NotificationManager.notify`, **not** `startForeground`). `CallNotificationManager.createNotification(...)` already builds `Notification.CallStyle.forOngoingCall(...)`; we post it with `showNotification(...)` and clear it with `cancelNotification()`.
 
+  > **CORRECTED (on-device, 2026-07-17):** this is **wrong**. core-telecom grants foreground *procstate* only — no foreground *service* — and Android rejects the `CallStyle` notification (and cuts background mic on API 34+) without a real FGS. A minimal `CallForegroundService` (type `microphone`) was reintroduced to `startForeground` with the notification for the call's lifetime; `CallManager` starts it on `setActive` success / refreshes it at Mumble-Synchronized, and stops it in `teardown`. See the design-doc CORRECTED note.
+
 ---
 
 ## File Structure

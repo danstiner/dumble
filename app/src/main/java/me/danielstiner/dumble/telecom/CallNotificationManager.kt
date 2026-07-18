@@ -13,7 +13,7 @@ class CallNotificationManager(context: Context) {
     companion object {
         private const val ONGOING_CHANNEL_ID = "dumble_ongoing_calls"
         private const val INCOMING_CHANNEL_ID = "dumble_incoming_calls"
-        private const val NOTIFICATION_ID = 1001
+        const val NOTIFICATION_ID = 1001
     }
 
     private val appContext = context.applicationContext
@@ -100,6 +100,19 @@ class CallNotificationManager(context: Context) {
 
         return builder.build()
     }
+
+    /**
+     * Plain ongoing notification (no CallStyle) used only as a last resort if [createNotification]
+     * ever throws, so the foreground service can still satisfy its mandatory startForeground call
+     * within the system's ~5s window instead of crashing the process.
+     */
+    fun createFallbackNotification(): Notification =
+        Notification.Builder(appContext, ONGOING_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentTitle("Dumble Call")
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_CALL)
+            .build()
 
     fun showNotification(notification: Notification) {
         notificationManager.notify(NOTIFICATION_ID, notification)
