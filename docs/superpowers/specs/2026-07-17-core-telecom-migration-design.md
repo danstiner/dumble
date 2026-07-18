@@ -160,8 +160,12 @@ These are things the implementation plan MUST confirm against the `core-telecom 
   `setActive` / `setInactive` / `disconnect` signatures + `CallControlResult` shape.
 - **`CallEndpointCompat` type constants** (`TYPE_BLUETOOTH` / `TYPE_WIRED_HEADSET` / `TYPE_EARPIECE` /
   `TYPE_SPEAKER`) — names + parity with the current `AudioRoute` mapping.
-- **`addCall` block lifetime** — confirm the collectors keep the block alive and that
-  `disconnect()` cancels the scope so the block returns (vs. needing an explicit `awaitCancellation`).
+- **`addCall` block lifetime** — RESOLVED during implementation (fable-verified against 1.0.0 source +
+  AAR bytecode): `addCall` wraps the block in `coroutineScope { }` and the collectors are its children;
+  they are infinite and the library does **not** cancel them on a normal disconnect, so `addCall` does
+  **not** return on its own when the call ends. `teardown()` must be driven **explicitly** from every
+  end-path, and its `callJob.cancel()` is what unwinds the parked scope. (The earlier guess that
+  `disconnect()` cancels the scope so the block returns was wrong.)
 - **Manifest** — confirm `core-telecom 1.0.0` needs **no** app-declared telecom `<service>`, and which
   foreground-service permissions it requires (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_PHONE_CALL` on
   API 34+); keep `MANAGE_OWN_CALLS`.
