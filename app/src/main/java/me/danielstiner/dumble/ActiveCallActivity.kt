@@ -30,7 +30,7 @@ class ActiveCallActivity : ComponentActivity() {
             DumbleTheme {
                 DumbleApp(
                     onConnect = { config -> onConnect(config) },
-                    onHangUp = { CallManager.disconnect() },
+                    onHangUp = { CallManager.hangUp() },
                     onLaunchEchoTest = {
                         startActivity(Intent(this, EchoTestActivity::class.java))
                     },

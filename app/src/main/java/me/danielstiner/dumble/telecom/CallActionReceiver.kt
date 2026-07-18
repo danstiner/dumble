@@ -7,7 +7,7 @@ import android.content.Intent
 class CallActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action == "ACTION_HANGUP") {
-            CallManager.disconnect()
+            CallManager.hangUp()
         }
     }
 }
