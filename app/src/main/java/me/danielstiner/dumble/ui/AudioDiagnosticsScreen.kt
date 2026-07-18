@@ -18,13 +18,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.net.NetStats
 import me.danielstiner.dumble.mumble.voice.AudioDiagnostics
+import me.danielstiner.dumble.mumble.voice.JitterStats
 import me.danielstiner.dumble.mumble.voice.LatencyStats
 import me.danielstiner.dumble.mumble.voice.VoiceStats
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioDiagnosticsScreen(
-    diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, latency: LatencyStats, onBack: () -> Unit,
+    diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, latency: LatencyStats, jitter: JitterStats, onBack: () -> Unit,
 ) {
     fun db(v: Float) = if (v.isFinite()) "%.1f dBFS".format(v) else "—"
     fun rtt(v: Double) = if (v >= 0) "%.1f ms".format(v) else "—"
@@ -61,6 +62,10 @@ fun AudioDiagnosticsScreen(
             Text("  Capture:  " + lat(latency.captureMs))
             Text("  Playout:  " + lat(latency.playoutMs))
             Text("  (best-effort pipeline latency — excludes delay the HAL doesn't report, e.g. Bluetooth; not acoustic)")
+            Text("")
+            Text("Jitter (adaptive prebuffer)")
+            Text("  Target:     ${jitter.targetMs} ms")
+            Text("  p95 delay:  ${jitter.p95Ms} ms")
             Text("")
             Text("Voice")
             Text("  Sent:       ${voice.sent}")

@@ -65,6 +65,8 @@ object MumbleManager {
     val voiceStats: StateFlow<VoiceStats> = _voiceStats.asStateFlow()
     private val _latencyStats = MutableStateFlow(LatencyStats())
     val latencyStats: StateFlow<LatencyStats> = _latencyStats.asStateFlow()
+    private val _jitterStats = MutableStateFlow(JitterStats())
+    val jitterStats: StateFlow<JitterStats> = _jitterStats.asStateFlow()
     private val _audioDiagnostics = MutableStateFlow(AudioDiagnostics())
     /** Read-only transmit-path diagnostics (platform effects + stage levels), live during a call. */
     val audioDiagnostics: StateFlow<AudioDiagnostics> = _audioDiagnostics.asStateFlow()
@@ -371,6 +373,7 @@ object MumbleManager {
             sessionScope.launch { selector.stats.collect { _netStats.value = it } }
             sessionScope.launch { engine.stats.collect { _voiceStats.value = it } }
             sessionScope.launch { engine.latency.collect { _latencyStats.value = it } }
+            sessionScope.launch { engine.jitter.collect { _jitterStats.value = it } }
             sessionScope.launch { engine.speakingSessions.collect { _speakingSessions.value = it } }
             sessionScope.launch { engine.selfTransmitting.collect { _selfTransmitting.value = it } }
             sessionScope.launch { engine.diagnostics.collect { _audioDiagnostics.value = it.copy(unprocessedSupported = unprocessedSupport) } }
@@ -460,6 +463,7 @@ object MumbleManager {
             _loopbackStats.value = LoopbackStats()
             _audioDiagnostics.value = AudioDiagnostics()
             _latencyStats.value = LatencyStats()
+            _jitterStats.value = JitterStats()
             _speakingSessions.value = emptySet()
             _selfTransmitting.value = false
             _deafened.value = false

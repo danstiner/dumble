@@ -45,6 +45,7 @@ fun DumbleApp(
     val netStats by MumbleManager.netStats.collectAsStateWithLifecycle()
     val voiceStats by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val latency by MumbleManager.latencyStats.collectAsStateWithLifecycle()
+    val jitter by MumbleManager.jitterStats.collectAsStateWithLifecycle()
     val serverModel by MumbleManager.model.state.collectAsStateWithLifecycle()
     val speakingSessions by MumbleManager.speakingSessions.collectAsStateWithLifecycle()
     val selfTransmitting by MumbleManager.selfTransmitting.collectAsStateWithLifecycle()
@@ -101,7 +102,7 @@ fun DumbleApp(
         showDiagnostics -> {
             BackHandler { showDiagnostics = false }
             AudioDiagnosticsScreen(diagnostics = audioDiagnostics, net = netStats, voice = voiceStats,
-                latency = latency, onBack = { showDiagnostics = false })
+                latency = latency, jitter = jitter, onBack = { showDiagnostics = false })
         }
         inCall && !showSettings -> {
             val callState = buildCallScreenState(
