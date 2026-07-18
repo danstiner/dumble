@@ -32,7 +32,7 @@ Load-bearing claims, fact-checked against `speexdsp/libspeexdsp/jitter.c`, Mumbl
 4. **Late-dropped packets MUST feed the estimator** — Speex feeds late packets to `update_timings`; excluding them is survivorship bias that blocks growth exactly when the buffer is too small.
 5. **Relative-delay metric is offset-cancelling, not drift-cancelling** — subtracting a window-local minimum bounds oscillator-skew error to ≤~1.5 ms/30 s; an all-time minimum would accumulate skew. Use **window-local minima**.
 6. **Units:** differencing a nanotime arrival against a sample-domain timestamp is dimensionally invalid — convert to one unit. All timestamps are multiples of 480 samples, and 480 samples = 10 ms exactly, so `rtpNanos = (rtpSamples / 480) * 10_000_000` is exact.
-7. **Estimator statistic:** p95 over peak-hold buckets is sound (mirrors NetEq's arrival-history + quantile), but 500 ms buckets make it a *robust max*; **200 ms buckets** (~40 over an 8 s window) make p95 a real quantile that ignores a one-off spike (top ~2 of 40 excluded) while covering recurring bursts. (NetEq's own forget factor is `kIatFactor`=0.9993, quantile `kLimitProbability`=0.95.)
+7. **Estimator statistic:** p95 over peak-hold buckets is sound — it mirrors NetEq's `underrun_optimizer` (500 ms peak-hold interval → forgetting histogram → 0.95 quantile, `forget_factor` **0.983**). We drop the histogram and take **p95 over 40 live 200 ms buckets** in a hard 8 s window: shorter, more-responsive memory that ignores a one-off spike (top ~2 of 40 excluded) while covering recurring bursts. (`0.9993`/`kIatFactor` is the *older* IAT-based `DelayManager` — a different NetEq generation, not the one we mirror.)
 
 ## Components
 
@@ -66,9 +66,9 @@ No Android deps. One instance per `SpeakerStream`. Fed on the **receive thread**
 | `WINDOW_BUCKETS` | 40 | 8 s window |
 | `PERCENTILE` | 0.95 | of bucket peaks |
 
-`targetNs` clamps to `[FLOOR_NS, MAX_NS]`. **There are exactly two ceilings in the whole design:** this adaptive **playout-delay target** (`MAX_NS` = 400 ms) and the unchanged **`JitterBuffer` high-water** (600 ms) — the high-water is deliberately larger so packets keep queueing during a stall even when the target is saturated. No separate hold ceiling (the mid-spurt grow in §2 deepens toward the same `MAX_NS`), and no `+margin` fudge (peak-hold *is* the headroom).
+`targetNs` clamps to `[FLOOR_NS, MAX_NS]`. **There are exactly two playout-*depth* ceilings in the whole design:** this adaptive **playout-delay target** (`MAX_NS` = 400 ms) and the unchanged **`JitterBuffer` high-water** (600 ms) — the high-water is deliberately larger (400 < 75 % of 600 = 450, satisfying NetEq's own cap rule) so packets keep queueing during a stall even when the target is saturated. (`maxHoldTicks` = 200 ms is unchanged, but it's a *different kind* of limit — a give-up/re-anchor timer on a dead stream, not a depth cap.) No separate hold ceiling (the mid-spurt grow in §2 deepens toward the same `MAX_NS`), and no `+margin` fudge — see the rationale for where headroom actually comes from.
 
-**Estimator rationale (vs NetEq / Speex).** NetEq peak-holds relative delay into buckets, feeds them into an exponentially-forgetting histogram (100 bins, decayed every packet), and takes the 0.95 quantile of that distribution. We keep the peak-hold buckets but take **p95 directly over the last 40 bucket peaks** — dropping NetEq's forgetting-histogram layer entirely (nothing to decay per packet). Bucket size is the accuracy knob: at 500 ms (~16 buckets) p95 barely filters and tracks the single worst window (a robust max → over-buffers on one-off spikes); at **200 ms (~40 buckets) p95 excludes the top ~2 buckets**, so an isolated spike is ignored while a recurring burst (several buckets) still drives growth — a lower, more responsive target. The peak-hold (worst-per-bucket) covers short bursts a raw packet-level p95 would miss, which is why no separate safety margin is needed. Speex's cost-function optimizer is deliberately *not* adopted — it's coupled to a per-quiet-frame WSOLA micro-adjust we don't do.
+**Estimator rationale (vs NetEq / Speex).** Modern NetEq (`underrun_optimizer.cc`) peak-holds relative delay over a **500 ms `resample_interval`**, feeds each interval max into an **exponentially-forgetting histogram** (`forget_factor` 0.983), and takes the **0.95 quantile**. Our design is the same shape minus the histogram: keep the peak-hold buckets, take **p95 directly over the last 40 *live* (non-empty) bucket peaks in a hard 8 s window** — no per-packet histogram to decay. The real trade is **memory**: NetEq's forgetting histogram remembers ~20 s with a smooth decay; ours is a hard 8 s window with a shorter, more-responsive bucket. Bucket size is the accuracy knob within that: at 500 ms (~16 buckets) p95 is essentially the single worst window (a robust max); at **200 ms (~40 buckets) p95 excludes the top ~2**, so an isolated spike is ignored while a recurring burst (several buckets) still drives growth — lower, more responsive. Empty buckets are **not** counted as 0 (that would under-buffer at cold start). The peak-hold (worst-per-bucket → ~p99 of packets) is why no *additive* margin is needed for **observed** jitter; headroom for **future** jitter beyond the window is provided by the **mid-spurt valve (§2)**, which deepens reactively when late-drops appear — not by the estimator. Speex's cost-function optimizer is deliberately *not* adopted — it's coupled to a per-quiet-frame WSOLA micro-adjust we don't do.
 
 **Thread-safety:** all mutation on the receive thread (single writer); the only cross-thread read is `targetSamples` (`@Volatile`, single Int) — identical to the latency-EMA pattern already in the codebase.
 
@@ -78,7 +78,12 @@ No Android deps. One instance per `SpeakerStream`. Fed on the **receive thread**
   `if (buffer.bufferedSamples() < estimator.targetSamples && buffer.terminatorTimestamp == null) return false`.
   Floor = 10 ms (480), so on a clean path the first packet (≥ 480 samples) anchors immediately; on a jittery path the gate waits for the grown target. Quantization to whole packets is automatic (packets arrive in ≥480-sample spans).
 - `offer(timestampSamples, opus, spanSamples, isTerminator, arrivalNanos)` — add `arrivalNanos`; feed `estimator.onPacket(timestampSamples, arrivalNanos)` at the top of `offer` for **every** packet (so late-dropped ones still feed growth), then delegate to `buffer.offer(...)` as today.
-- **Mid-spurt grow (the valve):** Part A's underrun path is unchanged — `plcHold()` conceals + holds the cursor, `resetToIdle` after `maxHoldTicks` (200 ms). The *new* piece covers the one case fable flagged that at-anchor growth misses: a long continuous spurt whose jitter rises but **never fully underruns** (some packets on time, some `LATE`) — with no underrun there's no re-anchor, so the grown target never gets applied and late-drops persist to the talkspurt end. Fix: on **sustained late-drops without underrun** (≥ 3 `LATE` in 200 ms), deepen by concealing **one** PLC frame while **holding the cursor** for that tick (the same `plcHold` primitive), so the next real packets land further ahead of the cursor. Deepen only until buffered depth reaches the current adaptive target (`MAX_NS`-capped). **This is exactly Mumble's grow path** — PLC insert + pointer hold. No new ceiling.
+- **Mid-spurt grow (the valve):** Part A's underrun path is unchanged — `plcHold()` conceals + holds the cursor, `resetToIdle` after `maxHoldTicks` (200 ms). The *new* piece covers the one case fable flagged that at-anchor growth misses: a long continuous spurt whose jitter rises but **never fully underruns** (some packets on time, some `LATE`) — with no underrun there's no re-anchor, so the grown target never gets applied and late-drops persist to the talkspurt end. Fix: on **sustained late-drops without underrun** (≥ 3 `LATE` in 200 ms) **and** `bufferedSamples() < targetSamples`, deepen by concealing **one** PLC frame while **holding the cursor** for that tick, so the next real packets land further ahead of the cursor. **This is exactly Mumble's grow path** — PLC insert + pointer hold. No new ceiling (it deepens toward the same `MAX_NS` target).
+
+  **Implementation constraints (must hold — a naive version introduces a spurious re-anchor bug):**
+  1. The valve's conceal-and-hold must **NOT** increment the underrun `consecutivePlc` counter. Use a distinct `plcDeepen()` (push a PLC frame, hold the cursor, leave `consecutivePlc` alone). Reusing `plcHold()` verbatim would trip `consecutivePlc >= maxHoldTicks → resetToIdle` on a persistent LATE run and discard the anchor *and* the deepening — the opposite of intent (`SpeakerStream.kt:53,83`).
+  2. Fire **at most one deepen per 200 ms detection window**, gated on `bufferedSamples() < targetSamples`, so a normal `decodeNext` resumes between fires (not "hold every tick until full").
+  3. **Cross-thread:** `LATE` is returned on the receive thread (`offer`); the valve fires on the playback thread (`fillTick`). Publish the "LATE count in the last 200 ms" via a `@Volatile`/atomic counter (same pattern as the estimator target), never a plain field.
 - **Shrink** is unchanged from Part A: it happens for free at the next talkspurt anchor (re-anchor to the now-lower target). This is the analog of Mumble's quiet-gated shrink — **the only way our mid-spurt behavior differs from Mumble** is that Mumble can *also* shrink mid-spurt during silence, and we don't. No mid-spurt shrink, no WSOLA.
 
 ### 3. `AudioVoiceEngine` — plumb `arrivalNanos` into `offer`
@@ -103,7 +108,9 @@ SpeakerStream.offer(ts, opus, span, term, arrivalNanos)
                                    │ targetSamples (read on playback thread)
 SpeakerStream.fillTick() [playback thread]
    anchor gate: bufferedSamples() >= estimator.targetSamples ?
-   underrun: plcHold (conceal + hold cursor) up to target/MAX  ← mid-spurt grow
+   underrun            → plcHold  (Part A, unchanged: ≤200ms → resetToIdle)
+   ≥3 LATE/200ms &     → plcDeepen (hold cursor, NO consecutivePlc++)  ← mid-spurt grow
+   buffered<target
         │
         ▼  (aggregate max target/jitter)
 AudioVoiceEngine flow → MumbleManager → AudioDiagnosticsScreen "Jitter"
@@ -113,11 +120,12 @@ AudioVoiceEngine flow → MumbleManager → AudioDiagnosticsScreen "Jitter"
 
 - **`DownlinkJitterEstimator`** (pure, JVM): synthetic `(tsSamples, arrivalNanos)` traces —
   - steady low-jitter arrivals → target converges to the floor (10 ms).
-  - injected 250 ms stall-and-burst → target grows to cover it (≥ burst − margin), then decays back toward floor once the bursty buckets age out of the 8 s window.
-  - a single one-off spike bucket → target unchanged (p95 excludes the top bucket).
+  - injected 250 ms stall-and-burst → target grows to cover the burst, then decays back toward the floor once the bursty buckets age out of the 8 s window.
+  - a single one-off spike bucket → target unchanged (p95 excludes the top ~2 of 40).
   - clamp: pathological jitter → target caps at MAX; empty/cold → floor.
+  - live-bucket-only: unfilled buckets are not counted as 0 (cold start doesn't under-buffer).
   - window-local minima: a slow monotonic arrival drift does NOT inflate the target (baseline re-bases).
-- **`SpeakerStream`**: anchor waits for the (mocked) estimator target; a long continuous underrun holds/deepens up to MAX rather than the fixed 200 ms; re-anchor uses the current target. (Reuse Part A's `SpeakerStream` test harness with an injected estimator/target supplier.)
+- **`SpeakerStream`**: anchor waits for the (mocked) estimator target; the mid-spurt valve fires `plcDeepen` on a ≥3-`LATE`-in-200 ms burst while `bufferedSamples() < target`, and does **not** increment `consecutivePlc` (assert no spurious `resetToIdle` on a persistent LATE run); Part A's underrun path (200 ms hold → reset) is unchanged; re-anchor uses the current target. (Reuse Part A's `SpeakerStream` test harness with an injected estimator/target supplier.)
 - On-device verification (Dan's batch): the "Jitter" readout drops toward 10 ms on a clean network and the Latency section's Playout number falls correspondingly; on a jittery path the target grows and `lateDrops` stays ≈ 0.
 
 ## Non-goals
