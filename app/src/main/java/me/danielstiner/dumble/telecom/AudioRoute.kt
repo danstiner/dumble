@@ -1,11 +1,11 @@
 package me.danielstiner.dumble.telecom
 
-import android.telecom.CallEndpoint
+import androidx.core.telecom.CallEndpointCompat
 
 /**
- * Pure mapping of a Telecom [CallEndpoint]'s type to a human-readable audio-route label, shown as a
- * read-only route indicator on the call screen (a stopgap until the call-screen redesign hosts a
- * first-class route control). The referenced `TYPE_*` values are compile-time `int` constants, so
+ * Pure mapping of a Telecom [CallEndpointCompat]'s type to a human-readable audio-route label, shown
+ * as a read-only route indicator on the call screen (a stopgap until the call-screen redesign hosts a
+ * first-class route control). The referenced `TYPE_*` values are compile-time `const val` constants, so
  * this has no Android runtime dependency and is JVM-unit-testable.
  */
 object AudioRoute {
@@ -14,11 +14,11 @@ object AudioRoute {
      * (a null/blank name falls back to the generic "Bluetooth" label).
      */
     fun label(type: Int, name: CharSequence? = null): String = when (type) {
-        CallEndpoint.TYPE_BLUETOOTH ->
+        CallEndpointCompat.TYPE_BLUETOOTH ->
             name?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: "Bluetooth"
-        CallEndpoint.TYPE_WIRED_HEADSET -> "Wired headset"
-        CallEndpoint.TYPE_EARPIECE -> "Earpiece"
-        CallEndpoint.TYPE_SPEAKER -> "Speaker"
+        CallEndpointCompat.TYPE_WIRED_HEADSET -> "Wired headset"
+        CallEndpointCompat.TYPE_EARPIECE -> "Earpiece"
+        CallEndpointCompat.TYPE_SPEAKER -> "Speaker"
         else -> "Unknown"
     }
 
@@ -26,10 +26,10 @@ object AudioRoute {
     enum class RouteIcon { BLUETOOTH, WIRED, EARPIECE, SPEAKER, UNKNOWN }
 
     fun icon(type: Int): RouteIcon = when (type) {
-        CallEndpoint.TYPE_BLUETOOTH -> RouteIcon.BLUETOOTH
-        CallEndpoint.TYPE_WIRED_HEADSET -> RouteIcon.WIRED
-        CallEndpoint.TYPE_EARPIECE -> RouteIcon.EARPIECE
-        CallEndpoint.TYPE_SPEAKER -> RouteIcon.SPEAKER
+        CallEndpointCompat.TYPE_BLUETOOTH -> RouteIcon.BLUETOOTH
+        CallEndpointCompat.TYPE_WIRED_HEADSET -> RouteIcon.WIRED
+        CallEndpointCompat.TYPE_EARPIECE -> RouteIcon.EARPIECE
+        CallEndpointCompat.TYPE_SPEAKER -> RouteIcon.SPEAKER
         else -> RouteIcon.UNKNOWN
     }
 }
