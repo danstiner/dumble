@@ -17,7 +17,10 @@ interface OpusCodec {
 /** libopus-backed factory. Each encoder/decoder owns one native handle, used by a single thread. */
 class LibOpusCodec(
     private val bitrate: Int = 32_000,
-    private val complexity: Int = 5,
+    // 9 = libopus (and mainline Mumble) default. Complexity >= 7 enables libopus's analysis pass (the
+    // tonality/VAD that drives per-frame VBR bit allocation) — lost entirely at < 7. Measured cost of
+    // 5->9 on arm64: ~+0.4% of one core (~0.18 ms per 20 ms frame), negligible vs the RNNoise/mic chain.
+    private val complexity: Int = 9,
 ) : OpusCodec {
     override fun newEncoder(): OpusEncoder = LibOpusEncoder(bitrate, complexity)
     override fun newDecoder(): OpusDecoder = LibOpusDecoder()

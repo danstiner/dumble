@@ -214,9 +214,19 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
     The 100 ms was deliberately raised (`4031812`) to stop late-drop starvation on jittery paths, so
     this must land *with* adaptive sizing: start ~10–20 ms and grow toward the 600 ms cap on measured
     jitter / `lateDrops`; a naive static 100→10 would regress that fix.
-- **#55** notification: show server label & channel (fallback to hostname)
+- ~~**#55** notification: show server label & channel (fallback to hostname)~~ — **DONE (2026-07-19)**:
+  server label (root-channel name / hostname fallback) as the CallStyle Person + channel as the secondary
+  line, live-refreshed from `MumbleManager.model`; `docs/superpowers/{specs,plans}/2026-07-19-notification-server-channel*`.
 - **#54** Bluetooth headset not selected as the initial call audio route
-- **#53** evaluate 32 kbps CVBR encoder default
+- ~~**#53** evaluate 32 kbps CVBR encoder default~~ — **DONE (2026-07-19)**: config confirmed well-chosen
+  (32 kbps / CVBR / VOICE all correct — fable-verified against libopus v1.5.2 + measured with `opus_demo` +
+  Mumble master); only change was **encoder complexity 5→9** (unlocks the analysis-driven VBR gated at
+  complexity 7; ~+0.4% of one core). Decision doc: `docs/superpowers/specs/2026-07-19-opus-encoder-config-decision.md`.
+- **Opus in-band FEC (packet-loss resilience)** — spun out of #53. NOT a config flip: needs encoder
+  `INBAND_FEC(1)` + `PACKET_LOSS_PERC(n)` AND a receiver change (`SpeakerStream.plcAdvance` must
+  decode-with-`fec=1` on the queued next packet; thread a `fec` flag through `OpusDecoder.decode` →
+  `NativeOpus.decode`). **Caveat:** mainline desktop Mumble decodes with `decode_fec=0`, so this only helps
+  **Drumble↔Drumble** calls — lower priority. Full recipe in the #53 decision doc.
 - **#40 voice-activity detection — LANDED.** RNNoise-denoised uplink gated by RNNoise's own VAD
   probability (default 0.5, in-app tunable + persisted via Settings → Voice activity). Wall-clock
   `frame_number` + real terminators (see Fixed). Remaining VAD follow-ups: expand the Voice
