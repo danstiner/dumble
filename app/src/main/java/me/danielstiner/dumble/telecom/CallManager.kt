@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.MumbleManager
+import me.danielstiner.dumble.mumble.model.currentChannelName
+import me.danielstiner.dumble.mumble.model.serverLabel
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 
 /**
@@ -58,6 +60,11 @@ object CallManager {
     // Wall-clock moment the call reached Synchronized; anchors the notification chronometer.
     private var connectedSinceMs: Long? = null
 
+    // Latest server/channel for the notification (Main-confined, like connectedSinceMs).
+    private var hostFallback: String = "Dumble"
+    private var serverLabelState: String = "Dumble"
+    private var channelNameState: String? = null
+
     private val _callActive = MutableStateFlow(false)
     /** True while a Telecom call is registered — drives the in-call UI (replaces the old Connection). */
     val callActive: StateFlow<Boolean> = _callActive
@@ -87,9 +94,12 @@ object CallManager {
     }
 
     /** Start the outgoing Mumble call: register once, then launch the addCall coroutine. */
-    fun startCall() {
+    fun startCall(host: String) {
         val cm = callsManager ?: run { Log.e(TAG, "startCall before init"); return }
         if (callJob?.isActive == true) { Log.w(TAG, "startCall while a call is active"); return }
+        hostFallback = host
+        serverLabelState = host
+        channelNameState = null
         ensureRegistered(cm)
         val seq = ++callSeq
         tornDown = false
@@ -146,6 +156,19 @@ object CallManager {
                             }
                         }
                     }
+                    // Live server/channel for the notification. Runs on Main (appScope); the …State fields
+                    // are Main-confined. Conflated StateFlow + the equality guard limit re-posts to changes.
+                    launch {
+                        MumbleManager.model.state.collect { m ->
+                            val label = serverLabel(m, hostFallback)
+                            val channel = currentChannelName(m)
+                            if (label != serverLabelState || channel != channelNameState) {
+                                serverLabelState = label
+                                channelNameState = channel
+                                startCallForeground()
+                            }
+                        }
+                    }
                     // Failure teardown MUST use the non-conflated failures flow: MumbleManager self-heals
                     // Failed -> Disconnected too fast for a conflated collector to observe.
                     launch {
@@ -181,7 +204,7 @@ object CallManager {
     private fun startCallForeground() {
         val ctx = appContext ?: return
         try {
-            CallForegroundService.start(ctx, connectedSinceMs = connectedSinceMs)
+            CallForegroundService.start(ctx, serverLabelState, channelNameState, connectedSinceMs)
         } catch (t: Throwable) {
             Log.e(TAG, "starting call foreground service failed", t)
         }
@@ -215,6 +238,8 @@ object CallManager {
         _activeEndpoint.value = null
         _isSpeaker.value = false
         connectedSinceMs = null
+        serverLabelState = "Dumble"
+        channelNameState = null
         callJob?.cancel() // unwinds the parked addCall coroutineScope (cancels the block's collectors)
         callJob = null
     }

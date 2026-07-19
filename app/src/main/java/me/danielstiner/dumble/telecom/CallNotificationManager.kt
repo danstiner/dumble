@@ -47,57 +47,36 @@ class CallNotificationManager(context: Context) {
         notificationManager.createNotificationChannel(incomingChannel)
     }
 
-    fun createNotification(callerName: String, isIncoming: Boolean, connectedSinceMs: Long? = null): Notification {
+    fun createNotification(serverLabel: String, channelName: String?, isIncoming: Boolean, connectedSinceMs: Long? = null): Notification {
         val channelId = if (isIncoming) INCOMING_CHANNEL_ID else ONGOING_CHANNEL_ID
-        
+        val title = serverLabel.ifBlank { "Dumble" }   // CallStyle throws on an empty Person name
+
         val intent = Intent(appContext, ActiveCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
-            appContext, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val hangupIntent = Intent(appContext, CallActionReceiver::class.java).apply {
-            action = "ACTION_HANGUP"
-        }
-        val hangupPendingIntent = PendingIntent.getBroadcast(
-            appContext, 1, hangupIntent, PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingIntent = PendingIntent.getActivity(appContext, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        val hangupIntent = Intent(appContext, CallActionReceiver::class.java).apply { action = "ACTION_HANGUP" }
+        val hangupPendingIntent = PendingIntent.getBroadcast(appContext, 1, hangupIntent, PendingIntent.FLAG_IMMUTABLE)
 
         val builder = Notification.Builder(appContext, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setContentTitle("Dumble Call")
-            .setContentText(if (isIncoming) "Incoming call from $callerName" else "Call with $callerName")
+            .setContentTitle(title)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(pendingIntent)
+        // Only set contentText when the channel is known — an empty string suppresses CallStyle's
+        // localized "Ongoing call" default and would show a blank line during the handshake.
+        channelName?.let { builder.setContentText("in $it") }
 
+        val person = android.app.Person.Builder().setName(title).build()
         if (isIncoming) {
-            // style for incoming call (usually includes Answer/Reject)
-            builder.setStyle(
-                Notification.CallStyle.forIncomingCall(
-                    android.app.Person.Builder().setName(callerName).build(),
-                    hangupPendingIntent, // reject
-                    pendingIntent // answer (launches activity)
-                )
-            )
+            builder.setStyle(Notification.CallStyle.forIncomingCall(person, hangupPendingIntent, pendingIntent))
         } else {
-            // style for ongoing call
-            builder.setStyle(
-                Notification.CallStyle.forOngoingCall(
-                    android.app.Person.Builder().setName(callerName).build(),
-                    hangupPendingIntent
-                )
-            )
+            builder.setStyle(Notification.CallStyle.forOngoingCall(person, hangupPendingIntent))
             if (connectedSinceMs != null) {
-                // Live-counting chronometer anchored to the moment the call connected, so it
-                // roughly matches the in-app "Connected · MM:SS" timer.
-                builder.setWhen(connectedSinceMs)
-                    .setUsesChronometer(true)
-                    .setShowWhen(true)
+                builder.setWhen(connectedSinceMs).setUsesChronometer(true).setShowWhen(true)
             }
         }
-
         return builder.build()
     }
 

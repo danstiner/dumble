@@ -30,12 +30,13 @@ class CallForegroundService : Service() {
     private val notifications by lazy { CallNotificationManager(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val callerName = intent?.getStringExtra(EXTRA_CALLER_NAME) ?: DEFAULT_CALLER
+        val serverLabel = intent?.getStringExtra(EXTRA_SERVER) ?: DEFAULT_SERVER
+        val channelName = intent?.getStringExtra(EXTRA_CHANNEL)   // null = channel unknown yet
         val connectedSinceMs = intent?.getLongExtra(EXTRA_CONNECTED_SINCE_MS, 0L)?.takeIf { it > 0L }
         // The system crashes the process if we don't call startForeground within ~5s of
         // startForegroundService, so guarantee a valid notification even if the CallStyle build fails.
         val notification = try {
-            notifications.createNotification(callerName, isIncoming = false, connectedSinceMs = connectedSinceMs)
+            notifications.createNotification(serverLabel, channelName, isIncoming = false, connectedSinceMs = connectedSinceMs)
         } catch (t: Throwable) {
             Log.e(TAG, "notification build failed; using fallback", t)
             notifications.createFallbackNotification()
@@ -62,14 +63,16 @@ class CallForegroundService : Service() {
 
     companion object {
         private const val TAG = "CallFgService"
-        private const val DEFAULT_CALLER = "Dumble User"
-        private const val EXTRA_CALLER_NAME = "caller_name"
+        private const val DEFAULT_SERVER = "Dumble"
+        private const val EXTRA_SERVER = "server_label"
+        private const val EXTRA_CHANNEL = "channel_name"
         private const val EXTRA_CONNECTED_SINCE_MS = "connected_since_ms"
 
-        /** Start the call FGS, or refresh its notification (e.g. with the chronometer anchor). Idempotent. */
-        fun start(context: Context, callerName: String = DEFAULT_CALLER, connectedSinceMs: Long? = null) {
+        /** Start the call FGS, or refresh its notification (server/channel/chronometer). Idempotent. */
+        fun start(context: Context, serverLabel: String = DEFAULT_SERVER, channelName: String? = null, connectedSinceMs: Long? = null) {
             val intent = Intent(context, CallForegroundService::class.java).apply {
-                putExtra(EXTRA_CALLER_NAME, callerName)
+                putExtra(EXTRA_SERVER, serverLabel)
+                if (channelName != null) putExtra(EXTRA_CHANNEL, channelName)
                 if (connectedSinceMs != null) putExtra(EXTRA_CONNECTED_SINCE_MS, connectedSinceMs)
             }
             context.startForegroundService(intent)

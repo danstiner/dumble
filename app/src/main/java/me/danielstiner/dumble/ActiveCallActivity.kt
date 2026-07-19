@@ -62,7 +62,7 @@ class ActiveCallActivity : ComponentActivity() {
             requestCallPermissions()
             return
         }
-        CallManager.startCall()
+        CallManager.startCall(config.host)
         MumbleManager.connect(config)
     }
 
