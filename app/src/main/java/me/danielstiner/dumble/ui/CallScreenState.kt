@@ -2,6 +2,7 @@ package me.danielstiner.dumble.ui
 
 import me.danielstiner.dumble.mumble.model.MumbleChannel
 import me.danielstiner.dumble.mumble.model.ServerModel
+import me.danielstiner.dumble.mumble.model.serverLabel
 
 data class UserVm(
     val session: Int,           // the UI derives a deterministic avatar color from this
@@ -44,9 +45,7 @@ fun buildCallScreenState(
     configHostFallback: String,
 ): CallScreenState {
     val myId = model.sessionId
-    val rootName = model.channels.values.firstOrNull { it.parentId == null }?.name
-    // "Root" is murmur's literal default for an unregistered server; treat it as no name.
-    val serverName = rootName?.takeIf { it.isNotBlank() && it != "Root" } ?: configHostFallback
+    val serverName = serverLabel(model, configHostFallback)
 
     val usersByChannel = model.users.values.groupBy { it.channelId }
     val myChannelId = myId?.let { model.users[it]?.channelId }
