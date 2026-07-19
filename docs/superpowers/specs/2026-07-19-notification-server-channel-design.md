@@ -49,14 +49,18 @@ fun currentChannelName(model: ServerModel): String? {
 ### 2. Notification content = (server, channel) — `telecom/CallNotificationManager.kt`
 
 Change `createNotification` to take `serverLabel: String, channelName: String?` (replacing `callerName`):
-- `Person.Builder().setName(serverLabel)` → the prominent CallStyle line.
-- `setContentTitle(serverLabel)`; `setContentText(channelName?.let { "in $it" } ?: "")` → the secondary line.
+- `Person.Builder().setName(serverLabel.ifBlank { "Dumble" })` → the prominent CallStyle line. **Guard non-blank**: AOSP `CallStyle` throws on an empty `Person` name.
+- `setContentTitle(serverLabel)` (decorative — CallStyle overrides the title with the Person name; harmless).
+- **`setContentText` only when `channelName != null`**: `channelName?.let { builder.setContentText("in $it") }`. Do **NOT** pass `""` — AOSP CallStyle only falls back to the localized "Ongoing call" default when `contentText == null`; an empty string suppresses that and shows a blank line. So during the handshake (channel unknown) the notification reads *server-label / "Ongoing call"*, then fills in the channel.
 - Chronometer/incoming behavior unchanged.
+
+**Verified (fable, 2026-07-19, against AOSP `Notification.java` `makeCallLayout`, API 31–35):** `Person.name` replaces the title and `setContentText` renders as the visible secondary line under CallStyle — so the server-prominent / channel-secondary mapping works on AOSP/Pixel. OEM-restyled call notifications (Samsung/MIUI) are the only place the combined-line fallback might be needed; on-device check below.
 
 ### 3. FGS + CallManager plumbing — `telecom/CallForegroundService.kt`, `telecom/CallManager.kt`
 
 - `CallForegroundService.start(context, serverLabel, channelName, connectedSinceMs)` — carry both through the intent extras (`EXTRA_SERVER`, `EXTRA_CHANNEL`) and hand them to `createNotification`. Fallback `serverLabel` when the extra is missing = a neutral default (e.g. `"Dumble"`).
 - `CallManager` holds Main-confined latest `serverLabel` / `channelName` (defaults: the host / null) plus the existing `connectedSinceMs`. `startCallForeground()` passes all three to `CallForegroundService.start`.
+- **Teardown reset (required).** `CallManager.teardown()` resets `serverLabelState` / `channelNameState` / the stored `hostFallback` to their defaults alongside the existing `connectedSinceMs` reset. `MumbleManager.disconnect()` does **not** clear the model, so without this the singleton carries call N's server/channel into call N+1's startup window (a real leak, not just cosmetic).
 - `CallManager.startCall(hostFallback: String)` gains the host; store it as the initial/label fallback. `ActiveCallActivity.onConnect` passes `config.host`.
 - **New collector** in the `addCall` block:
   ```kotlin
@@ -90,7 +94,7 @@ MumbleManager.model.state (ServerModel) ──collect(Main)──────┤
 ## Testing
 
 - **JVM unit tests** for the two helpers (`serverLabel`: root-name present / blank / "Root" / no root → host fallback; `currentChannelName`: self in a named channel / unknown session / missing channel → null). Reuse the existing `ServerModel` test construction from the call-screen tests.
-- **On-device** (Dan's batch): the notification shows the server label prominently and the channel as a secondary line; it fills in during the handshake and updates when you switch channels. **Confirm the `CallStyle` secondary line (`contentText`) actually renders** on the device — if it doesn't, fall back to a combined `"server · channel"` Person name (a one-line change).
+- **On-device** (Dan's batch): the notification shows the server label prominently and the channel as a secondary line; it reads *label / "Ongoing call"* during the handshake, then fills in the channel; it updates when you switch channels. On an OEM-restyled call notification (Samsung/MIUI) confirm the secondary line still renders — if not, fall back to a combined `"server · channel"` Person name (a one-line change). Also test **an admin moving you to another channel while Drumble is backgrounded** (the collector re-posts the FGS from the background — expected fine, worth confirming).
 
 ## Non-goals
 
