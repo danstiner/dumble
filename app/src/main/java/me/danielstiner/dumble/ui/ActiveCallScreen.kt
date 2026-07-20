@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -31,12 +32,13 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.telecom.AudioRoute
 import me.danielstiner.dumble.ui.theme.DumbleTheme
 
-// Deterministic avatar palette — indexed by session; reads acceptably on light and dark.
+// Deterministic avatar palette — indexed by a stable hash of the user's NAME, so someone keeps their
+// colour across reconnects (session ids are per-connection). Reads acceptably on light and dark.
 private val avatarPalette = listOf(
     Color(0xFF5A6BF0), Color(0xFF4CAF50), Color(0xFFC64AA6), Color(0xFFC6971F),
     Color(0xFF17A79A), Color(0xFF7E8AA0), Color(0xFF7E57C2), Color(0xFFC0603C),
 )
-private fun avatarColor(session: Int): Color = avatarPalette[Math.floorMod(session, avatarPalette.size)]
+private fun avatarColor(name: String): Color = avatarPalette[Math.floorMod(name.hashCode(), avatarPalette.size)]
 
 // Control-button shapes: a wider-than-tall pill by default, morphing squarer when a toggle is active.
 // (M3 Expressive's IconButtonDefaults.toggleableShapes() would encapsulate this, but it isn't in the
@@ -160,23 +162,33 @@ private fun UserRow(u: UserVm) {
 
 @Composable
 private fun Avatar(u: UserVm) {
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        val ring = if (u.speaking) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier
-        Box(Modifier.size(40.dp).then(ring).clip(CircleShape).background(avatarColor(u.session)),
-            contentAlignment = Alignment.Center) {
-            Text(u.initial, color = Color.White, style = MaterialTheme.typography.titleMedium)
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        if (u.speaking) {
+            // Soft primary halo behind the avatar — reads as a glow, clearer than the old flat 2dp ring.
+            Box(Modifier.matchParentSize().clip(CircleShape).background(
+                Brush.radialGradient(colorStops = arrayOf(0.6f to cs.primary.copy(alpha = 0.55f), 1f to Color.Transparent))))
         }
-        // Badge priority: deaf (can't hear you) over mute. Server-imposed = error/red, self = neutral.
-        val showDeaf = u.serverDeaf || u.selfDeaf
-        val showMute = !showDeaf && (u.serverMute || u.selfMute)
-        if (showDeaf || showMute) {
-            val server = if (showDeaf) u.serverDeaf else u.serverMute
-            Box(Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
-                .background(if (server) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant),
+        // Avatar + its badge share a 40dp box so the badge stays anchored to the avatar, not the
+        // larger (glow-padded) outer box.
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            val ring = if (u.speaking) Modifier.border(2.dp, cs.primary, CircleShape) else Modifier
+            Box(Modifier.matchParentSize().then(ring).clip(CircleShape).background(avatarColor(u.name)),
                 contentAlignment = Alignment.Center) {
-                Icon(if (showDeaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
-                    if (showDeaf) "deafened" else "muted", modifier = Modifier.size(11.dp),
-                    tint = if (server) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(u.initial, color = Color.White, style = MaterialTheme.typography.titleMedium)
+            }
+            // Badge priority: deaf (can't hear you) over mute. Server-imposed = error/red, self = neutral.
+            val showDeaf = u.serverDeaf || u.selfDeaf
+            val showMute = !showDeaf && (u.serverMute || u.selfMute)
+            if (showDeaf || showMute) {
+                val server = if (showDeaf) u.serverDeaf else u.serverMute
+                Box(Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
+                    .background(if (server) cs.error else cs.surfaceVariant),
+                    contentAlignment = Alignment.Center) {
+                    Icon(if (showDeaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
+                        if (showDeaf) "deafened" else "muted", modifier = Modifier.size(11.dp),
+                        tint = if (server) cs.onError else cs.onSurfaceVariant)
+                }
             }
         }
     }
@@ -235,7 +247,7 @@ private fun ControlToggle(
             modifier = Modifier.fillMaxWidth().height(72.dp),
             shape = if (checked) controlActiveShape else controlPillShape,   // pill -> squarer when active
             colors = IconButtonDefaults.filledIconToggleButtonColors(
-                containerColor = cs.surfaceContainerHighest,          // inactive blends into the bar
+                containerColor = cs.surfaceBright,                    // inactive = lighter/white circle on the bar
                 contentColor = cs.onSurface,
                 checkedContainerColor = cs.inverseSurface,            // white-ish highlight when active
                 checkedContentColor = cs.inverseOnSurface,
@@ -262,7 +274,7 @@ private fun RouteControl(
                 onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().height(72.dp),
                 shape = if (highlighted) controlActiveShape else controlPillShape,   // squarer when non-default
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (highlighted) cs.inverseSurface else cs.surfaceContainerHighest,
+                    containerColor = if (highlighted) cs.inverseSurface else cs.surfaceBright,
                     contentColor = if (highlighted) cs.inverseOnSurface else cs.onSurface,
                 ),
             ) {
