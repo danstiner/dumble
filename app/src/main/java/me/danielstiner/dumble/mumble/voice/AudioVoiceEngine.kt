@@ -45,6 +45,7 @@ class AudioVoiceEngine(
     private val _jitter = MutableStateFlow(JitterStats())
     val jitter: StateFlow<JitterStats> = _jitter.asStateFlow()
     private var diagTick = 0
+    private var jitterSnapshotTick = 0   // playback-thread only; throttles the per-speaker snapshot
 
     @Volatile private var muted = false
     @Volatile private var running = false
@@ -369,10 +370,12 @@ class AudioVoiceEngine(
                 captureMs = recorder?.latencyMs() ?: Double.NaN,
                 playoutMs = out.latencyMs(),
             )
-            _jitter.value = JitterStats(
-                targetMs = speakers.values.maxOfOrNull { it.jitterTargetMs() } ?: 10,
-                p95Ms = speakers.values.maxOfOrNull { it.jitterP95Ms() } ?: 0,
-            )
+            if (++jitterSnapshotTick % DIAG_INTERVAL == 0) {   // ~500 ms (25 * 20 ms)
+                val per = speakers.entries.map { (session, st) ->
+                    SpeakerJitter(session, st.jitterTargetMs(), st.jitterP95Ms(), st.bufferedMs(), st.lateDrops)
+                }
+                _jitter.value = JitterStats(perSpeaker = per)
+            }
         }
     }
 
