@@ -94,6 +94,15 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - PTT accessibility: TalkBack-operable transmit (hold gesture unusable via screen reader) + `mergeDescendants` polish (was task #42)
 
 ### 🟠 Bluetooth headset not selected as the initial call audio route (task #54)
+- **FIX LANDED (2026-07-20, pending device verification):** `CallManager` now **proactively routes** to
+  the best device on every `availableEndpoints` change — priority **BT > wired > earpiece** (Speaker is
+  the one route held against auto-routing, until toggled off; decision: *always* auto-route to best,
+  even after a manual non-speaker pick). `setSpeaker(false)` returns to the best non-speaker route (not
+  always earpiece). Plus **diagnostics** to crack the route-picker no-op below: logs the available
+  endpoint labels, active-endpoint changes, `requestEndpointChange` outcomes, and `selectRoute`'s
+  no-target case. **On-device check:** join with a BT headset connected → audio should route to BT;
+  toggle Speaker and the route picker; grep logcat tag `CallManager` for the `availableEndpoints` /
+  `auto-route` / `activeEndpoint` lines to confirm the endpoint set + whether `requestEndpointChange` succeeds.
 - **Symptom (original report):** joining a call with a Bluetooth headset already connected plays
   received audio out the phone **speaker**, not the headset.
 - **Status: CONFIRMED on-device (2026-07-17).** Dan joined a call with a BT headset connected —
@@ -116,6 +125,13 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   build it until the indicator confirms the framework isn't already routing correctly.
 
 ### 🔴 Route picker doesn't switch the output device — selecting Earpiece was a no-op (2026-07-17, on-device)
+- **DIAGNOSTICS LANDED (2026-07-20):** the code migrated to core-telecom's transactional
+  `requestEndpointChange` (which returns a `CallControlResult`, no more silent empty `OutcomeReceiver`),
+  and `selectRoute` now logs both the `requestEndpointChange` outcome AND the no-op case (requested type
+  absent from `_endpoints`, the most likely cause). Next device session: tap Earpiece and read logcat
+  `CallManager` — either `requestEndpointChange … ok/error=` or `selectRoute: no endpoint of type …`
+  pinpoints it. (The proactive auto-routing above also independently forces the best route, which may
+  mask this in practice.)
 - **Symptom:** in the in-call route picker, tapping **Earpiece** did not switch output to the earpiece;
   audio kept playing on the previous device.
 - **Likely shared root with #54:** both point at `CallManager`'s CallEndpoint selection path.

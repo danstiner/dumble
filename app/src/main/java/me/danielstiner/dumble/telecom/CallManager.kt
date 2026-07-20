@@ -52,6 +52,8 @@ object CallManager {
 
     private var callJob: Job? = null
     private var controlScope: CallControlScope? = null   // Main-confined
+    // True while the user is explicitly on Speaker — the one route held against auto-routing (Main-confined).
+    private var speakerHeld = false
     // Per-call generation. Guards teardown so a superseded call's late finalizer can't tear down the
     // next call (they share this singleton's fields).
     private var callSeq = 0
@@ -141,7 +143,24 @@ object CallManager {
                             }
                         }
                     }
-                    launch { availableEndpoints.collect { _endpoints.value = it } }
+                    launch {
+                        availableEndpoints.collect { eps ->
+                            _endpoints.value = eps
+                            Log.d(TAG, "availableEndpoints: ${eps.map { AudioRoute.label(it.type, it.name) }}")
+                            // Proactively route to the best device (BT > wired > earpiece). The framework
+                            // does NOT auto-route to BT at call start (observed: plays out the speaker), and a
+                            // headset can connect mid-call — so keep the call on the preferred endpoint
+                            // whenever the available set changes. Speaker is the one route we DON'T override:
+                            // the user opted into it, and it's held until they toggle it off.
+                            if (!speakerHeld) {
+                                val preferred = preferredEndpoint(eps)
+                                if (preferred != null && preferred.type != _activeEndpoint.value?.type) {
+                                    Log.d(TAG, "auto-route -> ${AudioRoute.label(preferred.type, preferred.name)}")
+                                    requestEndpoint(preferred)
+                                }
+                            }
+                        }
+                    }
                     launch { currentCallEndpoint.collect { onActiveEndpoint(it) } }
                     // System/hardware mute (BT-headset button, system call controls) -> mute in Mumble
                     // (broadcasts self_mute). drop(1) skips the framework's initial emit so it can't
@@ -241,6 +260,7 @@ object CallManager {
         _endpoints.value = emptyList()
         _activeEndpoint.value = null
         _isSpeaker.value = false
+        speakerHeld = false
         connectedSinceMs = null
         serverLabelState = "Dumble"
         channelNameState = null
@@ -249,28 +269,51 @@ object CallManager {
     }
 
     private fun onActiveEndpoint(ep: CallEndpointCompat) {
+        Log.d(TAG, "activeEndpoint: ${AudioRoute.label(ep.type, ep.name)}")
         _activeEndpoint.value = ep
         _isSpeaker.value = ep.type == CallEndpointCompat.TYPE_SPEAKER
     }
 
-    /** Route to the first available endpoint of [endpointType] (BT / wired / earpiece / speaker). */
-    fun selectRoute(endpointType: Int) {
+    /** Best non-speaker endpoint by priority: Bluetooth > wired headset > earpiece (null if none). */
+    private fun preferredEndpoint(eps: List<CallEndpointCompat>): CallEndpointCompat? =
+        eps.firstOrNull { it.type == CallEndpointCompat.TYPE_BLUETOOTH }
+            ?: eps.firstOrNull { it.type == CallEndpointCompat.TYPE_WIRED_HEADSET }
+            ?: eps.firstOrNull { it.type == CallEndpointCompat.TYPE_EARPIECE }
+
+    /** Request the framework switch the call's audio route to [ep], logging the outcome. */
+    private fun requestEndpoint(ep: CallEndpointCompat) {
         val scope = controlScope ?: return
-        val ep = _endpoints.value.firstOrNull { it.type == endpointType } ?: return
+        val label = AudioRoute.label(ep.type, ep.name)
         appScope.launch {
-            // Surfaced (parity with today's silent no-op, but now attributable — the later #59 fix
-            // consumes this error).
             when (val res = scope.requestEndpointChange(ep)) {
-                is CallControlResult.Error ->
-                    Log.w(TAG, "requestEndpointChange type=$endpointType error=${res.errorCode}")
-                is CallControlResult.Success ->
-                    Log.d(TAG, "requestEndpointChange type=$endpointType ok")
+                is CallControlResult.Error -> Log.w(TAG, "requestEndpointChange $label error=${res.errorCode}")
+                is CallControlResult.Success -> Log.d(TAG, "requestEndpointChange $label ok")
             }
         }
     }
 
-    /** Speaker on/off toggle for the no-headset case (earpiece <-> speaker). */
-    fun setSpeaker(speaker: Boolean) = selectRoute(
-        if (speaker) CallEndpointCompat.TYPE_SPEAKER else CallEndpointCompat.TYPE_EARPIECE
-    )
+    /** Route to the first available endpoint of [endpointType] (route picker: BT / wired / earpiece / speaker). */
+    fun selectRoute(endpointType: Int) {
+        speakerHeld = endpointType == CallEndpointCompat.TYPE_SPEAKER
+        val ep = _endpoints.value.firstOrNull { it.type == endpointType }
+        if (ep == null) {
+            Log.w(TAG, "selectRoute: no endpoint of type $endpointType in " +
+                "${_endpoints.value.map { AudioRoute.label(it.type, it.name) }}")
+            return
+        }
+        requestEndpoint(ep)
+    }
+
+    /** Speaker on/off. Off returns to the best non-speaker route (BT > wired > earpiece), not always earpiece. */
+    fun setSpeaker(speaker: Boolean) {
+        speakerHeld = speaker
+        val ep = if (speaker) _endpoints.value.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+                 else preferredEndpoint(_endpoints.value)
+        if (ep == null) {
+            Log.w(TAG, "setSpeaker($speaker): no target endpoint in " +
+                "${_endpoints.value.map { AudioRoute.label(it.type, it.name) }}")
+            return
+        }
+        requestEndpoint(ep)
+    }
 }
