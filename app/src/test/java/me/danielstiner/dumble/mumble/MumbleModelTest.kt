@@ -17,6 +17,12 @@ class MumbleModelTest {
         return b.build()
     }
 
+    private fun userStats(session: Int, tcp: Float? = null, udp: Float? = null): MumbleProtos.UserStats {
+        val b = MumbleProtos.UserStats.newBuilder().setSession(session)
+        tcp?.let { b.setTcpPingAvg(it) }; udp?.let { b.setUdpPingAvg(it) }
+        return b.build()
+    }
+
     @Test fun channelTreeAndPartialUpdate() {
         var m = ServerModel()
         m = ModelReducers.applyChannelState(m, channelState(0, name = "Root"))
@@ -53,5 +59,27 @@ class MumbleModelTest {
         assertEquals("A", holder.state.value.channels[1]!!.name)
         holder.reset()
         assertTrue(holder.state.value.channels.isEmpty())
+    }
+
+    @Test fun userStatsWritesPing() {
+        var m = ServerModel()
+        m = ModelReducers.applyUserState(m, userState(42, name = "dan"))
+        m = ModelReducers.applyUserStats(m, userStats(42, tcp = 15.5f, udp = 20f))
+        assertEquals(15.5f, m.users[42]!!.tcpPingMs!!, 0.001f)
+        assertEquals(20f, m.users[42]!!.udpPingMs!!, 0.001f)
+    }
+
+    @Test fun userStatsForUnknownSessionIsNoOp() {
+        val m = ModelReducers.applyUserStats(ServerModel(), userStats(99, tcp = 5f))
+        assertNull(m.users[99])
+    }
+
+    @Test fun userStatePreservesPingAcrossUpdate() {
+        var m = ServerModel()
+        m = ModelReducers.applyUserState(m, userState(42, name = "dan"))
+        m = ModelReducers.applyUserStats(m, userStats(42, tcp = 15.5f))
+        m = ModelReducers.applyUserState(m, userState(42, channel = 3))   // mute/move must NOT wipe ping
+        assertEquals(15.5f, m.users[42]!!.tcpPingMs!!, 0.001f)
+        assertEquals(3, m.users[42]!!.channelId)
     }
 }

@@ -23,6 +23,8 @@ data class MumbleUser(
     val selfDeaf: Boolean = false,
     val suppress: Boolean = false,
     val recording: Boolean = false,
+    val tcpPingMs: Float? = null,   // server-reported ping-to-server (via UserStats); null = unknown
+    val udpPingMs: Float? = null,
 )
 
 data class ServerModel(
@@ -62,12 +64,23 @@ object ModelReducers {
             selfDeaf = if (msg.hasSelfDeaf()) msg.selfDeaf else old?.selfDeaf ?: false,
             suppress = if (msg.hasSuppress()) msg.suppress else old?.suppress ?: false,
             recording = if (msg.hasRecording()) msg.recording else old?.recording ?: false,
+            tcpPingMs = old?.tcpPingMs,   // preserve — UserStats writes these, UserState must not wipe them
+            udpPingMs = old?.udpPingMs,
         )
         return m.copy(users = m.users + (u.session to u))
     }
 
     fun applyUserRemove(m: ServerModel, msg: MumbleProtos.UserRemove): ServerModel =
         m.copy(users = m.users - msg.session)
+
+    fun applyUserStats(m: ServerModel, msg: MumbleProtos.UserStats): ServerModel {
+        val old = m.users[msg.session] ?: return m       // stats for an unknown user → ignore
+        val u = old.copy(
+            tcpPingMs = if (msg.hasTcpPingAvg()) msg.tcpPingAvg else old.tcpPingMs,
+            udpPingMs = if (msg.hasUdpPingAvg()) msg.udpPingAvg else old.udpPingMs,
+        )
+        return m.copy(users = m.users + (u.session to u))
+    }
 
     fun applyServerSync(m: ServerModel, msg: MumbleProtos.ServerSync): ServerModel = m.copy(
         sessionId = if (msg.hasSession()) msg.session else m.sessionId,
@@ -85,6 +98,7 @@ class MumbleModel {
     fun onChannelRemove(msg: MumbleProtos.ChannelRemove) { _state.value = ModelReducers.applyChannelRemove(_state.value, msg) }
     fun onUserState(msg: MumbleProtos.UserState) { _state.value = ModelReducers.applyUserState(_state.value, msg) }
     fun onUserRemove(msg: MumbleProtos.UserRemove) { _state.value = ModelReducers.applyUserRemove(_state.value, msg) }
+    fun onUserStats(msg: MumbleProtos.UserStats) { _state.value = ModelReducers.applyUserStats(_state.value, msg) }
     fun onServerSync(msg: MumbleProtos.ServerSync) { _state.value = ModelReducers.applyServerSync(_state.value, msg) }
     fun reset() { _state.value = ServerModel() }
 }
