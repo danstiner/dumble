@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.mumble.integration
 
 import me.danielstiner.dumble.mumble.model.MumbleModel
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.net.*
 import me.danielstiner.dumble.mumble.protocol.*
 import me.danielstiner.dumble.mumble.voice.*
@@ -42,6 +43,10 @@ class LiveServerIntegrationTest {
         @Volatile var udp: MumbleUdpTransport? = null
         lateinit var sm: SessionStateMachine
         lateinit var voice: VoiceTransport
+        // Probe hooks (UserStats verification): spy on inbound control frames + note server-initiated close.
+        @Volatile var frameSpy: ((TcpFrame) -> Unit)? = null
+        @Volatile var closed = false
+        @Volatile var closedCause: Throwable? = null
 
         init {
             voice = VoiceTransport(
@@ -84,7 +89,87 @@ class LiveServerIntegrationTest {
             assertTrue("avg RTT sane: ${st.avgRttMs}", st.avgRttMs in 0.0..250.0)
         }
 
+        /** Control-channel connect + wait for Synchronized (no voice loopback). For the UserStats probe. */
+        suspend fun connectAndSync(username: String) {
+            tcp.connect(host, port, object : MumbleTcpTransport.Listener {
+                override fun onFrame(frame: TcpFrame) { frameSpy?.invoke(frame); sm.onFrame(frame) }
+                override fun onClosed(cause: Throwable?) { closed = true; closedCause = cause }
+            })
+            sm.start(username, password)
+            withTimeout(10_000) { sm.state.first { it is ConnectionState.Synchronized } }
+        }
+
         fun shutdown() { voice.stop(); udp?.close(); sm.disconnectLocal() }
+    }
+
+    /**
+     * PROBE (spec "Open verification"): does a NON-admin client receive another user's ping via
+     * UserStats, and does per-user polling trip Murmur's flood protection? Answers both against a real
+     * server. Not a pass/fail feature test — it prints its findings; the assert only guards Q1.
+     */
+    @Test fun userStatsProbe() = runBlocking {
+        val a = Harness(host!!, port, password, forceTcp = false)
+        val b = Harness(host!!, port, password, forceTcp = false)
+        val responses = java.util.concurrent.CopyOnWriteArrayList<MumbleProtos.UserStats>()
+        a.frameSpy = { frame ->
+            if (frame.type == TcpMessageType.UserStats.id)
+                responses.add(MumbleProtos.UserStats.parseFrom(frame.payload))
+        }
+        try {
+            a.connectAndSync("drumble-probe-a")
+            b.connectAndSync("drumble-probe-b")
+            // Drive TCP pings on both so the server accrues per-user ping stats to report.
+            repeat(5) { a.sm.sendPing(); b.sm.sendPing(); delay(1_000) }
+
+            val aSelf = a.model.state.value.sessionId
+            val bUser = a.model.state.value.users.values.firstOrNull { it.name == "drumble-probe-b" }
+                ?: a.model.state.value.users.values.firstOrNull { it.session != aSelf }
+            assertNotNull("A must see B in its user list: names=${a.model.state.value.users.values.map { it.name }}", bUser)
+            val bSession = bUser!!.session
+            val req = MumbleProtos.UserStats.newBuilder().setSession(bSession).setStatsOnly(true).build()
+            val reqBytes = req.toByteArray()
+
+            // --- Q1: non-admin requests a PEER's stats_only UserStats ---
+            responses.clear()
+            assertTrue("sendRaw(UserStats) accepted", a.tcp.sendRaw(TcpMessageType.UserStats, reqBytes, reqBytes.size))
+            val resp = withTimeoutOrNull(5_000) {
+                var r: MumbleProtos.UserStats? = null
+                while (r == null) { r = responses.firstOrNull { it.session == bSession }; if (r == null) delay(100) }
+                r
+            }
+            println("USERSTATS-PROBE Q1 self=$aSelf bSession=$bSession gotReply=${resp != null}")
+            if (resp != null) println("USERSTATS-PROBE Q1 statsOnly=${resp.statsOnly} " +
+                "hasTcpPing=${resp.hasTcpPingAvg()} tcpPingAvg=${resp.tcpPingAvg} " +
+                "hasUdpPing=${resp.hasUdpPingAvg()} udpPingAvg=${resp.udpPingAvg} " +
+                "hasFromClient=${resp.hasFromClient()} hasCerts=${resp.certificatesCount > 0}")
+
+            // --- Q2: flood — hammer requests at the peer, watch for throttle/disconnect ---
+            val burst = 60
+            responses.clear()
+            repeat(burst) { a.tcp.sendRaw(TcpMessageType.UserStats, reqBytes, reqBytes.size) }
+            delay(3_000)
+            println("USERSTATS-PROBE Q2 afterBurst=$burst aClosed=${a.closed} cause=${a.closedCause} " +
+                "state=${a.sm.state.value::class.simpleName} repliesToBurst=${responses.size}")
+
+            // --- Q3: prove the mechanism — server echoes each client's SELF-REPORTED ping ---
+            // B self-reports a sentinel tcp/udp ping in a raw Ping; A re-queries B's UserStats.
+            val ping = MumbleProtos.Ping.newBuilder()
+                .setTimestamp(System.nanoTime()).setTcpPingAvg(42.0f).setUdpPingAvg(43.0f).build()
+            val pingBytes = ping.toByteArray()
+            b.tcp.sendRaw(TcpMessageType.Ping, pingBytes, pingBytes.size)
+            delay(1_500)
+            responses.clear()
+            a.tcp.sendRaw(TcpMessageType.UserStats, reqBytes, reqBytes.size)
+            val resp3 = withTimeoutOrNull(5_000) {
+                var r: MumbleProtos.UserStats? = null
+                while (r == null) { r = responses.firstOrNull { it.session == bSession }; if (r == null) delay(100) }
+                r
+            }
+            println("USERSTATS-PROBE Q3 selfReport bSent(tcp=42.0,udp=43.0) -> peerSees " +
+                "tcp=${resp3?.tcpPingAvg} udp=${resp3?.udpPingAvg}")
+
+            assertNotNull("Q1: non-admin client should receive a UserStats reply for a peer", resp)
+        } finally { a.shutdown(); b.shutdown() }
     }
 
     @Test fun udpLoopback() = runBlocking {

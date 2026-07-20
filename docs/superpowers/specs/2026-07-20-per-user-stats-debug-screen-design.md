@@ -8,9 +8,11 @@ diagnosable instead of hidden inside an aggregate.
 snapshot plumbed out of `AudioVoiceEngine`; per-user ping fetched via Mumble `UserStats`. No behavior
 change to the audio path or the protocol beyond additive read-only diagnostics.
 
-**Status:** design — **fable-reviewed** (audio-side + concurrency confirmed exact; two ping-side
-defects fixed in-spec: reducer carry-forward + missing sender; one open item: real-server
-ping-permission/flood behavior, see "Open verification"). Grounded in the code as of `main@a099eb7`.
+**Status:** design — **fable-reviewed + server-verified**. Fable confirmed the audio-side/concurrency
+claims exact and caught two ping-side defects (reducer carry-forward, missing sender), both fixed
+in-spec. The real-server behavior is now empirically settled against Murmur 1.5.901 (see "VERIFIED"):
+ping works for non-admins and doesn't trip flood protection, but is **self-reported** — so a
+`sendPing()` self-report step is now required. Grounded in the code as of `main@a099eb7`.
 
 ## Motivation (verified, not assumed)
 
@@ -164,23 +166,30 @@ launched from (fable finding 7). Pass in the model users (name + ping, already a
 - Thread glue (the 500 ms snapshot, the 4 s poll loop) is kept as thin wrappers over the pure pieces
   above; not unit-tested directly.
 
-## Open verification (fable finding 3 — resolve before/at the start of Component B)
+## VERIFIED against real Murmur (2026-07-20)
 
-The single load-bearing unknown is **real server behavior**, which cannot be settled by reading our
-own code. Two questions:
-1. Does a **normal, non-admin** client actually receive populated `udp_ping_avg`/`tcp_ping_avg` in a
-   `UserStats` reply for **other** users (vs. permission-gated / redacted)? If not, Component B is
-   effectively dead and this becomes a jitter-only screen.
-2. Does polling `UserStats` for every visible user at the proposed cadence trip Murmur's flood/rate
-   protection (disconnect/throttle)?
+Probe run against dockerized `mumblevoip/mumble-server` **1.5.901**, two anonymous (non-admin)
+clients, via `LiveServerIntegrationTest.userStatsProbe`. Results:
 
-The project already has the harness: `docs/dev/mumble-server/docker-compose.yml` runs real
-`mumblevoip/mumble-server`, and `app/src/test/java/.../integration/LiveServerIntegrationTest.kt` is the
-existing live-server test bench (`docker`/`docker-compose` confirmed on PATH). **Plan:** a scripted
-probe — connect ≥2 clients, request `UserStats{other-session, stats_only}` as a non-admin, assert ping
-fields come back, then hammer at the intended fan-out/cadence and watch for throttle/disconnect. Do
-this **first**; it may narrow the cadence or (if ping is withheld) drop the ping half to the deferred
-`UserStats` TODO, leaving the jitter breakout (Component A) as the shippable core.
+1. **Permission — YES.** A non-admin client requesting `UserStats{peer, stats_only=true}` **receives a
+   reply for the peer** with `hasTcpPingAvg`/`hasUdpPingAvg` present and no cert chain
+   (`hasCerts=false`). Component B is viable; not permission-gated.
+2. **Flood — safe.** 60 back-to-back `UserStats` requests → **no throttle, no disconnect**, all 60
+   replied, connection stayed `Synchronized`. The intended ~5 s per-user cadence is far under any
+   limit. (Still keep the defensive cap/interval — cheap insurance across server configs.)
+3. **Ping is SELF-REPORTED, not server-measured (decisive).** With B self-reporting a sentinel
+   `Ping{tcp_ping_avg=42, udp_ping_avg=43}`, A saw **exactly** `tcp=42.0 udp=43.0` in B's `UserStats`.
+   Our current `sendPing()` (`SessionStateMachine.kt:165`) sets only `timestamp/good/late/lost/resync`
+   — **never** `tcp_ping_avg`/`udp_ping_avg` — so **every Drumble peer reports 0.0 ping to others.**
+   Desktop Mumble self-reports, so a Drumble client would see a *desktop* peer's real ping, but
+   **Drumble↔Drumble would be all zeros** without the fix below.
+
+**Consequence — Component B gains a required sub-step:** `sendPing()` must **self-report our own
+measured RTT**: set `tcp_ping_avg` from the TCP RTT the state machine already computes
+(`handlePingEcho`, `SessionStateMachine.kt:158`) and `udp_ping_avg` from the UDP RTT
+(`TransportSelector.udpRttMs`, plumbed in). Small (~2 fields on the existing Ping builder from values
+we already have) but **mandatory** for the ping column to be meaningful among Drumble clients. Nice
+side effect: our ping also becomes visible to desktop Mumble users' info panels (fidelity win).
 
 ## Scope / non-goals
 
@@ -196,8 +205,9 @@ this **first**; it may narrow the cadence or (if ping is withheld) drop the ping
 - `mumble/voice/JitterStats.kt` — add `SpeakerJitter`, `perSpeaker`, derived aggregate.
 - `mumble/voice/SpeakerStream.kt` — `bufferedMs()`, per-speaker `lateDrops`.
 - `mumble/voice/AudioVoiceEngine.kt` — throttled per-speaker snapshot into `_jitter`.
-- `mumble/protocol/SessionStateMachine.kt` — `UserStats` response case in `onFrame` **and** a new
-  `requestUserStats(session)` sender (channel is private; finding 2).
+- `mumble/protocol/SessionStateMachine.kt` — `UserStats` response case in `onFrame`, a new
+  `requestUserStats(session)` sender (channel is private; finding 2), **and** `sendPing()` self-report
+  of `tcp_ping_avg`/`udp_ping_avg` (server-verified requirement — else Drumble↔Drumble ping is 0).
 - `mumble/model/MumbleModel.kt` — per-user ping fields, `onUserStats`, **and** the `applyUserState`
   carry-forward (finding 1, BLOCKER).
 - `mumble/MumbleManager.kt` — `ActiveSession.requestUserStats` passthrough + `setUserStatsPolling`
