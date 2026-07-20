@@ -129,9 +129,9 @@ object MumbleManager {
         active?.sendSelfMute(value)
     }
 
-    /** Poll each known user's UserStats (ping) while the per-user stats screen is open. Gated so
-     *  we send zero extra traffic otherwise. No-op when no call is active. */
-    @Synchronized fun setUserStatsPolling(enabled: Boolean) { active?.setUserStatsPolling(enabled) }
+    /** Poll one user's UserStats (ping) every ~5s while their detail page is open; null = stop.
+     *  Gated so we send zero extra traffic otherwise. No-op when no call is active. */
+    @Synchronized fun setUserStatsPolling(session: Int?) { active?.setUserStatsPolling(session) }
 
     @Synchronized fun setDeafened(value: Boolean) {
         val r = DeafenLogic.onSetDeafened(value, _muted.value, deafenSetMute)
@@ -467,16 +467,13 @@ object MumbleManager {
         // Mutated only via MumbleManager.setUserStatsPolling (@Synchronized) — that lock serializes
         // the cancel/relaunch read-modify-write; do not mutate this from an unsynchronized context.
         private var userStatsPollJob: Job? = null
-        fun setUserStatsPolling(enabled: Boolean) {
+        fun setUserStatsPolling(session: Int?) {
             userStatsPollJob?.cancel(); userStatsPollJob = null
-            if (!enabled) return
+            if (session == null) return
             userStatsPollJob = sessionScope.launch {
                 while (currentCoroutineContext().isActive) {
-                    try {
-                        for (u in model.state.value.users.values) sm.requestUserStats(u.session)
-                    } catch (t: Throwable) {
-                        Log.e(TAG, "userStats poll tick threw (continuing)", t)
-                    }
+                    try { sm.requestUserStats(session) }
+                    catch (t: Throwable) { Log.e(TAG, "userStats poll tick threw (continuing)", t) }
                     delay(USERSTATS_POLL_MS)
                 }
             }

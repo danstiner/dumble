@@ -71,7 +71,7 @@ fun DumbleApp(
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
-    var showPerUserStats by remember { mutableStateOf(false) }
+    var userStatsSession by remember { mutableStateOf<Int?>(null) }
 
     // Failures arrive on a non-conflated SharedFlow (MumbleManager self-heals Failed -> Disconnected
     // too fast to read off the conflated state flow). Collect it for the whole lifetime of the app.
@@ -101,24 +101,24 @@ fun DumbleApp(
     val connectedText = connectedSince?.let { "Connected · " + formatElapsed(nowMillis - it) } ?: "Connecting…"
 
     when {
-        showPerUserStats -> {
-            BackHandler { showPerUserStats = false }
-            DisposableEffect(Unit) {
-                MumbleManager.setUserStatsPolling(true)
-                onDispose { MumbleManager.setUserStatsPolling(false) }
+        userStatsSession != null -> {
+            val session = userStatsSession!!
+            BackHandler { userStatsSession = null }
+            DisposableEffect(session) {
+                MumbleManager.setUserStatsPolling(session)
+                onDispose { MumbleManager.setUserStatsPolling(null) }
             }
-            PerUserStatsScreen(
-                users = serverModel.users.values.toList(),
-                perSpeaker = jitter.perSpeaker,
+            UserStatsDetailScreen(
+                user = serverModel.users[session],
+                jitter = jitter.perSpeaker.firstOrNull { it.session == session },
                 net = netStats,
-                onBack = { showPerUserStats = false },
+                onBack = { userStatsSession = null },
             )
         }
         showDiagnostics -> {
             BackHandler { showDiagnostics = false }
             AudioDiagnosticsScreen(diagnostics = audioDiagnostics, net = netStats, voice = voiceStats,
-                latency = latency, jitter = jitter, onBack = { showDiagnostics = false },
-                onOpenPerUser = { showPerUserStats = true })
+                latency = latency, jitter = jitter, onBack = { showDiagnostics = false })
         }
         inCall && !showSettings -> {
             val callState = buildCallScreenState(
@@ -143,6 +143,7 @@ fun DumbleApp(
                 onPttRelease = { MumbleManager.setPttHeld(false) },
                 onHangUp = onHangUp,
                 onOpenSettings = { showSettings = true },
+                onOpenUserStats = { userStatsSession = it },
             )
         }
         showSettings -> {

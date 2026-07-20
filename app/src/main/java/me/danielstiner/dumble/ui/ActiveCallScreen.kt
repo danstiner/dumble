@@ -2,6 +2,7 @@ package me.danielstiner.dumble.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -71,6 +72,7 @@ fun ActiveCallScreen(
     onPttRelease: () -> Unit,
     onHangUp: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenUserStats: (Int) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -112,7 +114,9 @@ fun ActiveCallScreen(
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
                 state.channels.forEach { ch ->
                     item(key = "ch-${ch.id}") { ChannelHeader(ch) }
-                    items(ch.users, key = { "u-${it.session}" }) { u -> UserRow(u) }
+                    items(ch.users, key = { "u-${it.session}" }) { u ->
+                        UserRow(u, onClick = { onOpenUserStats(u.session) })
+                    }
                 }
             }
         }
@@ -131,8 +135,9 @@ private fun ChannelHeader(ch: ChannelVm) {
 }
 
 @Composable
-private fun UserRow(u: UserVm) {
+private fun UserRow(u: UserVm, onClick: () -> Unit) {
     ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
         leadingContent = { Avatar(u) },
         headlineContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -388,6 +393,6 @@ private fun ActiveCallScreenPreview() {
                 RouteOption(1, AudioRoute.RouteIcon.EARPIECE, "Earpiece"),
             ),
             activeRouteType = 2, onSelectRoute = {},
-            onPttPress = {}, onPttRelease = {}, onHangUp = {}, onOpenSettings = {})
+            onPttPress = {}, onPttRelease = {}, onHangUp = {}, onOpenSettings = {}, onOpenUserStats = {})
     }
 }
