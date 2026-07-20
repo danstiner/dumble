@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -8,7 +10,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -100,6 +105,7 @@ fun DumbleApp(
     }
     val connectedText = connectedSince?.let { "Connected · " + formatElapsed(nowMillis - it) } ?: "Connecting…"
 
+    Box(Modifier.fillMaxSize()) {
     when {
         userStatsSession != null -> {
             val session = userStatsSession!!
@@ -183,9 +189,13 @@ fun DumbleApp(
                 onPasswordChange = { v -> vm.update { it.copy(password = v) } },
                 onConnect = { if (vm.canConnect()) onConnect(vm.persistAndBuild()) },
                 onOpenSettings = { showSettings = true },
-                snackbarHostState = snackbarHostState,
             )
         }
+    }
+    // One app-level SnackbarHost so a "Connection failed" snackbar's auto-dismiss timer keeps running
+    // across navigation. Previously the host lived only in ConnectScreen, so going to Settings and back
+    // paused the timer and re-showed the stale failure. Overlaid at the bottom over whatever screen shows.
+    SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter))
     }
 }
 

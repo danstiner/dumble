@@ -15,12 +15,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -41,7 +38,6 @@ fun ConnectScreen(
     onPasswordChange: (String) -> Unit,
     onConnect: () -> Unit,
     onOpenSettings: () -> Unit,
-    snackbarHostState: SnackbarHostState,
 ) {
     Scaffold(
         topBar = {
@@ -54,7 +50,6 @@ fun ConnectScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -121,7 +116,6 @@ private fun ConnectScreenPreview() {
             canConnect = validate(form).isValid,
             onHostChange = {}, onPortChange = {}, onUsernameChange = {}, onPasswordChange = {},
             onConnect = {}, onOpenSettings = {},
-            snackbarHostState = remember { SnackbarHostState() },
         )
     }
 }

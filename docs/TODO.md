@@ -19,6 +19,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   noise reduction. Adjacent *buildable* item (separate/larger): migrate raw `android.telecom` →
   **Jetpack Telecom `core-telecom` v1.1.0** for the Android 16.1 native VoIP-visibility features
   (unified call log in the Phone app, native callback).
+- ~~**🟡 Stale "Connection failed" snackbar re-appears after navigating away and back**~~ — **FIXED
+  (2026-07-20)**: fail to connect (e.g. auth failure) → Settings → back re-showed "authentication failed".
+  **Root cause:** `showSnackbar` (`DumbleApp.kt`) suspends until dismissed, but the `SnackbarHost` lived
+  *only inside* `ConnectScreen`, so navigating away tore it out of composition, paused the auto-dismiss
+  timer, and left `currentSnackbarData` set — re-entry re-displayed the stale failure. **Fix:** hoisted
+  ONE app-level `SnackbarHost` to the `DumbleApp` root (a `Box` overlay over the `when {}`), always
+  composed so the timer always runs; dropped the per-screen host in `ConnectScreen`. Build + suite green;
+  on-device eyeball pending.
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
 - **Investigate why playback uses 20 ms frames, not 10 ms** — `AudioVoiceEngine.playbackLoop` writes
