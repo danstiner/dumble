@@ -54,20 +54,20 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - Make noise suppression a group button select (native, if supported, and then RNNoise or none)
 
 ### UI / settings polish
-- **Per-user (per-speaker) jitter debug breakout — IN PROGRESS (this session).** The Audio diagnostics
-  "Jitter" readout is a single **max-across-speakers** aggregate (`AudioVoiceEngine` computes
-  `JitterStats.p95Ms = speakers.values.maxOf { jitterP95Ms() }`), and `p95Ms` is the **raw, unclamped**
-  p95 relative delay — so one bad sender shows as a "wild 4000 ms" with no way to tell who. (The actual
-  prebuffer `targetSamples` is still clamped to [10 ms, 400 ms], so 4000 ms is a *display* value, not real
-  buffering.) Fix: break the jitter section out **per speaker** (name-joined from the model) — target / raw
-  p95 / live buffered depth / per-user late-drops — with the server RTT kept once at the top (already in the
-  Network section).
-- **Per-user ping via Mumble `UserStats` (later).** The protocol *does* expose per-user ping — a client can
-  request `UserStats{session}` and the server returns that user's **ping to the server**
-  (`tcp_ping_avg`/`udp_ping_avg`), which is how desktop Mumble shows per-user ping. It is NOT peer-to-peer
-  (no user↔user ping), and Drumble doesn't request it today. Add a periodic `UserStats` request per visible
-  user + parse the ping fields, then show it in the per-speaker breakout above. Deferred (needs protocol
-  request/response plumbing).
+- ~~**Per-user (per-speaker) jitter debug breakout**~~ — **DONE (this session, merged to main)**: new
+  **Per-user stats** screen (reached from Audio diagnostics) shows a server-RTT header + one row per user —
+  name · ping (tcp/udp) · adaptive target · **raw p95** · live buffered depth · per-user late-drops. This
+  attributes the "wild 4000 ms" (the raw unclamped estimator p95, previously shown only as a
+  max-across-speakers aggregate) to a single speaker. `SpeakerStream.lateDrops`/`bufferedMs()` →
+  `JitterStats.perSpeaker` (throttled ~500 ms snapshot) → `PerUserStatsScreen`. Spec/plan:
+  `docs/superpowers/{specs,plans}/2026-07-20-per-user-stats-debug-screen*`. On-device eyeball pending.
+- ~~**Per-user ping via Mumble `UserStats`**~~ — **DONE (this session, merged to main)**: gated polling
+  (`MumbleManager.setUserStatsPolling`, ~5 s while the screen is open) requests `UserStats{session,
+  stats_only}` per user; `SessionStateMachine` routes the reply into `MumbleModel` (`tcpPingMs`/`udpPingMs`,
+  with `applyUserState` carry-forward). **Server-verified** (dockerized Murmur 1.5.901): non-admins get
+  peers' ping, no flood at the cadence, and ping is *self-reported* — so `sendPing()` now self-reports our
+  RTT (`dc4444d`), else Drumble↔Drumble read 0. **Deferred follow-up:** cap/filter the poll fan-out to
+  shown-or-active users (currently polls the whole roster; safe at the verified cadence but O(N)).
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
 - ~~**Settings screen: grouping / dividers**~~ — **DONE**: each group is a titled `ElevatedCard`
   (Transmit mode / Voice activity detection / AGC / Noise suppression / Tools), now under the
