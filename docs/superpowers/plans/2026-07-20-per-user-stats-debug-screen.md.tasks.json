@@ -1,0 +1,46 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-20-per-user-stats-debug-screen.md",
+  "tasks": [
+    {
+      "id": 92,
+      "subject": "Task 1: SpeakerStream per-speaker accessors",
+      "status": "pending",
+      "description": "**Goal:** SpeakerStream exposes buffered depth (ms) + per-speaker late-drop count.\n\n**Files:** Modify app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt; Test app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\n\n**Acceptance Criteria:** bufferedMs()=bufferedSamples()/48; @Volatile lateDrops increments on LATE non-terminator only; existing SpeakerStreamTest passes.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.SpeakerStreamTest\"\n\nFull code: docs/superpowers/plans/2026-07-20-per-user-stats-debug-screen.md Task 1.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SpeakerStream.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/SpeakerStreamTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.SpeakerStreamTest\\\"\", \"acceptanceCriteria\": [\"bufferedMs() = bufferedSamples()/48\", \"lateDrops increments on LATE non-terminator only\", \"existing SpeakerStreamTest passes\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 93,
+      "subject": "Task 2: JitterStats.perSpeaker + engine snapshot",
+      "status": "pending",
+      "blockedBy": [92],
+      "description": "**Goal:** JitterStats carries a per-speaker breakout; AudioVoiceEngine publishes it ~every 500ms, aggregate derived.\n\n**Files:** Modify voice/JitterStats.kt, voice/AudioVoiceEngine.kt (_jitter update ~372-375 + playbackLoop counter); Test voice/JitterStatsTest.kt (new)\n\n**Acceptance Criteria:** SpeakerJitter is a data class; JitterStats(perSpeaker) derives max aggregate (empty=10/0); engine snapshots perSpeaker every ~25 ticks via NEW counter jitterSnapshotTick (not diagTick); AudioDiagnosticsScreen still reads targetMs/p95Ms.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.JitterStatsTest\" then full suite.\n\nFull code: plan Task 2.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/JitterStats.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/voice/AudioVoiceEngine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/voice/JitterStatsTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.JitterStatsTest\\\"\", \"acceptanceCriteria\": [\"SpeakerJitter is a data class\", \"JitterStats derives max aggregate, empty=10/0\", \"engine snapshots perSpeaker every ~25 ticks via a new counter\", \"AudioDiagnosticsScreen still reads targetMs/p95Ms\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 94,
+      "subject": "Task 3: MumbleModel per-user ping + carry-forward",
+      "status": "pending",
+      "description": "**Goal:** MumbleUser carries nullable ping; UserStats reducer writes it; applyUserState preserves it (fable-caught blocker).\n\n**Files:** Modify model/MumbleModel.kt; Test MumbleModelTest.kt\n\n**Acceptance Criteria:** MumbleUser has nullable tcp/udpPingMs; applyUserStats writes ping (guarded), unknown session no-op; applyUserState carries ping forward; onUserStats delegates.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.MumbleModelTest\"\n\nFull code: plan Task 3.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/model/MumbleModel.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/MumbleModelTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.MumbleModelTest\\\"\", \"acceptanceCriteria\": [\"MumbleUser has nullable tcp/udpPingMs\", \"applyUserStats writes ping, unknown session no-op\", \"applyUserState carries ping forward\", \"onUserStats delegates\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 95,
+      "subject": "Task 4: SessionStateMachine UserStats req/resp",
+      "status": "pending",
+      "blockedBy": [94],
+      "description": "**Goal:** State machine can request a peer's UserStats and routes incoming UserStats into the model.\n\n**Files:** Modify protocol/SessionStateMachine.kt (onFrame when ~128, sender near sendSelfMute ~179); Test SessionStateMachineTest.kt\n\n**Acceptance Criteria:** requestUserStats(session) sends UserStats with session + stats_only=true; incoming UserStats frame updates model ping.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.SessionStateMachineTest\"\n\nFull code: plan Task 4.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/SessionStateMachineTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.SessionStateMachineTest\\\"\", \"acceptanceCriteria\": [\"requestUserStats sends session+stats_only\", \"incoming UserStats updates model ping\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 96,
+      "subject": "Task 5: MumbleManager gated UserStats polling",
+      "status": "pending",
+      "blockedBy": [95],
+      "description": "**Goal:** While enabled, the active session polls UserStats for each known user ~every 5s; disabled/idle sends nothing.\n\n**Files:** Modify MumbleManager.kt (manager forwarder near setMuted ~115, ActiveSession poll loop, USERSTATS_POLL_MS const)\n\n**Acceptance Criteria:** setUserStatsPolling(true) polls each user every ~5s on sessionScope; setUserStatsPolling(false) cancels, no-op with no active session; full suite green.\n\n**Verify:** ./gradlew :app:testDebugUnitTest\n\nFull code: plan Task 5.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest\", \"acceptanceCriteria\": [\"setUserStatsPolling(true) polls each user every ~5s on session scope\", \"setUserStatsPolling(false) cancels; no-op with no active session\", \"full suite green\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 97,
+      "subject": "Task 6: PerUserStatsScreen + nav + polling gate",
+      "status": "pending",
+      "blockedBy": [93, 96],
+      "description": "**Goal:** Dedicated debug screen: server RTT once + per-user row (name/ping/target/p95/buffered/lateDrops), reached from Audio diagnostics, polling only while open.\n\n**Files:** Create ui/PerUserStatsScreen.kt; Modify ui/AudioDiagnosticsScreen.kt (onOpenPerUser param + clickable row), ui/DumbleApp.kt (nav boolean, branch before showDiagnostics, DisposableEffect)\n\n**Acceptance Criteria:** screen shows server RTT + per-user rows joined by session (— when no active stream), empty state; entry row opens/back returns; DisposableEffect toggles setUserStatsPolling; assembleDebug succeeds.\n\n**Verify:** ./gradlew :app:assembleDebug\n\nFull code: plan Task 6.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/PerUserStatsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/AudioDiagnosticsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"screen shows server RTT + per-user rows joined by session, empty state\", \"entry row opens it, back returns\", \"DisposableEffect toggles setUserStatsPolling\", \"assembleDebug succeeds\"], \"modelTier\": \"standard\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-20T00:00:00Z"
+}
