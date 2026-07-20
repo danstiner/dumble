@@ -39,10 +39,15 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   proven better than RNNoise (an eval/on-device call, tracked under #40 follow-ups).
 - ~~Show when a remote client is deafened~~ — **already implemented** (call-screen redesign): remote
   users render a `HeadsetOff` deaf badge from `u.selfDeaf`/`u.deaf` (`ActiveCallScreen.kt`).
-- Show a more obvious glowing ring around the speaker
-- Use Ben's algorithm for automatic user icon color based on hash of their name
+- ~~Show a more obvious glowing ring around the speaker~~ — **DONE (`ui-quick-wins`, merged 2026-07-19)**:
+  radial-gradient glow halo behind the speaking avatar (`ActiveCallScreen.kt`). On-device eyeball pending.
+- ~~Use Ben's algorithm for automatic user icon color based on hash of their name~~ — **DONE
+  (`ui-quick-wins`, merged 2026-07-19)**: `avatarColor` now hashes the display name (`name.hashCode()`)
+  instead of the session id, so a user keeps a stable colour across sessions. On-device eyeball pending.
 - Add chat feature
-- More similar color scheme to phone app, white buttons with light gray background for the bottom bar
+- ~~More similar color scheme to phone app, white buttons with light gray background for the bottom bar~~
+  — **DONE (`ui-quick-wins`, merged 2026-07-19)**: inactive control toggles now use the lighter
+  `surfaceBright` container (was `surfaceContainerHighest`). On-device eyeball pending.
 - Make noise suppression a group button select (native, if supported, and then RNNoise or none)
 
 ### UI / settings polish
