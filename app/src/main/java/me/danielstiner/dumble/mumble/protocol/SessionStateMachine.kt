@@ -125,6 +125,7 @@ class SessionStateMachine(
             TcpMessageType.UserState -> model.onUserState(MumbleProtos.UserState.parseFrom(frame.payload))
             TcpMessageType.UserRemove -> model.onUserRemove(MumbleProtos.UserRemove.parseFrom(frame.payload))
             TcpMessageType.Ping -> handlePingEcho(MumbleProtos.Ping.parseFrom(frame.payload))
+            TcpMessageType.UserStats -> model.onUserStats(MumbleProtos.UserStats.parseFrom(frame.payload))
             TcpMessageType.UDPTunnel -> events.onTunneledVoice(frame.payload, frame.payload.size, clockNanos())
             else -> MumbleLog.d(TAG, "ignoring message type ${frame.type}")
         }
@@ -196,6 +197,13 @@ class SessionStateMachine(
     fun sendSelfDeaf(deaf: Boolean, mute: Boolean) {
         channel.send(TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder().setSelfDeaf(deaf).setSelfMute(mute).build())
+    }
+
+    /** Request a peer's mutable stats (ping/packets). Server relays that user's self-reported ping in
+     *  its reply; stats_only omits the cert chain. See the per-user stats debug screen. */
+    fun requestUserStats(session: Int) {
+        channel.send(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(session).setStatsOnly(true).build())
     }
 
     fun fail(reason: FailReason, detail: String? = null, cause: Throwable? = null) {

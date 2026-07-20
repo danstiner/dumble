@@ -210,4 +210,18 @@ class SessionStateMachineTest {
         assertTrue("first failure wins — stays AUTH_REJECT", after is ConnectionState.Failed && after.reason == FailReason.AUTH_REJECT)
         assertTrue(job.isCompleted)
     }
+
+    @Test fun requestUserStatsSendsStatsOnlyForSession() {
+        sm.start("dan", null)
+        sm.requestUserStats(7)
+        val us = channel.sent.last { it.first == TcpMessageType.UserStats }.second as MumbleProtos.UserStats
+        assertEquals(7, us.session); assertTrue(us.statsOnly)
+    }
+
+    @Test fun onFrameUserStatsUpdatesModel() {
+        sm.start("dan", null)
+        frame(TcpMessageType.UserState, MumbleProtos.UserState.newBuilder().setSession(7).setName("bob").build())
+        frame(TcpMessageType.UserStats, MumbleProtos.UserStats.newBuilder().setSession(7).setTcpPingAvg(12f).build())
+        assertEquals(12f, model.state.value.users[7]!!.tcpPingMs!!, 0.001f)
+    }
 }
