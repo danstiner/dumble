@@ -162,12 +162,24 @@ class SessionStateMachine(
         crypt.setRemoteStats(p.good, p.late, p.lost, p.resync)
     }
 
-    fun sendPing() {
+    /**
+     * Send a control Ping. [tcpPingAvgMs]/[udpPingAvgMs] self-report our own measured round-trip so
+     * the server stores them and echoes them back in our `UserStats` to peers who query us — verified
+     * behavior: Murmur does NOT measure per-user ping itself, it relays the client's self-report, so
+     * without this a Drumble↔Drumble call shows 0 ms ping for everyone (a desktop peer self-reports,
+     * so we'd see theirs). null / negative = no measurement yet → leave the field unset (server keeps
+     * whatever it had, i.e. 0 until we have real data). Also makes our ping visible in desktop Mumble's
+     * user-info panel.
+     */
+    fun sendPing(tcpPingAvgMs: Float? = null, udpPingAvgMs: Float? = null) {
         lastPingSentNanos = clockNanos()
         val s = crypt.stats()
-        channel.send(TcpMessageType.Ping, MumbleProtos.Ping.newBuilder()
+        val b = MumbleProtos.Ping.newBuilder()
             .setTimestamp(lastPingSentNanos)
-            .setGood(s.good).setLate(s.late).setLost(s.lost).setResync(s.resync).build())
+            .setGood(s.good).setLate(s.late).setLost(s.lost).setResync(s.resync)
+        if (tcpPingAvgMs != null && tcpPingAvgMs >= 0f) b.tcpPingAvg = tcpPingAvgMs
+        if (udpPingAvgMs != null && udpPingAvgMs >= 0f) b.udpPingAvg = udpPingAvgMs
+        channel.send(TcpMessageType.Ping, b.build())
     }
 
     fun requestCryptResync() {

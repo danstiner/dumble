@@ -406,7 +406,13 @@ object MumbleManager {
             while (currentCoroutineContext().isActive) {
                 delay(SessionStateMachine.PING_INTERVAL_MS)
                 try {
-                    sm.sendPing()
+                    // Self-report our measured RTT so the server relays it in our UserStats to peers
+                    // (Murmur echoes the client's self-report; without it Drumble<->Drumble ping = 0).
+                    val ns = selector.stats.value
+                    sm.sendPing(
+                        tcpPingAvgMs = ns.tcpRttMs.takeIf { it >= 0 }?.toFloat(),
+                        udpPingAvgMs = ns.udpRttMs.takeIf { it >= 0 }?.toFloat(),
+                    )
                     // Send a UDP ping every tick whenever the UDP socket exists — INCLUDING while
                     // tunneled. This is what enables tunnel->UDP recovery: TransportSelector only
                     // returns to UDP when BOTH `good` (we decrypt inbound pongs) and `remoteGood`

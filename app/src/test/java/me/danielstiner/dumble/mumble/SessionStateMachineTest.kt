@@ -119,6 +119,25 @@ class SessionStateMachineTest {
         assertEquals(10, crypt.stats().remoteGood)
     }
 
+    @Test fun sendPingSelfReportsMeasuredRtt() {
+        sm.start("dan", null)
+        sm.sendPing(tcpPingAvgMs = 15.5f, udpPingAvgMs = 20.25f)
+        val ping = channel.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        assertTrue("tcp_ping_avg set", ping.hasTcpPingAvg()); assertEquals(15.5f, ping.tcpPingAvg, 0.001f)
+        assertTrue("udp_ping_avg set", ping.hasUdpPingAvg()); assertEquals(20.25f, ping.udpPingAvg, 0.001f)
+    }
+
+    @Test fun sendPingOmitsPingAvgWhenUnmeasured() {
+        sm.start("dan", null)
+        sm.sendPing()                                   // no measurement yet (default null)
+        sm.sendPing(tcpPingAvgMs = -1f, udpPingAvgMs = -1f)   // sentinel "unknown" from selector (-1.0)
+        channel.sent.filter { it.first == TcpMessageType.Ping }.forEach {
+            val p = it.second as MumbleProtos.Ping
+            assertFalse("tcp_ping_avg must stay unset when unmeasured", p.hasTcpPingAvg())
+            assertFalse("udp_ping_avg must stay unset when unmeasured", p.hasUdpPingAvg())
+        }
+    }
+
     @Test fun udpTunnelRouted() {
         sm.start("dan", null)
         val payload = byteArrayOf(0, 1, 2, 3)

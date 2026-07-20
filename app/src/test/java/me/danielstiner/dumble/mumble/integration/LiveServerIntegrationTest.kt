@@ -118,8 +118,14 @@ class LiveServerIntegrationTest {
         try {
             a.connectAndSync("drumble-probe-a")
             b.connectAndSync("drumble-probe-b")
-            // Drive TCP pings on both so the server accrues per-user ping stats to report.
-            repeat(5) { a.sm.sendPing(); b.sm.sendPing(); delay(1_000) }
+            // Drive pings on both, self-reporting the measured RTT (the real fix path) so the server
+            // accrues each client's ping — Q1 then shows a real non-zero peer ping end-to-end.
+            repeat(5) {
+                val at = a.selector.stats.value; val bt = b.selector.stats.value
+                a.sm.sendPing(at.tcpRttMs.takeIf { it >= 0 }?.toFloat(), at.udpRttMs.takeIf { it >= 0 }?.toFloat())
+                b.sm.sendPing(bt.tcpRttMs.takeIf { it >= 0 }?.toFloat(), bt.udpRttMs.takeIf { it >= 0 }?.toFloat())
+                delay(1_000)
+            }
 
             val aSelf = a.model.state.value.sessionId
             val bUser = a.model.state.value.users.values.firstOrNull { it.name == "drumble-probe-b" }
