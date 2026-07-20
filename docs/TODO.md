@@ -275,11 +275,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   (32 kbps / CVBR / VOICE all correct — fable-verified against libopus v1.5.2 + measured with `opus_demo` +
   Mumble master); only change was **encoder complexity 5→9** (unlocks the analysis-driven VBR gated at
   complexity 7; ~+0.4% of one core). Decision doc: `docs/superpowers/specs/2026-07-19-opus-encoder-config-decision.md`.
-- **Opus in-band FEC (packet-loss resilience)** — spun out of #53. NOT a config flip: needs encoder
-  `INBAND_FEC(1)` + `PACKET_LOSS_PERC(n)` AND a receiver change (`SpeakerStream.plcAdvance` must
-  decode-with-`fec=1` on the queued next packet; thread a `fec` flag through `OpusDecoder.decode` →
-  `NativeOpus.decode`). **Caveat:** mainline desktop Mumble decodes with `decode_fec=0`, so this only helps
-  **Drumble↔Drumble** calls — lower priority. Full recipe in the #53 decision doc.
+- ~~**Opus in-band FEC (packet-loss resilience)**~~ — **DECIDED AGAINST (2026-07-20).** Three strikes:
+  (1) **peer-limited** — mainline desktop Mumble decodes `fec=0`, so it only helps Drumble↔Drumble;
+  (2) **benefit coupled to buffer depth** — recovering lost frame N needs packet N+1 already in the jitter
+  buffer, but at our ~10 ms low-latency prebuffer floor (half a 20 ms packet) N+1 usually isn't buffered
+  yet, so we'd PLC anyway; FEC only fires once the adaptive buffer has grown under jitter; (3) **~6 kbps**
+  continuous overhead. FEC adds no codec/algorithmic delay itself, but given (1)+(2)+(3) it's not worth the
+  complexity. Recipe still preserved in the #53 decision doc if this is ever revisited. (Was: encoder
+  `INBAND_FEC(1)`+`PACKET_LOSS_PERC` + receiver `SpeakerStream.plcAdvance` decode-with-`fec=1`.)
 - **#40 voice-activity detection — LANDED.** RNNoise-denoised uplink gated by RNNoise's own VAD
   probability (default 0.5, in-app tunable + persisted via Settings → Voice activity). Wall-clock
   `frame_number` + real terminators (see Fixed). Remaining VAD follow-ups: expand the Voice
