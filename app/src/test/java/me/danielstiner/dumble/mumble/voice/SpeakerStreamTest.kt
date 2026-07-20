@@ -155,4 +155,25 @@ class SpeakerStreamTest {
         s.offer(60 * 960L, encoded(960), 960, false, arr + 5_000_000_000L)   // ~5 s later -> renumber -> reset
         assertEquals(DownlinkJitterEstimator.FLOOR_SAMPLES, est.targetSamples)
     }
+
+    @Test fun lateNonTerminatorIncrementsLateDrops() {
+        val s = SpeakerStream(codec, targetSamples = { 0 })
+        val out = ShortArray(FRAME_SAMPLES_20MS)
+        s.offer(0, encoded(960), 960, false, 1_000_000_000L)
+        s.fillTick(out)                                       // decode ts0 → cursor = 960
+        assertEquals(0L, s.lateDrops)
+        s.offer(0, encoded(960), 960, false, 1_010_000_000L)  // ts 0 < cursor 960 → LATE
+        assertEquals(1L, s.lateDrops)
+        s.offer(0, encoded(960), 960, true, 1_020_000_000L)   // non-empty LATE *terminator* → guarded
+        assertEquals(1L, s.lateDrops)
+    }
+
+    @Test fun bufferedMsReflectsQueuedDepth() {
+        val s = SpeakerStream(codec, targetSamples = { 999_999 })  // gate never opens → nothing drains
+        assertEquals(0, s.bufferedMs())
+        s.offer(0, encoded(960), 960, false, 1_000_000_000L)       // 960 samples = 20 ms
+        assertEquals(20, s.bufferedMs())
+        s.offer(960, encoded(960), 960, false, 1_020_000_000L)     // +20 ms
+        assertEquals(40, s.bufferedMs())
+    }
 }

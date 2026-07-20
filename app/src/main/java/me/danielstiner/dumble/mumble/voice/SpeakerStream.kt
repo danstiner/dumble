@@ -29,6 +29,10 @@ class SpeakerStream(
     val decoderCreated get() = decoder != null
     var retired = false; private set
 
+    /** Per-speaker genuine late-drops (audio behind the cursor), for the per-user debug screen.
+     *  Written under the @Synchronized offer(); @Volatile publishes to the playback-thread reader. */
+    @Volatile var lateDrops: Long = 0L; private set
+
     /** Diagnostic read-only accessor: current playout cursor in samples (−1 = un-anchored). Written
      *  only by the playback thread; a slightly stale read from the receive thread is fine here. */
     fun playoutCursor(): Long = cursor
@@ -36,6 +40,9 @@ class SpeakerStream(
     /** Diagnostic read-only: current adaptive prebuffer target / p95 relative delay, in ms. */
     fun jitterTargetMs(): Int = estimator.targetSamples / 48     // 48 samples/ms
     fun jitterP95Ms(): Int = estimator.p95Ms
+
+    /** Diagnostic: current buffered audio depth in ms (JitterBuffer is @Synchronized → any thread). */
+    fun bufferedMs(): Int = buffer.bufferedSamples() / 48   // 48 samples/ms @48k
 
     /** Receive thread(s). Feeds the estimator (every non-empty packet, incl. late) and enqueues.
      *  @Synchronized: inbound voice can arrive on TWO threads (UDP recv thread + TCP-tunnel IO coroutine)
@@ -58,6 +65,7 @@ class SpeakerStream(
         if (result != JitterBuffer.OfferResult.EMPTY) {
             estimator.onPacket(timestampSamples, arrivalNanos, result == JitterBuffer.OfferResult.LATE)
         }
+        if (result == JitterBuffer.OfferResult.LATE && !isTerminator) lateDrops++
         return result
     }
 
