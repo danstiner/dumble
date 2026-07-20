@@ -211,14 +211,19 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - `libdumbleopus.so` 16 KB page alignment (Play compliance) — `-Wl,-z,max-page-size=16384`; all LOAD segments 0x4000 on all ABIs — `1567505`
 
 ## Follow-up features / tasks
-- **#56 part B** adaptive jitter buffer + adaptive playout delay (part A / talkspurt-silence handling has landed) — design notes: `docs/superpowers/adaptive-jitter-buffer-design-notes.md`
-  - **Lower the prebuffer floor 100 ms → ~10 ms** to match Mumble desktop's low-latency default (its
-    Speex jitterbuffer is adaptive; 10 ms is the floor, not a static target). Today
-    `SpeakerStream.prebufferSamples` is a **static** 100 ms (`FRAME_SAMPLES_20MS*5`) and
-    `JitterBuffer.highWaterSamples` a static 600 ms cap — the buffer does **not** grow dynamically.
-    The 100 ms was deliberately raised (`4031812`) to stop late-drop starvation on jittery paths, so
-    this must land *with* adaptive sizing: start ~10–20 ms and grow toward the 600 ms cap on measured
-    jitter / `lateDrops`; a naive static 100→10 would regress that fix.
+- ~~**#56 part B** adaptive jitter buffer + adaptive playout delay~~ — **DONE (merged this session)**:
+  the prebuffer is no longer static. `DownlinkJitterEstimator` (per-speaker, pure/JVM-testable) computes
+  an adaptive target = p95 of 200 ms peak-hold bucket maxima over an 8 s window, clamped **[10 ms floor,
+  400 ms cap]**, cold-start at the 10 ms floor; `SpeakerStream` consumes it via
+  `targetSamples: () -> Int = { estimator.targetSamples }` as the anchor-time prebuffer gate, plus a
+  mid-spurt **grow** valve (`plcDeepen` on a `lateBurst` = ≥3 LATE within 200 ms) and grow-on-measured-gap
+  (`plcAdvance`). `JitterBuffer.highWaterSamples` stays a static 600 ms **cap** by design (the target grows
+  toward it; the cap only hard-drops the oldest when depth > 600 ms). Design notes:
+  `docs/superpowers/adaptive-jitter-buffer-design-notes.md`.
+  - **Deferred sub-item (minor): active mid-spurt _shrink_** (design item 4 — drop one queued packet on a
+    bottom-1%-energy frame, deadband + 2 s cooldown, optional WSOLA cross-fade). Only matters for a *long
+    continuous* talkspurt; a VAD-gated app re-anchors at the lower target every talkspurt boundary, so
+    latency already self-corrects. Revisit only if long-monologue latency is observed high on-device.
 - ~~**#55** notification: show server label & channel (fallback to hostname)~~ — **DONE (2026-07-19)**:
   server label (root-channel name / hostname fallback) as the CallStyle Person + channel as the secondary
   line, live-refreshed from `MumbleManager.model`; `docs/superpowers/{specs,plans}/2026-07-19-notification-server-channel*`.
