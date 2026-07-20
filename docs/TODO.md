@@ -45,12 +45,29 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   (`ui-quick-wins`, merged 2026-07-19)**: `avatarColor` now hashes the display name (`name.hashCode()`)
   instead of the session id, so a user keeps a stable colour across sessions. On-device eyeball pending.
 - Add chat feature
+- **Per-user volume adjustments** (way later) — per-remote-user playout gain (a slider per user in the
+  channel tree), applied in the mixer (`AudioMixer.accumulate` — scale each speaker's samples by a
+  per-session gain before summing). Needs a persisted session→gain map and UI. Deferred.
 - ~~More similar color scheme to phone app, white buttons with light gray background for the bottom bar~~
   — **DONE (`ui-quick-wins`, merged 2026-07-19)**: inactive control toggles now use the lighter
   `surfaceBright` container (was `surfaceContainerHighest`). On-device eyeball pending.
 - Make noise suppression a group button select (native, if supported, and then RNNoise or none)
 
 ### UI / settings polish
+- **Per-user (per-speaker) jitter debug breakout — IN PROGRESS (this session).** The Audio diagnostics
+  "Jitter" readout is a single **max-across-speakers** aggregate (`AudioVoiceEngine` computes
+  `JitterStats.p95Ms = speakers.values.maxOf { jitterP95Ms() }`), and `p95Ms` is the **raw, unclamped**
+  p95 relative delay — so one bad sender shows as a "wild 4000 ms" with no way to tell who. (The actual
+  prebuffer `targetSamples` is still clamped to [10 ms, 400 ms], so 4000 ms is a *display* value, not real
+  buffering.) Fix: break the jitter section out **per speaker** (name-joined from the model) — target / raw
+  p95 / live buffered depth / per-user late-drops — with the server RTT kept once at the top (already in the
+  Network section).
+- **Per-user ping via Mumble `UserStats` (later).** The protocol *does* expose per-user ping — a client can
+  request `UserStats{session}` and the server returns that user's **ping to the server**
+  (`tcp_ping_avg`/`udp_ping_avg`), which is how desktop Mumble shows per-user ping. It is NOT peer-to-peer
+  (no user↔user ping), and Drumble doesn't request it today. Add a periodic `UserStats` request per visible
+  user + parse the ping fields, then show it in the per-speaker breakout above. Deferred (needs protocol
+  request/response plumbing).
 - **Audio diagnostics: make it work standalone** — open a local capture session while the screen is on-screen (like the VAD Gate Tuner / Echo Test tools), so platform effects + stage levels show *without* joining a server call. Today the screen needs a live call (the effect probe + stage RMS come from the in-call AudioRecord).
 - ~~**Settings screen: grouping / dividers**~~ — **DONE**: each group is a titled `ElevatedCard`
   (Transmit mode / Voice activity detection / AGC / Noise suppression / Tools), now under the
