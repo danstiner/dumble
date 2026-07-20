@@ -136,7 +136,7 @@ object CallManager {
                             is CallControlResult.Success -> startCallForeground()
                             is CallControlResult.Error -> {
                                 Log.w(TAG, "setActive failed error=${res.errorCode}; disconnecting")
-                                disconnect(DisconnectCause(DisconnectCause.ERROR))
+                                disconnect(DisconnectCause(DisconnectCause.LOCAL))   // see below: ERROR is rejected
                                 teardown(seq)
                             }
                         }
@@ -173,8 +173,12 @@ object CallManager {
                     // Failed -> Disconnected too fast for a conflated collector to observe.
                     launch {
                         MumbleManager.failures.collect {
-                            val res = disconnect(DisconnectCause(DisconnectCause.ERROR))
-                            Log.w(TAG, "disconnect(ERROR) on Mumble failure result=$res")
+                            // REMOTE, not ERROR: the transactional CallControl.disconnect only accepts
+                            // LOCAL/REMOTE/MISSED/REJECTED and THROWS IllegalArgumentException on ERROR — which
+                            // aborted this collector before the platform call was ended, orphaning it (the OS
+                            // then thinks a call is ongoing → spurious "end your call?" prompts on the next action).
+                            val res = disconnect(DisconnectCause(DisconnectCause.REMOTE))
+                            Log.w(TAG, "disconnect(REMOTE) on Mumble failure result=$res")
                             teardown(seq)
                         }
                     }
