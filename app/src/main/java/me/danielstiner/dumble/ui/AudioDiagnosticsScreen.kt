@@ -1,7 +1,9 @@
 package me.danielstiner.dumble.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +28,7 @@ import me.danielstiner.dumble.mumble.voice.VoiceStats
 @Composable
 fun AudioDiagnosticsScreen(
     diagnostics: AudioDiagnostics, net: NetStats, voice: VoiceStats, latency: LatencyStats, jitter: JitterStats, onBack: () -> Unit,
+    onOpenPerUser: () -> Unit,
 ) {
     fun db(v: Float) = if (v.isFinite()) "%.1f dBFS".format(v) else "—"
     fun rtt(v: Double) = if (v >= 0) "%.1f ms".format(v) else "—"
@@ -36,6 +39,11 @@ fun AudioDiagnosticsScreen(
         })
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
+            Text("Per-user stats →", modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenPerUser)
+                .padding(vertical = 8.dp))
+            Text("")
             Text("Platform effects (device self-report)")
             diagnostics.effects.forEach { e ->
                 val en = when (e.enabled) { true -> "ON"; false -> "off"; null -> if (e.available) "unknown" else "n/a" }

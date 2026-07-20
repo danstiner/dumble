@@ -2,6 +2,7 @@ package me.danielstiner.dumble.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,7 @@ fun DumbleApp(
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showPerUserStats by remember { mutableStateOf(false) }
 
     // Failures arrive on a non-conflated SharedFlow (MumbleManager self-heals Failed -> Disconnected
     // too fast to read off the conflated state flow). Collect it for the whole lifetime of the app.
@@ -99,10 +101,24 @@ fun DumbleApp(
     val connectedText = connectedSince?.let { "Connected · " + formatElapsed(nowMillis - it) } ?: "Connecting…"
 
     when {
+        showPerUserStats -> {
+            BackHandler { showPerUserStats = false }
+            DisposableEffect(Unit) {
+                MumbleManager.setUserStatsPolling(true)
+                onDispose { MumbleManager.setUserStatsPolling(false) }
+            }
+            PerUserStatsScreen(
+                users = serverModel.users.values.toList(),
+                perSpeaker = jitter.perSpeaker,
+                net = netStats,
+                onBack = { showPerUserStats = false },
+            )
+        }
         showDiagnostics -> {
             BackHandler { showDiagnostics = false }
             AudioDiagnosticsScreen(diagnostics = audioDiagnostics, net = netStats, voice = voiceStats,
-                latency = latency, jitter = jitter, onBack = { showDiagnostics = false })
+                latency = latency, jitter = jitter, onBack = { showDiagnostics = false },
+                onOpenPerUser = { showPerUserStats = true })
         }
         inCall && !showSettings -> {
             val callState = buildCallScreenState(
