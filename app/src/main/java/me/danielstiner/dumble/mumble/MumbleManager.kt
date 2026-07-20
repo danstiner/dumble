@@ -52,6 +52,7 @@ object MumbleManager {
     // "Connecting…" indefinitely. ~10s overall keeps a healthy connect (well under 2s) unaffected
     // while failing an unreachable/stalling server fast.
     private const val CONNECTING_TIMEOUT_MS = 10_000L
+    private const val USERSTATS_POLL_MS = 5_000L   // per-user ping poll cadence (server-verified safe)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -127,6 +128,10 @@ object MumbleManager {
         active?.setMuted(value)
         active?.sendSelfMute(value)
     }
+
+    /** Poll each known user's UserStats (ping) while the per-user stats screen is open. Gated so
+     *  we send zero extra traffic otherwise. No-op when no call is active. */
+    @Synchronized fun setUserStatsPolling(enabled: Boolean) { active?.setUserStatsPolling(enabled) }
 
     @Synchronized fun setDeafened(value: Boolean) {
         val r = DeafenLogic.onSetDeafened(value, _muted.value, deafenSetMute)
@@ -458,6 +463,24 @@ object MumbleManager {
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
         fun setDeafened(value: Boolean) = engine.setDeafened(value)
         fun sendSelfDeaf(deaf: Boolean, mute: Boolean) = sm.sendSelfDeaf(deaf, mute)
+
+        // Mutated only via MumbleManager.setUserStatsPolling (@Synchronized) — that lock serializes
+        // the cancel/relaunch read-modify-write; do not mutate this from an unsynchronized context.
+        private var userStatsPollJob: Job? = null
+        fun setUserStatsPolling(enabled: Boolean) {
+            userStatsPollJob?.cancel(); userStatsPollJob = null
+            if (!enabled) return
+            userStatsPollJob = sessionScope.launch {
+                while (currentCoroutineContext().isActive) {
+                    try {
+                        for (u in model.state.value.users.values) sm.requestUserStats(u.session)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "userStats poll tick threw (continuing)", t)
+                    }
+                    delay(USERSTATS_POLL_MS)
+                }
+            }
+        }
 
         fun shutdown() {
             voice.stop()
