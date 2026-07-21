@@ -46,6 +46,7 @@ object MumbleManager {
     // VOICE_COMMUNICATION AGC/NS, so default AGC off too rather than double-processing.
     private const val DEFAULT_AGC_ENABLED = DEFAULT_RNNOISE_ENABLED
     private const val DEFAULT_PREROLL_MS = 40
+    private const val DEFAULT_SOUND_CUES_ENABLED = true
     // Overall deadline for the whole connecting phase (TLS handshake + auth -> ServerSync). The TCP
     // connect already has its own 10s timeout, but the handshake sets no SO_TIMEOUT and nothing
     // bounded the auth exchange, so a server that accepts the socket then stalls would hang on
@@ -102,6 +103,10 @@ object MumbleManager {
     private val _rnnoiseEnabled = MutableStateFlow(DEFAULT_RNNOISE_ENABLED)
     /** RNNoise denoising on/off (the VAD keeps running regardless), persisted and applied live. */
     val rnnoiseEnabled: StateFlow<Boolean> = _rnnoiseEnabled.asStateFlow()
+    private val _soundCuesEnabled = MutableStateFlow(DEFAULT_SOUND_CUES_ENABLED)
+    /** Play short cues on channel join/leave + new chat, mixed into the call audio. Persisted. */
+    val soundCuesEnabled: StateFlow<Boolean> = _soundCuesEnabled.asStateFlow()
+    private val soundCues = SoundCues()
     private val _vadEngine = MutableStateFlow("rnnoise")
     /** Which detector drives the transmit gate: "energy" | "rnnoise" | "silero". Persisted, applied live. */
     val vadEngine: StateFlow<String> = _vadEngine.asStateFlow()
@@ -203,6 +208,12 @@ object MumbleManager {
         appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
             ?.edit()?.putBoolean("rnnoise_enabled", value)?.apply()
         active?.setRnnoiseEnabled(value)
+    }
+
+    @Synchronized fun setSoundCuesEnabled(value: Boolean) {
+        _soundCuesEnabled.value = value
+        appContext?.getSharedPreferences("dumble_audio", Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean("sound_cues_enabled", value)?.apply()
     }
 
     /** Select which detector drives the transmit gate. Persists + sets the state optimistically, then
@@ -312,6 +323,7 @@ object MumbleManager {
         _agcTargetDbFs.value = audioPrefs.getFloat("agc_target_dbfs", DEFAULT_AGC_TARGET_DBFS)
         _agcEnabled.value = audioPrefs.getBoolean("agc_enabled", DEFAULT_AGC_ENABLED)
         _rnnoiseEnabled.value = audioPrefs.getBoolean("rnnoise_enabled", DEFAULT_RNNOISE_ENABLED)
+        _soundCuesEnabled.value = audioPrefs.getBoolean("sound_cues_enabled", DEFAULT_SOUND_CUES_ENABLED)
         _vadEngine.value = audioPrefs.getString("vad_engine", "rnnoise") ?: "rnnoise"
         _prerollMs.value = audioPrefs.getInt("preroll_ms", DEFAULT_PREROLL_MS)
         MumbleLog.sink = { tag, msg, t -> if (t != null) Log.w(tag, msg, t) else Log.d(tag, msg) }
@@ -329,6 +341,7 @@ object MumbleManager {
         active = null
         _chat.value = emptyList()
         _unreadChat.value = 0
+        soundCues.release()
     }
 
     private fun urgentAudioThread() {
@@ -399,11 +412,13 @@ object MumbleManager {
                 val name = if (actor == 0) "Server"
                     else model.state.value.users[actor]?.name ?: "#$actor"
                 appendChat(ChatMessage(name, stripHtml(message), mine = false, System.currentTimeMillis()))
+                if (_soundCuesEnabled.value) soundCues.chat()
             }
         }
 
         private val sm: SessionStateMachine = SessionStateMachine(tcp, model, crypt, events)
 
+        @OptIn(ExperimentalCoroutinesApi::class)
         fun start() {
             sessionScope.launch { sm.state.collect { _state.value = it } }
             sessionScope.launch { selector.stats.collect { _netStats.value = it } }
@@ -435,6 +450,23 @@ object MumbleManager {
                 }
                 sm.start(config.username, config.password)
                 sessionScope.launch { pingLoop() }
+            }
+            sessionScope.launch {
+                var presence: ChannelPresence? = null
+                // flatMapLatest, NOT combine(sm.state, model.state): combine fans two independently-
+                // conflated StateFlows with no cross-flow atomicity, so the first Synchronized emission
+                // could carry a stale/partial roster and then spuriously cue "joins" for already-present
+                // users. flatMapLatest re-subscribes to model.state fresh at each Synchronized transition.
+                sm.state.flatMapLatest { conn ->
+                    if (conn is ConnectionState.Synchronized) model.state else emptyFlow()
+                }.collect { m ->
+                    val diff = diffChannelPresence(presence, m)
+                    presence = diff.next
+                    if (_soundCuesEnabled.value) {
+                        if (diff.joins.isNotEmpty()) soundCues.join()
+                        if (diff.leaves.isNotEmpty()) soundCues.leave()
+                    }
+                }
             }
         }
 
