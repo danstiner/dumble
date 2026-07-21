@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +41,7 @@ fun ChatScreen(messages: List<ChatMessage>, onSend: (String) -> Unit, onBack: ()
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
     Scaffold(
+        modifier = Modifier.imePadding(),   // lift the input above the keyboard; keep the top bar fixed
         topBar = {
             TopAppBar(title = { Text("Chat") }, navigationIcon = {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
