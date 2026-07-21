@@ -4,26 +4,26 @@
     {
       "id": 102,
       "subject": "Task 1: Pure channel-presence diff",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Pure diffChannelPresence computing join/leave in OUR channel; baselines silently on first sight + own channel change.\n\n**Files:** Create mumble/SoundCueLogic.kt; Test DiffChannelPresenceTest.kt\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.DiffChannelPresenceTest\"\n\nFull code: plan Task 1.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/SoundCueLogic.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/DiffChannelPresenceTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.DiffChannelPresenceTest\\\"\", \"acceptanceCriteria\": [\"members = our channel excl self\", \"null prev / own-channel-change → no cues + baseline\", \"joins/leaves = set diffs\", \"other channels ignored\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 103,
       "subject": "Task 2: SoundCues ToneGenerator player",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** ToneGenerator player (join/leave/chat/release) on STREAM_VOICE_CALL, all methods @Synchronized.\n\n**Files:** Create mumble/voice/SoundCues.kt\n\n**Verify:** ./gradlew :app:assembleDebug\n\nFull code: plan Task 2.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/voice/SoundCues.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"join/leave/chat distinct presets on STREAM_VOICE_CALL\", \"release frees generator\", \"lazy init, construction failure swallowed\", \"all public methods @Synchronized\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 104,
       "subject": "Task 3: MumbleManager cue wiring",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [102, 103],
       "description": "**Goal:** Enable flag + persistence, SoundCues instance, chat cue, after-sync join/leave collector.\n\n**Files:** Modify mumble/MumbleManager.kt\n\n**Acceptance:** soundCuesEnabled flow + setter persist + load (default true); onTextMessage plays chat cue when enabled; collector in ActiveSession.start() using sm.state.flatMapLatest{if Synchronized model.state else emptyFlow()} (NOT combine — stale-roster race) with @OptIn(ExperimentalCoroutinesApi); disconnect() releases SoundCues.\n\n**Verify:** ./gradlew :app:testDebugUnitTest\n\nFull code: plan Task 3.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest\", \"acceptanceCriteria\": [\"soundCuesEnabled flow + setter persist + load (default true)\", \"onTextMessage plays chat cue when enabled\", \"flatMapLatest(sm.state->model.state) collector in start() cues join/leave (NOT combine)\", \"disconnect releases SoundCues\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 105,
       "subject": "Task 4: Sound cues Settings toggle",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [104],
       "description": "**Goal:** 'Sound cues' switch in Settings wired to MumbleManager.\n\n**Files:** Modify ui/SettingsScreen.kt, ui/DumbleApp.kt\n\n**Acceptance:** SettingsScreen params + 'Sound cues' ElevatedCard after RNNoise card + @Preview updated; DumbleApp collects + wires setSoundCuesEnabled; assembleDebug succeeds.\n\n**Verify:** ./gradlew :app:assembleDebug\n\nFull code: plan Task 4.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/SettingsScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"SettingsScreen sound-cues card + params + preview\", \"DumbleApp collects + wires setSoundCuesEnabled\", \"assembleDebug succeeds\"], \"modelTier\": \"standard\"}\n```"
     }

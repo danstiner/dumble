@@ -74,6 +74,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   text). Session-only, in-memory (capped 200, cleared on disconnect). Plan:
   `docs/superpowers/plans/2026-07-20-chat-feature.md`. On-device eyeball pending. **Deferred follow-ups:**
   direct messages (per-user), HTML rendering, persistence across sessions.
+- ~~Audio cues (join / leave / new chat)~~ — **DONE (v1, 2026-07-20, merged to main)**: short
+  `ToneGenerator` blips on the voice-call stream — ascending on a **channel** join, descending on leave,
+  a soft beep on incoming chat — gated by a persisted "Sound cues" Settings toggle (default on). Join/leave
+  from a pure `diffChannelPresence` run by a `sm.state.flatMapLatest{model.state}` collector that baselines
+  silently on the connect roster + your own channel moves (so only real changes cue); chat from
+  `onTextMessage` (incoming only). `SoundCues` is fully guarded so a failed cue can't drop the call. Plan:
+  `docs/superpowers/plans/2026-07-20-audio-cues.md`. On-device eyeball pending. **Deferred follow-ups:**
+  bundled Mumble-style custom sounds (vs ToneGenerator presets), per-event toggles, server-wide scope.
 - **Per-user volume adjustments** (way later) — per-remote-user playout gain (a slider per user in the
   channel tree), applied in the mixer (`AudioMixer.accumulate` — scale each speaker's samples by a
   per-session gain before summing). Needs a persisted session→gain map and UI. Deferred.
