@@ -1,0 +1,22 @@
+*.iml
+.gradle/
+/local.properties
+local.properties
+/build
+/captures
+.externalNativeBuild
+.cxx
+.kotlin/
+.DS_Store
+
+# IDE — never commit IDE state (incl. .idea/gradle.xml)
+/.idea/
+
+# Claude Code local state
+/.claude/
+
+# Local planning scratchpad
+/TODO.md
+
+# Superpowers skill state; a bit too detailed to bother tracking in source control
+/docs/superpowers/
