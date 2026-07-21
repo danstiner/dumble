@@ -27,6 +27,20 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   ONE app-level `SnackbarHost` to the `DumbleApp` root (a `Box` overlay over the `when {}`), always
   composed so the timer always runs; dropped the per-screen host in `ConnectScreen`. Build + suite green;
   on-device eyeball pending.
+- **🟡 Investigate: media apps (YouTube) pause immediately when started during a Drumble call.**
+  Symptom: start a call, then try to play a YouTube video → it pauses right away. **Likely cause (to
+  confirm):** Drumble delegates ALL audio handling to Jetpack core-telecom — `CallManager` explicitly
+  does NOT touch `AudioManager`; the library owns audio focus + sets `MODE_IN_COMMUNICATION` for the
+  call (see `CallManager` class doc). A VoIP call claims high-priority `USAGE_VOICE_COMMUNICATION` focus,
+  so a media app (`USAGE_MEDIA`) requesting `AUDIOFOCUS_GAIN` gets denied / the call re-asserts, and the
+  media app pauses — the standard "don't play media during a call" policy. **Investigate:** (1) logcat
+  the `AudioManager` focus transitions while reproducing (is YouTube's focus request denied, or granted
+  then immediately lost?); (2) confirm it's ALL media apps, not YouTube-specific; (3) check what focus
+  gain/type core-telecom requests for the call and whether `CallAttributesCompat`/audio-attributes offer
+  any knob for concurrent media; (4) decide whether concurrent media-during-call is even achievable with
+  a self-managed telecom call, or a fundamental VoIP-focus constraint. **Open question:** is changing
+  this desired? Exclusive focus during a call is normal phone behavior; concurrent media (watch-party /
+  background listening) is the unusual ask here.
 - Evaluate move to OBOE and native low-latency audio capture: https://developer.android.com/games/sdk/oboe/low-latency-audio
 - Add latency monitoring (measure average audio input/audio output/network latency, surface in settings page or similar)
 - **Investigate why playback uses 20 ms frames, not 10 ms** — `AudioVoiceEngine.playbackLoop` writes
