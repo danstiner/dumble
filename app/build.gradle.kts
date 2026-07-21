@@ -22,11 +22,27 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        val keystorePath = providers.gradleProperty("DUMBLE_KEYSTORE_FILE").orNull
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = providers.gradleProperty("DUMBLE_KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.gradleProperty("DUMBLE_KEY_ALIAS").orNull
+                keyPassword = providers.gradleProperty("DUMBLE_KEY_PASSWORD").orNull
+            }
+        }
+    }
+
     buildTypes {
         release {
-            optimization {
-                enable = false // Task 3 turns R8 on
-            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
