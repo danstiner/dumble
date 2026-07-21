@@ -52,6 +52,8 @@ fun DumbleApp(
     val voiceStats by MumbleManager.voiceStats.collectAsStateWithLifecycle()
     val latency by MumbleManager.latencyStats.collectAsStateWithLifecycle()
     val jitter by MumbleManager.jitterStats.collectAsStateWithLifecycle()
+    val chat by MumbleManager.chat.collectAsStateWithLifecycle()
+    val unreadChat by MumbleManager.unreadChat.collectAsStateWithLifecycle()
     val serverModel by MumbleManager.model.state.collectAsStateWithLifecycle()
     val speakingSessions by MumbleManager.speakingSessions.collectAsStateWithLifecycle()
     val selfTransmitting by MumbleManager.selfTransmitting.collectAsStateWithLifecycle()
@@ -75,6 +77,7 @@ fun DumbleApp(
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
+    var showChat by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var userStatsSession by remember { mutableStateOf<Int?>(null) }
 
@@ -98,6 +101,7 @@ fun DumbleApp(
         connectedSince = if (state is ConnectionState.Synchronized) {
             connectedSince ?: System.currentTimeMillis()
         } else null
+        if (state !is ConnectionState.Synchronized) showChat = false
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(connectedSince) {
@@ -126,6 +130,12 @@ fun DumbleApp(
             AudioDiagnosticsScreen(diagnostics = audioDiagnostics, net = netStats, voice = voiceStats,
                 latency = latency, jitter = jitter, onBack = { showDiagnostics = false })
         }
+        showChat && inCall -> {
+            BackHandler { showChat = false }
+            LaunchedEffect(chat.lastOrNull()) { MumbleManager.markChatRead() }
+            ChatScreen(messages = chat, onSend = { MumbleManager.sendChatMessage(it) },
+                onBack = { showChat = false })
+        }
         inCall && !showSettings -> {
             val callState = buildCallScreenState(
                 serverModel, speakingSessions, selfTransmitting, muted, deafened,
@@ -150,6 +160,8 @@ fun DumbleApp(
                 onHangUp = onHangUp,
                 onOpenSettings = { showSettings = true },
                 onOpenUserStats = { userStatsSession = it },
+                onOpenChat = { showChat = true },
+                unreadChat = unreadChat,
             )
         }
         showSettings -> {

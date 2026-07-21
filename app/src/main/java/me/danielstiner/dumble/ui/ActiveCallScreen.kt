@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -73,6 +74,8 @@ fun ActiveCallScreen(
     onHangUp: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenUserStats: (Int) -> Unit,
+    onOpenChat: () -> Unit,
+    unreadChat: Int,
 ) {
     Scaffold(
         topBar = {
@@ -92,7 +95,14 @@ fun ActiveCallScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
-                actions = { IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Tune, "Settings") } },
+                actions = {
+                    IconButton(onClick = onOpenChat) {
+                        BadgedBox(badge = { if (unreadChat > 0) Badge { Text("$unreadChat") } }) {
+                            Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
+                        }
+                    }
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Tune, "Settings") }
+                },
             )
         },
         bottomBar = {
@@ -393,6 +403,7 @@ private fun ActiveCallScreenPreview() {
                 RouteOption(1, AudioRoute.RouteIcon.EARPIECE, "Earpiece"),
             ),
             activeRouteType = 2, onSelectRoute = {},
-            onPttPress = {}, onPttRelease = {}, onHangUp = {}, onOpenSettings = {}, onOpenUserStats = {})
+            onPttPress = {}, onPttRelease = {}, onHangUp = {}, onOpenSettings = {}, onOpenUserStats = {},
+            onOpenChat = {}, unreadChat = 0)
     }
 }
