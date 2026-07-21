@@ -13,22 +13,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.ui.theme.DumbleTheme
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             DumbleTheme {
-                DumbleApp()
+                DumbleAppContent()
             }
         }
     }
 }
 
 @Composable
-private fun DumbleApp() {
+private fun DumbleAppContent() {
     Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
         Box(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -43,6 +45,6 @@ private fun DumbleApp() {
 @Composable
 private fun MainPreview() {
     DumbleTheme {
-        DumbleApp()
+        DumbleAppContent()
     }
 }
