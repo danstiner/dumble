@@ -53,6 +53,7 @@ object MumbleManager {
     // while failing an unreachable/stalling server fast.
     private const val CONNECTING_TIMEOUT_MS = 10_000L
     private const val USERSTATS_POLL_MS = 5_000L   // per-user ping poll cadence (server-verified safe)
+    private const val CHAT_CAP = 200
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -68,6 +69,12 @@ object MumbleManager {
     val latencyStats: StateFlow<LatencyStats> = _latencyStats.asStateFlow()
     private val _jitterStats = MutableStateFlow(JitterStats())
     val jitterStats: StateFlow<JitterStats> = _jitterStats.asStateFlow()
+    private val _chat = MutableStateFlow<List<ChatMessage>>(emptyList())
+    /** In-call chat log (session-scoped, capped, cleared on disconnect). */
+    val chat: StateFlow<List<ChatMessage>> = _chat.asStateFlow()
+    private val _unreadChat = MutableStateFlow(0)
+    /** Unread chat count for the call-screen badge; zeroed by [markChatRead]. */
+    val unreadChat: StateFlow<Int> = _unreadChat.asStateFlow()
     private val _audioDiagnostics = MutableStateFlow(AudioDiagnostics())
     /** Read-only transmit-path diagnostics (platform effects + stage levels), live during a call. */
     val audioDiagnostics: StateFlow<AudioDiagnostics> = _audioDiagnostics.asStateFlow()
@@ -132,6 +139,23 @@ object MumbleManager {
     /** Poll one user's UserStats (ping) every ~5s while their detail page is open; null = stop.
      *  Gated so we send zero extra traffic otherwise. No-op when no call is active. */
     @Synchronized fun setUserStatsPolling(session: Int?) { active?.setUserStatsPolling(session) }
+
+    @Synchronized private fun appendChat(m: ChatMessage) {
+        _chat.value = (_chat.value + m).let { if (it.size > CHAT_CAP) it.takeLast(CHAT_CAP) else it }
+        if (!m.mine) _unreadChat.value = minOf(_unreadChat.value + 1, _chat.value.size)
+    }
+
+    /** Send a chat message to our current channel and locally echo it (server doesn't echo to sender). */
+    @Synchronized fun sendChatMessage(text: String) {
+        val t = text.trim(); if (t.isEmpty()) return
+        val session = active ?: return                                   // not connected → don't echo a phantom send
+        val m = model.state.value
+        val ch = m.sessionId?.let { m.users[it]?.channelId } ?: return   // not in a channel yet → drop
+        session.sendTextMessage(ch, t)
+        appendChat(ChatMessage(sender = "You", text = t, mine = true, timestampMs = System.currentTimeMillis()))
+    }
+
+    @Synchronized fun markChatRead() { _unreadChat.value = 0 }
 
     @Synchronized fun setDeafened(value: Boolean) {
         val r = DeafenLogic.onSetDeafened(value, _muted.value, deafenSetMute)
@@ -303,6 +327,8 @@ object MumbleManager {
     @Synchronized fun disconnect() {
         active?.shutdown()
         active = null
+        _chat.value = emptyList()
+        _unreadChat.value = 0
     }
 
     private fun urgentAudioThread() {
@@ -370,7 +396,9 @@ object MumbleManager {
             override fun onTunneledVoice(plaintext: ByteArray, len: Int, arrivalNanos: Long) =
                 voice.onPlaintext(plaintext, len, arrivalNanos)
             override fun onTextMessage(actor: Int, message: String) {
-                // Wired up in Task 3 (chat log); no-op for now so incoming TextMessage frames don't crash.
+                val name = if (actor == 0) "Server"
+                    else model.state.value.users[actor]?.name ?: "#$actor"
+                appendChat(ChatMessage(name, stripHtml(message), mine = false, System.currentTimeMillis()))
             }
         }
 
@@ -464,6 +492,7 @@ object MumbleManager {
         fun setTransmitMode(mode: TransmitMode) = engine.setTransmitMode(mode)
         fun setPttHeld(held: Boolean) = engine.setPttHeld(held)
         fun sendSelfMute(muted: Boolean) = sm.sendSelfMute(muted)
+        fun sendTextMessage(channelId: Int, text: String) = sm.sendTextMessage(channelId, text)
         fun setDeafened(value: Boolean) = engine.setDeafened(value)
         fun sendSelfDeaf(deaf: Boolean, mute: Boolean) = sm.sendSelfDeaf(deaf, mute)
 
