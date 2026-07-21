@@ -49,6 +49,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   Opus decode frame size, `SpeakerStream.prebufferSamples` (currently 100 ms), the jitter buffer, and
   mixer accumulation — all assume 20 ms. Pairs with the new latency-monitoring HUD (measures the payoff)
   and #56B adaptive jitter buffer.
+- **🟡 Investigate creeping playout latency (device reading 2026-07-20).** `playoutMs` read ~**142 ms**
+  during a call and Dan reports it **slowly creeping up** over the call. Two possibilities to distinguish
+  BEFORE the 10 ms work above: (a) a **real accumulating playout latency** — the AudioTrack write buffer /
+  jitter buffer slowly filling so audio delay grows unbounded (a genuine bug worth fixing), vs (b) a
+  **measurement drift** in the HUD (`AudioTrack.getTimestamp` framePosition 32-bit wrap in `LatencyMath`,
+  or the `LatencyEma`). Instrument: log raw `framePosition`/`presentationTime` + `framesWritten` over a
+  long call and see whether the true DAC latency grows or just the reported EMA. If (a), it also explains
+  the high absolute number and makes the 10 ms/buffer work more urgent.
 - move all non-essential settings under an advanced section in settings — **DONE**
   (`advanced-settings-section`): Transmit mode is the only always-visible card; Voice activity, AGC,
   Noise suppression, and the debug Tools are wrapped in a collapsible **Advanced** section (collapsed
@@ -66,6 +74,10 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - ~~Use Ben's algorithm for automatic user icon color based on hash of their name~~ — **DONE
   (`ui-quick-wins`, merged 2026-07-19)**: `avatarColor` now hashes the display name (`name.hashCode()`)
   instead of the session id, so a user keeps a stable colour across sessions. On-device eyeball pending.
+- **🟡 UI polish follow-ups (device feedback 2026-07-20):** (a) **the speaking ring needs more work** —
+  Dan found it "okay ish"; make it more obvious / refined. (b) **Tweak the name→colour hash** — the
+  current `avatarColor = avatarPalette[floorMod(name.hashCode(), size)]` (`ActiveCallScreen.kt`) wants
+  tuning for more distinct/pleasant colours (better hash and/or a wider, better-balanced palette).
 - ~~Add chat feature~~ — **DONE (v1, 2026-07-20, merged to main)**: in-call text chat — tap the chat icon
   on the call screen → `ChatScreen` (scrolling log + input), with an unread badge. Send goes to your
   current channel (`MumbleManager.sendChatMessage` → `SessionStateMachine.sendTextMessage`), and locally
@@ -81,7 +93,9 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   silently on the connect roster + your own channel moves (so only real changes cue); chat from
   `onTextMessage` (incoming only). `SoundCues` is fully guarded so a failed cue can't drop the call. Plan:
   `docs/superpowers/plans/2026-07-20-audio-cues.md`. On-device eyeball pending. **Deferred follow-ups:**
-  bundled Mumble-style custom sounds (vs ToneGenerator presets), per-event toggles, server-wide scope.
+  **pick better cue sounds** (device feedback 2026-07-20 — Dan dislikes the current ToneGenerator
+  ACK/NACK presets: "I don't like what you chose"); bundle nicer Mumble-style custom sounds in res/raw
+  played via SoundPool (the deferred asset-based option). Also: per-event toggles, server-wide scope.
 - **Per-user volume adjustments** (way later) — per-remote-user playout gain (a slider per user in the
   channel tree), applied in the mixer (`AudioMixer.accumulate` — scale each speaker's samples by a
   per-session gain before summing). Needs a persisted session→gain map and UI. Deferred.
@@ -100,6 +114,12 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
   detail page (joined by session). Spec/plans:
   `docs/superpowers/{specs,plans}/2026-07-20-per-user-stats-debug-screen*` +
   `…-pivot-to-detail-page.md`. On-device eyeball pending.
+  - **Follow-up (device feedback 2026-07-20): nicer jitter-buffer visualization** — Dan wants a richer
+    view than the plain numbers, e.g. a **histogram** of the `DownlinkJitterEstimator`'s calc (the 200 ms
+    peak-hold buckets over the 8 s window, or the relative-delay distribution the p95 is drawn from). The
+    per-user detail page is the place; the estimator already computes the buckets — surface them.
+  - **Follow-up: per-user ping shows 1 decimal now** (`UserStatsDetailScreen`, 2026-07-20) so a sub-ms LAN
+    ping reads "0.4 ms" not "0 ms" (a "0 ms" was a real rounded value, never a null — null renders "—").
 - ~~**Per-user ping via Mumble `UserStats`**~~ — **DONE (this session, merged to main)**: while a user's
   detail page is open, `MumbleManager.setUserStatsPolling(session)` requests `UserStats{session,
   stats_only}` for **just that one user** every ~5 s; `SessionStateMachine` routes the reply into

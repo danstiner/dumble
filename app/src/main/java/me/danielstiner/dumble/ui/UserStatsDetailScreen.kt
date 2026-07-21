@@ -29,7 +29,7 @@ fun UserStatsDetailScreen(
     user: MumbleUser?, jitter: SpeakerJitter?, net: NetStats, onBack: () -> Unit,
 ) {
     fun rtt(v: Double) = if (v >= 0) "%.1f ms".format(v) else "—"
-    fun ping(v: Float?) = if (v != null && v >= 0f) "%.0f ms".format(v) else "—"
+    fun ping(v: Float?) = if (v != null && v >= 0f) "%.1f ms".format(v) else "—"   // 1 decimal: sub-ms LAN pings shouldn't read as "0 ms"
     Scaffold(topBar = {
         TopAppBar(title = { Text(user?.name ?: "User") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
