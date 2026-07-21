@@ -178,6 +178,30 @@ class LiveServerIntegrationTest {
         } finally { a.shutdown(); b.shutdown() }
     }
 
+    @Test fun textMessageProbe() = runBlocking {
+        val a = Harness(host!!, port, password, forceTcp = false)
+        val b = Harness(host!!, port, password, forceTcp = false)
+        val aGot = java.util.concurrent.CopyOnWriteArrayList<MumbleProtos.TextMessage>()
+        val bGot = java.util.concurrent.CopyOnWriteArrayList<MumbleProtos.TextMessage>()
+        a.frameSpy = { f -> if (f.type == TcpMessageType.TextMessage.id) aGot.add(MumbleProtos.TextMessage.parseFrom(f.payload)) }
+        b.frameSpy = { f -> if (f.type == TcpMessageType.TextMessage.id) bGot.add(MumbleProtos.TextMessage.parseFrom(f.payload)) }
+        try {
+            a.connectAndSync("chat-probe-a")
+            b.connectAndSync("chat-probe-b")
+            delay(500)
+            val aSelf = a.model.state.value.sessionId!!
+            val aChannel = a.model.state.value.users[aSelf]!!.channelId
+            val msg = MumbleProtos.TextMessage.newBuilder().addChannelId(aChannel).setMessage("hello from a").build()
+            aGot.clear(); bGot.clear()
+            a.tcp.sendRaw(TcpMessageType.TextMessage, msg.toByteArray(), msg.toByteArray().size)
+            delay(2_000)
+            val bMsg = bGot.firstOrNull { it.message == "hello from a" }
+            println("CHAT-PROBE aChannel=$aChannel aSelf=$aSelf bReceived=${bMsg != null} " +
+                "bActor=${bMsg?.actor} echoToSender=${aGot.any { it.message == "hello from a" }}")
+            assertNotNull("B (same channel) must receive A's message", bMsg)
+        } finally { a.shutdown(); b.shutdown() }
+    }
+
     @Test fun udpLoopback() = runBlocking {
         val h = Harness(host!!, port, password, forceTcp = false)
         try {
