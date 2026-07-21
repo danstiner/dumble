@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Nothing here pushes; don't leave the token readable by ./gradlew.
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # Matches gradle-daemon-jvm.properties and jvmToolchain; without it the
+          # daemon's JDK 21 comes from the runner image by luck, not by declaration.
+          java-version: '21'
+      # Avoids the proprietary gradle-actions-caching component that v6 defaults to.
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: Build and test
+        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest --stacktrace
