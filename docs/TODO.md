@@ -52,7 +52,14 @@ Running list of bugs found during on-device testing of the audio pipeline. Defer
 - ~~Use Ben's algorithm for automatic user icon color based on hash of their name~~ — **DONE
   (`ui-quick-wins`, merged 2026-07-19)**: `avatarColor` now hashes the display name (`name.hashCode()`)
   instead of the session id, so a user keeps a stable colour across sessions. On-device eyeball pending.
-- Add chat feature
+- ~~Add chat feature~~ — **DONE (v1, 2026-07-20, merged to main)**: in-call text chat — tap the chat icon
+  on the call screen → `ChatScreen` (scrolling log + input), with an unread badge. Send goes to your
+  current channel (`MumbleManager.sendChatMessage` → `SessionStateMachine.sendTextMessage`), and locally
+  appends (server-verified: Murmur doesn't echo your own message back). Incoming `TextMessage`s route
+  `onFrame → Events.onTextMessage → MumbleManager` chat log, resolving actor→name + `stripHtml` (plain
+  text). Session-only, in-memory (capped 200, cleared on disconnect). Plan:
+  `docs/superpowers/plans/2026-07-20-chat-feature.md`. On-device eyeball pending. **Deferred follow-ups:**
+  direct messages (per-user), HTML rendering, persistence across sessions.
 - **Per-user volume adjustments** (way later) — per-remote-user playout gain (a slider per user in the
   channel tree), applied in the mixer (`AudioMixer.accumulate` — scale each speaker's samples by a
   per-session gain before summing). Needs a persisted session→gain map and UI. Deferred.

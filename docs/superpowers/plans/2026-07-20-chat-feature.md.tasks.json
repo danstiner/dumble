@@ -4,26 +4,26 @@
     {
       "id": 98,
       "subject": "Task 1: Probe TextMessage echo/delivery",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Verify whether Murmur echoes your own channel TextMessage back + that a same-channel peer receives it (actor=sender).\n\n**Files:** Modify app/src/test/java/me/danielstiner/dumble/mumble/integration/LiveServerIntegrationTest.kt\n\n**Verify:** MUMBLE_TEST_SERVER=127.0.0.1 ./gradlew :app:testDebugUnitTest --tests \"*.LiveServerIntegrationTest.textMessageProbe\" (docker Murmur up)\n\nFull code: plan Task 1. Record echoToSender (expected false → Task 3 locally appends).\n\n```json:metadata\n{\"files\": [\"app/src/test/java/me/danielstiner/dumble/mumble/integration/LiveServerIntegrationTest.kt\"], \"verifyCommand\": \"MUMBLE_TEST_SERVER=127.0.0.1 ./gradlew :app:testDebugUnitTest --tests \\\"*.LiveServerIntegrationTest.textMessageProbe\\\"\", \"acceptanceCriteria\": [\"probe prints echoToSender + bActor + bReceived\", \"asserts B receives A's message\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 99,
       "subject": "Task 2: Chat protocol wiring + stripHtml",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** State machine can receive/send TextMessage; ChatMessage + pure stripHtml exist.\n\n**Files:** Create mumble/ChatMessage.kt; Modify mumble/protocol/SessionStateMachine.kt; Test SessionStateMachineTest.kt + new StripHtmlTest.kt; COMPILE FIX Modify integration/LiveServerIntegrationTest.kt (Harness is a 3rd Events implementor — add no-op onTextMessage override or app/src/test won't compile).\n\n**Acceptance:** Events.onTextMessage + onFrame routing; sendTextMessage targets channel; ChatMessage data class; stripHtml strips tags+unescapes; ALL 3 Events implementors updated.\n\n**Verify:** ./gradlew :app:testDebugUnitTest --tests \"*.SessionStateMachineTest\" --tests \"*.StripHtmlTest\"\n\nFull code: plan Task 2.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/ChatMessage.kt\", \"app/src/main/java/me/danielstiner/dumble/mumble/protocol/SessionStateMachine.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/SessionStateMachineTest.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/StripHtmlTest.kt\", \"app/src/test/java/me/danielstiner/dumble/mumble/integration/LiveServerIntegrationTest.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest --tests \\\"*.SessionStateMachineTest\\\" --tests \\\"*.StripHtmlTest\\\"\", \"acceptanceCriteria\": [\"Events.onTextMessage + onFrame routing\", \"sendTextMessage targets channel\", \"ChatMessage data class\", \"stripHtml strips tags + unescapes\", \"all 3 Events implementors updated incl Harness no-op\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 100,
       "subject": "Task 3: MumbleManager chat log",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [98, 99],
       "description": "**Goal:** Session-scoped chat log + unread; send appends locally; cleared on disconnect.\n\n**Files:** Modify mumble/MumbleManager.kt\n\n**Acceptance:** chat + unreadChat StateFlows capped at 200; onTextMessage resolves name+strips+appends+bumps unread; sendChatMessage resolves current channel + sends + locally appends (no echo); markChatRead zeroes; cleared in disconnect() (NOT connect()); @Synchronized append/unread/markRead.\n\n**Verify:** ./gradlew :app:testDebugUnitTest\n\nFull code: plan Task 3.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/mumble/MumbleManager.kt\"], \"verifyCommand\": \"./gradlew :app:testDebugUnitTest\", \"acceptanceCriteria\": [\"chat + unreadChat capped at 200\", \"onTextMessage resolves+strips+appends+unread\", \"sendChatMessage current channel + local append\", \"markChatRead zeroes; cleared on disconnect\", \"synchronized append/unread/markRead\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 101,
       "subject": "Task 4: Chat UI + call-screen icon/badge",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [100],
       "description": "**Goal:** ChatScreen reached from a chat icon (unread badge) on the call screen.\n\n**Files:** Create ui/ChatScreen.kt; Modify ui/ActiveCallScreen.kt, ui/DumbleApp.kt\n\n**Acceptance:** ChatScreen scrolling log + input + send + auto-scroll; call-screen chat icon + unread badge; showChat&&inCall branch before inCall&&!showSettings + markChatRead + reset showChat=false on call-end; assembleDebug succeeds.\n\n**Verify:** ./gradlew :app:assembleDebug\n\nFull code: plan Task 4.\n\n```json:metadata\n{\"files\": [\"app/src/main/java/me/danielstiner/dumble/ui/ChatScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/ActiveCallScreen.kt\", \"app/src/main/java/me/danielstiner/dumble/ui/DumbleApp.kt\"], \"verifyCommand\": \"./gradlew :app:assembleDebug\", \"acceptanceCriteria\": [\"ChatScreen scrolling log + input + send + auto-scroll\", \"call-screen chat icon + unread badge\", \"showChat branch + markChatRead + reset on call-end\", \"assembleDebug succeeds\"], \"modelTier\": \"standard\"}\n```"
     }
