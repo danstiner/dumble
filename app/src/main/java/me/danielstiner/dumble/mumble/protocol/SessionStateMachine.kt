@@ -66,6 +66,7 @@ class SessionStateMachine(
         fun onCryptReady()
         fun onTcpRtt(rttMs: Double)
         fun onTunneledVoice(plaintext: ByteArray, len: Int, arrivalNanos: Long)
+        fun onTextMessage(actor: Int, message: String)
     }
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -127,6 +128,10 @@ class SessionStateMachine(
             TcpMessageType.Ping -> handlePingEcho(MumbleProtos.Ping.parseFrom(frame.payload))
             TcpMessageType.UserStats -> model.onUserStats(MumbleProtos.UserStats.parseFrom(frame.payload))
             TcpMessageType.UDPTunnel -> events.onTunneledVoice(frame.payload, frame.payload.size, clockNanos())
+            TcpMessageType.TextMessage -> {
+                val tm = MumbleProtos.TextMessage.parseFrom(frame.payload)
+                events.onTextMessage(if (tm.hasActor()) tm.actor else 0, tm.message)
+            }
             else -> MumbleLog.d(TAG, "ignoring message type ${frame.type}")
         }
     }
@@ -186,6 +191,12 @@ class SessionStateMachine(
     fun requestCryptResync() {
         crypt.markResyncRequested()
         channel.send(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder().build())
+    }
+
+    /** Send a chat message to [channelId] (everyone in that channel). */
+    fun sendTextMessage(channelId: Int, text: String) {
+        channel.send(TcpMessageType.TextMessage,
+            MumbleProtos.TextMessage.newBuilder().addChannelId(channelId).setMessage(text).build())
     }
 
     /** Broadcasts local mute state so other clients render the mute icon (server infers session from the connection). */

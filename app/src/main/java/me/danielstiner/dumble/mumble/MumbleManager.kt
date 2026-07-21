@@ -369,6 +369,9 @@ object MumbleManager {
             override fun onTcpRtt(rttMs: Double) = selector.onTcpRtt(rttMs)
             override fun onTunneledVoice(plaintext: ByteArray, len: Int, arrivalNanos: Long) =
                 voice.onPlaintext(plaintext, len, arrivalNanos)
+            override fun onTextMessage(actor: Int, message: String) {
+                // Wired up in Task 3 (chat log); no-op for now so incoming TextMessage frames don't crash.
+            }
         }
 
         private val sm: SessionStateMachine = SessionStateMachine(tcp, model, crypt, events)

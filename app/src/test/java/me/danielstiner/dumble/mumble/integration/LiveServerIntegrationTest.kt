@@ -68,6 +68,7 @@ class LiveServerIntegrationTest {
                 }
                 override fun onTcpRtt(rttMs: Double) = selector.onTcpRtt(rttMs)
                 override fun onTunneledVoice(p: ByteArray, len: Int, ar: Long) = voice.onPlaintext(p, len, ar)
+                override fun onTextMessage(actor: Int, message: String) {}
             })
         }
 

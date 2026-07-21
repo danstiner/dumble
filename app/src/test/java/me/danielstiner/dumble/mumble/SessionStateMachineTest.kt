@@ -27,11 +27,13 @@ class SessionStateMachineTest {
         var cryptReady = 0
         var lastRttMs = -1.0
         val tunneled = mutableListOf<ByteArray>()
+        var lastText: Pair<Int, String>? = null
         override fun onCryptReady() { cryptReady++ }
         override fun onTcpRtt(rttMs: Double) { lastRttMs = rttMs }
         override fun onTunneledVoice(plaintext: ByteArray, len: Int, arrivalNanos: Long) {
             tunneled.add(plaintext.copyOf(len))
         }
+        override fun onTextMessage(actor: Int, message: String) { lastText = actor to message }
     }
 
     private lateinit var channel: FakeChannel
@@ -223,5 +225,18 @@ class SessionStateMachineTest {
         frame(TcpMessageType.UserState, MumbleProtos.UserState.newBuilder().setSession(7).setName("bob").build())
         frame(TcpMessageType.UserStats, MumbleProtos.UserStats.newBuilder().setSession(7).setTcpPingAvg(12f).build())
         assertEquals(12f, model.state.value.users[7]!!.tcpPingMs!!, 0.001f)
+    }
+
+    @Test fun onFrameTextMessageRoutesToEvents() {
+        sm.start("dan", null)
+        frame(TcpMessageType.TextMessage, MumbleProtos.TextMessage.newBuilder().setActor(7).setMessage("hi").build())
+        assertEquals(7 to "hi", events.lastText)
+    }
+
+    @Test fun sendTextMessageTargetsChannel() {
+        sm.start("dan", null)
+        sm.sendTextMessage(3, "hello")
+        val tm = channel.sent.last { it.first == TcpMessageType.TextMessage }.second as MumbleProtos.TextMessage
+        assertEquals(listOf(3), tm.channelIdList); assertEquals("hello", tm.message)
     }
 }
