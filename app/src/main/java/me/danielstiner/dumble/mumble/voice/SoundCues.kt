@@ -21,10 +21,16 @@ class SoundCues {
         ToneGenerator(AudioManager.STREAM_VOICE_CALL, VOLUME)
     }.onFailure { Log.w(TAG, "ToneGenerator init failed", it) }.getOrNull()?.also { gen = it }
 
-    @Synchronized fun join() { tones()?.startTone(ToneGenerator.TONE_PROP_ACK) }   // ascending blip
-    @Synchronized fun leave() { tones()?.startTone(ToneGenerator.TONE_PROP_NACK) } // descending blip
-    @Synchronized fun chat() { tones()?.startTone(ToneGenerator.TONE_PROP_BEEP) }  // soft beep
+    @Synchronized fun join() = play(ToneGenerator.TONE_PROP_ACK)    // ascending blip
+    @Synchronized fun leave() = play(ToneGenerator.TONE_PROP_NACK)  // descending blip
+    @Synchronized fun chat() = play(ToneGenerator.TONE_PROP_BEEP)   // soft beep
     @Synchronized fun release() { runCatching { gen?.release() }; gen = null }
+
+    /** Guard BOTH lazy init and startTone: cues fire from the TCP-reader thread, whose blanket catch
+     *  would otherwise misread a ToneGenerator failure as a transport error and drop the whole call. */
+    private fun play(tone: Int) {
+        runCatching { tones()?.startTone(tone) }.onFailure { Log.w(TAG, "startTone failed", it) }
+    }
 
     companion object { private const val TAG = "SoundCues"; private const val VOLUME = 80 } // 0..100
 }
