@@ -45,6 +45,7 @@ fun DumbleApp(
     val agcEnabled by MumbleManager.agcEnabled.collectAsStateWithLifecycle()
     val agcTargetDbFs by MumbleManager.agcTargetDbFs.collectAsStateWithLifecycle()
     val rnnoiseEnabled by MumbleManager.rnnoiseEnabled.collectAsStateWithLifecycle()
+    val soundCuesEnabled by MumbleManager.soundCuesEnabled.collectAsStateWithLifecycle()
     val vadEngine by MumbleManager.vadEngine.collectAsStateWithLifecycle()
     val prerollMs by MumbleManager.prerollMs.collectAsStateWithLifecycle()
     val audioDiagnostics by MumbleManager.audioDiagnostics.collectAsStateWithLifecycle()
@@ -182,6 +183,8 @@ fun DumbleApp(
                 onAgcTargetChange = { MumbleManager.setAgcTargetDbFs(it) },
                 rnnoiseEnabled = rnnoiseEnabled,
                 onRnnoiseEnabledChange = { MumbleManager.setRnnoiseEnabled(it) },
+                soundCuesEnabled = soundCuesEnabled,
+                onSoundCuesEnabledChange = { MumbleManager.setSoundCuesEnabled(it) },
                 vadEngine = vadEngine,
                 onVadEngineChange = { MumbleManager.setVadEngine(it) },
                 prerollMs = prerollMs,

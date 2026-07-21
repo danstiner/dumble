@@ -58,6 +58,8 @@ fun SettingsScreen(
     onAgcTargetChange: (Float) -> Unit,
     rnnoiseEnabled: Boolean,
     onRnnoiseEnabledChange: (Boolean) -> Unit,
+    soundCuesEnabled: Boolean,
+    onSoundCuesEnabledChange: (Boolean) -> Unit,
     vadEngine: String,
     onVadEngineChange: (String) -> Unit,
     prerollMs: Int,
@@ -240,6 +242,26 @@ fun SettingsScreen(
                             }
                         }
 
+                        // Sound cues
+                        Text(
+                            "Sound cues",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
+                        )
+                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("Enabled", modifier = Modifier.weight(1f))
+                                    Switch(checked = soundCuesEnabled, onCheckedChange = onSoundCuesEnabledChange)
+                                }
+                                Text("Short blips when someone joins/leaves your channel or a chat arrives.")
+                            }
+                        }
+
                         // Tools
                         Text(
                             "Tools",
@@ -284,6 +306,7 @@ private fun SettingsScreenPreview() {
             agcEnabled = true, onAgcEnabledChange = {},
             agcTargetDbFs = -18f, onAgcTargetChange = {},
             rnnoiseEnabled = true, onRnnoiseEnabledChange = {},
+            soundCuesEnabled = true, onSoundCuesEnabledChange = {},
             vadEngine = "rnnoise", onVadEngineChange = {},
             prerollMs = 0, onPrerollChange = {},
             onOpenDiagnostics = {})
