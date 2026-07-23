@@ -24,6 +24,9 @@ object ChannelTreeReducers {
         return tree.copy(channels = tree.channels + (id to channel))
     }
 
+    // ChannelRemove.channel_id and UserRemove.session are `required` in the proto, so parseFrom
+    // already guarantees they're present — no has-bit guard needed here, unlike the optional id
+    // fields the state reducers guard.
     fun applyChannelRemove(tree: ChannelTree, msg: MumbleProtos.ChannelRemove): ChannelTree =
         tree.copy(channels = tree.channels - msg.channelId)
 
