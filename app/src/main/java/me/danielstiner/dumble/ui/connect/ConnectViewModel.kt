@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.data.ServerProfile
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -38,6 +39,7 @@ data class ConnectUiState(
     val status: ConnectionStatus = ConnectionStatus.Idle,
     val serverVersion: ServerVersion? = null,
     val rttMs: Double? = null,
+    val channelTree: ChannelTree = ChannelTree(),
 )
 
 @HiltViewModel
@@ -49,8 +51,8 @@ class ConnectViewModel @Inject constructor(
     private val form = MutableStateFlow(ConnectUiState())
 
     val uiState: StateFlow<ConnectUiState> =
-        combine(form, connection.status, connection.serverVersion, connection.roundTripMillis) { f, status, ver, rtt ->
-            f.copy(status = status, serverVersion = ver, rttMs = rtt)
+        combine(form, connection.status, connection.serverVersion, connection.roundTripMillis, connection.channelTree) { f, status, ver, rtt, tree ->
+            f.copy(status = status, serverVersion = ver, rttMs = rtt, channelTree = tree)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
     init {

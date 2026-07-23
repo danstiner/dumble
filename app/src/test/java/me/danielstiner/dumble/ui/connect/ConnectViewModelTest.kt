@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import me.danielstiner.dumble.data.ServerProfile
+import me.danielstiner.dumble.mumble.channeltree.Channel
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -57,5 +59,13 @@ class ConnectViewModelTest {
         assertNull(vm.uiState.value.portError)
         assertEquals(1, conn.connectCalls)
         assertEquals(ServerProfile("h", 64738, "u"), store.saved)
+    }
+
+    @Test fun channelTreeFromConnectionAppearsInUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        conn.channelTree.value = ChannelTree(channels = mapOf(0 to Channel(0, null, "Root", 0)))
+        advanceUntilIdle()
+        assertEquals("Root", vm.uiState.value.channelTree.channels[0]?.name)
     }
 }

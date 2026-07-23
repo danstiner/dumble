@@ -45,6 +45,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                 sessionId = s.sessionId,
                 serverVersion = state.serverVersion,
                 rttMs = state.rttMs,
+                channelTree = state.channelTree,
                 onDisconnect = vm::onDisconnect,
                 modifier = m,
             )
