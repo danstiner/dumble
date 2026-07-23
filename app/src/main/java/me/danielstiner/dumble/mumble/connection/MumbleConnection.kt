@@ -36,17 +36,17 @@ import javax.inject.Singleton
 class MumbleConnection internal constructor(
     private val pinStore: PinStore,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
-) {
+) : Connection {
     @Inject constructor(pinStore: PinStore) : this(pinStore, { MumbleTcpTransport(it) })
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
-    val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
+    override val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
     private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
-    val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
+    override val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
     private val _roundTripMillis = MutableStateFlow<Double?>(null)
-    val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
+    override val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
 
     init {
         // One point that mirrors every status transition to logcat, whichever path set it.
@@ -72,7 +72,7 @@ class MumbleConnection internal constructor(
     private fun publishVersion(gen: Int, v: ServerVersion?) = synchronized(lock) { if (gen == attempt) _serverVersion.value = v }
     private fun publishRtt(gen: Int, r: Double?) = synchronized(lock) { if (gen == attempt) _roundTripMillis.value = r }
 
-    fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
+    override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val gen: Int
         val prior: Attempt?
         synchronized(lock) {
@@ -120,7 +120,7 @@ class MumbleConnection internal constructor(
     }
 
     /** Accept the presented certificate (first contact or a mismatch) and reconnect on the pinned path. */
-    fun trustAndConnect() {
+    override fun trustAndConnect() {
         val att = current ?: return
         val presented = att.presented ?: return
         scope.launch {
@@ -129,9 +129,9 @@ class MumbleConnection internal constructor(
         }
     }
 
-    fun cancelTrust() = disconnect()
+    override fun cancelTrust() = disconnect()
 
-    fun disconnect() {
+    override fun disconnect() {
         val prior: Attempt?
         synchronized(lock) {
             prior = current; current = null; attempt += 1
