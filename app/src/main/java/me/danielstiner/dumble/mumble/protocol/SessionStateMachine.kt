@@ -32,6 +32,9 @@ class SessionStateMachine(
     private val _roundTripMillis = MutableStateFlow<Double?>(null)
     val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
 
+    private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
+    val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
+
     /** CryptSetup key material, stored for the voice task. Unused here. */
     @Volatile var cryptKey: ByteArray? = null
         private set
@@ -122,6 +125,9 @@ class SessionStateMachine(
                 val setup = MumbleProtos.CryptSetup.parseFrom(frame.payload)
                 if (setup.hasKey()) cryptKey = setup.key.toByteArray()
             }
+            TcpMessageType.Version -> {
+                _serverVersion.value = ServerVersion.from(MumbleProtos.Version.parseFrom(frame.payload))
+            }
 
             // Deliberately ignored in this task — see the design's non-goals.
             TcpMessageType.UDPTunnel,          // raw voice bytes, not protobuf; no voice yet
@@ -133,7 +139,6 @@ class SessionStateMachine(
             TcpMessageType.CodecVersion,
             TcpMessageType.ServerConfig,
             TcpMessageType.PermissionQuery,
-            TcpMessageType.Version,
             -> Unit
 
             else -> Unit                       // unknown or unmodelled id: ignore, never fail

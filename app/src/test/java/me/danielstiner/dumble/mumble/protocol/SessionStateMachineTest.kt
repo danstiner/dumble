@@ -201,6 +201,20 @@ class SessionStateMachineTest {
     }
 
     @Test
+    fun versionFramePopulatesServerVersion() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 5, 735))
+            .setRelease("Murmur")
+            .setOs("Linux")
+            .build()))
+
+        assertEquals(ServerVersion(1, 5, 735, "Murmur", "Linux"), sm.serverVersion.value)
+    }
+
+    @Test
     fun tunnelRosterAndUnknownFramesAreIgnored() = runTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
