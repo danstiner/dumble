@@ -3,6 +3,7 @@ package me.danielstiner.dumble.ui.connect
 import me.danielstiner.dumble.mumble.channeltree.Channel
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.User
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -55,11 +56,15 @@ class ChannelTreeRowsTest {
     @Test fun tagsMyChannelAndMyRow() {
         val tree = ChannelTree(
             channels = mapOf(0 to Channel(0, null, "Root", 0), 1 to Channel(1, 0, "Gaming", 0)),
-            users = mapOf(7 to user(7, "me", 1)),
+            users = mapOf(7 to user(7, "me", 1), 8 to user(8, "bob", 0)),
         )
         val rows = channelTreeRows(tree, mySession = 7)
-        assertTrue(rows.filterIsInstance<ChannelTreeRow.ChannelRow>().single { it.id == 1 }.isMine)
-        assertTrue(rows.filterIsInstance<ChannelTreeRow.UserRow>().single().isMe)
+        val channels = rows.filterIsInstance<ChannelTreeRow.ChannelRow>().associateBy { it.id }
+        assertTrue(channels.getValue(1).isMine)
+        assertFalse(channels.getValue(0).isMine)
+        val users = rows.filterIsInstance<ChannelTreeRow.UserRow>().associateBy { it.session }
+        assertTrue(users.getValue(7).isMe)
+        assertFalse(users.getValue(8).isMe)
     }
 
     @Test fun omitsUserWhoseChannelIsUnknown() {
@@ -76,6 +81,18 @@ class ChannelTreeRowsTest {
         )
         assertEquals(
             listOf(ChannelTreeRow.ChannelRow(0, 5, "Orphaned root", 0, false)),
+            channelTreeRows(tree, null),
+        )
+    }
+
+    @Test fun treatsChannelWithMissingParentAsRoot() {
+        val tree = ChannelTree(
+            // parent 99 was never received (or was already removed) -- 3 must still
+            // render as a root rather than disappear until 99 shows up.
+            channels = mapOf(3 to Channel(3, parentId = 99, name = "Detached", position = 0)),
+        )
+        assertEquals(
+            listOf(ChannelTreeRow.ChannelRow(0, 3, "Detached", 0, false)),
             channelTreeRows(tree, null),
         )
     }
