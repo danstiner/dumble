@@ -2,6 +2,7 @@ package me.danielstiner.dumble.ui.connect
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -11,6 +12,7 @@ class FakeConnection : Connection {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     override val serverVersion = MutableStateFlow<ServerVersion?>(null)
     override val roundTripMillis = MutableStateFlow<Double?>(null)
+    override val channelTree = MutableStateFlow(ChannelTree())
 
     var connectCalls = 0; private set
     var lastEndpoint: MumbleEndpoint? = null; private set

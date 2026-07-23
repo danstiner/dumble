@@ -5,11 +5,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.TestTlsServer
 import me.danielstiner.dumble.mumble.net.sha256Hex
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.net.SocketTimeoutException
@@ -72,5 +76,54 @@ class MumbleConnectionTest {
         gate.complete(Unit)                                   // stale attempt resumes and returns
         delay(100)                                            // let the stale coroutine run to completion
         assertEquals(ConnectionStatus.Idle, conn.status.value)  // guard held: no clobber
+    }
+
+    @Test fun channelTreeSurfacesReducedFrames() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(InMemoryPinStore()) {
+            FakeControlTransport { _, _ -> }.also { fake = it }   // connects, stays open
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        fake.listener!!.onFrame(TcpFrame(
+            TcpMessageType.ChannelState.id,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
+        ))
+
+        val tree = withTimeout(5_000) { conn.channelTree.first { it.channels.containsKey(1) } }
+        assertEquals("Root", tree.channels[1]!!.name)
+        conn.disconnect()
+    }
+
+    @Test fun disconnectResetsChannelTree() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(InMemoryPinStore()) {
+            FakeControlTransport { _, _ -> }.also { fake = it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fake.listener!!.onFrame(TcpFrame(
+            TcpMessageType.ChannelState.id,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
+        ))
+        withTimeout(5_000) { conn.channelTree.first { it.channels.containsKey(1) } }
+
+        conn.disconnect()
+
+        assertEquals(ChannelTree(), conn.channelTree.value)
+    }
+
+    @Test fun aSupersededAttemptLeavesChannelTreeEmpty() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val conn = MumbleConnection(InMemoryPinStore()) {
+            FakeControlTransport { _, _ -> gate.await() }   // blocks mid-handshake
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
+        conn.disconnect()          // bumps the attempt generation
+        gate.complete(Unit)        // stale attempt resumes and is torn down
+        delay(100)
+        assertEquals(ChannelTree(), conn.channelTree.value)
     }
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -47,6 +48,8 @@ class MumbleConnection internal constructor(
     override val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
     private val _roundTripMillis = MutableStateFlow<Double?>(null)
     override val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
+    private val _channelTree = MutableStateFlow(ChannelTree())
+    override val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
 
     init {
         // One point that mirrors every status transition to logcat, whichever path set it.
@@ -71,6 +74,7 @@ class MumbleConnection internal constructor(
     private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == attempt) _status.value = s }
     private fun publishVersion(gen: Int, v: ServerVersion?) = synchronized(lock) { if (gen == attempt) _serverVersion.value = v }
     private fun publishRtt(gen: Int, r: Double?) = synchronized(lock) { if (gen == attempt) _roundTripMillis.value = r }
+    private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val gen: Int
@@ -79,6 +83,7 @@ class MumbleConnection internal constructor(
             prior = current; current = null; attempt += 1; gen = attempt
             _status.value = ConnectionStatus.Connecting
             _serverVersion.value = null; _roundTripMillis.value = null
+            _channelTree.value = ChannelTree()
         }
         prior?.let { teardown(it) }
 
@@ -116,6 +121,7 @@ class MumbleConnection internal constructor(
             childScope.launch { sm.state.collect { mapState(it)?.let { s -> publishStatus(gen, s) } } }
             childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
             childScope.launch { sm.roundTripMillis.collect { publishRtt(gen, it) } }
+            childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
         }
     }
 
@@ -137,6 +143,7 @@ class MumbleConnection internal constructor(
             prior = current; current = null; attempt += 1
             _status.value = ConnectionStatus.Idle
             _serverVersion.value = null; _roundTripMillis.value = null
+            _channelTree.value = ChannelTree()
         }
         prior?.let { teardown(it) }
     }
