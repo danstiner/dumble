@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
+import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.sha256Hex
@@ -90,7 +91,7 @@ class LiveServerIntegrationTest {
         while (true) {
             attempt++
             try {
-                transport.connect(host, port, object : MumbleTcpTransport.Listener {
+                transport.connect(host, port, object : MumbleControlTransport.Listener {
                     override fun onFrame(f: TcpFrame) = session.onFrame(f)
                     override fun onClosed(cause: Throwable?) = session.onClosed(cause)
                 })

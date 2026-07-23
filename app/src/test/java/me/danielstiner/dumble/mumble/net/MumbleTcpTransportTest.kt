@@ -37,7 +37,7 @@ class MumbleTcpTransportTest {
 
     private fun startServer(): TestTlsServer = TestTlsServer().also { server = it; it.start() }
 
-    private fun noopListener() = object : MumbleTcpTransport.Listener {
+    private fun noopListener() = object : MumbleControlTransport.Listener {
         override fun onFrame(f: TcpFrame) = Unit
         override fun onClosed(cause: Throwable?) = Unit
     }
@@ -51,7 +51,7 @@ class MumbleTcpTransportTest {
         var frame: TcpFrame? = null
 
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) { frame = f; received.countDown() }
             override fun onClosed(cause: Throwable?) = Unit
         })
@@ -101,7 +101,7 @@ class MumbleTcpTransportTest {
         val srv = startServer()
         var closedCount = 0
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
             override fun onClosed(cause: Throwable?) { closedCount++ }
         })
@@ -136,7 +136,7 @@ class MumbleTcpTransportTest {
             connectStarted.countDown()
             runCatching {
                 runBlocking {
-                    transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+                    transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
                         override fun onFrame(f: TcpFrame) { delivered.countDown() }
                         override fun onClosed(cause: Throwable?) = Unit
                     })
@@ -166,7 +166,7 @@ class MumbleTcpTransportTest {
         inOnFrame = false
 
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) {
                 inOnFrame = true
                 inFrame.countDown()
@@ -202,7 +202,7 @@ class MumbleTcpTransportTest {
 
         lateinit var transport: MumbleTcpTransport
         transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) {
                 insideOnFrame.set(true)
                 transport.close()
@@ -229,7 +229,7 @@ class MumbleTcpTransportTest {
         val cause = AtomicReference<Throwable?>()
         val closedFired = CountDownLatch(1)
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
             override fun onClosed(c: Throwable?) { cause.set(c); closedFired.countDown() }
         })
@@ -252,7 +252,7 @@ class MumbleTcpTransportTest {
         val closedFired = CountDownLatch(1)
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
         transport.TESTONLY_beforeWrite = { throw writeError }
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
             override fun onClosed(c: Throwable?) { cause.set(c); closedFired.countDown() }
         })
@@ -275,7 +275,7 @@ class MumbleTcpTransportTest {
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
         transport.TESTONLY_beforePublish = { thread { transport.close() }.join() }
 
-        transport.connect("localhost", srv.port, object : MumbleTcpTransport.Listener {
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) { delivered.countDown() }
             override fun onClosed(cause: Throwable?) = Unit
         })

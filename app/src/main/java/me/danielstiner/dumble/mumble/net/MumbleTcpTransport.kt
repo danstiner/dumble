@@ -12,7 +12,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.danielstiner.dumble.mumble.protocol.ControlChannel
 import me.danielstiner.dumble.mumble.protocol.MumbleCodec
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
@@ -42,17 +41,9 @@ class MumbleTcpTransport(
      * own decision — when to verify — rather than the platform's answer.
      */
     private val hostNameVerifier: HostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier(),
-) : ControlChannel {
-
-    interface Listener {
-        /** Invoked on the single reader coroutine, so implementations need no locking. */
-        fun onFrame(f: TcpFrame)
-        /**
-         * Fires exactly once, and only if the connection was ever published — always delivered by
-         * the reader after [onFrame] returns, so the two never overlap. null cause for a local close.
-         */
-        fun onClosed(cause: Throwable?)
-    }
+    private val connectTimeoutMs: Int = 10_000,
+    private val handshakeTimeoutMs: Int = 10_000,
+) : MumbleControlTransport {
 
     // Small on purpose: this is a low-volume control channel — a couple of handshake frames, then a
     // ping every few seconds. A larger buffer would only let a stalled socket hide longer behind a
@@ -61,7 +52,7 @@ class MumbleTcpTransport(
 
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var scope: CoroutineScope? = null
-    @Volatile private var listener: Listener? = null
+    @Volatile private var listener: MumbleControlTransport.Listener? = null
 
     /**
      * One monitor for everything that races: publishing the socket against tearing it down. The
@@ -104,7 +95,7 @@ class MumbleTcpTransport(
      * instance: [closed] never resets, so after any teardown a second connect silently refuses to
      * publish. Reconnection is a new instance.
      */
-    suspend fun connect(host: String, port: Int, listener: Listener) = withContext(Dispatchers.IO) {
+    override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) = withContext(Dispatchers.IO) {
         this@MumbleTcpTransport.listener = listener
 
         // One trust manager per connection attempt: its outcome is per-handshake state.
@@ -113,8 +104,8 @@ class MumbleTcpTransport(
         val s = ctx.socketFactory.createSocket() as SSLSocket
 
         try {
-            s.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            s.soTimeout = HANDSHAKE_TIMEOUT_MS
+            s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+            s.soTimeout = handshakeTimeoutMs
             s.startHandshake()
             s.soTimeout = 0
             verifyHostNameIfAuthorityValidated(host, s, trust.outcome)
@@ -242,8 +233,6 @@ class MumbleTcpTransport(
     }
 
     private companion object {
-        const val CONNECT_TIMEOUT_MS = 10_000
-        const val HANDSHAKE_TIMEOUT_MS = 10_000
         const val FRAME_HEADER_BYTES = 6
     }
 }
