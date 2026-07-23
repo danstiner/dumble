@@ -12,12 +12,15 @@ import java.math.BigInteger
 import java.net.Socket
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.CountDownLatch
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
 
 /**
@@ -48,6 +51,9 @@ class TestTlsServer : AutoCloseable {
 
     val certSha256: String = sha256Hex(cert.encoded)
 
+    /** The server's self-signed leaf certificate, for tests that need to assert an exact fingerprint. */
+    val leafCertificate: X509Certificate get() = cert
+
     private val serverSocket: SSLServerSocket = run {
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null, null)
@@ -64,17 +70,26 @@ class TestTlsServer : AutoCloseable {
     @Volatile private var accepted: Socket? = null
     private val ready = CountDownLatch(1)
 
+    /**
+     * Loops accept(): a trust test dials this server twice on the same port — once rejected
+     * (first contact, no pin), once pinned after the client accepts the fingerprint — and both
+     * attempts must land on the same certificate. A failed handshake (e.g. the client's trust
+     * manager rejecting the cert) is swallowed by runCatching so the loop goes back to accept()
+     * rather than exiting; [close] unblocks the pending accept() and ends the thread.
+     */
     fun start() {
         thread(isDaemon = true) {
-            runCatching {
-                val s = serverSocket.accept() as SSLSocket
-                accepted = s
-                // JSSE only processes handshake records when something reads or writes on the
-                // socket. Without an explicit startHandshake() here, nothing ever drives the
-                // server's half of the handshake, and the client blocks in startHandshake()
-                // until its read times out.
-                s.startHandshake()
-                ready.countDown()
+            while (!serverSocket.isClosed) {
+                runCatching {
+                    val s = serverSocket.accept() as SSLSocket
+                    accepted = s
+                    // JSSE only processes handshake records when something reads or writes on the
+                    // socket. Without an explicit startHandshake() here, nothing ever drives the
+                    // server's half of the handshake, and the client blocks in startHandshake()
+                    // until its read times out.
+                    s.startHandshake()
+                    ready.countDown()
+                }
             }
         }
     }
@@ -94,5 +109,18 @@ class TestTlsServer : AutoCloseable {
         runCatching { serverSocket.close() }
     }
 
-    private companion object { val PASSWORD = "test".toCharArray() }
+    companion object {
+        private val PASSWORD = "test".toCharArray()
+
+        /** Rejects every certificate, forcing [MumbleTrustManager] past the authority path to
+         *  [UntrustedCertificateException] — stands in for a client with no CA that trusts a
+         *  self-signed server, i.e. genuine first contact. */
+        fun rejectingTrustManager(): X509TrustManager = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String): Unit =
+                throw CertificateException("test: reject")
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String): Unit =
+                throw CertificateException("test: reject")
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+    }
 }
