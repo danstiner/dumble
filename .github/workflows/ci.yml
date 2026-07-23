@@ -12,6 +12,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      mumble:
+        image: mumblevoip/mumble-server:latest
+        ports:
+          - 64738:64738/tcp
     steps:
       - uses: actions/checkout@v7
         with:
@@ -28,4 +33,6 @@ jobs:
         with:
           cache-provider: basic
       - name: Build and test
+        env:
+          MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest --stacktrace
