@@ -215,16 +215,45 @@ class SessionStateMachineTest {
     }
 
     @Test
-    fun tunnelRosterAndUnknownFramesAreIgnored() = runTest {
+    fun tunnelAndUnknownFramesAreIgnored() = runTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0, 1, 2)))
-        sm.onFrame(frame(TcpMessageType.ChannelState, MumbleProtos.ChannelState.newBuilder().setChannelId(1).build()))
-        sm.onFrame(frame(TcpMessageType.UserState, MumbleProtos.UserState.newBuilder().setSession(3).build()))
         sm.onFrame(TcpFrame(9999, byteArrayOf(1)))
 
         assertEquals(ConnectionState.Handshaking, sm.state.value)
+    }
+
+    @Test
+    fun channelAndUserStateFramesBuildTheChannelTree() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.ChannelState,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(0).setName("Root").build()))
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(7).setName("alice").setChannelId(0).build()))
+
+        val tree = sm.channelTree.value
+        assertEquals("Root", tree.channels[0]!!.name)
+        assertEquals("alice", tree.users[7]!!.name)
+    }
+
+    @Test
+    fun removeFramesPruneTheChannelTree() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        sm.onFrame(frame(TcpMessageType.ChannelState,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Gaming").build()))
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(7).setName("alice").setChannelId(1).build()))
+
+        sm.onFrame(frame(TcpMessageType.ChannelRemove, MumbleProtos.ChannelRemove.newBuilder().setChannelId(1).build()))
+        sm.onFrame(frame(TcpMessageType.UserRemove, MumbleProtos.UserRemove.newBuilder().setSession(7).build()))
+
+        assertTrue(sm.channelTree.value.channels.isEmpty())
+        assertTrue(sm.channelTree.value.users.isEmpty())
     }
 
     @Test
