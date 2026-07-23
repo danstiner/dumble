@@ -1,0 +1,14 @@
+# Local convenience server for LiveServerIntegrationTest. Continuous integration uses a service
+# container instead (see .github/workflows/ci.yml); this file is for running the test by hand.
+#
+#   docker compose -f docs/dev/mumble-server/docker-compose.yml up -d
+#
+services:
+  mumble-server:
+    image: mumblevoip/mumble-server:latest
+    container_name: dumble-murmur
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+    environment:
+      MUMBLE_CONFIG_WELCOMETEXT: "Dumble test server"
