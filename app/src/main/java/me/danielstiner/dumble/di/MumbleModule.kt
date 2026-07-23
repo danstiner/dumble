@@ -11,6 +11,8 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import me.danielstiner.dumble.data.PinDataStore
+import me.danielstiner.dumble.data.ServerConfigDataStore
+import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.PinStore
 import javax.inject.Singleton
 
@@ -29,4 +31,13 @@ object MumbleModule {
     @Provides
     @Singleton
     fun providePinStore(dataStore: DataStore<Preferences>): PinStore = PinDataStore(dataStore)
+
+    const val SERVER_CONFIG_NAME = "server_config"
+
+    @Provides
+    @Singleton
+    fun provideServerConfigStore(@ApplicationContext context: Context): ServerConfigStore =
+        ServerConfigDataStore(
+            PreferenceDataStoreFactory.create { context.preferencesDataStoreFile(SERVER_CONFIG_NAME) },
+        )
 }
