@@ -10,6 +10,9 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 object ChannelTreeReducers {
 
     fun applyChannelState(tree: ChannelTree, msg: MumbleProtos.ChannelState): ChannelTree {
+        // channel_id is optional in proto2, so an absent one reads as 0 — ignore rather than
+        // corrupt channel 0. Real ChannelState broadcasts always carry it.
+        if (!msg.hasChannelId()) return tree
         val id = msg.channelId
         val old = tree.channels[id]
         val channel = Channel(
@@ -25,6 +28,9 @@ object ChannelTreeReducers {
         tree.copy(channels = tree.channels - msg.channelId)
 
     fun applyUserState(tree: ChannelTree, msg: MumbleProtos.UserState): ChannelTree {
+        // session is optional in proto2, so an absent one reads as 0 — ignore rather than
+        // corrupt session 0. Real UserState broadcasts always carry it.
+        if (!msg.hasSession()) return tree
         val session = msg.session
         val old = tree.users[session]
         val user = User(

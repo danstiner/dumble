@@ -57,6 +57,19 @@ class ChannelTreeReducersTest {
         assertEquals(2, tree.users[7]!!.channelId)
     }
 
+    @Test fun partialUserStatePreservesBooleanFlags() {
+        var tree = ChannelTreeReducers.applyUserState(
+            ChannelTree(),
+            MumbleProtos.UserState.newBuilder().setSession(7).setName("alice").setChannelId(1).setSelfMute(true).build(),
+        )
+        // A pure channel move omits the flags; they must not revert to false.
+        tree = ChannelTreeReducers.applyUserState(
+            tree,
+            MumbleProtos.UserState.newBuilder().setSession(7).setChannelId(2).build(),
+        )
+        assertTrue(tree.users[7]!!.selfMute)
+    }
+
     @Test fun removesPruneEntries() {
         var tree = ChannelTree(
             channels = mapOf(1 to Channel(1, 0, "Gaming", 0)),
