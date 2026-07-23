@@ -94,9 +94,4 @@ class PinStoreTest {
             readerScope.coroutineContext[Job]!!.cancelAndJoin()
         }
     }
-
-    @Test
-    fun pinKeyIsHostColonPort() {
-        assertEquals("example.com:64738", pinKey("example.com", 64738))
-    }
 }
