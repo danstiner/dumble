@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import android.util.Log
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.CertificateException
@@ -79,10 +80,15 @@ class MumbleTrustManager(
         // with no rotation path that outlives the certificate, so key-only pinning would buy no
         // resilience.
         val presented = sha256Hex(chain[0].encoded)
+        Log.d(TAG, "checkServerTrusted: presented=$presented havePin=${expectedPin != null}")
 
         // If a certificate was pinned for this server, only trust exactly that pin.
         if (expectedPin != null) {
-            if (expectedPin != presented) throw PinMismatchException(expectedPin, presented)
+            if (expectedPin != presented) {
+                Log.w(TAG, "PIN MISMATCH: pinned=$expectedPin presented=$presented")
+                throw PinMismatchException(expectedPin, presented)
+            }
+            Log.i(TAG, "trusted via pin match")
             outcome = TrustOutcome.Pinned
             return
         }
@@ -90,14 +96,20 @@ class MumbleTrustManager(
         // Otherwise fallback to the default platform trust check.
         try {
             delegate.checkServerTrusted(chain, authType)
+            Log.i(TAG, "trusted via certificate authority")
             outcome = TrustOutcome.CaValid
             return
         } catch (_: CertificateException) {
             // Expected for the self-signed servers most Mumble hosts run.
         }
 
+        Log.i(TAG, "untrusted self-signed cert, prompting for trust")
         throw UntrustedCertificateException(presented)
     }
 
     override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
+
+    private companion object {
+        const val TAG = "MumbleTrust"
+    }
 }

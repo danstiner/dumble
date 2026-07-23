@@ -53,6 +53,11 @@ android {
     buildFeatures {
         compose = true
     }
+    // Connection/trust code logs via android.util.Log and is exercised in JVM unit tests, where the
+    // framework is a stub. Return defaults so Log.* no-ops instead of throwing "not mocked".
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 kotlin {
