@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.channeltree.ChannelTreeReducers
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 
 /**
@@ -34,6 +36,12 @@ class SessionStateMachine(
 
     private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
     val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
+
+    // Only ever written from onFrame, the transport's single reader coroutine, so a plain
+    // read-modify-write assignment is race-free — unlike _state, which the deadline coroutine
+    // also writes.
+    private val _channelTree = MutableStateFlow(ChannelTree())
+    val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
 
     /** CryptSetup key material, stored for the voice task. Unused here. */
     @Volatile var cryptKey: ByteArray? = null
@@ -129,12 +137,21 @@ class SessionStateMachine(
                 _serverVersion.value = ServerVersion.from(MumbleProtos.Version.parseFrom(frame.payload))
             }
 
-            // Deliberately ignored in this task — see the design's non-goals.
+            TcpMessageType.ChannelState ->
+                _channelTree.value = ChannelTreeReducers.applyChannelState(
+                    _channelTree.value, MumbleProtos.ChannelState.parseFrom(frame.payload))
+            TcpMessageType.ChannelRemove ->
+                _channelTree.value = ChannelTreeReducers.applyChannelRemove(
+                    _channelTree.value, MumbleProtos.ChannelRemove.parseFrom(frame.payload))
+            TcpMessageType.UserState ->
+                _channelTree.value = ChannelTreeReducers.applyUserState(
+                    _channelTree.value, MumbleProtos.UserState.parseFrom(frame.payload))
+            TcpMessageType.UserRemove ->
+                _channelTree.value = ChannelTreeReducers.applyUserRemove(
+                    _channelTree.value, MumbleProtos.UserRemove.parseFrom(frame.payload))
+
+            // Deliberately ignored — see the design's non-goals.
             TcpMessageType.UDPTunnel,          // raw voice bytes, not protobuf; no voice yet
-            TcpMessageType.ChannelState,       // the roster task owns these
-            TcpMessageType.UserState,
-            TcpMessageType.ChannelRemove,
-            TcpMessageType.UserRemove,
             TcpMessageType.TextMessage,        // the text chat task
             TcpMessageType.CodecVersion,
             TcpMessageType.ServerConfig,
