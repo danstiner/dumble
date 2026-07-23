@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
+import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
-import me.danielstiner.dumble.mumble.net.pinKey
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
@@ -51,9 +51,10 @@ class LiveServerIntegrationTest {
         // then connect for real. This keeps the production pinned path under test rather than
         // bypassing trust with an accept-everything manager.
         val fingerprint = probeLeafFingerprint(target, port)
-        val pins = InMemoryPinStore().apply { put(pinKey(target, port), fingerprint) }
+        val endpoint = MumbleEndpoint.parse(target, port)
+        val pins = InMemoryPinStore().apply { put(endpoint.pinKey, fingerprint) }
 
-        val transport = MumbleTcpTransport(expectedPin = pins.get(pinKey(target, port)))
+        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.pinKey))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = SessionStateMachine(transport, "dumble-ci", password, scope)
 

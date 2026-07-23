@@ -2,12 +2,9 @@ package me.danielstiner.dumble.mumble.net
 
 import java.security.cert.CertificateException
 
-/** Pins are keyed per endpoint: the same host on another port is a different server. */
-fun pinKey(host: String, port: Int): String = "$host:$port"
-
 /**
  * User-accepted server certificate pins. The key is the connection target as the user specified it,
- * `host:port` from [pinKey] — nothing is read off the certificate itself. The value is [sha256Hex]
+ * `host:port` from [MumbleEndpoint.pinKey] — nothing is read off the certificate itself. The value is [sha256Hex]
  * of the leaf certificate.
  */
 interface PinStore {
