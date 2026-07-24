@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -10,6 +11,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.ChannelTreeReducers
+import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 
 /**
@@ -27,6 +30,7 @@ class SessionStateMachine(
     private val password: String?,
     private val scope: CoroutineScope,
     private val clockNanos: () -> Long = System::nanoTime,
+    private val clock: () -> Instant = Instant::now,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -42,6 +46,18 @@ class SessionStateMachine(
     // also writes.
     private val _channelTree = MutableStateFlow(ChannelTree())
     val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
+
+    // Two writers — the reader coroutine (inbound frames) and the caller thread (sendText) — so this
+    // uses an atomic update, unlike the single-writer _channelTree above.
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+    // Capped to the most recent MAX_MESSAGES — the log is display-only and never re-read in full, so
+    // old lines are dropped rather than retained for the whole connection. update() is atomic against
+    // the two writers above.
+    private fun appendMessage(msg: ChatMessage) {
+        _messages.update { (it + msg).takeLast(MAX_MESSAGES) }
+    }
 
     /** CryptSetup key material, stored for the voice task. Unused here. */
     @Volatile var cryptKey: ByteArray? = null
@@ -150,9 +166,26 @@ class SessionStateMachine(
                 _channelTree.value = ChannelTreeReducers.applyUserRemove(
                     _channelTree.value, MumbleProtos.UserRemove.parseFrom(frame.payload))
 
+            TcpMessageType.TextMessage -> {
+                val tm = MumbleProtos.TextMessage.parseFrom(frame.payload)
+                // A server/system broadcast carries no actor; null keeps it from rendering as "user 0".
+                val actor = if (tm.hasActor()) tm.actor else null
+                // Resolve the sender's name now, not at render — the log is a transcript.
+                val senderName = actor?.let { _channelTree.value.users[it]?.name }
+                appendMessage(ChatMessage.Remote(actor, senderName, tm.message, clock()))
+            }
+
+            TcpMessageType.PermissionDenied -> {
+                // The server never acks a delivered TextMessage and gives no id to tie a rejection to
+                // the message that caused it, so — like the reference client — surface it as its own
+                // notice rather than trying to roll back the optimistic echo. Structured, not worded:
+                // the UI turns the reason into (someday localized) text.
+                val pd = MumbleProtos.PermissionDenied.parseFrom(frame.payload)
+                appendMessage(ChatMessage.Denied(denyReason(pd), clock()))
+            }
+
             // Deliberately ignored — see the design's non-goals.
             TcpMessageType.UDPTunnel,          // raw voice bytes, not protobuf; no voice yet
-            TcpMessageType.TextMessage,        // the text chat task
             TcpMessageType.CodecVersion,
             TcpMessageType.ServerConfig,
             TcpMessageType.PermissionQuery,
@@ -160,6 +193,33 @@ class SessionStateMachine(
 
             else -> Unit                       // unknown or unmodelled id: ignore, never fail
         }
+    }
+
+    /**
+     * Send [body] to my current channel and optimistically echo it — the server strips the sender
+     * from a TextMessage's recipients, so it never comes back. [body] is sent verbatim as the message
+     * payload; formatting concerns (HTML-escaping user input, trimming) belong to the caller, not this
+     * layer. Returns whether it was enqueued; a no-op until Synchronized with a known channel. Safe to
+     * call off the reader thread: channel.send enqueues (non-blocking) and _messages.update is atomic.
+     */
+    fun sendText(body: String): Boolean {
+        val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false
+        val channelId = _channelTree.value.users[session]?.channelId ?: return false
+        val ok = channel.send(
+            TcpMessageType.TextMessage,
+            MumbleProtos.TextMessage.newBuilder().addChannelId(channelId).setMessage(body).build(),
+        )
+        val senderName = _channelTree.value.users[session]?.name
+        if (ok) appendMessage(ChatMessage.Remote(session, senderName, body, clock()))
+        return ok
+    }
+
+    /** Translate a [MumbleProtos.PermissionDenied] into the domain reason; wording is the UI's job. */
+    private fun denyReason(pd: MumbleProtos.PermissionDenied): DenyReason = when (pd.type) {
+        MumbleProtos.PermissionDenied.DenyType.TextTooLong -> DenyReason.TooLong
+        MumbleProtos.PermissionDenied.DenyType.Permission ->
+            DenyReason.NoPostPermission(if (pd.hasChannelId()) _channelTree.value.channels[pd.channelId]?.name else null)
+        else -> DenyReason.Other(pd.reason.ifBlank { null })
     }
 
     /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
@@ -219,5 +279,6 @@ class SessionStateMachine(
         const val CLIENT_PATCH = 0
         const val HANDSHAKE_DEADLINE_MS = 15_000L
         const val PING_INTERVAL_MS = 5_000L
+        const val MAX_MESSAGES = 1000
     }
 }
