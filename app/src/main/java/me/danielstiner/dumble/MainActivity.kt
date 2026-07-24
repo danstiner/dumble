@@ -15,6 +15,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.ui.connect.ChatScreen
 import me.danielstiner.dumble.ui.connect.ConnectScreen
 import me.danielstiner.dumble.ui.connect.ConnectUiState
 import me.danielstiner.dumble.ui.connect.ConnectViewModel
@@ -40,15 +41,26 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
     Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
         val m = Modifier.fillMaxSize().padding(padding)
         when (val s = state.status) {
-            is ConnectionStatus.Connected -> ConnectedScreen(
-                server = "${state.draft.host}:${state.draft.port}",
-                sessionId = s.sessionId,
-                serverVersion = state.serverVersion,
-                rttMs = state.rttMs,
-                channelTree = state.channelTree,
-                onDisconnect = vm::onDisconnect,
-                modifier = m,
-            )
+            is ConnectionStatus.Connected ->
+                if (state.showChat) ChatScreen(
+                    messages = state.messages,
+                    mySession = s.sessionId,
+                    draft = state.chatDraft,
+                    onDraftChange = vm::onChatDraftChange,
+                    onSend = vm::sendMessage,
+                    onBack = vm::closeChat,
+                    modifier = m,
+                ) else ConnectedScreen(
+                    server = "${state.draft.host}:${state.draft.port}",
+                    sessionId = s.sessionId,
+                    serverVersion = state.serverVersion,
+                    rttMs = state.rttMs,
+                    channelTree = state.channelTree,
+                    unread = state.unread,
+                    onOpenChat = vm::openChat,
+                    onDisconnect = vm::onDisconnect,
+                    modifier = m,
+                )
             else -> ConnectScreen(
                 state = state,
                 onHost = vm::onHostChange, onPort = vm::onPortChange,
