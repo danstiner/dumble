@@ -8,11 +8,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 import kotlin.concurrent.thread
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -223,6 +226,150 @@ class SessionStateMachineTest {
         sm.onFrame(TcpFrame(9999, byteArrayOf(1)))
 
         assertEquals(ConnectionState.Handshaking, sm.state.value)
+    }
+
+    @Test
+    fun textMessageFrameResolvesTheSenderNameEagerly() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(5).setName("alice").setChannelId(0).build()))
+
+        sm.onFrame(frame(TcpMessageType.TextMessage,
+            MumbleProtos.TextMessage.newBuilder().setActor(5).setMessage("hi there").build()))
+
+        assertEquals(listOf(ChatMessage.Remote(5, "alice", "hi there", Instant.ofEpochMilli(1000))), sm.messages.value)
+    }
+
+    // A chat log is a transcript: the sender name is captured when the line arrives and must not
+    // change when that user later leaves (their session is pruned from the tree).
+    @Test
+    fun senderNameSurvivesTheSenderLeaving() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(5).setName("alice").setChannelId(0).build()))
+        sm.onFrame(frame(TcpMessageType.TextMessage,
+            MumbleProtos.TextMessage.newBuilder().setActor(5).setMessage("hi there").build()))
+
+        sm.onFrame(frame(TcpMessageType.UserRemove, MumbleProtos.UserRemove.newBuilder().setSession(5).build()))
+
+        assertEquals("alice", (sm.messages.value.single() as ChatMessage.Remote).senderName)
+    }
+
+    @Test
+    fun textMessageWithoutActorHasNullActor() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+
+        // A server/system broadcast carries no actor; null keeps it from rendering as "user 0".
+        sm.onFrame(frame(TcpMessageType.TextMessage,
+            MumbleProtos.TextMessage.newBuilder().setMessage("welcome").build()))
+
+        assertEquals(listOf(ChatMessage.Remote(null, null, "welcome", Instant.ofEpochMilli(1000))), sm.messages.value)
+    }
+
+    @Test
+    fun permissionDeniedAppendsAStructuredDenial() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.PermissionDenied,
+            MumbleProtos.PermissionDenied.newBuilder()
+                .setType(MumbleProtos.PermissionDenied.DenyType.TextTooLong).build()))
+
+        // Domain reason, not pre-worded — the UI does the phrasing.
+        assertEquals(
+            listOf(ChatMessage.Denied(DenyReason.TooLong, Instant.ofEpochMilli(1000))),
+            sm.messages.value,
+        )
+    }
+
+    @Test
+    fun permissionDeniedCapturesTheChannelForAPermissionDenial() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.ChannelState,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(7).setName("Gaming").build()))
+        sm.onFrame(frame(TcpMessageType.PermissionDenied,
+            MumbleProtos.PermissionDenied.newBuilder()
+                .setType(MumbleProtos.PermissionDenied.DenyType.Permission).setChannelId(7).build()))
+
+        // Channel name captured eagerly, like the sender name.
+        assertEquals(
+            listOf(ChatMessage.Denied(DenyReason.NoPostPermission("Gaming"), Instant.ofEpochMilli(1000))),
+            sm.messages.value,
+        )
+    }
+
+    @Test
+    fun messageLogIsCappedAtMaxMessages() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
+
+        repeat(SessionStateMachine.MAX_MESSAGES + 5) { i ->
+            sm.onFrame(frame(TcpMessageType.TextMessage,
+                MumbleProtos.TextMessage.newBuilder().setActor(1).setMessage("m$i").build()))
+        }
+
+        assertEquals(SessionStateMachine.MAX_MESSAGES, sm.messages.value.size)
+        // Oldest dropped, newest kept.
+        assertEquals("m5", (sm.messages.value.first() as ChatMessage.Remote).htmlBody)
+        assertEquals("m${SessionStateMachine.MAX_MESSAGES + 4}", (sm.messages.value.last() as ChatMessage.Remote).htmlBody)
+    }
+
+    // The unread marker anchors on instance identity, so a real wrap past the cap must not clone
+    // survivors: a message that stays in the window keeps its reference (just shifts down), and one
+    // that falls off the front is gone by identity.
+    @Test
+    fun cappedLogPreservesInstanceIdentityAcrossAWrap() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
+        repeat(SessionStateMachine.MAX_MESSAGES) { i ->
+            sm.onFrame(frame(TcpMessageType.TextMessage,
+                MumbleProtos.TextMessage.newBuilder().setActor(1).setMessage("m$i").build()))
+        }
+        val survivor = sm.messages.value[500]        // stays in the window
+        val fallsOff = sm.messages.value.first()     // m0, about to drop
+
+        repeat(5) { i ->
+            sm.onFrame(frame(TcpMessageType.TextMessage,
+                MumbleProtos.TextMessage.newBuilder().setActor(1).setMessage("n$i").build()))
+        }
+
+        // Same instance, shifted down by the 5 that fell off the front.
+        assertEquals(495, sm.messages.value.indexOfLast { it === survivor })
+        // The dropped one is no longer findable by identity.
+        assertEquals(-1, sm.messages.value.indexOfLast { it === fallsOff })
+    }
+
+    @Test
+    fun sendTextGoesToMyChannelVerbatimAndEchoesLocally() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(2000) }).apply { start() }
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(1).setName("me").setChannelId(7).build()))
+
+        // The body is sent as given — escaping is the caller's concern now, not this layer's.
+        val ok = sm.sendText("a&lt;b")
+
+        assertTrue(ok)
+        val sent = ch.sent.last { it.first == TcpMessageType.TextMessage }.second as MumbleProtos.TextMessage
+        assertEquals(listOf(7), sent.channelIdList)
+        assertEquals("a&lt;b", sent.message)
+        assertEquals(listOf(ChatMessage.Remote(1, "me", "a&lt;b", Instant.ofEpochMilli(2000))), sm.messages.value)
+    }
+
+    @Test
+    fun sendTextBeforeSynchronizedIsANoOp() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        assertFalse(sm.sendText("hi"))
+        assertTrue(ch.sent.none { it.first == TcpMessageType.TextMessage })
+        assertTrue(sm.messages.value.isEmpty())
     }
 
     @Test
