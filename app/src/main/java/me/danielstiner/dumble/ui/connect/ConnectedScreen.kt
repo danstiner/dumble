@@ -2,6 +2,7 @@ package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,6 +21,8 @@ fun ConnectedScreen(
     serverVersion: ServerVersion?,
     rttMs: Double?,
     channelTree: ChannelTree,
+    unread: Int,
+    onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -29,6 +32,9 @@ fun ConnectedScreen(
         Text("Server version: ${serverVersion?.toString() ?: "—"}")
         Text("Ping: ${rttMs?.let { "%.1f ms".format(it) } ?: "—"}")
         ChannelTreeView(channelTree, mySession = sessionId, modifier = Modifier.weight(1f).fillMaxWidth())
-        Button(onClick = onDisconnect) { Text("Disconnect") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onOpenChat) { Text(if (unread > 0) "Chat ($unread)" else "Chat") }
+            Button(onClick = onDisconnect) { Text("Disconnect") }
+        }
     }
 }
