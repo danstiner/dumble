@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -50,6 +51,8 @@ class MumbleConnection internal constructor(
     override val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
     private val _channelTree = MutableStateFlow(ChannelTree())
     override val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     init {
         // One point that mirrors every status transition to logcat, whichever path set it.
@@ -66,6 +69,7 @@ class MumbleConnection internal constructor(
         val username: String,
         val password: String?,
         val transport: MumbleControlTransport,
+        val sm: SessionStateMachine,
         val childScope: CoroutineScope,
         @Volatile var presented: String? = null,
     )
@@ -75,6 +79,7 @@ class MumbleConnection internal constructor(
     private fun publishVersion(gen: Int, v: ServerVersion?) = synchronized(lock) { if (gen == attempt) _serverVersion.value = v }
     private fun publishRtt(gen: Int, r: Double?) = synchronized(lock) { if (gen == attempt) _roundTripMillis.value = r }
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
+    private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val gen: Int
@@ -84,6 +89,7 @@ class MumbleConnection internal constructor(
             _status.value = ConnectionStatus.Connecting
             _serverVersion.value = null; _roundTripMillis.value = null
             _channelTree.value = ChannelTree()
+            _messages.value = emptyList()
         }
         prior?.let { teardown(it) }
 
@@ -93,7 +99,7 @@ class MumbleConnection internal constructor(
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
             val sm = SessionStateMachine(transport, username, password, childScope)
-            val att = Attempt(gen, endpoint, username, password, transport, childScope)
+            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { runCatching { transport.close() }; childScope.cancel(); return@launch }
 
@@ -122,6 +128,7 @@ class MumbleConnection internal constructor(
             childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
             childScope.launch { sm.roundTripMillis.collect { publishRtt(gen, it) } }
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
+            childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
         }
     }
 
@@ -144,9 +151,12 @@ class MumbleConnection internal constructor(
             _status.value = ConnectionStatus.Idle
             _serverVersion.value = null; _roundTripMillis.value = null
             _channelTree.value = ChannelTree()
+            _messages.value = emptyList()
         }
         prior?.let { teardown(it) }
     }
+
+    override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
     private fun teardown(att: Attempt) {
         runCatching { att.transport.close() }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -15,6 +16,8 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.SocketTimeoutException
 import javax.net.ssl.HostnameVerifier
@@ -125,5 +128,58 @@ class MumbleConnectionTest {
         gate.complete(Unit)        // stale attempt resumes and is torn down
         delay(100)
         assertEquals(ChannelTree(), conn.channelTree.value)
+    }
+
+    @Test fun messagesSurfaceFromTheSession() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
+            MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray()))
+
+        val msgs = withTimeout(5_000) { conn.messages.first { it.isNotEmpty() } }
+        assertEquals("yo", (msgs.single() as ChatMessage.Remote).htmlBody)
+        conn.disconnect()
+    }
+
+    @Test fun disconnectClearsMessages() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
+            MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray()))
+        withTimeout(5_000) { conn.messages.first { it.isNotEmpty() } }
+
+        conn.disconnect()
+
+        assertEquals(emptyList<ChatMessage>(), conn.messages.value)
+    }
+
+    @Test fun sendTextRoutesToTheLiveSessionAndEchoes() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.ServerSync.id,
+            MumbleProtos.ServerSync.newBuilder().setSession(1).build().toByteArray()))
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
+            MumbleProtos.UserState.newBuilder().setSession(1).setChannelId(0).build().toByteArray()))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        val ok = conn.sendText("hello")
+
+        assertTrue(ok)
+        assertTrue(fake.sent.any { it.first == TcpMessageType.TextMessage })
+        val msgs = withTimeout(5_000) { conn.messages.first { it.isNotEmpty() } }
+        assertEquals("hello", (msgs.single() as ChatMessage.Remote).htmlBody)
+        conn.disconnect()
+    }
+
+    @Test fun sendTextWithNoConnectionReturnsFalse() = runBlocking {
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> } }
+        assertFalse(conn.sendText("hi"))
     }
 }

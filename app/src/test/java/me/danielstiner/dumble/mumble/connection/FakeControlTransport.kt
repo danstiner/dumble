@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.connection
 import com.google.protobuf.MessageLite
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** Test transport whose connect() behaviour the test controls: block, throw, or return. */
 class FakeControlTransport(
@@ -10,11 +11,17 @@ class FakeControlTransport(
 ) : MumbleControlTransport {
     @Volatile var closed = false; private set
     @Volatile var listener: MumbleControlTransport.Listener? = null
+    val sent = CopyOnWriteArrayList<Pair<TcpMessageType, MessageLite>>()
 
     override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) {
         this.listener = listener
         onConnect(host, port)
     }
-    override fun send(type: TcpMessageType, message: MessageLite): Boolean = !closed
+
+    override fun send(type: TcpMessageType, message: MessageLite): Boolean {
+        if (closed) return false
+        sent += type to message
+        return true
+    }
     override fun close() { closed = true }
 }
