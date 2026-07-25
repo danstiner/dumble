@@ -5,15 +5,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectScreen(
     state: ConnectUiState,
@@ -24,35 +33,51 @@ fun ConnectScreen(
     onConnect: () -> Unit,
     onTrust: () -> Unit,
     onCancelTrust: () -> Unit,
+    onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val idle = state.status is ConnectionStatus.Idle || state.status is ConnectionStatus.Error
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
 
-    Column(modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedTextField(
-            state.draft.host, onHost, label = { Text("Server") }, singleLine = true,
-            isError = state.hostError != null,
-            supportingText = state.hostError?.let { msg -> { Text(msg) } },
-            modifier = Modifier.fillMaxWidth(),
+    Column(modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Dumble") },
+            actions = {
+                IconButton(onClick = onSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                }
+            },
         )
-        OutlinedTextField(
-            state.portText, onPort, label = { Text("Port") }, singleLine = true,
-            isError = state.portError != null,
-            supportingText = state.portError?.let { msg -> { Text(msg) } },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(state.draft.username, onUsername, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(
-            state.password, onPassword, label = { Text("Password (optional)") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
-        )
-        Button(onClick = onConnect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
-            Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
-        }
-        when (val s = state.status) {
-            is ConnectionStatus.Error -> Text("${s.kind}: ${s.detail ?: ""}")
-            else -> {}
+        // The form is taller than a phone screen once the keyboard is up; without this the last
+        // field is unreachable rather than merely off-screen.
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedTextField(
+                state.draft.host, onHost, label = { Text("Server") }, singleLine = true,
+                isError = state.hostError != null,
+                supportingText = state.hostError?.let { msg -> { Text(msg) } },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                state.portText, onPort, label = { Text("Port") }, singleLine = true,
+                isError = state.portError != null,
+                supportingText = state.portError?.let { msg -> { Text(msg) } },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(state.draft.username, onUsername, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                state.password, onPassword, label = { Text("Password (optional)") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            )
+            Button(onClick = onConnect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
+                Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
+            }
+            when (val s = state.status) {
+                is ConnectionStatus.Error -> Text("${s.kind}: ${s.detail ?: ""}")
+                else -> {}
+            }
         }
     }
 

@@ -36,7 +36,7 @@ jobs:
         env:
           MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest --stacktrace
-      - name: Verify protobuf R8 keep rules
+      - name: Verify protobuf R8 keep rules and attribution
         # Conditional -keepclassmembers only fires once the protocol is reachable; assembleRelease
         # already ran above so this reuses that seeds.txt rather than rebuilding.
-        run: ./gradlew verifyProtobufKeepRules --stacktrace
+        run: ./gradlew verifyProtobufKeepRules verifyShippedGroups --stacktrace
