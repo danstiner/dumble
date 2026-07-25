@@ -49,6 +49,14 @@ class VoiceReceiver(
         }
     }
 
+    /**
+     * Synchronized because teardown can reach the same attempt twice (a handshake completing
+     * after it was superseded), and each teardown now hands the join to a coroutine — so two
+     * calls genuinely race. Unserialized, both would observe a dead thread and both would close
+     * every decoder in [speakers], which is the same double-free this method is careful to avoid
+     * on the timeout path.
+     */
+    @Synchronized
     fun stop() {
         running = false
         synchronized(idleLock) { idleLock.notifyAll() }
