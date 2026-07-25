@@ -14,6 +14,8 @@ import me.danielstiner.dumble.data.PinDataStore
 import me.danielstiner.dumble.data.ServerConfigDataStore
 import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.PinStore
+import me.danielstiner.dumble.mumble.voice.LibOpusCodec
+import me.danielstiner.dumble.mumble.voice.OpusCodec
 import javax.inject.Singleton
 
 @Module
@@ -31,6 +33,12 @@ object MumbleModule {
     @Provides
     @Singleton
     fun providePinStore(dataStore: DataStore<Preferences>): PinStore = PinDataStore(dataStore)
+
+    /** The binding that makes native code reachable from the manifest graph — without an
+     *  injection site R8 strips the whole subgraph and the JNI keep rule never fires. */
+    @Provides
+    @Singleton
+    fun provideOpusCodec(): OpusCodec = LibOpusCodec()
 
     const val SERVER_CONFIG_NAME = "server_config"
 
