@@ -8,11 +8,10 @@ interface ControlChannel {
 
     /**
      * UDPTunnel carries raw bytes, not a protobuf message — see SessionStateMachine.onFrame.
-     * Defaulted to false rather than left abstract: SessionStateMachineTest's FakeChannel and
-     * FailingChannel implement ControlChannel directly to exercise the version/auth handshake and
-     * never send audio, so they have no reason to know this method exists.
+     * Deliberately abstract: a default would hand a new implementation a send that silently
+     * always fails, where leaving it abstract makes the compiler name the omission.
      */
-    fun sendRaw(type: Int, payload: ByteArray): Boolean = false
+    fun sendRaw(type: Int, payload: ByteArray): Boolean
 
     fun close()
 }

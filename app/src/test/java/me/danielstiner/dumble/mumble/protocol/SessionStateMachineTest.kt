@@ -26,9 +26,13 @@ class SessionStateMachineTest {
 
     private class FakeChannel : ControlChannel {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()
+        val sentRaw = mutableListOf<Pair<Int, ByteArray>>()
         var closed = false
         override fun send(type: TcpMessageType, message: MessageLite): Boolean {
             sent += type to message; return true
+        }
+        override fun sendRaw(type: Int, payload: ByteArray): Boolean {
+            sentRaw += type to payload; return true
         }
         override fun close() { closed = true }
     }
@@ -68,6 +72,8 @@ class SessionStateMachineTest {
             sent += type
             return true
         }
+        // This fake exists to fail one handshake message; audio never reaches it.
+        override fun sendRaw(type: Int, payload: ByteArray) = true
         override fun close() = Unit
     }
 
