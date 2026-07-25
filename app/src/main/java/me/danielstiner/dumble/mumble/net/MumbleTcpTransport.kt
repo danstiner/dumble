@@ -206,6 +206,13 @@ class MumbleTcpTransport(
         return sendQueue.trySend(framed.toByteArray()).isSuccess
     }
 
+    override fun sendRaw(type: Int, payload: ByteArray): Boolean {
+        if (closed) return false
+        val framed = ByteArrayOutputStream(payload.size + FRAME_HEADER_BYTES)
+        MumbleCodec.writeFrame(DataOutputStream(framed), type, payload)
+        return sendQueue.trySend(framed.toByteArray()).isSuccess
+    }
+
     override fun close() = teardown(null)
 
     /**

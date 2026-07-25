@@ -12,6 +12,7 @@ class FakeControlTransport(
     @Volatile var closed = false; private set
     @Volatile var listener: MumbleControlTransport.Listener? = null
     val sent = CopyOnWriteArrayList<Pair<TcpMessageType, MessageLite>>()
+    val sentRaw = CopyOnWriteArrayList<Pair<Int, ByteArray>>()
 
     override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) {
         this.listener = listener
@@ -21,6 +22,12 @@ class FakeControlTransport(
     override fun send(type: TcpMessageType, message: MessageLite): Boolean {
         if (closed) return false
         sent += type to message
+        return true
+    }
+
+    override fun sendRaw(type: Int, payload: ByteArray): Boolean {
+        if (closed) return false
+        sentRaw += type to payload
         return true
     }
     override fun close() { closed = true }

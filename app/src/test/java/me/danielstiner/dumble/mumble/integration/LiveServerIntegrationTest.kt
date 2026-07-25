@@ -1,5 +1,7 @@
 package me.danielstiner.dumble.mumble.integration
 
+import com.google.protobuf.ByteString
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,9 +14,12 @@ import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.sha256Hex
+import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -69,6 +74,60 @@ class LiveServerIntegrationTest {
 
             assertTrue("expected Synchronized, was $state", state is ConnectionState.Synchronized)
             assertTrue((state as ConnectionState.Synchronized).sessionId > 0)
+        } finally {
+            transport.close()
+            scope.cancel()
+        }
+    }
+
+    /**
+     * MumbleUDP.proto documents target 2^5 - 1 = 31 as "server loopback": the server echoes the
+     * packet straight back instead of forwarding it to a channel. That makes the whole inbound
+     * wire path testable with no microphone, no encoder, and no second client.
+     *
+     * Asserts byte-identity, not decode — libdumble.so is built for Android ABIs only, so no JVM
+     * test can call libopus. Decode is covered by the on-device gate.
+     */
+    @Test
+    fun loopbackAudioReturnsThroughTheTunnel() = runBlocking {
+        val target = host!!
+        awaitPort(target, port)
+
+        val fingerprint = probeLeafFingerprint(target, port)
+        val endpoint = MumbleEndpoint.parse(target, port)
+        val pins = InMemoryPinStore().apply { put(endpoint.pinKey, fingerprint) }
+        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.pinKey))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val session = SessionStateMachine(transport, "dumble-ci-voice", password, scope)
+
+        // A single TOC byte is a legal Opus packet (RFC 6716 3.1): SILK-NB, 20 ms, mono, code 0.
+        // Nothing here decodes it — the server relays audio untouched and this is a JVM test.
+        val fixture = byteArrayOf(0x08)
+
+        val echoed = CompletableDeferred<ByteArray>()
+        session.audioListener = SessionStateMachine.AudioListener { payload, _ ->
+            if (payload.isNotEmpty() && payload[0].toInt() == 0) {
+                val audio = MumbleUdpProtos.Audio.parseFrom(payload.copyOfRange(1, payload.size))
+                if (!audio.opusData.isEmpty) echoed.complete(audio.opusData.toByteArray())
+            }
+        }
+
+        try {
+            connectWithRetry(transport, target, port, session)
+            session.start()
+            withTimeout(20_000) { session.state.first { it is ConnectionState.Synchronized } }
+
+            val audio = MumbleUdpProtos.Audio.newBuilder()
+                .setTarget(31)
+                .setFrameNumber(0)
+                .setOpusData(ByteString.copyFrom(fixture))
+                .build()
+            val packet = byteArrayOf(0) + audio.toByteArray()
+            assertTrue("payload exceeds the server's 1024-byte tunnel cap", packet.size < 1024)
+            assertTrue("tunnel send failed", transport.sendRaw(TcpMessageType.UDPTunnel.id, packet))
+
+            val back = withTimeout(15_000) { echoed.await() }
+            assertArrayEquals("loopback returned different opus bytes", fixture, back)
         } finally {
             transport.close()
             scope.cancel()
