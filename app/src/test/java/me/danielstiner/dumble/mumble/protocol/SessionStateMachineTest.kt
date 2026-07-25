@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import com.google.protobuf.ByteString
 import com.google.protobuf.MessageLite
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,7 +12,9 @@ import kotlinx.coroutines.test.runTest
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -598,6 +601,33 @@ class SessionStateMachineTest {
             ),
             version.versionV1,
         )
+    }
+
+    @Test
+    fun tunneledAudioReachesTheListener() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        val seen = mutableListOf<ByteArray>()
+        sm.audioListener = SessionStateMachine.AudioListener { payload, _ -> seen += payload }
+
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(7)
+            .setFrameNumber(3)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1, 2, 3)))
+            .build()
+        val payload = byteArrayOf(0) + audio.toByteArray()
+        sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, payload))
+
+        assertEquals(1, seen.size)
+        assertArrayEquals(payload, seen[0])
+    }
+
+    @Test
+    fun tunneledAudioWithNoListenerIsIgnored() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        // No listener attached — the frame must be dropped, not throw.
+        sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0, 1, 2)))
     }
 
     @Test
