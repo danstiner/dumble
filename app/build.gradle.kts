@@ -157,10 +157,13 @@ tasks.register("verifyShippedGroups") {
     val manifest = layout.projectDirectory.file("src/test/resources/shipped-groups.txt").asFile
     val rootLicense = rootProject.layout.projectDirectory.file("LICENSE").asFile
     val bundledLicense = layout.projectDirectory.file("src/main/res/raw/license_apache_2_0.txt").asFile
+    val gitmodules = rootProject.layout.projectDirectory.file(".gitmodules").asFile
+    val submoduleManifest = layout.projectDirectory.file("src/test/resources/shipped-submodules.txt").asFile
 
     inputs.property("groups", groups)
     inputs.file(rootLicense)
     inputs.file(bundledLicense)
+    inputs.file(gitmodules)
 
     doLast {
         val resolved = groups.get().joinToString("\n") + "\n"
@@ -171,6 +174,19 @@ tasks.register("verifyShippedGroups") {
         }
         require(rootLicense.readBytes().contentEquals(bundledLicense.readBytes())) {
             "${bundledLicense.name} has drifted from the repo's LICENSE; they must be identical."
+        }
+        // verifyShippedGroups above only sees Maven coordinates. A vendored native library has
+        // none, so libopus would ship unattributed and nothing would fail. Diff the submodule
+        // set for the same reason the group set is diffed.
+        val paths = Regex("""(?m)^\s*path\s*=\s*(.+)$""")
+            .findAll(gitmodules.readText())
+            .map { it.groupValues[1].trim() }
+            .toSortedSet()
+        val expected = paths.joinToString("\n") + "\n"
+        if (!submoduleManifest.exists() || submoduleManifest.readText() != expected) {
+            submoduleManifest.writeText(expected)
+            error("shipped-submodules.txt was stale and has been rewritten — review the diff, " +
+                "attribute the new submodule in Attribution.kt, and commit.")
         }
     }
 }

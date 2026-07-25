@@ -42,7 +42,8 @@ class AttributionTest {
         val bsd = attributionsFor(License.BSD_3_CLAUSE)
         assertTrue(bsd.contains(MUMBLE_SCHEMA))
         assertTrue(bsd.any { it.groupPrefix == "com.google.protobuf" })
-        assertEquals(2, bsd.size)
+        assertTrue(bsd.contains(LIBOPUS))
+        assertEquals(3, bsd.size)
     }
 
     /** Every license whose text we bundle must actually cover something, or the About screen shows an empty section. */
@@ -63,5 +64,32 @@ class AttributionTest {
             .bufferedReader().readLines().filter { it.isNotBlank() }
         assertTrue("shipped-groups.txt is empty", groups.isNotEmpty())
         assertEquals(emptyList<String>(), groups.filter { attributionFor(it) == null })
+    }
+
+    @Test
+    fun libopusIsAttributedUnderBsd() {
+        val bsd = attributionsFor(License.BSD_3_CLAUSE)
+        assertTrue(
+            "libopus ships inside libdumble.so and must be attributed; had $bsd",
+            bsd.any { it.description.contains("libopus") },
+        )
+    }
+
+    @Test
+    fun everyShippedSubmoduleIsAttributed() {
+        val manifest = checkNotNull(
+            javaClass.classLoader!!.getResourceAsStream("shipped-submodules.txt"),
+        ) { "shipped-submodules.txt missing — run ./gradlew verifyShippedGroups" }
+        val paths = manifest.bufferedReader().readLines().filter { it.isNotBlank() }
+        // Vendored components carry an empty groupPrefix, so they are matched by name rather
+        // than by attributionFor(), which only resolves Maven groups.
+        val vendored = (ATTRIBUTIONS + MUMBLE_SCHEMA + LIBOPUS).filter { it.groupPrefix.isEmpty() }
+        for (path in paths) {
+            val name = path.substringAfterLast('/')
+            assertTrue(
+                "submodule $path is shipped but nothing in Attribution.kt mentions '$name'",
+                vendored.any { it.description.contains(name, ignoreCase = true) },
+            )
+        }
     }
 }
