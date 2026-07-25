@@ -1,3 +1,5 @@
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -79,6 +81,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // Settings gear + back arrows; material3 no longer pulls the icons artifact.
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
@@ -125,6 +129,41 @@ tasks.register("verifyProtobufKeepRules") {
         require(missing.isEmpty()) {
             "R8 seeds.txt is missing field seeds for MumbleProtos message types: $missing — the " +
                 "-keepclassmembers rule did not fire for them (protocol not reachable, or rule broken)."
+        }
+    }
+}
+
+// Transitive dependencies arrive without appearing in any diff — that is the blind spot here
+// (org.slf4j and okio reached the APK via ktor-utils unnoticed). The resolved group list is
+// committed, so an arrival shows up in review; that Attribution.kt covers it is asserted by
+// AttributionTest, in Kotlin, against the real data rather than by parsing this source.
+tasks.register("verifyShippedGroups") {
+    val groups = configurations.named("releaseRuntimeClasspath").flatMap { conf ->
+        conf.incoming.artifacts.resolvedArtifacts.map { artifacts ->
+            artifacts.mapNotNull {
+                (it.id.componentIdentifier as? ModuleComponentIdentifier)?.moduleIdentifier?.group
+            }.toSortedSet()
+        }
+    }
+    // Captured as plain Files at configuration time; the configuration cache forbids touching
+    // Project inside doLast.
+    val manifest = layout.projectDirectory.file("src/test/resources/shipped-groups.txt").asFile
+    val rootLicense = rootProject.layout.projectDirectory.file("LICENSE").asFile
+    val bundledLicense = layout.projectDirectory.file("src/main/res/raw/license_apache_2_0.txt").asFile
+
+    inputs.property("groups", groups)
+    inputs.file(rootLicense)
+    inputs.file(bundledLicense)
+
+    doLast {
+        val resolved = groups.get().joinToString("\n") + "\n"
+        if (!manifest.exists() || manifest.readText() != resolved) {
+            manifest.writeText(resolved)
+            error("shipped-groups.txt was stale and has been rewritten — review the diff, " +
+                "attribute any new group in Attribution.kt, and commit.")
+        }
+        require(rootLicense.readBytes().contentEquals(bundledLicense.readBytes())) {
+            "${bundledLicense.name} has drifted from the repo's LICENSE; they must be identical."
         }
     }
 }

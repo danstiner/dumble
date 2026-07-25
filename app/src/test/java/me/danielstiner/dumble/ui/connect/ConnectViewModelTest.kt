@@ -10,8 +10,10 @@ import me.danielstiner.dumble.data.ServerProfile
 import me.danielstiner.dumble.mumble.channeltree.Channel
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -216,5 +218,34 @@ class ConnectViewModelTest {
         vm.sendMessage()
         advanceUntilIdle()
         assertEquals("hi", vm.uiState.value.chatDraft)
+    }
+
+    @Test fun settingsAndAboutNavigateAsNestedRoutes() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        advanceUntilIdle()
+        assertEquals(Route.Main, vm.uiState.value.route)
+        vm.openSettings(); advanceUntilIdle()
+        assertEquals(Route.Settings, vm.uiState.value.route)
+        vm.openAbout(); advanceUntilIdle()
+        assertEquals(Route.About, vm.uiState.value.route)
+        // About is nested under Settings, so back lands there rather than on the form.
+        vm.back(); advanceUntilIdle()
+        assertEquals(Route.Settings, vm.uiState.value.route)
+        vm.back(); advanceUntilIdle()
+        assertEquals(Route.Main, vm.uiState.value.route)
+    }
+
+    /** Settings overlays the session, so connecting must not yank the user out of it. */
+    @Test fun connectingLeavesAnOpenRouteAlone() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        advanceUntilIdle()
+        vm.openSettings(); advanceUntilIdle()
+        conn.status.value = ConnectionStatus.Connected(sessionId = 1)
+        advanceUntilIdle()
+        assertEquals(Route.Settings, vm.uiState.value.route)
+        // Backing out lands on Main, which now renders the connected screen rather than the form.
+        vm.back(); advanceUntilIdle()
+        assertEquals(Route.Main, vm.uiState.value.route)
     }
 }

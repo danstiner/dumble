@@ -32,6 +32,12 @@ fun parsePort(text: String): PortInput {
     return if (n in 1..65535) PortInput.Ok(n) else PortInput.Invalid("out of range")
 }
 
+/**
+ * Overlay screens, orthogonal to connection state — Settings is reachable both before and during
+ * a session. [Main] means no overlay: show whatever the connection status dictates.
+ */
+enum class Route { Main, Settings, About }
+
 data class ConnectUiState(
     val draft: ServerProfile = ServerProfile("", MumbleEndpoint.DEFAULT_PORT, ""),
     val portText: String = "",
@@ -44,6 +50,7 @@ data class ConnectUiState(
     val channelTree: ChannelTree = ChannelTree(),
     val messages: List<ChatMessage> = emptyList(),
     val showChat: Boolean = false,
+    val route: Route = Route.Main,
     val unread: Int = 0,
     val chatDraft: String = "",
 )
@@ -120,6 +127,14 @@ class ConnectViewModel @Inject constructor(
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
     fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }
+    fun openSettings() { form.value = form.value.copy(route = Route.Settings) }
+    fun openAbout() { form.value = form.value.copy(route = Route.About) }
+    /** About is nested under Settings, so backing out of it lands there, not on the form. */
+    fun back() {
+        form.value = form.value.copy(
+            route = if (form.value.route == Route.About) Route.Settings else Route.Main,
+        )
+    }
     fun sendMessage() {
         // Trim and HTML-escape here, at the input boundary — the connection sends the body verbatim.
         val body = form.value.chatDraft.trim()
