@@ -53,6 +53,7 @@ data class ConnectUiState(
     val route: Route = Route.Main,
     val unread: Int = 0,
     val chatDraft: String = "",
+    val speakingSessions: Set<Int> = emptySet(),
 )
 
 private data class ConnSnapshot(
@@ -79,10 +80,11 @@ class ConnectViewModel @Inject constructor(
     ) { status, ver, rtt, tree, msgs -> ConnSnapshot(status, ver, rtt, tree, msgs) }
 
     val uiState: StateFlow<ConnectUiState> =
-        combine(form, connSnapshot) { f, c ->
+        combine(form, connSnapshot, connection.speakingSessions) { f, c, speaking ->
             f.copy(
                 status = c.status, serverVersion = c.serverVersion, rttMs = c.rttMs,
                 channelTree = c.channelTree, messages = c.messages,
+                speakingSessions = speaking,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 

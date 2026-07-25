@@ -28,6 +28,7 @@ fun ConnectedScreen(
     serverVersion: ServerVersion?,
     rttMs: Double?,
     channelTree: ChannelTree,
+    speaking: Set<Int>,
     unread: Int,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
@@ -51,7 +52,7 @@ fun ConnectedScreen(
             Text("Session #$sessionId")
             Text("Server version: ${serverVersion?.toString() ?: "—"}")
             Text("Ping: ${rttMs?.let { "%.1f ms".format(it) } ?: "—"}")
-            ChannelTreeView(channelTree, mySession = sessionId, modifier = Modifier.weight(1f).fillMaxWidth())
+            ChannelTreeView(channelTree, mySession = sessionId, speaking = speaking, modifier = Modifier.weight(1f).fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpenChat) { Text(if (unread > 0) "Chat ($unread)" else "Chat") }
                 Button(onClick = onDisconnect) { Text("Disconnect") }

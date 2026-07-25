@@ -12,9 +12,9 @@ import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 
 @Composable
-fun ChannelTreeView(tree: ChannelTree, mySession: Int, modifier: Modifier = Modifier) {
-    // Flatten once per (tree, mySession); the list feeds a flat LazyColumn — no recursive composables.
-    val rows = remember(tree, mySession) { channelTreeRows(tree, mySession) }
+fun ChannelTreeView(tree: ChannelTree, mySession: Int, speaking: Set<Int> = emptySet(), modifier: Modifier = Modifier) {
+    // Flatten once per (tree, mySession, speaking); the list feeds a flat LazyColumn — no recursive composables.
+    val rows = remember(tree, mySession, speaking) { channelTreeRows(tree, mySession, speaking) }
     LazyColumn(modifier) {
         items(
             rows,
@@ -44,6 +44,7 @@ fun ChannelTreeView(tree: ChannelTree, mySession: Int, modifier: Modifier = Modi
 
 /** Glyphs stand in for proper icons; server-mute and self-mute collapse to one speaker-off mark. */
 private fun userLabel(u: ChannelTreeRow.UserRow): String = buildString {
+    if (u.isSpeaking) append("🔊 ")
     append(u.name)
     if (u.mute || u.selfMute) append(" 🔇")
     if (u.deaf || u.selfDeaf) append(" 🔈")
