@@ -18,6 +18,19 @@ FN(decode)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data,
     OpusDecoder *dec = (OpusDecoder *)(intptr_t)handle;
     if (dec == NULL) return -1;
 
+    // Trust-boundary check, not a redundant assertion: frameSize/offset/len are caller-supplied
+    // and the Kotlin layer does not re-validate them (LibOpusDecoder always requests
+    // MAX_FRAME_SAMPLES, regardless of the real size of `out`). libopus itself does no bounds
+    // checking — it writes frameSize samples into out and reads len bytes from data at offset
+    // unconditionally — so an unchecked mismatch here is a heap overflow or OOB read, not merely
+    // a wrong decode result. Checked before any array is pinned, so these early returns have
+    // nothing to release.
+    if (frameSize < 0 || frameSize > (*env)->GetArrayLength(env, out)) return -1;
+    if (data != NULL) {
+        jsize dataLen = (*env)->GetArrayLength(env, data);
+        if (offset < 0 || len < 0 || offset > dataLen || len > dataLen - offset) return -1;
+    }
+
     jshort *outBuf = (*env)->GetShortArrayElements(env, out, NULL);
     if (outBuf == NULL) return -1;
 
@@ -43,6 +56,12 @@ FN(decode)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data,
 JNIEXPORT jint JNICALL
 FN(packetGetNbSamples)(JNIEnv *env, jobject thiz, jbyteArray data,
                        jint offset, jint len, jint sampleRate) {
+    // Trust-boundary check: offset/len are caller-supplied and opus_packet_get_nb_samples does no
+    // bounds checking of its own, so an unchecked mismatch here is an OOB read. Checked before the
+    // array is pinned, so this early return has nothing to release.
+    jsize dataLen = (*env)->GetArrayLength(env, data);
+    if (offset < 0 || len < 0 || offset > dataLen || len > dataLen - offset) return -1;
+
     jbyte *inBuf = (*env)->GetByteArrayElements(env, data, NULL);
     if (inBuf == NULL) return -1;
     int n = opus_packet_get_nb_samples((const unsigned char *)(inBuf + offset), len, sampleRate);
