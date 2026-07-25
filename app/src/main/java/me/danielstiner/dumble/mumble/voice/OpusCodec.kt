@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.voice
 interface OpusDecoder {
     /** Decodes into [out], returning the sample count. [opus] null requests loss concealment. */
     fun decode(opus: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int
+    /** Must be called at most once; the native handle is freed and calling again is a double-free. */
     fun close()
 }
 

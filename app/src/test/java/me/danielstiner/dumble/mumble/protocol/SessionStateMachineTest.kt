@@ -221,7 +221,7 @@ class SessionStateMachineTest {
     }
 
     @Test
-    fun tunnelAndUnknownFramesAreIgnored() = runTest {
+    fun unknownMessageIdIsIgnored() = runTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
@@ -606,9 +606,14 @@ class SessionStateMachineTest {
     @Test
     fun tunneledAudioReachesTheListener() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
-        val seen = mutableListOf<ByteArray>()
-        sm.audioListener = SessionStateMachine.AudioListener { payload, _ -> seen += payload }
+        // Nonzero baseline: with a zero baseline an implementation that forgot to pass
+        // the arrival timestamp would produce the same answer and the test would prove nothing.
+        val now = 1_000_000L
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clockNanos = { now })
+        val seen = mutableListOf<Pair<ByteArray, Long>>()
+        sm.audioListener = SessionStateMachine.AudioListener { payload, arrivalNanos ->
+            seen += payload to arrivalNanos
+        }
 
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(7)
@@ -619,7 +624,8 @@ class SessionStateMachineTest {
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, payload))
 
         assertEquals(1, seen.size)
-        assertArrayEquals(payload, seen[0])
+        assertArrayEquals(payload, seen[0].first)
+        assertEquals(now, seen[0].second)
     }
 
     @Test

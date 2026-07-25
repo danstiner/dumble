@@ -25,6 +25,8 @@ FN(decode)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data,
     // unconditionally — so an unchecked mismatch here is a heap overflow or OOB read, not merely
     // a wrong decode result. Checked before any array is pinned, so these early returns have
     // nothing to release.
+    // Assumes mono: frameSize is samples, not sample-sets. If channels > 1 is ever supported,
+    // this must become frameSize * channels.
     if (frameSize < 0 || frameSize > (*env)->GetArrayLength(env, out)) return -1;
     if (data != NULL) {
         jsize dataLen = (*env)->GetArrayLength(env, data);

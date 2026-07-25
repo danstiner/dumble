@@ -6,10 +6,15 @@
 
 syntax = "proto3";
 
-package MumbleUDP;
-
+// ---- Local additions ----
+// Java codegen only, no wire-format effect. Without java_package protoc would emit the
+// unqualified package `MumbleUDP`, potentially causing namespace conflicts.
 option java_package = "me.danielstiner.dumble.mumble.proto";
 option java_outer_classname = "MumbleUdpProtos";
+// ---- end local additions ----
+
+package MumbleUDP;
+
 option optimize_for = SPEED;
 
 message Audio {
