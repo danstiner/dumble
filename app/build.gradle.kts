@@ -9,28 +9,32 @@ plugins {
 android {
     namespace = "me.danielstiner.dumble"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version = release(37)
     }
 
     defaultConfig {
         applicationId = "me.danielstiner.dumble"
         minSdk = 30
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
         val keystorePath = providers.gradleProperty("DUMBLE_KEYSTORE_FILE").orNull
         if (keystorePath != null) {
+            // Fail here, naming the property, rather than opaquely at packaging time.
+            fun credential(name: String): String =
+                requireNotNull(providers.gradleProperty(name).orNull) {
+                    "DUMBLE_KEYSTORE_FILE is set, so $name must be set too — put all four " +
+                        "DUMBLE_* properties in ~/.gradle/gradle.properties."
+                }
             create("release") {
                 storeFile = file(keystorePath)
-                storePassword = providers.gradleProperty("DUMBLE_KEYSTORE_PASSWORD").orNull
-                keyAlias = providers.gradleProperty("DUMBLE_KEY_ALIAS").orNull
-                keyPassword = providers.gradleProperty("DUMBLE_KEY_PASSWORD").orNull
+                storePassword = credential("DUMBLE_KEYSTORE_PASSWORD")
+                keyAlias = credential("DUMBLE_KEY_ALIAS")
+                keyPassword = credential("DUMBLE_KEY_PASSWORD")
             }
         }
     }
@@ -52,6 +56,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.VERSION_NAME is shown on the About screen; AGP defaults this off.
+        buildConfig = true
     }
     // Connection/trust code logs via android.util.Log and is exercised in JVM unit tests, where the
     // framework is a stub. Return defaults so Log.* no-ops instead of throwing "not mocked".
