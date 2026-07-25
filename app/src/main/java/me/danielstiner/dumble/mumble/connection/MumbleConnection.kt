@@ -21,6 +21,8 @@ import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
+import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import java.net.SocketTimeoutException
@@ -40,10 +42,11 @@ import javax.inject.Singleton
 class MumbleConnection internal constructor(
     private val pinStore: PinStore,
     private val opusCodec: OpusCodec,
+    private val newAudioOut: () -> AudioOut,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(pinStore: PinStore, opusCodec: OpusCodec) :
-        this(pinStore, opusCodec, { MumbleTcpTransport(it) })
+        this(pinStore, opusCodec, { AndroidAudioOut() }, { MumbleTcpTransport(it) })
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -108,7 +111,7 @@ class MumbleConnection internal constructor(
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
             val sm = SessionStateMachine(transport, username, password, childScope)
-            val receiver = VoiceReceiver(opusCodec)
+            val receiver = VoiceReceiver(opusCodec, newAudioOut)
             val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { runCatching { transport.close() }; childScope.cancel(); return@launch }
