@@ -631,6 +631,46 @@ class SessionStateMachineTest {
     }
 
     @Test
+    fun aServerBelowOnePointFiveIsRejected() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
+            .build()))
+
+        val state = sm.state.value
+        assertTrue("expected Failed, was $state", state is ConnectionState.Failed)
+        assertEquals(FailReason.VERSION_TOO_OLD, (state as ConnectionState.Failed).reason)
+    }
+
+    @Test
+    fun exactlyOnePointFiveIsAccepted() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 5, 0))
+            .build()))
+
+        // Still handshaking — the version check must not settle a terminal state on a good server.
+        assertEquals(ConnectionState.Handshaking, sm.state.value)
+    }
+
+    @Test
+    fun serverVersionIsPublishedEvenWhenTooOld() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
+            .build()))
+
+        // The UI names the offending version in its error, so it must survive the failure.
+        assertEquals("1.4.287", sm.serverVersion.value?.toString())
+    }
+
+    @Test
     fun versionEncodingMatchesProtocol() {
         assertEquals((1L shl 48) or (5L shl 32), MumbleVersion.encodeV2(1, 5, 0))
         assertEquals((1 shl 16) or (5 shl 8), MumbleVersion.encodeV1(1, 5, 0))

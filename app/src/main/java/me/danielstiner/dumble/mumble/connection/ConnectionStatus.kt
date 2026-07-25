@@ -14,7 +14,7 @@ sealed interface ConnectionStatus {
     data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
 }
 
-enum class ErrorKind { CONNECT_FAILED, AUTH_REJECTED, TIMEOUT, DISCONNECTED }
+enum class ErrorKind { CONNECT_FAILED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD }
 
 /**
  * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state
@@ -28,5 +28,6 @@ fun mapState(s: ConnectionState): ConnectionStatus? = when (s) {
         FailReason.AUTH_REJECT -> ConnectionStatus.Error(ErrorKind.AUTH_REJECTED, s.detail)
         FailReason.TIMEOUT -> ConnectionStatus.Error(ErrorKind.TIMEOUT, s.detail)
         FailReason.IO -> ConnectionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
+        FailReason.VERSION_TOO_OLD -> ConnectionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
     }
 }

@@ -161,7 +161,15 @@ class SessionStateMachine(
                 if (setup.hasKey()) cryptKey = setup.key.toByteArray()
             }
             TcpMessageType.Version -> {
-                _serverVersion.value = ServerVersion.from(MumbleProtos.Version.parseFrom(frame.payload))
+                val version = ServerVersion.from(MumbleProtos.Version.parseFrom(frame.payload))
+                // Publish before any rejection so the UI can name the version it refused.
+                _serverVersion.value = version
+                // Protobuf UDP audio is a 1.5 format: a 1.4 server parses our 0x00-prefixed
+                // payload as malformed legacy CELT-alpha and silently drops every frame. Voice
+                // is the point of connecting, so refuse rather than connect without it.
+                if (version.major < 1 || (version.major == 1 && version.minor < 5)) {
+                    fail(FailReason.VERSION_TOO_OLD, "server $version — need >= 1.5")
+                }
             }
 
             TcpMessageType.ChannelState ->
