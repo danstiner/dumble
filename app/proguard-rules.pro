@@ -6,3 +6,7 @@
 # reaches fields reflectively; R8 renaming them fails at runtime, not build time.
 -assumevalues class com.google.protobuf.Android { static boolean ASSUME_ANDROID return true; }
 -keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite { <fields>; }
+
+# JNI entry points are bound by name from C at runtime; R8 renaming them fails at runtime
+# only, never at build time. Decode surface lives in app/src/main/cpp/opus_jni.c.
+-keepclasseswithmembernames class * { native <methods>; }

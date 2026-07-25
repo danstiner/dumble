@@ -22,6 +22,8 @@ jobs:
         with:
           # Nothing here pushes; don't leave the token readable by ./gradlew.
           persist-credentials: false
+          # libopus is a submodule; without this the CMake build fails on an empty directory.
+          submodules: recursive
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
