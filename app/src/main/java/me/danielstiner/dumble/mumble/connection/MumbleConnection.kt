@@ -145,7 +145,11 @@ class MumbleConnection internal constructor(
             childScope.launch { sm.roundTripMillis.collect { publishRtt(gen, it) } }
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
-            receiver.start()
+            // Same gen==attempt guard as every other mutation here: without it, a disconnect()/
+            // connect() racing this exact point supersedes `att` — teardown() no-ops on a
+            // not-yet-started receiver — and this call starts it anyway, so nothing will ever
+            // stop() it again and the playback thread runs forever holding an open AudioOut.
+            synchronized(lock) { if (gen == attempt) receiver.start() }
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
         }
     }
@@ -178,7 +182,12 @@ class MumbleConnection internal constructor(
     override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
     private fun teardown(att: Attempt) {
-        att.receiver.stop()
+        // receiver.stop() joins the playback thread (up to 1s), and teardown() runs synchronously
+        // on whatever thread calls disconnect()/connect() — including the main thread, since
+        // ConnectViewModel.onDisconnect() calls disconnect() straight from a Button onClick. Hand
+        // the join to `scope` so a wedged AudioTrack.write can't freeze the UI. transport.close()
+        // and childScope.cancel() stay here: neither blocks.
+        scope.launch { att.receiver.stop() }
         runCatching { att.transport.close() }
         att.childScope.cancel()
     }

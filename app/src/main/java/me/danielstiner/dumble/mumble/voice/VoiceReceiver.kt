@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.voice
 
+import android.os.Process
 import android.util.Log
 import com.google.protobuf.InvalidProtocolBufferException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,9 +37,14 @@ class VoiceReceiver(
     fun start() {
         if (running) return
         running = true
-        thread = Thread({ loop() }, "dumble-voice-playback").apply {
+        thread = Thread({
+            // JVM Thread.priority is a hint the Android scheduler mostly ignores; only the
+            // nice-value bump from THREAD_PRIORITY_URGENT_AUDIO holds the 10 ms cadence loop()
+            // depends on. Applies to the calling thread, so it must be set from inside loop's thread.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            loop()
+        }, "dumble-voice-playback").apply {
             isDaemon = true
-            priority = Thread.MAX_PRIORITY
             start()
         }
     }
@@ -46,10 +52,20 @@ class VoiceReceiver(
     fun stop() {
         running = false
         synchronized(idleLock) { idleLock.notifyAll() }
-        thread?.join(1_000)
+        val worker = thread
+        worker?.join(1_000)
         thread = null
-        speakers.values.forEach { it.close() }
-        speakers.clear()
+        if (worker == null || !worker.isAlive) {
+            speakers.values.forEach { it.close() }
+            speakers.clear()
+        } else {
+            // join timing out doesn't mean the thread died — it can still be blocked in a wedged
+            // AudioTrack.write and will keep touching `speakers` itself (retiring/closing queues).
+            // Closing decoders here too races that thread's own close() on the same native handle:
+            // OpusDecoder.close() is at-most-once, so a second call is a double-free, not a
+            // catchable exception. Leaking bounded native memory beats corrupting the heap.
+            Log.w(TAG, "playback thread outlived stop(); leaking decoders to avoid a double-free")
+        }
         _speakingSessions.value = emptySet()
     }
 
@@ -72,7 +88,17 @@ class VoiceReceiver(
     }
 
     private fun loop() {
-        val out = outFactory()
+        val out = try {
+            outFactory()
+        } catch (t: Throwable) {
+            // AudioTrack.Builder().build() throws (UnsupportedOperationException/
+            // IllegalStateException) when the device can't honor the requested route. Uncaught on
+            // this thread, Android's default handler kills the whole process. Receive-only voice
+            // must degrade to silence instead of taking the session down.
+            Log.e(TAG, "audio output unavailable, voice playback disabled", t)
+            running = false
+            return
+        }
         val acc = IntArray(QUANTUM_SAMPLES)
         val mix = ShortArray(QUANTUM_SAMPLES)
         val speakerOut = ShortArray(QUANTUM_SAMPLES)
