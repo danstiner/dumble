@@ -6,18 +6,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class SpeakerQueueTest {
+class SpeakerPlayoutTest {
 
     private val out = ShortArray(QUANTUM_SAMPLES)
 
     /** Six 10 ms packets = 60 ms = exactly the prebuffer threshold. */
-    private fun SpeakerQueue.arm(tenMsFrames: Int = 1, count: Int = 6) {
+    private fun SpeakerPlayout.arm(tenMsFrames: Int = 1, count: Int = 6) {
         repeat(count) { offer(packet(tenMsFrames), isTerminator = false) }
     }
 
     @Test
     fun producesNothingUntilPrebufferIsMet() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.offer(packet(1), isTerminator = false)   // 10 ms — well short of 60
         assertFalse(q.fillTick(out))
         q.arm(count = 5)                            // now 60 ms total
@@ -27,7 +27,7 @@ class SpeakerQueueTest {
     @Test
     fun tenMillisecondSenderDrainsOneQuantumPerTick() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.arm(tenMsFrames = 1, count = 6)
         repeat(6) { assertTrue("tick $it produced nothing", q.fillTick(out)) }
         assertFalse(q.fillTick(out))
@@ -37,7 +37,7 @@ class SpeakerQueueTest {
     @Test
     fun sixtyMillisecondSenderDrainsOneQuantumPerTick() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.offer(packet(6), isTerminator = false)   // one 60 ms packet meets the prebuffer alone
         repeat(6) { assertTrue("tick $it produced nothing", q.fillTick(out)) }
         assertFalse(q.fillTick(out))
@@ -46,7 +46,7 @@ class SpeakerQueueTest {
 
     @Test
     fun decodedSamplesCarryThroughInOrder() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.offer(packet(6), isTerminator = false)
         q.fillTick(out)
         assertTrue(out.all { it.toInt() == 6 })
@@ -54,7 +54,7 @@ class SpeakerQueueTest {
 
     @Test
     fun goingIdleReArmsThePrebuffer() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.arm()
         // Drain the whole spurt — every queued sample must play, none stranded.
         repeat(6) { assertTrue(q.fillTick(out)) }
@@ -67,7 +67,7 @@ class SpeakerQueueTest {
     @Test
     fun theTailOfASpurtIsNotStranded() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.arm()                                // exactly 60 ms queued
         // All six quanta must play. The earlier design stranded five of them by re-arming the
         // prebuffer while audio was still queued.
@@ -78,7 +78,7 @@ class SpeakerQueueTest {
     @Test
     fun terminatorPlaysOutAShortSpurt() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.offer(packet(1), isTerminator = false)   // 10 ms
         q.offer(packet(1), isTerminator = false)   // 20 ms total — well under the 60 ms threshold
         q.offer(ByteArray(0), isTerminator = true) // tag-only terminator: no more audio coming
@@ -89,7 +89,7 @@ class SpeakerQueueTest {
 
     @Test
     fun withoutATerminatorAShortSpurtStillWaitsOnThePrebuffer() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.offer(packet(1), isTerminator = false)
         q.offer(packet(1), isTerminator = false)   // 20 ms total, no terminator arrived
         assertFalse("threshold must still govern when no terminator ever arrives", q.fillTick(out))
@@ -98,7 +98,7 @@ class SpeakerQueueTest {
     @Test
     fun terminatorDoesNotReArmTheGateMidSpurt() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         repeat(5) { q.offer(packet(1), isTerminator = false) }
         q.offer(packet(1), isTerminator = true)   // terminator on the spurt's last packet
         // All six quanta must still play in one pass. A terminator may only ever release the
@@ -110,7 +110,7 @@ class SpeakerQueueTest {
 
     @Test
     fun overflowDropsOldestAndIsCappedInSamples() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         repeat(120) { q.offer(packet(6), isTerminator = false) }   // 7.2 s, far past 600 ms
         assertTrue(q.queuedSamplesForTest <= HIGH_WATER_SAMPLES)
     }
@@ -118,7 +118,7 @@ class SpeakerQueueTest {
     @Test
     fun retiresAfterIdleAndClosesItsDecoder() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.arm()
         repeat(6) { q.fillTick(out) }
         assertFalse(q.retired)
@@ -130,7 +130,7 @@ class SpeakerQueueTest {
 
     @Test
     fun prebufferingDoesNotCountAsIdle() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.offer(packet(1), isTerminator = false)   // 10 ms — far short of the 60 ms gate
         // A spurt produces nothing while it fills its prebuffer, and the playback loop ticks it
         // faster than 100 Hz while nobody is producing. Charging that as idle would retire a
@@ -145,7 +145,7 @@ class SpeakerQueueTest {
 
     @Test
     fun aSpurtStalledBelowThePrebufferEventuallyReleasesItsSlot() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.offer(packet(1), isTerminator = false)   // sender died mid-spurt: no terminator, ever
         repeat(STALL_IDLE_TICKS) { q.fillTick(out) }
         assertTrue("a stalled spurt would hold its speaker slot forever", q.retired)
@@ -153,7 +153,7 @@ class SpeakerQueueTest {
 
     @Test
     fun aRetiredQueueRejectsRatherThanSwallowsAPacket() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         repeat(RETIRE_IDLE_TICKS) { q.fillTick(out) }
         assertTrue(q.retired)
         // Retirement and the removal from the speaker map are not one step, so the reader can
@@ -167,7 +167,7 @@ class SpeakerQueueTest {
     @Test
     fun createsExactlyOneDecoderAtConstruction() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         assertEquals(1, codec.decodersCreated)
         q.arm()
         repeat(8) { q.fillTick(out) }
@@ -181,7 +181,7 @@ class SpeakerQueueTest {
     @Test
     fun closeRetiresSoALateOfferIsRejected() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.close()
         assertTrue(q.retired)
         assertFalse(q.offer(packet(1), isTerminator = false))
@@ -191,7 +191,7 @@ class SpeakerQueueTest {
     @Test
     fun closeIsIdempotent() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         q.close()
         q.close()
         assertEquals("a second close must not double-free the native handle", 2, codec.decodersClosed)
@@ -201,7 +201,7 @@ class SpeakerQueueTest {
     /** A queue closed mid-spurt must drop what it held rather than report it still queued. */
     @Test
     fun closeDiscardsQueuedAudio() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         q.arm()
         assertTrue(q.queuedSamplesForTest > 0)
         q.close()
@@ -211,7 +211,7 @@ class SpeakerQueueTest {
     /** span 0: packetSamples cannot parse it, so it must not occupy the queue. */
     @Test
     fun anUnparseablePacketIsNotQueued() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         assertTrue(q.offer(packet(0), isTerminator = false))
         assertEquals(0, q.queuedSamplesForTest)
     }
@@ -219,7 +219,7 @@ class SpeakerQueueTest {
     /** A tag-only frame carries no audio and no terminator: accepted, but it changes nothing. */
     @Test
     fun aTagOnlyFrameIsAcceptedAndQueuesNothing() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         assertTrue(q.offer(ByteArray(0), isTerminator = false))
         assertEquals(0, q.queuedSamplesForTest)
         assertFalse(q.fillTick(out))
@@ -228,7 +228,7 @@ class SpeakerQueueTest {
     /** Pins the retirement window from below; the existing test only pins it from above. */
     @Test
     fun doesNotRetireBeforeTheIdleWindowElapses() {
-        val q = SpeakerQueue(FakeOpusCodec())
+        val q = SpeakerPlayout(FakeOpusCodec())
         repeat(RETIRE_IDLE_TICKS - 1) { q.fillTick(out) }
         assertFalse("retired a tick early", q.retired)
         q.fillTick(out)
@@ -243,7 +243,7 @@ class SpeakerQueueTest {
     @Test
     fun concurrentOffersAndTicksKeepTheAccountingSane() {
         val codec = FakeOpusCodec()
-        val q = SpeakerQueue(codec)
+        val q = SpeakerPlayout(codec)
         val failure = java.util.concurrent.atomic.AtomicReference<Throwable>()
         val start = java.util.concurrent.CountDownLatch(1)
         val readers = (1..4).map {

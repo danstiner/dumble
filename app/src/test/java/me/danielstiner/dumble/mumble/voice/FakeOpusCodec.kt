@@ -20,7 +20,8 @@ class FakeOpusCodec : OpusCodec {
                 decodeCalls++
                 if (opusData == null) return 0
                 val frames = opusData[offset].toInt()
-                val n = frames * 480
+                // Clamped like the real decoder, which caps frameSize at the out buffer.
+                val n = minOf(frames * 480, out.size)
                 java.util.Arrays.fill(out, 0, n, frames.toShort())
                 return n
             }

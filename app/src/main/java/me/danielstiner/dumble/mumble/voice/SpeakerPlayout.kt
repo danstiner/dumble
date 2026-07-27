@@ -1,11 +1,17 @@
 package me.danielstiner.dumble.mumble.voice
 
 /**
- * One speaker's playout state.
+ * One speaker's playout path: encoded packets in, quantum-sized PCM out.
+ *
+ * [offer] appends still-encoded packets to a locked deque; each [fillTick] pops and decodes
+ * just enough of them into a small PCM fifo to emit exactly one quantum. Audio therefore waits
+ * compressed for as long as the network requires (capped at [HIGH_WATER_SAMPLES]) and exists
+ * as PCM for at most one frame's worth of ticks. A new talk spurt is held until
+ * [PREBUFFER_SAMPLES] are queued, so the first network stall doesn't glitch the first syllable.
  *
  * Threading: [offer] runs on the transport's reader coroutine, [fillTick] and [close] on the
- * playback thread. Only the encoded queue crosses that boundary, so it alone is locked; the
- * decoder, the PCM FIFO, and the idle counter are playback-thread-only. Decoding happens
+ * playback thread. Only the encoded deque crosses that boundary, so it alone is locked; the
+ * decoder, the PCM fifo, and the idle counter are playback-thread-only. Decoding happens
  * outside the lock so a slow decode never stalls the reader.
  *
  * Arrival order is correct order: this slice receives audio only through the TCP tunnel, which
@@ -13,7 +19,7 @@ package me.danielstiner.dumble.mumble.voice
  * reorder buffer. `frame_number` is deliberately unused here — it becomes load-bearing when UDP
  * lands and reordering becomes possible again.
  */
-class SpeakerQueue(private val codec: OpusCodec) {
+class SpeakerPlayout(private val codec: OpusCodec) {
 
     private class Packet(val opusData: ByteArray, val spanSamples: Int)
 
@@ -26,12 +32,12 @@ class SpeakerQueue(private val codec: OpusCodec) {
     // reintroduce the earlier bug where it cleared the gate mid-spurt and stranded the tail.
     private var prebuffered = false                 // guarded by lock
 
-    private val fifo = ShortArrayFifo(MAX_FRAME_SAMPLES * 2)
+    // fillTick decodes only while below one quantum and one decode adds at most one frame,
+    // so this is the fifo's exact occupancy bound.
+    private val fifo = ShortArrayFifo(QUANTUM_SAMPLES + MAX_FRAME_SAMPLES)
     private val decodeOut = ShortArray(MAX_FRAME_SAMPLES)
-    // Eager, so opus_decoder_create runs on the reader thread that constructs the queue rather
-    // than inside fillTick on the THREAD_PRIORITY_URGENT_AUDIO thread, where an 18 KB malloc's
-    // tail latency lands against a 10 ms deadline. It also puts a failed create inside the
-    // caller's try/catch, which only wraps the reader side.
+    // Eagerly create the decoder so opus_decoder_create and its malloc run on the transport
+    // reader thread rather than the playback thread that needs predictable timing.
     private val decoder = codec.newDecoder()
     private var idleTicks = 0
 
