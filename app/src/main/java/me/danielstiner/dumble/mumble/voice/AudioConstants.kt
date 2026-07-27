@@ -36,7 +36,7 @@ const val RETIRE_IDLE_TICKS = 10
 const val STALL_IDLE_TICKS = 1000
 
 /** Concurrent per-speaker queues we will allocate, bounding what a server can make us hold at
- *  34,560 bytes of Java arrays each plus a native decoder. The desktop client has no equivalent
+ *  ~28 KB of Java arrays each (a 8192-short ring plus the decode scratch) plus a native decoder. The desktop client has no equivalent
  *  cap and is genuinely unbounded here — its `ClientUser` lookup gates on the session list, which
  *  a hostile server writes via UserState, so it bounds nothing. What keeps that survivable is retiring on drain:
  *  every live slot has to be re-fed within [RETIRE_IDLE_TICKS] or it evaporates, so holding N of
