@@ -9,6 +9,7 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class VoiceReceiverTest {
 
@@ -49,17 +50,34 @@ class VoiceReceiverTest {
 
     @Test
     fun reportsSpeakingSessions() {
-        val latch = CountDownLatch(2)
-        val rx = VoiceReceiver(FakeOpusCodec()) { CountingOut(latch) }
+        val latch = CountDownLatch(1)
+        val speakingAtWrite = AtomicReference<Set<Int>?>(null)
+        lateinit var rx: VoiceReceiver
+        val out = object : AudioOut {
+            override fun write(pcm: ShortArray, n: Int): Boolean {
+                // Sampled here rather than polled from the test thread. This fake never blocks, so
+                // unlike a real AudioTrack it imposes no pacing: the whole 60 ms spurt drains in
+                // microseconds and "speaking" is over before a poller can see it. loop() publishes
+                // the set before it writes, so any write is a valid observation point.
+                speakingAtWrite.compareAndSet(null, rx.speakingSessions.value)
+                latch.countDown()
+                return true
+            }
+            override fun close() = Unit
+        }
+        rx = VoiceReceiver(FakeOpusCodec()) { out }
         rx.start()
         try {
             rx.onTunneledAudio(audioPayload(session = 9, tenMsFrames = 6), 0L)
-            assertTrue(latch.await(5, TimeUnit.SECONDS))
-            val deadline = System.currentTimeMillis() + 2_000
-            while (rx.speakingSessions.value != setOf(9) && System.currentTimeMillis() < deadline) {
-                Thread.sleep(10)
+            assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
+            assertEquals(setOf(9), speakingAtWrite.get())
+            // Drained is a terminal state, so waiting for it cannot lose a race the way waiting
+            // for "speaking" can.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (rx.speakingSessions.value.isNotEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(5)
             }
-            assertEquals(setOf(9), rx.speakingSessions.value)
+            assertEquals("speaking must clear once the queue drains", emptySet<Int>(), rx.speakingSessions.value)
         } finally {
             rx.stop()
         }
