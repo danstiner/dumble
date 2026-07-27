@@ -198,9 +198,12 @@ class MumbleTcpTransport(
         }
     }
 
-    override fun send(type: TcpMessageType, message: MessageLite): Boolean {
+    // Guarded before serializing so a send on a closed channel costs nothing.
+    override fun send(type: TcpMessageType, message: MessageLite): Boolean =
+        !closed && sendRaw(type, message.toByteArray())
+
+    override fun sendRaw(type: TcpMessageType, payload: ByteArray): Boolean {
         if (closed) return false
-        val payload = message.toByteArray()
         val framed = ByteArrayOutputStream(payload.size + FRAME_HEADER_BYTES)
         MumbleCodec.writeFrame(DataOutputStream(framed), type.id, payload)
         return sendQueue.trySend(framed.toByteArray()).isSuccess

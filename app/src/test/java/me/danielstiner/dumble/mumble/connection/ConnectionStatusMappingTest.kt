@@ -33,4 +33,10 @@ class ConnectionStatusMappingTest {
             ConnectionStatus.Error(ErrorKind.DISCONNECTED, "dropped"),
             mapState(ConnectionState.Failed(FailReason.IO, "dropped")),
         )
+
+    @Test fun versionTooOldBecomesServerTooOld() =
+        assertEquals(
+            ConnectionStatus.Error(ErrorKind.SERVER_TOO_OLD, "server 1.4.287 — need >= 1.5"),
+            mapState(ConnectionState.Failed(FailReason.VERSION_TOO_OLD, "server 1.4.287 — need >= 1.5")),
+        )
 }
