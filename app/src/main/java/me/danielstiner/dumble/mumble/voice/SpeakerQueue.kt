@@ -21,6 +21,11 @@ class SpeakerQueue(private val codec: OpusCodec) {
     private val encoded = ArrayDeque<Packet>()      // guarded by lock
     private var queuedSamples = 0                   // guarded by lock
     private var prebuffered = false                 // guarded by lock
+    // Set by a terminator packet: release the gate and play out whatever is queued even if it
+    // never reached PREBUFFER_SAMPLES (a short "yep"/"no" spurt otherwise never plays at all).
+    // Never re-arms the gate — only the idle path in fillTick does that — so a terminator can't
+    // reintroduce the earlier bug where it cleared `prebuffered` mid-spurt and stranded the tail.
+    private var flushShort = false                  // guarded by lock
 
     private val fifo = ShortArrayFifo(MAX_FRAME_SAMPLES * 2)
     private val decodeOut = ShortArray(MAX_FRAME_SAMPLES)
@@ -33,17 +38,28 @@ class SpeakerQueue(private val codec: OpusCodec) {
     /** Test-only view of the locked depth counter. */
     internal val queuedSamplesForTest: Int get() = synchronized(lock) { queuedSamples }
 
-    /** Reader-coroutine context; must not block. An empty [opus] is a tag-only frame and is not enqueued. */
-    fun offer(opus: ByteArray) {
+    /**
+     * Reader-coroutine context; must not block. An empty [opus] is a tag-only frame and is not
+     * enqueued, but [isTerminator] on it is still honored — a terminator can arrive with no
+     * trailing audio of its own.
+     */
+    fun offer(opus: ByteArray, isTerminator: Boolean) {
         synchronized(lock) {
-            if (opus.isEmpty()) return
-            val span = codec.packetSamples(opus, 0, opus.size)
-            if (span <= 0) return
-            encoded.addLast(Packet(opus, span))
-            queuedSamples += span
-            while (queuedSamples > HIGH_WATER_SAMPLES && encoded.size > 1) {
-                queuedSamples -= encoded.removeFirst().spanSamples
+            if (opus.isNotEmpty()) {
+                val span = codec.packetSamples(opus, 0, opus.size)
+                if (span > 0) {
+                    encoded.addLast(Packet(opus, span))
+                    queuedSamples += span
+                    while (queuedSamples > HIGH_WATER_SAMPLES && encoded.size > 1) {
+                        queuedSamples -= encoded.removeFirst().spanSamples
+                    }
+                }
             }
+            // is_terminator means no more audio is coming for this spurt: release the gate so
+            // fillTick plays out what's queued, however short. Latches rather than plays
+            // immediately here because offer() runs on the reader thread and must not touch fifo
+            // or the decoder, which are playback-thread-only.
+            if (isTerminator) flushShort = true
         }
     }
 
@@ -55,7 +71,12 @@ class SpeakerQueue(private val codec: OpusCodec) {
         while (fifo.size < QUANTUM_SAMPLES) {
             val next = synchronized(lock) {
                 if (!prebuffered) {
-                    if (queuedSamples < PREBUFFER_SAMPLES) return@synchronized null
+                    // A terminator means no more audio is coming for this spurt, so a short
+                    // spurt ("yep", "no") must play rather than wait for a margin it will never
+                    // reach. flushShort only ever opens the gate here, never re-arms it, so it
+                    // can't reintroduce the earlier bug where the terminator itself stranded a
+                    // spurt's tail by clearing `prebuffered` mid-playback.
+                    if (queuedSamples < PREBUFFER_SAMPLES && !flushShort) return@synchronized null
                     prebuffered = true
                 }
                 encoded.removeFirstOrNull()?.also { queuedSamples -= it.spanSamples }
@@ -68,8 +89,10 @@ class SpeakerQueue(private val codec: OpusCodec) {
         if (!produced && fifo.size == 0) {
             // Fully drained: re-arm so the next talk spurt rebuilds its playout margin. Doing
             // this on idle rather than on the terminator frame means the tail of a spurt plays
-            // out first, and a spurt whose terminator never arrives still re-arms.
-            synchronized(lock) { if (encoded.isEmpty()) prebuffered = false }
+            // out first, and a spurt whose terminator never arrives still re-arms. flushShort
+            // resets alongside prebuffered — same drain condition — so it can't leak into the
+            // next spurt and bypass its playout margin.
+            synchronized(lock) { if (encoded.isEmpty()) { prebuffered = false; flushShort = false } }
         }
         idleTicks = if (produced) 0 else idleTicks + 1
         if (idleTicks >= RETIRE_IDLE_TICKS) retired = true

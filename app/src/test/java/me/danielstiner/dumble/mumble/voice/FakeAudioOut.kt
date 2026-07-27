@@ -13,9 +13,10 @@ class FakeAudioOut : AudioOut {
     @Volatile var closed = false
         private set
 
-    override fun write(pcm: ShortArray, n: Int) {
+    override fun write(pcm: ShortArray, n: Int): Boolean {
         writeCount.incrementAndGet()
         Thread.sleep(10)
+        return true
     }
 
     override fun close() {

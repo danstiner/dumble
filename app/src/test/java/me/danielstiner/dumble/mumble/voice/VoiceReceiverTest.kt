@@ -16,7 +16,7 @@ class VoiceReceiverTest {
     private class CountingOut(private val latch: CountDownLatch) : AudioOut {
         val writes = AtomicInteger()
         @Volatile var closed = false
-        override fun write(pcm: ShortArray, n: Int) { writes.incrementAndGet(); latch.countDown() }
+        override fun write(pcm: ShortArray, n: Int): Boolean { writes.incrementAndGet(); latch.countDown(); return true }
         override fun close() { closed = true }
     }
 

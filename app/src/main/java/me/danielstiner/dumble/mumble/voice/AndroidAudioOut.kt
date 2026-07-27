@@ -36,8 +36,10 @@ class AndroidAudioOut : AudioOut {
         track.play()
     }
 
-    override fun write(pcm: ShortArray, n: Int) {
-        track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING)
+    override fun write(pcm: ShortArray, n: Int): Boolean {
+        // A negative return (ERROR_DEAD_OBJECT, ERROR_INVALID_OPERATION, ...) means the track
+        // will never block again, so the caller must stop instead of spinning at audio priority.
+        return track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING) >= 0
     }
 
     override fun close() {

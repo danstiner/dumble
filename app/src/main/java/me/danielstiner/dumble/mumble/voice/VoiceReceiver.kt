@@ -31,8 +31,17 @@ class VoiceReceiver(
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
 
+    // Latched once a decode path throws something other than a malformed packet (notably
+    // UnsatisfiedLinkError when libopus didn't load). Voice is additive: it must fail silent,
+    // never take the control connection down with it, and never retry a broken native path once
+    // per packet at ~100 Hz.
+    @Volatile private var voiceUnavailable = false
+
     @Volatile private var running = false
-    private var thread: Thread? = null
+    // Written by start() outside the stop() monitor and read by stop() under it — no other
+    // ordering ties the two, so without @Volatile a stop() on another thread could observe a
+    // stale null and race start()'s own write.
+    @Volatile private var thread: Thread? = null
 
     fun start() {
         if (running) return
@@ -62,8 +71,12 @@ class VoiceReceiver(
         synchronized(idleLock) { idleLock.notifyAll() }
         val worker = thread
         worker?.join(1_000)
-        thread = null
         if (worker == null || !worker.isAlive) {
+            // Only clear `thread` when the join actually observed exit. If a repeat call sees
+            // `thread == null` it must mean this branch already ran, not "the thread must have
+            // exited by now" — that conflation is what let a second stop() close live decoders
+            // out from under a still-running loop() the last time this bug happened.
+            thread = null
             speakers.values.forEach { it.close() }
             speakers.clear()
         } else {
@@ -72,6 +85,8 @@ class VoiceReceiver(
             // Closing decoders here too races that thread's own close() on the same native handle:
             // OpusDecoder.close() is at-most-once, so a second call is a double-free, not a
             // catchable exception. Leaking bounded native memory beats corrupting the heap.
+            // Leaving `thread` set means a later stop() re-joins and re-checks liveness instead
+            // of trusting a stale "already gone" conclusion.
             Log.w(TAG, "playback thread outlived stop(); leaking decoders to avoid a double-free")
         }
         _speakingSessions.value = emptySet()
@@ -82,6 +97,7 @@ class VoiceReceiver(
      * a one-byte type followed by a protobuf body.
      */
     fun onTunneledAudio(payload: ByteArray, arrivalNanos: Long) {
+        if (voiceUnavailable) return
         if (payload.isEmpty() || payload[0].toInt() != UDP_TYPE_AUDIO) return
         val audio = try {
             MumbleUdpProtos.Audio.parseFrom(payload.copyOfRange(1, payload.size))
@@ -90,8 +106,21 @@ class VoiceReceiver(
             Log.w(TAG, "dropping malformed tunneled audio", e)
             return
         }
-        speakers.computeIfAbsent(audio.senderSession) { SpeakerQueue(codec) }
-            .offer(audio.opusData.toByteArray())
+        try {
+            speakers.computeIfAbsent(audio.senderSession) { SpeakerQueue(codec) }
+                .offer(audio.opusData.toByteArray(), audio.isTerminator)
+        } catch (t: Throwable) {
+            // offer() reaches LibOpusCodec -> NativeOpus, whose class init loads libopus.
+            // UnsatisfiedLinkError (an Error, not an Exception) on a missing/unpackaged .so is a
+            // real device state, and MumbleTcpTransport's reader catches Throwable and tears the
+            // whole session down. Voice is additive on top of chat/channels here, so a broken
+            // decoder must degrade to silence, not take those down with it. Latch instead of
+            // logging per-packet: this path runs at ~100 Hz and a log at that rate is its own
+            // liveness problem.
+            voiceUnavailable = true
+            Log.e(TAG, "voice decode unavailable, disabling receive for this session", t)
+            return
+        }
         synchronized(idleLock) { idleLock.notifyAll() }
     }
 
@@ -143,7 +172,13 @@ class VoiceReceiver(
 
                 if (_speakingSessions.value != producing) _speakingSessions.value = HashSet(producing)
                 AudioMixer.finalizeMix(acc, mix, QUANTUM_SAMPLES)
-                out.write(mix, QUANTUM_SAMPLES)
+                if (!out.write(mix, QUANTUM_SAMPLES)) {
+                    // A failed write does not block, unlike every successful one — write() is
+                    // this loop's only pacing. Ignoring the failure would busy-spin a CPU core at
+                    // THREAD_PRIORITY_URGENT_AUDIO for as long as any speaker keeps producing.
+                    Log.e(TAG, "audio output write failed, stopping playback")
+                    running = false
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "playback loop died", t)
