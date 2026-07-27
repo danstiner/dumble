@@ -24,3 +24,9 @@ const val HIGH_WATER_SAMPLES = 28800
 
 /** ~10 s of silence at the 10 ms quantum before a speaker's decoder is released. */
 const val RETIRE_IDLE_TICKS = 1000
+
+/** Concurrent per-speaker queues we will allocate, bounding what a server can make us hold at
+ *  ~50 KB each (PCM FIFO, decode scratch, native decoder). Sized well above any plausible count
+ *  of distinct people talking inside one retirement window, so it bites only on a broken or
+ *  hostile server rather than on a busy channel. */
+const val MAX_SPEAKERS = 32

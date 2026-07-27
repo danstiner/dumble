@@ -23,7 +23,11 @@ object AudioMixer {
 
     fun finalizeMix(acc: IntArray, dst: ShortArray, n: Int) {
         for (i in 0 until n) {
-            val x = acc[i]
+            // Widened because -Int.MIN_VALUE is still Int.MIN_VALUE: the magnitude would stay
+            // negative, slip past the threshold test, and truncate to 0 — silence exactly where the
+            // mix is loudest. Overflowing the accumulator takes ~65k concurrent full-scale
+            // speakers, so this is cheap insurance against a branch that cannot be tested for.
+            val x = acc[i].toLong()
             val ax = if (x < 0) -x else x
             dst[i] = if (ax <= THRESHOLD) {
                 x.toShort()

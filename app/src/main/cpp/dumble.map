@@ -1,0 +1,12 @@
+/*
+ * Static-linking libopus pulls whole object files, so its internal symbol table lands in our
+ * dynsym alongside the four JNI entry points. Nothing in Java can reach any of it, but it is
+ * binary size and needless surface. JNI resolves by exported symbol name, so these four are the
+ * entire public contract of this library.
+ */
+DUMBLE_JNI {
+  global:
+    Java_me_danielstiner_dumble_mumble_voice_NativeOpus_*;
+  local:
+    *;
+};

@@ -32,6 +32,9 @@ class SpeakerQueue(private val codec: OpusCodec) {
     private var decoder: OpusDecoder? = null
     private var idleTicks = 0
 
+    // Set under lock so it doubles as the gate on offer, and volatile so the retirement the
+    // playback thread just decided is visible to the reader that must stop enqueueing.
+    @Volatile
     var retired = false
         private set
 
@@ -42,9 +45,15 @@ class SpeakerQueue(private val codec: OpusCodec) {
      * Reader-coroutine context; must not block. An empty [opusData] is a tag-only frame and is not
      * enqueued, but [isTerminator] on it is still honored — a terminator can arrive with no
      * trailing audio of its own.
+     *
+     * Returns false once this queue has retired, meaning the packet was not accepted and the
+     * caller must take a fresh queue. Retirement and the removal from the speaker map are not one
+     * step, so without this the caller could enqueue into a queue that is already on its way out
+     * and lose the packet silently.
      */
-    fun offer(opusData: ByteArray, isTerminator: Boolean) {
+    fun offer(opusData: ByteArray, isTerminator: Boolean): Boolean {
         synchronized(lock) {
+            if (retired) return false
             if (opusData.isNotEmpty()) {
                 val span = codec.packetSamples(opusData, 0, opusData.size)
                 if (span > 0) {
@@ -60,6 +69,7 @@ class SpeakerQueue(private val codec: OpusCodec) {
             // immediately here because offer() runs on the reader thread and must not touch fifo
             // or the decoder, which are playback-thread-only.
             if (isTerminator) flushShort = true
+            return true
         }
     }
 
@@ -95,7 +105,9 @@ class SpeakerQueue(private val codec: OpusCodec) {
             synchronized(lock) { if (encoded.isEmpty()) { prebuffered = false; flushShort = false } }
         }
         idleTicks = if (produced) 0 else idleTicks + 1
-        if (idleTicks >= RETIRE_IDLE_TICKS) retired = true
+        // Under the lock so it cannot land between offer's gate check and its enqueue: the reader
+        // either gets in before retirement or is told to go elsewhere, never neither.
+        if (!retired && idleTicks >= RETIRE_IDLE_TICKS) synchronized(lock) { retired = true }
         return produced
     }
 

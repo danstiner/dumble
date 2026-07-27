@@ -10,5 +10,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/opus
 
 add_library(dumble SHARED opus_jni.c)
 target_link_libraries(dumble opus)
-# Android 15+ ships 16 KB page-size devices; without this the loader rejects the library.
-target_link_options(dumble PRIVATE "-Wl,-z,max-page-size=16384")
+set(DUMBLE_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/dumble.map)
+target_link_options(dumble PRIVATE
+    # Android 15+ ships 16 KB page-size devices; without this the loader rejects the library.
+    "-Wl,-z,max-page-size=16384"
+    # Export only the JNI entry points; see dumble.map.
+    "-Wl,--version-script=${DUMBLE_VERSION_SCRIPT}")
+# Editing the script alone must relink, or a stale .so silently keeps the old exports.
+set_target_properties(dumble PROPERTIES LINK_DEPENDS ${DUMBLE_VERSION_SCRIPT})

@@ -127,4 +127,16 @@ class SpeakerQueueTest {
         q.close()
         assertEquals(1, codec.decodersClosed)
     }
+
+    @Test
+    fun aRetiredQueueRejectsRatherThanSwallowsAPacket() {
+        val q = SpeakerQueue(FakeOpusCodec())
+        repeat(RETIRE_IDLE_TICKS) { q.fillTick(out) }
+        assertTrue(q.retired)
+        // Retirement and the removal from the speaker map are not one step, so the reader can
+        // still find this queue afterwards. Accepting here would drop the packet on the floor;
+        // rejecting tells the caller to take a fresh queue.
+        assertFalse(q.offer(packet(1), isTerminator = false))
+        assertEquals(0, q.queuedSamplesForTest)
+    }
 }

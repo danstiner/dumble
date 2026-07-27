@@ -84,6 +84,22 @@ class VoiceReceiverTest {
     }
 
     @Test
+    fun capsConcurrentSpeakers() {
+        val codec = FakeOpusCodec()
+        // Deliberately not started: with no playback thread nothing drains and nothing retires,
+        // so the map only grows — which is the case the cap exists for.
+        val rx = VoiceReceiver(codec) { CountingOut(CountDownLatch(1)) }
+        repeat(MAX_SPEAKERS + 8) { rx.onTunneledAudio(audioPayload(session = it, tenMsFrames = 6), 0L) }
+        // packetSamples is called once per packet that reaches a queue, so it counts admissions.
+        assertEquals("sessions past the cap must not allocate", MAX_SPEAKERS, codec.packetSamplesCalls)
+
+        // A speaker already in the map keeps working — the cap turns away new sessions, it does
+        // not mute the channel once it trips.
+        rx.onTunneledAudio(audioPayload(session = 0, tenMsFrames = 6), 0L)
+        assertEquals(MAX_SPEAKERS + 1, codec.packetSamplesCalls)
+    }
+
+    @Test
     fun ignoresUnknownTypeByte() {
         val rx = VoiceReceiver(FakeOpusCodec()) { CountingOut(CountDownLatch(1)) }
         rx.start()

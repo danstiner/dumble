@@ -50,6 +50,10 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.findByName("release")
+            // From this branch on the AAB carries our own native code (libopus + opus_jni), so
+            // Play needs a symbol table to symbolicate native crashes. SYMBOL_TABLE, not FULL:
+            // DWARF only earns its upload size if we ever ship unstripped libraries.
+            ndk { debugSymbolLevel = "SYMBOL_TABLE" }
         }
     }
     compileOptions {

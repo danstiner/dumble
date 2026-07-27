@@ -37,6 +37,10 @@ class VoiceReceiver(
     // per packet at ~100 Hz.
     @Volatile private var voiceUnavailable = false
 
+    // Latched: the cap is only hit by a server misbehaving, and this path runs at ~100 Hz, so an
+    // unlatched log is its own liveness problem.
+    private var speakerCapReported = false
+
     @Volatile private var running = false
     // Written by start() outside the stop() monitor and read by stop() under it — no other
     // ordering ties the two, so without @Volatile a stop() on another thread could observe a
@@ -106,9 +110,29 @@ class VoiceReceiver(
             Log.w(TAG, "dropping malformed tunneled audio", e)
             return
         }
+        // A server handing out session ids freely — hostile, or merely broken — would otherwise
+        // allocate a queue per id far faster than the ~10 s idle retirement reclaims them. Capping
+        // the map bounds that whether or not the opus payload is well-formed, which validating the
+        // payload first would not.
+        if (speakers.size >= MAX_SPEAKERS && !speakers.containsKey(audio.senderSession)) {
+            if (!speakerCapReported) {
+                speakerCapReported = true
+                Log.w(TAG, "speaker cap of $MAX_SPEAKERS reached; ignoring further sessions")
+            }
+            return
+        }
         try {
-            speakers.computeIfAbsent(audio.senderSession) { SpeakerQueue(codec) }
-                .offer(audio.opusData.toByteArray(), audio.isTerminator)
+            val opusData = audio.opusData.toByteArray()
+            // Retirement removes a queue from the map on the playback thread, and the lookup here
+            // is not atomic with the offer that follows — so the queue can retire in between.
+            // offer reports that rather than swallowing the packet: drop the dead entry and take a
+            // fresh one. Terminates because a queue only retires after ~10 s of idle playback
+            // ticks, which a just-created one has not had.
+            while (true) {
+                val queue = speakers.computeIfAbsent(audio.senderSession) { SpeakerQueue(codec) }
+                if (queue.offer(opusData, audio.isTerminator)) break
+                speakers.remove(audio.senderSession, queue)
+            }
         } catch (t: Throwable) {
             // offer() reaches LibOpusCodec -> NativeOpus, whose class init loads libopus.
             // UnsatisfiedLinkError (an Error, not an Exception) on a missing/unpackaged .so is a
@@ -145,19 +169,20 @@ class VoiceReceiver(
                 java.util.Arrays.fill(acc, 0)
                 producing.clear()
 
-                val it = speakers.entries.iterator()
-                while (it.hasNext()) {
-                    val entry = it.next()
+                for (entry in speakers.entries) {
                     val queue = entry.value
                     if (queue.fillTick(speakerOut)) {
                         AudioMixer.accumulate(acc, speakerOut, QUANTUM_SAMPLES)
                         producing += entry.key
                     }
                     // retired is one-way, so drop the queue here; a later packet from this
-                    // session allocates a fresh one via computeIfAbsent.
+                    // session allocates a fresh one via computeIfAbsent. Removed by identity
+                    // rather than through the iterator: the reader may already have swapped in a
+                    // replacement for this session, and an unconditional removal by key would
+                    // discard that one instead of this corpse.
                     if (queue.retired) {
                         queue.close()
-                        it.remove()
+                        speakers.remove(entry.key, queue)
                     }
                 }
 
