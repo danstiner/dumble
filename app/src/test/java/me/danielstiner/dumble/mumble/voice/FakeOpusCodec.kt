@@ -16,10 +16,10 @@ class FakeOpusCodec : OpusCodec {
     override fun newDecoder(): OpusDecoder {
         decodersCreated++
         return object : OpusDecoder {
-            override fun decode(opus: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int {
+            override fun decode(opusData: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int {
                 decodeCalls++
-                if (opus == null) return 0
-                val frames = opus[offset].toInt()
+                if (opusData == null) return 0
+                val frames = opusData[offset].toInt()
                 val n = frames * 480
                 java.util.Arrays.fill(out, 0, n, frames.toShort())
                 return n
@@ -28,8 +28,8 @@ class FakeOpusCodec : OpusCodec {
         }
     }
 
-    override fun packetSamples(opus: ByteArray, offset: Int, length: Int): Int =
-        opus[offset].toInt() * 480
+    override fun packetSamples(opusData: ByteArray, offset: Int, length: Int): Int =
+        opusData[offset].toInt() * 480
 
     companion object {
         /** A packet spanning [tenMsFrames] * 10 ms. */

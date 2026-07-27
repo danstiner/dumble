@@ -1,36 +1,60 @@
 package me.danielstiner.dumble.mumble.voice
 
-interface OpusDecoder {
-    /** Decodes into [out], returning the sample count. [opus] null requests loss concealment. */
-    fun decode(opus: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int
-    /** Must be called at most once; the native handle is freed and calling again is a double-free. */
-    fun close()
+import java.util.concurrent.atomic.AtomicLong
+
+interface OpusDecoder : AutoCloseable {
+    /**
+     * Decodes [opusData] into [out], returning the sample count.
+     *
+     * A null [opusData] asks for packet loss concealment: libopus synthesises a plausible
+     * continuation from decoder state rather than leaving a hole. [plcFrameSamples] says how much
+     * to synthesise, which only the caller can know — the packet that would have declared its own
+     * length is the one that went missing. It is ignored for a real packet, whose TOC byte carries
+     * the frame duration. Nothing requests concealment while audio arrives over the TCP tunnel,
+     * which delivers without loss; the parameter becomes load-bearing when UDP lands.
+     */
+    fun decode(opusData: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int
+
+    /** Frees the native handle. Repeat calls are no-ops; overlapping a live [decode] is not. */
+    override fun close()
 }
 
 /** The seam tests substitute, so nothing above it loads native code. */
 interface OpusCodec {
     fun newDecoder(): OpusDecoder
     /** Samples this packet will decode to, without decoding it. 0 if unparseable. */
-    fun packetSamples(opus: ByteArray, offset: Int, length: Int): Int
+    fun packetSamples(opusData: ByteArray, offset: Int, length: Int): Int
 }
 
 /** libopus-backed. Each decoder owns one native handle and is used by a single thread. */
 class LibOpusCodec : OpusCodec {
     override fun newDecoder(): OpusDecoder = LibOpusDecoder()
-    override fun packetSamples(opus: ByteArray, offset: Int, length: Int): Int =
-        NativeOpus.packetGetNbSamples(opus, offset, length, SAMPLE_RATE).coerceAtLeast(0)
+    override fun packetSamples(opusData: ByteArray, offset: Int, length: Int): Int =
+        NativeOpus.packetGetNbSamples(opusData, offset, length, SAMPLE_RATE).coerceAtLeast(0)
 }
 
 class LibOpusDecoder : OpusDecoder {
-    private val handle = NativeOpus.createDecoder(SAMPLE_RATE, CHANNELS)
-        .also { require(it != 0L) { "opus_decoder_create failed" } }
+    // AtomicLong, not a plain Long, so a repeated close() is a no-op rather than a second
+    // opus_decoder_destroy on a freed pointer — that corrupts the heap and throws nothing anyone
+    // could catch. It does not make close() safe to race a live decode(); that ordering is still
+    // the caller's to enforce.
+    private val handle = AtomicLong(NativeOpus.createDecoder(SAMPLE_RATE, CHANNELS))
 
-    override fun decode(opus: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int {
-        // With real data libopus needs room for the largest frame the packet might carry; with
-        // null it synthesises exactly plcFrameSamples.
-        val frameSize = if (opus == null) plcFrameSamples else MAX_FRAME_SAMPLES
-        return NativeOpus.decode(handle, opus, offset, length, out, frameSize, 0).coerceAtLeast(0)
+    init {
+        require(handle.get() != 0L) { "opus_decoder_create failed" }
     }
 
-    override fun close() = NativeOpus.destroyDecoder(handle)
+    override fun decode(opusData: ByteArray?, offset: Int, length: Int, out: ShortArray, plcFrameSamples: Int): Int {
+        val h = handle.get()
+        if (h == 0L) return 0
+        // With real data libopus needs room for the largest frame the packet might carry; with
+        // null it synthesises exactly plcFrameSamples.
+        val frameSize = if (opusData == null) plcFrameSamples else MAX_FRAME_SAMPLES
+        return NativeOpus.decode(h, opusData, offset, length, out, frameSize, 0).coerceAtLeast(0)
+    }
+
+    override fun close() {
+        val h = handle.getAndSet(0L)
+        if (h != 0L) NativeOpus.destroyDecoder(h)
+    }
 }

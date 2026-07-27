@@ -9,6 +9,11 @@ import kotlin.math.tanh
  * Playback-thread only.
  */
 object AudioMixer {
+    // LIMIT is forced: PCM16 full scale. THRESHOLD is a judgement call — 0.8 full scale is where
+    // the tanh knee starts trading a little colour for never hard-clipping on double-talk. It is a
+    // heuristic, not a measured optimum, and it has not been checked by ear. Note the knee is
+    // unconditional, so a single loud speaker is shaped too (30000 -> 29628, -0.11 dB) even though
+    // one PCM16 stream cannot clip on its own.
     private const val LIMIT = 32767.0
     private const val THRESHOLD = 26214.0   // 0.8 * full scale
 

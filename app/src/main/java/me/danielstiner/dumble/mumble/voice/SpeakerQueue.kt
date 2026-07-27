@@ -15,7 +15,7 @@ package me.danielstiner.dumble.mumble.voice
  */
 class SpeakerQueue(private val codec: OpusCodec) {
 
-    private class Packet(val opus: ByteArray, val spanSamples: Int)
+    private class Packet(val opusData: ByteArray, val spanSamples: Int)
 
     private val lock = Any()
     private val encoded = ArrayDeque<Packet>()      // guarded by lock
@@ -39,16 +39,16 @@ class SpeakerQueue(private val codec: OpusCodec) {
     internal val queuedSamplesForTest: Int get() = synchronized(lock) { queuedSamples }
 
     /**
-     * Reader-coroutine context; must not block. An empty [opus] is a tag-only frame and is not
+     * Reader-coroutine context; must not block. An empty [opusData] is a tag-only frame and is not
      * enqueued, but [isTerminator] on it is still honored — a terminator can arrive with no
      * trailing audio of its own.
      */
-    fun offer(opus: ByteArray, isTerminator: Boolean) {
+    fun offer(opusData: ByteArray, isTerminator: Boolean) {
         synchronized(lock) {
-            if (opus.isNotEmpty()) {
-                val span = codec.packetSamples(opus, 0, opus.size)
+            if (opusData.isNotEmpty()) {
+                val span = codec.packetSamples(opusData, 0, opusData.size)
                 if (span > 0) {
-                    encoded.addLast(Packet(opus, span))
+                    encoded.addLast(Packet(opusData, span))
                     queuedSamples += span
                     while (queuedSamples > HIGH_WATER_SAMPLES && encoded.size > 1) {
                         queuedSamples -= encoded.removeFirst().spanSamples
@@ -81,7 +81,7 @@ class SpeakerQueue(private val codec: OpusCodec) {
                 }
                 encoded.removeFirstOrNull()?.also { queuedSamples -= it.spanSamples }
             } ?: break
-            val n = decoder().decode(next.opus, 0, next.opus.size, decodeOut, QUANTUM_SAMPLES)
+            val n = decoder().decode(next.opusData, 0, next.opusData.size, decodeOut, QUANTUM_SAMPLES)
             if (n > 0) fifo.push(decodeOut, n)
         }
         val produced = fifo.size > 0
