@@ -18,6 +18,7 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLSession
@@ -99,18 +100,23 @@ class MumbleTcpTransportTest {
     @Test
     fun closeIsIdempotentAndReportsOnce() = runBlocking {
         val srv = startServer()
-        var closedCount = 0
+        val closedCount = AtomicInteger()
+        val closedFired = CountDownLatch(1)
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
         transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
-            override fun onClosed(cause: Throwable?) { closedCount++ }
+            override fun onClosed(cause: Throwable?) { closedCount.incrementAndGet(); closedFired.countDown() }
         })
 
         transport.close()
         transport.close()
-        Thread.sleep(200)
 
-        assertEquals(1, closedCount)
+        // Waits on the delivery rather than a guessed duration, and supplies the happens-before the
+        // old plain `var` lacked entirely. Bounds the "once" claim to what is provable: by the time
+        // this fires, both close() calls have returned and the reader's finally — the sole delivery
+        // site — has run, so a duplicate from that path is already counted.
+        assertTrue("onClosed never delivered", closedFired.await(5, TimeUnit.SECONDS))
+        assertEquals(1, closedCount.get())
     }
 
     @Test
@@ -162,6 +168,7 @@ class MumbleTcpTransportTest {
         val srv = startServer()
         val inFrame = CountDownLatch(1)
         val releaseFrame = CountDownLatch(1)
+        val closedFired = CountDownLatch(1)
         overlapped = false
         inOnFrame = false
 
@@ -175,17 +182,22 @@ class MumbleTcpTransportTest {
             }
             override fun onClosed(cause: Throwable?) {
                 if (inOnFrame) overlapped = true
+                closedFired.countDown()
             }
         })
 
         srv.writeFrame(TcpMessageType.ServerSync.id, byteArrayOf(1))
         assertTrue("reader never entered onFrame", inFrame.await(5, TimeUnit.SECONDS))
 
+        // Join before releasing onFrame: the defect is close() delivering onClosed on its own
+        // thread, and if it did, joining proves it has already happened. A sleep only made it
+        // likely. Then wait for the real delivery — without that the assert could run before
+        // onClosed ever fired and pass while proving nothing.
         val closer = thread { transport.close() }
-        Thread.sleep(200)          // give close() time to reach onClosed if it were unserialized
-        releaseFrame.countDown()
         closer.join(5_000)
+        releaseFrame.countDown()
 
+        assertTrue("onClosed never delivered", closedFired.await(5, TimeUnit.SECONDS))
         assertFalse("onClosed ran while onFrame was still executing", overlapped)
     }
 
