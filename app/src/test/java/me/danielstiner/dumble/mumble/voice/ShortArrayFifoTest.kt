@@ -45,7 +45,7 @@ class ShortArrayFifoTest {
     /**
      * The residue case that used to make the growable version reallocate: spans that are not a
      * multiple of the drain count skip size past zero, so head walks the ring indefinitely.
-     * Mirrors SpeakerQueue's loop — fill past a quantum, drain exactly one quantum — with the
+     * Mirrors SpeakerPlayout's loop — fill past a quantum, drain exactly one quantum — with the
      * stream's ordering checked across thousands of wraps.
      */
     @Test
