@@ -11,11 +11,10 @@ enum class License(val displayName: String) {
  * One attributed component. [groupPrefix] matches a Maven group exactly or on a dot boundary,
  * so a single entry covers a whole family (all 38 androidx groups, for instance).
  *
- * The verifyAttribution Gradle task recovers the prefixes from this file by regex over the
- * named argument, so entries below must keep that form with literal string values. `//` line
- * comments are stripped before matching, but block comments are not — never spell out that
- * named-argument call syntax in a `/** */` block comment anywhere in this file, or it will be
- * parsed as a real entry.
+ * Entries with an empty [groupPrefix] are vendored components that have no Maven coordinate
+ * and therefore cannot be discovered from the dependency graph at all — see [MUMBLE_SCHEMA]
+ * and [LIBOPUS]. verifyShippedGroups covers the Maven side; the submodule manifest covers this
+ * side.
  */
 data class Attribution(
     val groupPrefix: String,
@@ -54,7 +53,18 @@ val ATTRIBUTIONS: List<Attribution> = listOf(
  */
 val MUMBLE_SCHEMA = Attribution(
     groupPrefix = "",
-    description = "Mumble protocol schema (Mumble.proto, vendored from mumble-voip/mumble)",
+    description = "Mumble protocol schema (Mumble.proto, vendored from https://github.com/mumble-voip/mumble )",
+    license = License.BSD_3_CLAUSE,
+)
+
+/**
+ * libopus is built from source vendored as a git submodule, so like the Mumble schema it has no
+ * Maven group and verifyShippedGroups cannot see it. The compiled library ships inside
+ * libdumble.so, so BSD-3-Clause clause 2 applies to the binary we distribute.
+ */
+val LIBOPUS = Attribution(
+    groupPrefix = "",
+    description = "libopus (Xiph.Org Foundation, vendored from https://github.com/xiph/opus/ )",
     license = License.BSD_3_CLAUSE,
 )
 
@@ -66,4 +76,4 @@ fun attributionFor(group: String): Attribution? =
 
 /** Components covered by [license], for display grouped by license. */
 fun attributionsFor(license: License): List<Attribution> =
-    (ATTRIBUTIONS + MUMBLE_SCHEMA).filter { it.license == license }
+    (ATTRIBUTIONS + MUMBLE_SCHEMA + LIBOPUS).filter { it.license == license }

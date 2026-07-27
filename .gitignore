@@ -18,5 +18,8 @@ local.properties
 # Local planning scratchpad
 /TODO.md
 
+# Signed release artifacts from Android Studio's bundle wizard
+/app/release/
+
 # Superpowers skill state; a bit too detailed to bother tracking in source control
 /docs/superpowers/

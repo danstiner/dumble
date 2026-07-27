@@ -22,6 +22,7 @@ jobs:
         with:
           # Nothing here pushes; don't leave the token readable by ./gradlew.
           persist-credentials: false
+          submodules: recursive
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
