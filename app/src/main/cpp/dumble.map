@@ -1,0 +1,9 @@
+/*
+ * Reduce which symbols libdumble.so EXPORTS to just its JNI entry points.
+ */
+DUMBLE_JNI {
+  global:
+    Java_me_danielstiner_dumble_mumble_voice_NativeOpus_*;
+  local:
+    *;
+};
