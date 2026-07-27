@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.mumble.protocol
 
 /** Why a connection ended. Only what this layer can actually report; trust failures never reach it. */
-enum class FailReason { AUTH_REJECT, TIMEOUT, IO }
+enum class FailReason { AUTH_REJECT, TIMEOUT, IO, VERSION_TOO_OLD }
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState

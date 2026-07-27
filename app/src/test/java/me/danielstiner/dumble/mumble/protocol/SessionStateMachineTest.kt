@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import com.google.protobuf.ByteString
 import com.google.protobuf.MessageLite
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,7 +12,9 @@ import kotlinx.coroutines.test.runTest
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,9 +26,13 @@ class SessionStateMachineTest {
 
     private class FakeChannel : ControlChannel {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()
+        val sentRaw = mutableListOf<Pair<TcpMessageType, ByteArray>>()
         var closed = false
         override fun send(type: TcpMessageType, message: MessageLite): Boolean {
             sent += type to message; return true
+        }
+        override fun sendRaw(type: TcpMessageType, payload: ByteArray): Boolean {
+            sentRaw += type to payload; return true
         }
         override fun close() { closed = true }
     }
@@ -65,6 +72,8 @@ class SessionStateMachineTest {
             sent += type
             return true
         }
+        // This fake exists to fail one handshake message; audio never reaches it.
+        override fun sendRaw(type: TcpMessageType, payload: ByteArray) = true
         override fun close() = Unit
     }
 
@@ -218,7 +227,7 @@ class SessionStateMachineTest {
     }
 
     @Test
-    fun tunnelAndUnknownFramesAreIgnored() = runTest {
+    fun unknownMessageIdIsIgnored() = runTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
@@ -598,6 +607,108 @@ class SessionStateMachineTest {
             ),
             version.versionV1,
         )
+    }
+
+    @Test
+    fun tunneledAudioReachesTheListener() = runTest {
+        val ch = FakeChannel()
+        // Nonzero baseline: with a zero baseline an implementation that forgot to pass
+        // the arrival timestamp would produce the same answer and the test would prove nothing.
+        val now = 1_000_000L
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clockNanos = { now })
+        val seen = mutableListOf<Pair<ByteArray, Long>>()
+        sm.audioListener = SessionStateMachine.AudioListener { payload, arrivalNanos ->
+            seen += payload to arrivalNanos
+        }
+
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(7)
+            .setFrameNumber(3)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1, 2, 3)))
+            .build()
+        val payload = byteArrayOf(0) + audio.toByteArray()
+        sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, payload))
+
+        assertEquals(1, seen.size)
+        assertArrayEquals(payload, seen[0].first)
+        assertEquals(now, seen[0].second)
+    }
+
+    @Test
+    fun tunneledAudioWithNoListenerIsIgnored() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        // No listener attached — the frame must be dropped, not throw.
+        sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0, 1, 2)))
+    }
+
+    @Test
+    fun aServerBelowOnePointFiveIsRejected() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
+            .build()))
+
+        val state = sm.state.value
+        assertTrue("expected Failed, was $state", state is ConnectionState.Failed)
+        assertEquals(FailReason.VERSION_TOO_OLD, (state as ConnectionState.Failed).reason)
+    }
+
+    // version_v2 was introduced in 1.5, so a real server old enough to be refused can only announce
+    // itself in the legacy encoding. Rejecting setVersionV2(1,4,x) proves nothing about that server.
+    @Test
+    fun aLegacyEncodedServerBelowOnePointFiveIsRejected() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV1(MumbleVersion.encodeV1(1, 4, 287))
+            .build()))
+
+        val state = sm.state.value
+        assertTrue("expected Failed, was $state", state is ConnectionState.Failed)
+        assertEquals(FailReason.VERSION_TOO_OLD, (state as ConnectionState.Failed).reason)
+    }
+
+    // Guards the `major == 1 &&` conjunction against being flattened to a bare `minor < 5`.
+    @Test
+    fun aFutureMajorIsAccepted() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(2, 0, 0))
+            .build()))
+
+        assertEquals(ConnectionState.Handshaking, sm.state.value)
+    }
+
+    @Test
+    fun exactlyOnePointFiveIsAccepted() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 5, 0))
+            .build()))
+
+        // Still handshaking — the version check must not settle a terminal state on a good server.
+        assertEquals(ConnectionState.Handshaking, sm.state.value)
+    }
+
+    @Test
+    fun serverVersionIsPublishedEvenWhenTooOld() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
+            .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
+            .build()))
+
+        // The UI names the offending version in its error, so it must survive the failure.
+        assertEquals("1.4.287", sm.serverVersion.value?.toString())
     }
 
     @Test

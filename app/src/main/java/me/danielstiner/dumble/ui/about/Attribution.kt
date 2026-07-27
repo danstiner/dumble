@@ -53,7 +53,7 @@ val ATTRIBUTIONS: List<Attribution> = listOf(
  */
 val MUMBLE_SCHEMA = Attribution(
     groupPrefix = "",
-    description = "Mumble protocol schema (Mumble.proto, vendored from https://github.com/mumble-voip/mumble )",
+    description = "Mumble protocol schema (Mumble.proto, MumbleUDP.proto, vendored from https://github.com/mumble-voip/mumble )",
     license = License.BSD_3_CLAUSE,
 )
 
