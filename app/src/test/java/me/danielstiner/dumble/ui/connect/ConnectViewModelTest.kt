@@ -248,4 +248,13 @@ class ConnectViewModelTest {
         vm.back(); advanceUntilIdle()
         assertEquals(Route.Main, vm.uiState.value.route)
     }
+
+    @Test fun speakingSessionsReachTheUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        advanceUntilIdle()
+        conn.speakingSessions.value = setOf(4, 5)
+        advanceUntilIdle()
+        assertEquals(setOf(4, 5), vm.uiState.value.speakingSessions)
+    }
 }

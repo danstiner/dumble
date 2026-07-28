@@ -25,6 +25,7 @@ sealed interface ChannelTreeRow {
         val selfDeaf: Boolean,
         val suppress: Boolean,
         val isMe: Boolean,
+        val isSpeaking: Boolean,
     ) : ChannelTreeRow
 }
 
@@ -34,7 +35,7 @@ sealed interface ChannelTreeRow {
  * server guarantees. A user whose channel has not arrived yet is skipped and reappears on the next
  * emission.
  */
-fun channelTreeRows(tree: ChannelTree, mySession: Int?): List<ChannelTreeRow> {
+fun channelTreeRows(tree: ChannelTree, mySession: Int?, speaking: Set<Int> = emptySet()): List<ChannelTreeRow> {
     val myChannelId = mySession?.let { tree.users[it]?.channelId }
     val childrenByParent = tree.channels.values.groupBy { it.parentId }
     val usersByChannel = tree.users.values.groupBy { it.channelId }
@@ -48,6 +49,7 @@ fun channelTreeRows(tree: ChannelTree, mySession: Int?): List<ChannelTreeRow> {
                 depth + 1, u.session, u.name,
                 u.mute, u.deaf, u.selfMute, u.selfDeaf, u.suppress,
                 isMe = u.session == mySession,
+                isSpeaking = u.session in speaking,
             )
         }
         childrenByParent[channel.id].orEmpty()
