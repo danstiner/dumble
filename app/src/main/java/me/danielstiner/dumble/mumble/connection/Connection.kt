@@ -13,6 +13,7 @@ interface Connection {
     val roundTripMillis: StateFlow<Double?>
     val channelTree: StateFlow<ChannelTree>
     val messages: StateFlow<List<ChatMessage>>
+    val speakingSessions: StateFlow<Set<Int>>
     fun connect(endpoint: MumbleEndpoint, username: String, password: String?)
     fun trustAndConnect()
     fun cancelTrust()
