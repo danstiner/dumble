@@ -26,7 +26,7 @@ class ChannelTreeRowsTest {
             listOf(
                 ChannelTreeRow.ChannelRow(0, 0, "Root", 0, false),
                 ChannelTreeRow.ChannelRow(1, 1, "Gaming", 1, false),
-                ChannelTreeRow.UserRow(2, 7, "alice", false, false, false, false, false, false),
+                ChannelTreeRow.UserRow(2, 7, "alice", false, false, false, false, false, false, false),
             ),
             rows,
         )
@@ -95,5 +95,16 @@ class ChannelTreeRowsTest {
             listOf(ChannelTreeRow.ChannelRow(0, 3, "Detached", 0, false)),
             channelTreeRows(tree, null),
         )
+    }
+
+    @Test fun speakingSessionsAreTagged() {
+        val tree = ChannelTree(
+            channels = mapOf(0 to Channel(0, null, "Root", 0)),
+            users = mapOf(1 to user(1, "alice", 0), 2 to user(2, "bob", 0)),
+        )
+        val rows = channelTreeRows(tree, mySession = 1, speaking = setOf(2))
+        val users = rows.filterIsInstance<ChannelTreeRow.UserRow>()
+        assertFalse(users.first { it.session == 1 }.isSpeaking)
+        assertTrue(users.first { it.session == 2 }.isSpeaking)
     }
 }
