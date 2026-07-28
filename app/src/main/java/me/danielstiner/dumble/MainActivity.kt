@@ -72,6 +72,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                         serverVersion = state.serverVersion,
                         rttMs = state.rttMs,
                         channelTree = state.channelTree,
+                        speaking = state.speakingSessions,
                         unread = state.unread,
                         onOpenChat = vm::openChat,
                         onDisconnect = vm::onDisconnect,
