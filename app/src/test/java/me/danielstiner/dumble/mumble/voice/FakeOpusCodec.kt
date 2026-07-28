@@ -13,6 +13,10 @@ class FakeOpusCodec : OpusCodec {
     var decodeCalls = 0
         private set
 
+    /** Stands in for "a packet was admitted into a playout" — offer is the only caller. */
+    var packetSamplesCalls = 0
+        private set
+
     override fun newDecoder(): OpusDecoder {
         decodersCreated++
         return object : OpusDecoder {
@@ -29,8 +33,10 @@ class FakeOpusCodec : OpusCodec {
         }
     }
 
-    override fun packetSamples(opusData: ByteArray, offset: Int, length: Int): Int =
-        opusData[offset].toInt() * 480
+    override fun packetSamples(opusData: ByteArray, offset: Int, length: Int): Int {
+        packetSamplesCalls++
+        return opusData[offset].toInt() * 480
+    }
 
     companion object {
         /** A packet spanning [tenMsFrames] * 10 ms. */
