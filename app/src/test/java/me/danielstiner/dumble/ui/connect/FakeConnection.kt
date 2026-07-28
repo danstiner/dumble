@@ -15,6 +15,7 @@ class FakeConnection : Connection {
     override val roundTripMillis = MutableStateFlow<Double?>(null)
     override val channelTree = MutableStateFlow(ChannelTree())
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
 
     var connectCalls = 0; private set
     var lastEndpoint: MumbleEndpoint? = null; private set
