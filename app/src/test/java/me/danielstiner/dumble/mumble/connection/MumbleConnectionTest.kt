@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.connection
 
+import com.google.protobuf.ByteString
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -10,16 +11,22 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
+import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import me.danielstiner.dumble.mumble.voice.FakeAudioOut
+import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.SocketTimeoutException
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HostnameVerifier
 
 class MumbleConnectionTest {
@@ -29,7 +36,7 @@ class MumbleConnectionTest {
         srv.start()
         try {
             val pins = InMemoryPinStore()
-            val conn = MumbleConnection(pins) { pin ->
+            val conn = MumbleConnection(pins, FakeOpusCodec(), { FakeAudioOut() }) { pin ->
                 MumbleTcpTransport(
                     expectedPin = pin,
                     // First contact must be rejected by the authority path so MumbleTrustManager
@@ -59,7 +66,7 @@ class MumbleConnectionTest {
     }
 
     @Test fun connectTimeoutMapsToTimeoutError() = runBlocking {
-        val conn = MumbleConnection(InMemoryPinStore()) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -69,7 +76,7 @@ class MumbleConnectionTest {
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
         val gate = CompletableDeferred<Unit>()
-        val conn = MumbleConnection(InMemoryPinStore()) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> gate.await() }     // blocks mid-"handshake"
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -83,7 +90,7 @@ class MumbleConnectionTest {
 
     @Test fun channelTreeSurfacesReducedFrames() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore()) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> }.also { fake = it }   // connects, stays open
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -101,7 +108,7 @@ class MumbleConnectionTest {
 
     @Test fun disconnectResetsChannelTree() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore()) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -119,7 +126,7 @@ class MumbleConnectionTest {
 
     @Test fun aSupersededAttemptLeavesChannelTreeEmpty() = runBlocking {
         val gate = CompletableDeferred<Unit>()
-        val conn = MumbleConnection(InMemoryPinStore()) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> gate.await() }   // blocks mid-handshake
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -132,7 +139,7 @@ class MumbleConnectionTest {
 
     @Test fun messagesSurfaceFromTheSession() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
@@ -146,7 +153,7 @@ class MumbleConnectionTest {
 
     @Test fun disconnectClearsMessages() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
@@ -160,7 +167,7 @@ class MumbleConnectionTest {
 
     @Test fun sendTextRoutesToTheLiveSessionAndEchoes() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.ServerSync.id,
@@ -179,7 +186,170 @@ class MumbleConnectionTest {
     }
 
     @Test fun sendTextWithNoConnectionReturnsFalse() = runBlocking {
-        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> } }
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> } }
         assertFalse(conn.sendText("hi"))
+    }
+
+    @Test fun speakingSessionsPopulateThenClearOnDisconnect() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val codec = FakeOpusCodec()
+        val out = FakeAudioOut()
+        val conn = MumbleConnection(InMemoryPinStore(), codec, { out }) {
+            FakeControlTransport { _, _ -> }.also { fake = it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        // One 60 ms packet satisfies VoiceReceiver's 60 ms prebuffer (PREBUFFER_SAMPLES) in a
+        // single frame, so the playout starts producing on the very next tick.
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
+            .build()
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+
+        // speakingSessions updates on the playback thread; the flow collect that republishes it
+        // is another hop, so wait on the value rather than sampling it.
+        val speaking = withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
+        assertEquals(setOf(9), speaking)
+
+        // disconnect() zeroes the flow under the same lock as every other reset, so this is
+        // deterministic even though the receiver's own stop() is handed to a coroutine.
+        conn.disconnect()
+        assertEquals(emptySet<Int>(), conn.speakingSessions.value)
+
+        // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
+        // synchronously and the generation guard blocks any later receiver-originated write, so
+        // deleting the stop() from teardown() would still pass it. These are what actually prove
+        // the receiver was released. stop() is handed to a coroutine, hence the poll.
+        awaitTrue("teardown must close the AudioOut") { out.closed }
+        // Awaited, not sampled: out.close() runs in loop()'s finally, before the thread dies, while
+        // stop() closes the decoders only after join() returns. Asserting straight off out.closed
+        // reads that gap and fails whenever stop()'s coroutine is slow to be scheduled.
+        awaitTrue("teardown must close every decoder") { codec.decodersClosed == codec.decodersCreated }
+    }
+
+    /**
+     * A session that dies on its own reaches no disconnect() and supersedes no prior attempt, so
+     * before retire() nothing tore the attempt down and the playback thread outlived it — waking
+     * at 100 Hz with an open AudioTrack for as long as the error screen stayed up.
+     */
+    @Test fun aFailedSessionReleasesTheReceiver() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val codec = FakeOpusCodec()
+        val out = FakeAudioOut()
+        val conn = MumbleConnection(InMemoryPinStore(), codec, { out }) {
+            FakeControlTransport { _, _ -> }.also { fake = it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        // Reach the receiver first, so there is a live decoder and an open output to release.
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
+            .build()
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
+
+        // The server rejects the login: a terminal state nobody asked for.
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
+            MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
+
+        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
+        assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
+
+        awaitTrue("a failed session must close the AudioOut") { out.closed }
+        // Awaited for the same reason as in the disconnect test: the output closes on the playback
+        // thread's way out, the decoders only once stop() has joined it.
+        awaitTrue("a failed session must close every decoder") { codec.decodersClosed == codec.decodersCreated }
+        // The error must survive the teardown — it is what the user is looking at.
+        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
+    }
+
+    /**
+     * A session can reach a terminal state before connect() gets as far as starting the receiver —
+     * an instant auth reject, or a socket dropped right after the TLS handshake. retire() releases
+     * such an attempt without bumping `attempt`, so a guard testing the generation alone still
+     * passes and starts a receiver whose stop() has already run: a playback thread nothing will
+     * ever stop, holding an open AudioOut until the process dies, one per failed connect.
+     *
+     * Whether that window is hit is pure scheduling. On an idle machine the connect coroutine wins
+     * every time — against the bug this body passed 200 consecutive runs. The load threads are what
+     * make it reachable, at which point it reproduced on roughly a quarter of runs.
+     */
+    @Test fun aSessionFailingBeforeStartLeavesNoReceiverRunning() = runBlocking {
+        val stopLoad = AtomicBoolean(false)
+        val load = (1..Runtime.getRuntime().availableProcessors()).map {
+            Thread { var x = 0L; while (!stopLoad.get()) x += 1 }.apply { isDaemon = true; start() }
+        }
+        try {
+            repeat(50) { run ->
+                val outs = CopyOnWriteArrayList<FakeAudioOut>()
+                lateinit var fake: FakeControlTransport
+                val conn = MumbleConnection(
+                    InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut().also { outs += it } },
+                ) {
+                    // Rejected from inside connect(), so the session is already Failed by the time
+                    // the state collector is launched — well before the receiver would start.
+                    FakeControlTransport { _, _ ->
+                        fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
+                            MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
+                    }.also { fake = it }
+                }
+
+                conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+                withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
+                // Either ordering is fine: the guard sees the release and never starts (no output
+                // is built at all), or it starts first and the teardown's stop() closes it. What
+                // must never survive is an output that was opened and left open.
+                awaitTrue("run $run: receiver started for a retired attempt and was never stopped") {
+                    outs.all { it.closed }
+                }
+            }
+        } finally {
+            stopLoad.set(true)
+            load.forEach { it.join(1_000) }
+        }
+    }
+
+    /**
+     * connect() bumps `attempt` synchronously but builds the attempt inside a coroutine, so a
+     * disconnect() landing while the pin lookup is still suspended leaves an attempt that was
+     * constructed and never published. Nothing else can reach it — it was never in `current`, so no
+     * teardown path knows about it — which makes the guard at the top of that coroutine its only
+     * exit, and releasing the transport there its own responsibility.
+     *
+     * Deterministic rather than racy: the gate holds the coroutine inside pinStore.get(), which is
+     * upstream of the publish, so disconnect() always wins.
+     */
+    @Test fun anAttemptSupersededBeforePublishReleasesItsTransport() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val pins = object : PinStore {
+            override suspend fun get(key: String): String? { gate.await(); return null }
+            override suspend fun put(key: String, fingerprint: String) = Unit
+            override suspend fun remove(key: String) = Unit
+        }
+        val outs = CopyOnWriteArrayList<FakeAudioOut>()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(pins, FakeOpusCodec(), { FakeAudioOut().also { outs += it } }) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        conn.disconnect()
+        gate.complete(Unit)
+
+        awaitTrue("superseded attempt left its transport open") {
+            transports.size == 1 && transports.all { it.closed }
+        }
+        assertTrue("no receiver should ever start on this path", outs.isEmpty())
+    }
+
+    /** Polls a condition a background coroutine will satisfy, rather than sleeping a fixed time. */
+    private suspend fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (!cond() && System.currentTimeMillis() < deadline) delay(10)
+        assertTrue(message, cond())
     }
 }

@@ -18,9 +18,14 @@ import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
+import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
+import me.danielstiner.dumble.mumble.voice.AudioOut
+import me.danielstiner.dumble.mumble.voice.OpusCodec
+import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,9 +42,12 @@ import javax.inject.Singleton
 @Singleton
 class MumbleConnection internal constructor(
     private val pinStore: PinStore,
+    private val opusCodec: OpusCodec,
+    private val newAudioOut: () -> AudioOut,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
-    @Inject constructor(pinStore: PinStore) : this(pinStore, { MumbleTcpTransport(it) })
+    @Inject constructor(pinStore: PinStore, opusCodec: OpusCodec) :
+        this(pinStore, opusCodec, { AndroidAudioOut() }, { MumbleTcpTransport(it) })
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -53,6 +61,8 @@ class MumbleConnection internal constructor(
     override val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+    private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
+    override val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
 
     init {
         // One point that mirrors every status transition to logcat, whichever path set it.
@@ -71,6 +81,7 @@ class MumbleConnection internal constructor(
         val transport: MumbleControlTransport,
         val sm: SessionStateMachine,
         val childScope: CoroutineScope,
+        val receiver: VoiceReceiver,
         @Volatile var presented: String? = null,
     )
 
@@ -80,6 +91,7 @@ class MumbleConnection internal constructor(
     private fun publishRtt(gen: Int, r: Double?) = synchronized(lock) { if (gen == attempt) _roundTripMillis.value = r }
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
+    private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val gen: Int
@@ -90,6 +102,7 @@ class MumbleConnection internal constructor(
             _serverVersion.value = null; _roundTripMillis.value = null
             _channelTree.value = ChannelTree()
             _messages.value = emptyList()
+            _speakingSessions.value = emptySet()
         }
         prior?.let { teardown(it) }
 
@@ -99,9 +112,10 @@ class MumbleConnection internal constructor(
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
             val sm = SessionStateMachine(transport, username, password, childScope)
-            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope)
+            val receiver = VoiceReceiver(opusCodec, newAudioOut)
+            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
-            if (!live) { runCatching { transport.close() }; childScope.cancel(); return@launch }
+            if (!live) { teardown(att); return@launch }   // superseded before publish
 
             val listener = object : MumbleControlTransport.Listener {
                 override fun onFrame(f: TcpFrame) = sm.onFrame(f)
@@ -123,12 +137,27 @@ class MumbleConnection internal constructor(
             }
             if (gen != attempt) { teardown(att); return@launch }   // superseded mid-handshake
 
+            sm.audioListener = SessionStateMachine.AudioListener { payload, _ ->
+                receiver.onTunneledAudio(payload)
+            }
             sm.start()
-            childScope.launch { sm.state.collect { mapState(it)?.let { s -> publishStatus(gen, s) } } }
+            childScope.launch {
+                sm.state.collect { st ->
+                    mapState(st)?.let { publishStatus(gen, it) }
+                    // Retire the attempt if the session fails. Sequenced after publishStatus:
+                    // retire() calls teardown(), which cancels this collector's own scope.
+                    if (st is ConnectionState.Failed) retire(att)
+                }
+            }
             childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
             childScope.launch { sm.roundTripMillis.collect { publishRtt(gen, it) } }
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
+            childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
+            // Start the receiver if we are still on the current attempt. Guarded to avoid racing
+            // with teardown(), which could leave a dangling playback thread. Both halves matter:
+            // retire() clears `current` without bumping `attempt`.
+            synchronized(lock) { if (gen == attempt && current === att) receiver.start() }
         }
     }
 
@@ -152,14 +181,39 @@ class MumbleConnection internal constructor(
             _serverVersion.value = null; _roundTripMillis.value = null
             _channelTree.value = ChannelTree()
             _messages.value = emptyList()
+            _speakingSessions.value = emptySet()
         }
         prior?.let { teardown(it) }
     }
 
     override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
+    /**
+     * Release a still-current attempt whose session died on its own. Deliberately does not bump
+     * [attempt] or reset any published state — the terminal Error status is what the user is
+     * looking at. Clearing [current] is what makes this at-most-once: a later disconnect() sees no
+     * prior and a later connect() has nothing to tear down.
+     */
+    private fun retire(att: Attempt) {
+        val live = synchronized(lock) {
+            if (att.gen == attempt && current === att) { current = null; true } else false
+        }
+        if (live) teardown(att)
+    }
+
     private fun teardown(att: Attempt) {
-        runCatching { att.transport.close() }
+        // Launch blocking work asynchronously, teardown() can be called from the main thread.
+        // IO because both block: stop() joins the playback thread for up to a second, and
+        // SSLSocket.close can stall writing close-notify to a dead peer. Socket first, since that
+        // is the part a reconnect waits on. Safe to be asynchronous: teardown is idempotent and
+        // every publish is generation-guarded.
+        scope.launch(Dispatchers.IO) {
+            runCatching { att.transport.close() }
+            att.receiver.stop()
+        }
+        // The collectors never finish on their own, and retire() does not bump `attempt`, so this
+        // is the only thing that stops a retired attempt still publishing. Stays last because
+        // retire() can reach here from inside childScope itself.
         att.childScope.cancel()
     }
 
