@@ -27,6 +27,7 @@ import me.danielstiner.dumble.R
 @RawRes
 private fun License.rawResId(): Int = when (this) {
     License.APACHE_2_0 -> R.raw.license_apache_2_0
+    License.APACHE_2_0_LLVM -> R.raw.license_apache_2_0_llvm_exception
     License.BSD_3_CLAUSE -> R.raw.license_bsd_3_clause
     License.MIT -> R.raw.license_mit
 }

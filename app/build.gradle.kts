@@ -21,6 +21,15 @@ android {
         versionCode = 1
         versionName = "0.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                // CMake 3.22.1 defaults CMAKE_ANDROID_STL_TYPE to c++_static (Android-Common.cmake),
+                // but Oboe's prefab package declares c++_shared and prefab rejects the mismatch at
+                // configure time. Shared is also the only correct answer: one libc++ per process, or
+                // the libdumble.so <-> liboboe.so boundary becomes an ODR and unwinding hazard.
+                arguments += "-DANDROID_STL=c++_shared"
+            }
+        }
     }
 
     signingConfigs {
@@ -75,6 +84,8 @@ android {
         compose = true
         // BuildConfig.VERSION_NAME is shown on the About screen; AGP defaults this off.
         buildConfig = true
+        // Oboe ships as a prefab AAR rather than source; without this find_package cannot see it.
+        prefab = true
     }
     // Connection/trust code logs via android.util.Log and is exercised in JVM unit tests, where the
     // framework is a stub. Return defaults so Log.* no-ops instead of throwing "not mocked".
@@ -113,6 +124,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.ktor.utils) // io.ktor.util.escapeHTML for outgoing chat text
+    implementation(libs.oboe)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -135,6 +147,8 @@ protobuf {
 // committed, so an arrival shows up in review; that Attribution.kt covers it is asserted by
 // AttributionTest, in Kotlin, against the real data rather than by parsing this source.
 tasks.register("verifyShippedGroups") {
+    // Without this the task finds no files and passes vacuously.
+    dependsOn("stripReleaseDebugSymbols")
     val groups = configurations.named("releaseRuntimeClasspath").flatMap { conf ->
         conf.incoming.artifacts.resolvedArtifacts.map { artifacts ->
             artifacts.mapNotNull {
@@ -149,6 +163,8 @@ tasks.register("verifyShippedGroups") {
     val bundledLicense = layout.projectDirectory.file("src/main/res/raw/license_apache_2_0.txt").asFile
     val gitmodules = rootProject.layout.projectDirectory.file(".gitmodules").asFile
     val submoduleManifest = layout.projectDirectory.file("src/test/resources/shipped-submodules.txt").asFile
+    val nativeLibsDir = layout.buildDirectory.dir("intermediates/stripped_native_libs/release")
+    val nativeManifest = layout.projectDirectory.file("src/test/resources/shipped-native-libs.txt").asFile
 
     inputs.property("groups", groups)
     inputs.file(rootLicense)
@@ -177,6 +193,19 @@ tasks.register("verifyShippedGroups") {
             submoduleManifest.writeText(expected)
             error("shipped-submodules.txt was stale and has been rewritten — review the diff, " +
                 "attribute the new submodule in Attribution.kt, and commit.")
+        }
+        // The group diff sees only Maven coordinates and the submodule diff only vendored source.
+        // An NDK-toolchain runtime like libc++_shared.so is neither, and ships anyway. Diff the
+        // packaged .so set for the same reason the other two sets are diffed.
+        val sos = nativeLibsDir.get().asFile.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".so") }
+            .map { it.name }
+            .toSortedSet()
+        val expectedSos = sos.joinToString("\n") + "\n"
+        if (!nativeManifest.exists() || nativeManifest.readText() != expectedSos) {
+            nativeManifest.writeText(expectedSos)
+            error("shipped-native-libs.txt was stale and has been rewritten — review the diff, " +
+                "attribute any new native library in Attribution.kt, and commit.")
         }
     }
 }

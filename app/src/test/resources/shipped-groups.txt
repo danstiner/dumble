@@ -38,6 +38,7 @@ androidx.window
 com.google.code.findbugs
 com.google.dagger
 com.google.guava
+com.google.oboe
 com.google.protobuf
 com.squareup.okio
 io.ktor
