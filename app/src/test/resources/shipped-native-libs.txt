@@ -1,0 +1,5 @@
+libandroidx.graphics.path.so
+libc++_shared.so
+libdatastore_shared_counter.so
+libdumble.so
+liboboe.so
