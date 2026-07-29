@@ -88,6 +88,56 @@ class VoiceReceiverTest {
     }
 
     @Test
+    fun audioArrivingAfterStopAllocatesNothing() {
+        val codec = FakeOpusCodec()
+        val latch = CountDownLatch(1)
+        val out = LatchingOut(latch)
+        val rx = VoiceReceiver(codec) { out }
+        rx.start()
+        try {
+            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+            assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
+        } finally {
+            rx.stop()
+        }
+        val afterStop = codec.decodersCreated
+
+        // The reader is a separate thread from stop(), so a packet can still be in flight when the
+        // sweep finishes. offer() answering false makes the retry take a *fresh* playout, so an
+        // ungated late packet does not merely get dropped — it allocates a native decoder into a
+        // map nothing will ever sweep again, one per session, for the life of the process.
+        rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6))
+
+        assertEquals("a packet arriving after stop() must not allocate", afterStop, codec.decodersCreated)
+        assertEquals("every decoder must still be closed", codec.decodersCreated, codec.decodersClosed)
+    }
+
+    /**
+     * Single-shot: MumbleConnection builds a fresh receiver per connection attempt and never
+     * restarts one, so `stopped` is one-way and start() refuses after it. Without that guard a
+     * restart runs a second playback thread the already-completed stop() will never join, holding
+     * an open AudioOut for the life of the process.
+     *
+     * The second stop() is what makes this deterministic rather than a sleep: it joins whatever the
+     * second start() may have created, so the count below is settled by the time it returns.
+     */
+    @Test
+    fun startAfterStopIsRefused() {
+        val built = AtomicInteger()
+        val latch = CountDownLatch(1)
+        val rx = VoiceReceiver(FakeOpusCodec()) { built.incrementAndGet(); LatchingOut(latch) }
+        rx.start()
+        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+        assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
+        rx.stop()
+        assertEquals(1, built.get())
+
+        rx.start()
+        rx.stop()
+        assertEquals("start() after stop() must not run a second playback thread", 1, built.get())
+    }
+
+    @Test
     fun reportsSpeakingSessions() {
         val latch = CountDownLatch(1)
         val speakingAtWrite = AtomicReference<Set<Int>?>(null)

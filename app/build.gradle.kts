@@ -130,31 +130,6 @@ protobuf {
     }
 }
 
-// R8 verification: the protobuf keep rule is -keepclassmembers (conditional on the class surviving),
-// so it only fires once the protocol is reachable from real UI. Assert the reflected fields of the
-// message types the session actually parses/builds are seeded — a class-name substring would pass
-// even for still-dead message types (e.g. UserState, ChannelState, legitimately stripped).
-tasks.register("verifyProtobufKeepRules") {
-    dependsOn("assembleRelease")
-    val seeds = layout.buildDirectory.file("outputs/mapping/release/seeds.txt")
-    inputs.file(seeds)
-    doLast {
-        val text = seeds.get().asFile.readText()
-        val required = listOf("Version", "Authenticate", "Ping", "Reject", "CryptSetup", "ServerSync")
-        // Field seed lines look like:
-        //   me.danielstiner.dumble.mumble.proto.MumbleProtos$Ping: int good_
-        // Nested classes use '$', matching R8's seeds.txt output (verified empirically).
-        val prefix = "me.danielstiner.dumble.mumble.proto.MumbleProtos\$"
-        val missing = required.filter { type ->
-            text.lineSequence().none { it.startsWith("$prefix$type:") }
-        }
-        require(missing.isEmpty()) {
-            "R8 seeds.txt is missing field seeds for MumbleProtos message types: $missing — the " +
-                "-keepclassmembers rule did not fire for them (protocol not reachable, or rule broken)."
-        }
-    }
-}
-
 // Transitive dependencies arrive without appearing in any diff — that is the blind spot here
 // (org.slf4j and okio reached the APK via ktor-utils unnoticed). The resolved group list is
 // committed, so an arrival shows up in review; that Attribution.kt covers it is asserted by

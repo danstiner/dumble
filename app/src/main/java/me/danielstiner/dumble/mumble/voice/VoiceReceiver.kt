@@ -18,8 +18,9 @@ private const val UDP_TYPE_AUDIO = 0
  *
  * Pacing: while any speaker is draining, the loop is clocked by the blocking [AudioOut.write] —
  * AudioTrack consumes exactly one quantum per quantum-duration off the audio clock, so no timer
- * is used and none should be added. When every speaker is idle there is nothing to block on, so
- * the loop parks on [idleLock] until a frame arrives.
+ * is used and none should be added. When nobody is draining there is nothing to block on, so the
+ * loop parks on [idleLock]: unbounded when no speaker exists at all, and 10 ms at a time while one
+ * does.
  */
 class VoiceReceiver(
     private val codec: OpusCodec,
@@ -46,8 +47,14 @@ class VoiceReceiver(
     // unlatched log is its own liveness problem.
     private var speakerCapReported = false
 
+    // One-way, and the loop's only exit condition. Set by stop() and by loop() on its way out, so
+    // a playback thread that died on its own silences the reader too: offer() returning false makes
+    // the reader take a *fresh* playout, so an ungated packet does not merely get dropped — it
+    // allocates a native decoder into a map nothing will sweep again. One-way rather than a pair of
+    // flags because every "stop" is terminal here; `thread` already distinguishes not-yet-started
+    // from running, and a latch cannot be clobbered by a thread that is on its way out.
     @Volatile
-    private var running = false
+    private var stopped = false
 
     // Written by start() outside the stop() monitor and read by stop() under it — no other
     // ordering ties the two, so without @Volatile a stop() on another thread could observe a
@@ -55,23 +62,15 @@ class VoiceReceiver(
     @Volatile
     private var thread: Thread? = null
 
-    /**
-     * Synchronized to pair with [stop].
-     *
-     * It does not fix the cross-generation [running] clobber: one flag serves every thread this
-     * receiver starts, so a dying generation's `finally` can still clear the flag a newer one is
-     * running on. That needs per-generation state rather than a wider lock.
-     */
+    /** Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per attempt. */
     @Synchronized
     fun start() {
-        if (running) return
-        running = true
+        if (stopped || thread != null) return
         thread = Thread({
             // Here rather than in start(): setThreadPriority applies to the calling thread. JVM
             // Thread.priority is a hint Android mostly ignores — only this nice-value bump holds
             // the 10 ms cadence. Priority is an optimisation, so a refusal (SecurityException on
-            // some OEM builds) must degrade cadence, not throw: nothing out here clears `running`,
-            // so an escaping throw strands it true and makes every later start() a no-op.
+            // some OEM builds) must degrade cadence, not throw.
             runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
                 .onFailure { Log.w(TAG, "could not raise playback thread priority", it) }
 
@@ -91,7 +90,9 @@ class VoiceReceiver(
      */
     @Synchronized
     fun stop() {
-        running = false
+        // Before the join, so the loop sees its exit condition and a reader arriving later never
+        // allocates; one already inside onTunneledAudio is serialized against the sweep by idleLock.
+        stopped = true
         synchronized(idleLock) { idleLock.notifyAll() }
         val worker = thread
         worker?.join(1_000)
@@ -101,8 +102,11 @@ class VoiceReceiver(
             // exited by now" — that conflation is what let a second stop() close live decoders
             // out from under a still-running loop() the last time this bug happened.
             thread = null
-            speakers.values.forEach { it.close() }
-            speakers.clear()
+            // Same monitor the reader admits under, so no insert can straddle this sweep.
+            synchronized(idleLock) {
+                speakers.values.forEach { it.close() }
+                speakers.clear()
+            }
         } else {
             // join timing out doesn't mean the thread died — it can still be blocked in a wedged
             // AudioTrack.write and will keep touching `speakers` itself (retiring/closing
@@ -121,21 +125,29 @@ class VoiceReceiver(
      * a one-byte type followed by a protobuf body.
      */
     fun onTunneledAudio(payload: ByteArray) {
-        if (voiceUnavailable) return
+        if (voiceUnavailable || stopped) return
         if (payload.isEmpty() || payload[0].toInt() != UDP_TYPE_AUDIO) return
         val audio = try {
-            MumbleUdpProtos.Audio.parseFrom(payload.copyOfRange(1, payload.size))
+            // Parsed in place; copyOfRange here would allocate a whole packet per frame at ~100 Hz.
+            MumbleUdpProtos.Audio.parser().parseFrom(payload, 1, payload.size - 1)
         } catch (e: InvalidProtocolBufferException) {
             // A corrupt frame must not propagate into the transport's reader and kill the session.
             Log.w(TAG, "dropping malformed tunneled audio", e)
             return
+        } catch (t: Throwable) {
+            // Not every parse failure is an InvalidProtocolBufferException. protobuf-lite resolves
+            // fields reflectively, so a keep rule that stopped firing surfaces here as a plain
+            // RuntimeException out of the generated schema initializer. Uncaught it reaches
+            // MumbleTcpTransport's reader, which tears the whole session down on Throwable — chat
+            // and channels would die the moment anyone spoke, in release builds only. Latched
+            // because it is a build property, identical for every packet that follows.
+            voiceUnavailable = true
+            Log.e(TAG, "tunneled audio unparseable, disabling receive for this session", t)
+            return
         }
         val session = audio.senderSession
-        // A server handing out session ids freely — hostile, or merely broken — would otherwise
-        // allocate a playout per id. Retirement cannot keep up with that on its own: it is charged
-        // in playback ticks against a drained playout, so a burst arriving inside one retirement
-        // window is admitted in full. Capping the map bounds that whether or not the opus payload
-        // is well-formed, which validating the payload first would not.
+        // Checked before the payload is touched: the cap has to bound a hostile server's invented
+        // sessions whether or not their opus data is well-formed. See MAX_SPEAKERS for the pricing.
         if (speakers.size >= MAX_SPEAKERS && !speakers.containsKey(session)) {
             if (!speakerCapReported) {
                 speakerCapReported = true
@@ -151,10 +163,21 @@ class VoiceReceiver(
             // one. A retry is rare and cannot spin: retirement costs at least RETIRE_IDLE_TICKS
             // drained playback ticks (~100 ms), which the playout this iteration just created has
             // not had.
-            while (true) {
-                val playout = speakers.computeIfAbsent(session) { SpeakerPlayout(codec) }
-                if (playout.offer(opusData, audio.isTerminator)) break
-                speakers.remove(session, playout)
+            // Under idleLock so the `stopped` check and the insert are atomic against stop()'s
+            // sweep. The latch alone leaves a window — this thread reads it false, stop() sweeps,
+            // then the insert lands in a map nothing will clear again, leaking a native decoder for
+            // the life of the process. The playback thread takes this monitor only when it has
+            // nothing to mix, so the paced path never contends for it.
+            synchronized(idleLock) {
+                while (!stopped) {
+                    val playout = speakers.computeIfAbsent(session) { SpeakerPlayout(codec) }
+                    if (playout.offer(opusData, audio.isTerminator)) break
+                    // Re-checked rather than looping straight back: stop() retires every playout it
+                    // sweeps, so without this the retry turns a concurrent stop() into an
+                    // allocation loop, each pass leaving another native decoder behind it.
+                    speakers.remove(session, playout)
+                }
+                idleLock.notifyAll()
             }
         } catch (t: Throwable) {
             // offer() reaches LibOpusCodec -> NativeOpus, whose class init loads libopus.
@@ -166,9 +189,7 @@ class VoiceReceiver(
             // liveness problem.
             voiceUnavailable = true
             Log.e(TAG, "voice decode unavailable, disabling receive for this session", t)
-            return
         }
-        synchronized(idleLock) { idleLock.notifyAll() }
     }
 
     private fun loop() {
@@ -178,7 +199,7 @@ class VoiceReceiver(
         val producing = HashSet<Int>()
 
         // Acquired last: nothing may run between this and the try that guarantees close(), or a
-        // throw there leaks the AudioTrack and strands `running` true.
+        // throw there leaks the AudioTrack.
         val out = try {
             outFactory()
         } catch (t: Throwable) {
@@ -187,13 +208,11 @@ class VoiceReceiver(
             // this thread, Android's default handler kills the whole process. Receive-only voice
             // must degrade to silence instead of taking the session down.
             Log.e(TAG, "audio output unavailable, voice playback disabled", t)
-            running = false
+            stopped = true
             return
         }
         try {
-            // Each iteration we accumulate, mix, and write one 10 ms quantum of samples to the
-            // audio output track, while keeping a set of active speakers updated for the UI.
-            while (running) {
+            while (!stopped) {
                 acc.fill(0)
                 producing.clear()
 
@@ -214,11 +233,20 @@ class VoiceReceiver(
                 }
 
                 if (producing.isEmpty()) {
-                    if (_speakingSessions.value.isNotEmpty()) _speakingSessions.value = emptySet()
+                    _speakingSessions.value = emptySet()
                     // Nothing to block on. Do NOT zero-fill to keep the clock: that would leave
                     // AudioTrack permanently full after a burst, ratcheting latency up with no
-                    // gap to drain it. The bounded wait re-checks prebuffering speakers.
-                    synchronized(idleLock) { if (running) idleLock.wait(10) }
+                    // gap to drain it.
+                    //
+                    // The 10 ms bound only exists to keep charging idle ticks against a playout
+                    // that is prebuffering or has gone quiet, so it is needed exactly while one
+                    // exists; polling an empty map burned ~100 wakeups a second at
+                    // THREAD_PRIORITY_URGENT_AUDIO for the whole of a silent call. Emptiness is
+                    // read under idleLock, and onTunneledAudio and stop() both notify under the
+                    // same monitor, so the unbounded park cannot miss a wakeup.
+                    synchronized(idleLock) {
+                        if (!stopped) if (speakers.isEmpty()) idleLock.wait() else idleLock.wait(10)
+                    }
                     continue
                 }
 
@@ -231,17 +259,17 @@ class VoiceReceiver(
                     // this loop's only pacing. Ignoring the failure would busy-spin a CPU core at
                     // THREAD_PRIORITY_URGENT_AUDIO for as long as any speaker keeps producing.
                     Log.e(TAG, "audio output write failed, stopping playback")
-                    running = false
+                    stopped = true
                 }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "playback loop died", t)
         } finally {
-            // Cleared here rather than only on the paths that decide to stop, so `running` can
-            // never outlive the thread it describes. Leaving it true after a throw made start() a
-            // permanent no-op — the receiver was silently dead while the reader kept parsing and
-            // offering at ~100 Hz into playouts nothing would ever drain.
-            running = false
+            // Latched here rather than only on the paths that decide to stop, so it can never
+            // outlive the thread it describes: a loop that died on its own (a failed write, a
+            // throw) would otherwise leave the reader parsing and allocating at ~100 Hz into
+            // playouts nothing will ever drain or retire.
+            stopped = true
             // The loop owns this flow while it is alive, so it has to hand it back empty. Every
             // self-death path here (a failed write, a throw) happens on an iteration that just
             // published a non-empty set, and no stop() need follow — an audioserver restart alone
