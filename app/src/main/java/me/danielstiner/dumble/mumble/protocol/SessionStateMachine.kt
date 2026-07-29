@@ -1,5 +1,7 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import android.util.Log
+import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -140,6 +142,16 @@ class SessionStateMachine(
                 ) {
                     deadlineJob?.cancel()
                     startPings()
+                    // The server drops over-cap packets silently, with no error to the client, so
+                    // without this the symptom is undiagnosable one-way audio. Adaptation is out
+                    // of scope. ACCOUNTED_BITRATE is derived from the encoder's own rate rather
+                    // than written down again here, so the two cannot drift apart — a drift would
+                    // mis-calibrate the one warning that explains the symptom.
+                    if (sync.maxBandwidth in 1 until ACCOUNTED_BITRATE) {
+                        Log.w(TAG, "server max_bandwidth=${sync.maxBandwidth} is below our fixed " +
+                            "$ACCOUNTED_BITRATE — the server will silently drop audio packets " +
+                            "over the cap")
+                    }
                 }
             }
             TcpMessageType.Ping -> {
@@ -296,6 +308,7 @@ class SessionStateMachine(
     }
 
     companion object {
+        private const val TAG = "SessionStateMachine"
         const val CLIENT_MAJOR = 1
         const val CLIENT_MINOR = 5
         const val CLIENT_PATCH = 0

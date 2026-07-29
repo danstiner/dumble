@@ -22,6 +22,12 @@ object NativeCapture {
     const val POLL_BUFFER_TOO_SMALL = -5
     const val FLAG_TERMINATOR = 1L
 
+    /** Positions in [pollFrame]'s `meta`. Kotlin has no out-parameter for a primitive, so the two
+     *  values a packet carries besides its bytes come back through an array — named here rather
+     *  than left as bare subscripts at the call site. */
+    const val META_FRAME_NUMBER = 0
+    const val META_FLAGS = 1
+
     /** Smallest [pollFrame] `out` array native will accept: libopus's own ceiling for a
      *  single-frame packet. A 32 kb/s packet is nearer 80 bytes; this is the worst case, not the
      *  expected one. */
