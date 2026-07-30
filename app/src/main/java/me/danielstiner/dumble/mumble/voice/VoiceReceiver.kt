@@ -36,6 +36,9 @@ class VoiceReceiver(
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
 
+    private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
+    val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
+
     // Latched once a decode path throws something other than a malformed packet (notably
     // UnsatisfiedLinkError when libopus didn't load). Voice is additive: it must fail silent,
     // never take the control connection down with it, and never retry a broken native path once
@@ -117,7 +120,11 @@ class VoiceReceiver(
             // re-joins and re-checks liveness instead of trusting a stale "already gone".
             Log.w(TAG, "playback thread outlived stop(); leaking decoders")
         }
+        // Both flows, for the same reason: loop()'s finally clears them, but it only runs if the
+        // thread actually exited. On the join-timeout path above it never does, and a stats
+        // reading from a dead connection would sit in the flow for the life of the process.
         _speakingSessions.value = emptySet()
+        _playoutStats.value = null
     }
 
     /**
@@ -198,6 +205,14 @@ class VoiceReceiver(
         val speakerOut = ShortArray(QUANTUM_SAMPLES)
         val producing = HashSet<Int>()
 
+        // All playback-thread-only. The concealment counter is loop-owned rather than per-speaker
+        // because the sum of per-speaker counters is not monotonic: a retiring playout takes its
+        // count out of the sum, and subtracting a spurt-start baseline from that goes negative.
+        var inSpurt = false
+        var writesThisSpurt = 0
+        var concealedThisSpurt = 0
+        var underrunBaseline: Int? = null
+
         // Acquired last: nothing may run between this and the try that guarantees close(), or a
         // throw there leaks the AudioTrack.
         val out = try {
@@ -217,10 +232,14 @@ class VoiceReceiver(
                 producing.clear()
 
                 speakers.forEach { (session, playout) ->
-                    if (playout.fillTick(speakerOut)) {
+                    val produced = playout.fillTick(speakerOut)
+                    if (produced > 0) {
                         AudioMixer.accumulate(acc, speakerOut, QUANTUM_SAMPLES)
                         producing += session
                     }
+                    // Real audio, but less than a quantum, so drainInto zero-padded the rest —
+                    // speech spliced with silence, which a listener hears as a gap.
+                    if (produced in 1 until QUANTUM_SAMPLES) concealedThisSpurt++
                     // retired is one-way, so drop the playout here; a later packet from this
                     // session allocates a fresh one via computeIfAbsent. Removed by identity
                     // rather than by key alone: the reader may already have swapped in a
@@ -234,6 +253,15 @@ class VoiceReceiver(
 
                 if (producing.isEmpty()) {
                     _speakingSessions.value = emptySet()
+                    if (inSpurt) {
+                        publishStats(out, underrunBaseline, concealedThisSpurt)
+                        inSpurt = false
+                        // Reset here rather than on the next spurt's open: open runs after this
+                        // same tick's forEach on the tick that starts a new spurt, and that tick
+                        // can itself be partial (a big decode landing short) — resetting there
+                        // would erase the very count it just produced.
+                        concealedThisSpurt = 0
+                    }
                     // Nothing to block on. Do NOT zero-fill to keep the clock: that would leave
                     // AudioTrack permanently full after a burst, ratcheting latency up with no
                     // gap to drain it.
@@ -250,6 +278,15 @@ class VoiceReceiver(
                     continue
                 }
 
+                if (!inSpurt) {
+                    inSpurt = true
+                    writesThisSpurt = 0
+                    // Read before the spurt's first write, so the underrun the platform recorded
+                    // for the preceding silence is inside the baseline and drops out. True whether
+                    // it counts one event per transition or keeps counting while idle.
+                    underrunBaseline = runCatching { out.outputStats().underrunsTotal }.getOrNull()
+                }
+
                 if (_speakingSessions.value != producing) {
                     _speakingSessions.value = HashSet(producing)
                 }
@@ -260,6 +297,11 @@ class VoiceReceiver(
                     // THREAD_PRIORITY_URGENT_AUDIO for as long as any speaker keeps producing.
                     Log.e(TAG, "audio output write failed, stopping playback")
                     stopped = true
+                } else if (++writesThisSpurt >= WRITES_PER_SAMPLE) {
+                    // Successful writes, not loop iterations: the loop spins faster than 100 Hz
+                    // while a speaker exists but produces nothing, so only writes measure audio.
+                    writesThisSpurt = 0
+                    publishStats(out, underrunBaseline, concealedThisSpurt)
                 }
             }
         } catch (t: Throwable) {
@@ -275,11 +317,36 @@ class VoiceReceiver(
             // published a non-empty set, and no stop() need follow — an audioserver restart alone
             // would otherwise leave a speaker lit in the channel tree for the rest of the session.
             _speakingSessions.value = emptySet()
+            _playoutStats.value = null
             out.close()
+        }
+    }
+
+    /**
+     * Wrapped whole: the loop's catch (Throwable) is fatal to playback, and instrumentation must
+     * never be able to reach it. A failed [underrunBaseline] publishes a null count rather than
+     * subtracting a stale one, which would be wrong for the entire spurt.
+     */
+    private fun publishStats(out: AudioOut, underrunBaseline: Int?, concealedTicks: Int) {
+        runCatching {
+            val reading = out.outputStats()
+            val stats = PlayoutStats(
+                latencyMs = reading.latencyMs,
+                underruns = underrunBaseline?.let { reading.underrunsTotal - it },
+                concealedTicks = concealedTicks,
+                bufferedSamples = speakers.mapValues { (_, playout) -> playout.bufferedSamples },
+            )
+            _playoutStats.value = stats
+            // Debug rather than info, and ungated, for the reason VoiceSender's capture line is:
+            // being readable off a shipped build is the point of collecting this at all.
+            Log.d(TAG, stats.summary())
         }
     }
 
     private companion object {
         const val TAG = "VoiceReceiver"
+
+        /** One second of audio at [QUANTUM_SAMPLES] per write. */
+        const val WRITES_PER_SAMPLE = 100
     }
 }
