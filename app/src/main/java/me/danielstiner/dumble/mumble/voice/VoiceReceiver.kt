@@ -24,7 +24,7 @@ private const val UDP_TYPE_AUDIO = 0
  */
 class VoiceReceiver(
     private val codec: OpusCodec,
-    private val outFactory: () -> AudioOut = { AndroidAudioOut() },
+    private val outFactory: () -> AudioOut,
 ) {
     private val speakers = ConcurrentHashMap<Int, SpeakerPlayout>()
 

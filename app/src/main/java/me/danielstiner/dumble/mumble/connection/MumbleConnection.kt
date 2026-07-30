@@ -69,7 +69,7 @@ class MumbleConnection internal constructor(
         pinStore: PinStore,
         opusCodec: OpusCodec,
     ) : this(
-        pinStore, opusCodec, { AndroidAudioOut() }, { openNativeCapture() },
+        pinStore, opusCodec, { AndroidAudioOut(context) }, { openNativeCapture() },
         TelecomCall(context),
         newTransport = { MumbleTcpTransport(it) },
     )
