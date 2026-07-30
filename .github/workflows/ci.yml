@@ -37,5 +37,13 @@ jobs:
         env:
           MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest --stacktrace
+      - name: Build and run host C++ core tests
+        # cpp/core has no Android dependency by construction, so it is tested on the runner
+        # directly. This is also the only place libopus is reachable from a test at all —
+        # libdumble.so is built for Android ABIs only.
+        run: |
+          cmake -S app/src/main/cpp/host -B build/host
+          cmake --build build/host -j
+          ctest --test-dir build/host --output-on-failure
       - name: Verify attribution
         run: ./gradlew verifyShippedGroups --stacktrace

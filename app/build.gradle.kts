@@ -163,6 +163,12 @@ tasks.register("verifyShippedGroups") {
     val bundledLicense = layout.projectDirectory.file("src/main/res/raw/license_apache_2_0.txt").asFile
     val gitmodules = rootProject.layout.projectDirectory.file(".gitmodules").asFile
     val submoduleManifest = layout.projectDirectory.file("src/test/resources/shipped-submodules.txt").asFile
+    // Submodules that are built only for the host test binary (app/src/main/cpp/host/CMakeLists.txt)
+    // and never linked into the APK — GoogleTest today. Listed here instead of in Attribution.kt,
+    // because attributing them would falsely claim we distribute code we don't. A submodule not on
+    // this list still has to clear the diff below, so adding one always forces a reviewed decision:
+    // either attribute it, or add it here and say why in the same diff.
+    val testOnlySubmodules = layout.projectDirectory.file("src/test/resources/test-only-submodules.txt").asFile
     val nativeLibsDir = layout.buildDirectory.dir("intermediates/stripped_native_libs/release")
     val nativeManifest = layout.projectDirectory.file("src/test/resources/shipped-native-libs.txt").asFile
 
@@ -170,6 +176,7 @@ tasks.register("verifyShippedGroups") {
     inputs.file(rootLicense)
     inputs.file(bundledLicense)
     inputs.file(gitmodules)
+    inputs.file(testOnlySubmodules)
 
     doLast {
         val resolved = groups.get().joinToString("\n") + "\n"
@@ -183,10 +190,13 @@ tasks.register("verifyShippedGroups") {
         }
         // verifyShippedGroups above only sees Maven coordinates. A vendored native library has
         // none, so libopus would ship unattributed and nothing would fail. Diff the submodule
-        // set for the same reason the group set is diffed.
+        // set for the same reason the group set is diffed — minus the test-only ones, since this
+        // manifest's contract (and AttributionTest's) is "shipped", not "checked out".
+        val testOnly = testOnlySubmodules.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         val paths = Regex("""(?m)^\s*path\s*=\s*(.+)$""")
             .findAll(gitmodules.readText())
             .map { it.groupValues[1].trim() }
+            .filterNot { it in testOnly }
             .toSortedSet()
         val expected = paths.joinToString("\n") + "\n"
         if (!submoduleManifest.exists() || submoduleManifest.readText() != expected) {

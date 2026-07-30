@@ -1,5 +1,8 @@
 package me.danielstiner.dumble.mumble.voice
 
+/** Mumble voice is 48 kHz mono; these pin the playback/decode side to the protocol. The native
+ *  capture side pins itself independently (CaptureConstants.h kSampleRate/kChannels) — deliberate
+ *  twins, not a shared definition; see the note there. */
 const val SAMPLE_RATE = 48000
 const val CHANNELS = 1
 
