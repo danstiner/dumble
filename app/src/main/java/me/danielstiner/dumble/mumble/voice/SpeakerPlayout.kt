@@ -47,8 +47,12 @@ class SpeakerPlayout(private val codec: OpusCodec) {
     var retired = false
         private set
 
-    /** Test-only view of the locked depth counter. */
-    internal val queuedSamplesForTest: Int get() = synchronized(lock) { queuedSamples }
+    /**
+     * This speaker's jitter-buffer occupancy. The encoded deque, not the PCM fifo — the fifo is
+     * bounded at one quantum plus one frame and says nothing about how much delay the network has
+     * added.
+     */
+    val bufferedSamples: Int get() = synchronized(lock) { queuedSamples }
 
     /**
      * Reader-coroutine context; must not block. An empty [opusData] is a tag-only frame and is not
@@ -85,9 +89,11 @@ class SpeakerPlayout(private val codec: OpusCodec) {
 
     /**
      * Playback thread. Fills [out] with exactly [QUANTUM_SAMPLES], zero-padded when short.
-     * Returns true if any real audio was produced.
+     * Returns how many of those samples are real audio, so `0` means the speaker produced nothing
+     * and anything below a full quantum means speech spliced with silence — an audible gap the
+     * caller counts. Must be read before [ShortArrayFifo.drainInto], which destroys the evidence.
      */
-    fun fillTick(out: ShortArray): Boolean {
+    fun fillTick(out: ShortArray): Int {
         while (fifo.size < QUANTUM_SAMPLES) {
             val next = synchronized(lock) {
                 if (!prebuffered) {
@@ -99,7 +105,8 @@ class SpeakerPlayout(private val codec: OpusCodec) {
             val n = decoder.decode(next.opusData, 0, next.opusData.size, decodeOut, QUANTUM_SAMPLES)
             if (n > 0) fifo.push(decodeOut, n)
         }
-        val produced = fifo.size > 0
+        val producedSamples = minOf(fifo.size, QUANTUM_SAMPLES)
+        val produced = producedSamples > 0
         fifo.drainInto(out, QUANTUM_SAMPLES)
         idleTicks = if (produced) 0 else idleTicks + 1
         // One lock acquisition for both decisions, so they cannot disagree about whether the queue
@@ -120,7 +127,7 @@ class SpeakerPlayout(private val codec: OpusCodec) {
             // enqueue: the reader either gets in first or is told to go elsewhere, never neither.
             if (idleTicks >= if (drained) RETIRE_IDLE_TICKS else STALL_IDLE_TICKS) retired = true
         }
-        return produced
+        return producedSamples
     }
 
     /**

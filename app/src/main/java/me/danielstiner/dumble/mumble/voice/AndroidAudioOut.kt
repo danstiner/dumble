@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.util.Log
 
@@ -13,6 +14,10 @@ import android.util.Log
  */
 class AndroidAudioOut(context: Context) : AudioOut {
     private val track: AudioTrack
+
+    /** Playback thread only — [write] is the sole writer, [outputStats] the sole other reader. */
+    private var framesWritten = 0L
+    private val timestamp = AudioTimestamp()
 
     init {
         val format = AudioFormat.Builder()
@@ -42,9 +47,26 @@ class AndroidAudioOut(context: Context) : AudioOut {
     }
 
     override fun write(pcm: ShortArray, n: Int): Boolean {
-        // A negative return (ERROR_DEAD_OBJECT, ERROR_INVALID_OPERATION, ...) means the track
-        // will never block again, so the caller must stop instead of spinning at audio priority.
-        return track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING) >= 0
+        val written = track.write(pcm, 0, n, AudioTrack.WRITE_BLOCKING)
+        // Negative is an error code (ERROR_DEAD_OBJECT, ...). Short of the request means the track
+        // was stopped or paused mid-call. Neither blocks, and write() is the loop's only pacing, so
+        // both must stop it rather than let it spin at THREAD_PRIORITY_URGENT_AUDIO.
+        if (written < n) return false
+        // Shorts, not frames — identical only because CHANNELS is 1. Stereo would double this.
+        framesWritten += written
+        return true
+    }
+
+    override fun outputStats(): OutputStats {
+        val latencyMs = if (track.getTimestamp(timestamp)) {
+            LatencyMath.outputLatencyMs(
+                framesWritten, timestamp.framePosition, timestamp.nanoTime,
+                System.nanoTime(), SAMPLE_RATE, MAX_TIMESTAMP_AGE_NANOS,
+            )
+        } else {
+            null
+        }
+        return OutputStats(latencyMs, track.underrunCount)
     }
 
     override fun close() = track.release()
@@ -76,5 +98,10 @@ class AndroidAudioOut(context: Context) : AudioOut {
 
     private companion object {
         const val TAG = "AudioOut"
+
+        /** Equal to the 1 s sample interval: outputStats() is called at least that often while a
+         *  spurt is producing audio, so a reading staler than this can only be the platform's last
+         *  pre-gap timestamp. */
+        const val MAX_TIMESTAMP_AGE_NANOS = 1_000_000_000L
     }
 }
