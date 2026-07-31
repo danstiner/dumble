@@ -4,6 +4,16 @@ project(dumble_core_host CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Claim the default before opus can. Its OpusBuildtype.cmake writes CMAKE_BUILD_TYPE into the
+# cache whenever it finds it unset, and a build tree has one cache with no directory scoping, so
+# vendoring opus otherwise lets a dependency choose our default — silently, and it chooses
+# Release. Debug, because this tree exists to run tests and Release defines NDEBUG, which compiles
+# the assertions some of them check straight out. An explicit -DCMAKE_BUILD_TYPE still wins: both
+# this and opus only act when nothing was asked for.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Choose the type of build." FORCE)
+endif()
+
 set(CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
