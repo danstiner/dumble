@@ -13,8 +13,7 @@ constexpr int kChannels = 1;
 
 // 20 ms. Upstream Mumble's own default (iFramesPerPacket = 2), and the largest single Opus frame
 // — 40 and 60 ms are multi-frame packets. Below 20 ms SILK loses coding efficiency and per-packet
-// overhead doubles, for ~10 ms of algorithmic delay against a budget already carrying a 60 ms
-// receiver prebuffer.
+// overhead doubles.
 constexpr int kTxFrameSamples = 960;
 
 // 10 ms, the unit MumbleUDP.Audio.frame_number is counted in.
@@ -25,6 +24,12 @@ constexpr uint32_t kRingCapacitySamples = 16384;
 
 // Consumer-side staleness bound: beyond this, drop forward to the newest frame.
 constexpr uint32_t kHighWaterSamples = 4800;                 // 100 ms
+
+// How long the pump parks between polls. onPcm() deliberately does not signal it — the audio
+// callback stays free of anything that could block — so this interval alone decides how late a
+// finished frame is noticed. A quarter of a packet keeps that under 5 ms against the 20 ms the
+// packet spends filling, at 200 mostly-empty wakes a second while transmitting.
+constexpr int kPollWaitMillis = kTxFrameSamples / (kSampleRate / 1000) / 4;   // 5 ms
 
 // pollFrame return codes. Non-negative values are byte counts.
 constexpr int kPollRetry = -1;      // stream is down, native side is reopening — keep polling
