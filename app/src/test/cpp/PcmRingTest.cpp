@@ -17,8 +17,8 @@ TEST(PcmRing, ReadExactReturnsZeroUntilAFullRequestIsAvailable) {
 
 #ifndef NDEBUG
 // Debug builds assert on a non-power-of-two request — a caller asking for one size and silently
-// getting another. Release builds round up and carry on; that path is unreachable from this test
-// binary, which builds with assertions enabled.
+// getting another. Release builds round up and carry on, so NDEBUG compiles the assert away and
+// this test with it; the host tree defaults to Debug precisely so it runs.
 TEST(PcmRingDeathTest, DebugBuildsRejectANonPowerOfTwoCapacity) {
     EXPECT_DEATH(PcmRing(6), "power of two");
     EXPECT_DEATH(PcmRing(0), "power of two");
