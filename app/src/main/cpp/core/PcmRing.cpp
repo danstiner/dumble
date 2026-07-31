@@ -26,14 +26,14 @@ PcmRing::PcmRing(uint32_t minCapacitySamples)
 }
 
 bool PcmRing::write(const int16_t* src, uint32_t n) {
-    const uint32_t w = writeIdx_.load(std::memory_order_relaxed);
+    const uint64_t w = writeIdx_.load(std::memory_order_relaxed);
     // Acquire: pair with the consumer's release store so space freed by a read is visible here.
-    const uint32_t r = readIdx_.load(std::memory_order_acquire);
-    if (uint32_t(buf_.size()) - (w - r) < n) {
+    const uint64_t r = readIdx_.load(std::memory_order_acquire);
+    if (uint64_t(buf_.size()) - (w - r) < n) {
         droppedWrites_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    const uint32_t start = w & mask_;
+    const uint32_t start = uint32_t(w & mask_);
     const uint32_t first = std::min(n, uint32_t(buf_.size()) - start);
     std::memcpy(&buf_[start], src, first * sizeof(int16_t));
     if (n > first) std::memcpy(&buf_[0], src + first, (n - first) * sizeof(int16_t));
@@ -51,11 +51,11 @@ uint32_t PcmRing::readExact(int16_t* dst, uint32_t n) {
 }
 
 uint32_t PcmRing::readUpTo(int16_t* dst, uint32_t maxSamples) {
-    const uint32_t r = readIdx_.load(std::memory_order_relaxed);
-    const uint32_t w = writeIdx_.load(std::memory_order_acquire);
-    const uint32_t n = std::min(maxSamples, w - r);
+    const uint64_t r = readIdx_.load(std::memory_order_relaxed);
+    const uint64_t w = writeIdx_.load(std::memory_order_acquire);
+    const uint32_t n = uint32_t(std::min(uint64_t(maxSamples), w - r));
     if (n == 0) return 0;
-    const uint32_t start = r & mask_;
+    const uint32_t start = uint32_t(r & mask_);
     const uint32_t first = std::min(n, uint32_t(buf_.size()) - start);
     std::memcpy(dst, &buf_[start], first * sizeof(int16_t));
     if (n > first) std::memcpy(dst + first, &buf_[0], (n - first) * sizeof(int16_t));
@@ -64,15 +64,25 @@ uint32_t PcmRing::readUpTo(int16_t* dst, uint32_t maxSamples) {
 }
 
 uint32_t PcmRing::available() const {
-    return writeIdx_.load(std::memory_order_acquire) - readIdx_.load(std::memory_order_relaxed);
+    // Never exceeds the buffer, so the narrowing is exact.
+    return uint32_t(writeIdx_.load(std::memory_order_acquire)
+                    - readIdx_.load(std::memory_order_relaxed));
+}
+
+uint64_t PcmRing::writeIndex() const {
+    return writeIdx_.load(std::memory_order_acquire);
+}
+
+uint64_t PcmRing::readIndex() const {
+    return readIdx_.load(std::memory_order_relaxed);
 }
 
 void PcmRing::skipToNewest(uint32_t keep) {
-    const uint32_t r = readIdx_.load(std::memory_order_relaxed);
-    const uint32_t w = writeIdx_.load(std::memory_order_acquire);
-    const uint32_t have = w - r;
+    const uint64_t r = readIdx_.load(std::memory_order_relaxed);
+    const uint64_t w = writeIdx_.load(std::memory_order_acquire);
+    const uint64_t have = w - r;
     if (have <= keep) return;
-    const uint32_t drop = have - keep;
+    const uint64_t drop = have - keep;
     skippedSamples_.fetch_add(drop, std::memory_order_relaxed);
     readIdx_.store(r + drop, std::memory_order_release);
 }
