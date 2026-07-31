@@ -81,6 +81,28 @@ TEST(PcmRing, ResetDiscardsEverything) {
     EXPECT_EQ(0u, ring.available());
 }
 
+// The property CaptureEngine rests on: marks measure the stream, not the buffer, so discarding
+// buffered audio moves the read mark forward to meet the write mark rather than rewinding either.
+// A wrapped-pointer implementation would fail this the moment the ring wrapped.
+TEST(PcmRing, MarksTrackTheStreamAcrossDiscards) {
+    PcmRing ring(16);
+    std::vector<int16_t> in(12, 7);
+    ASSERT_TRUE(ring.write(in.data(), 12));
+    EXPECT_EQ(12u, ring.writeIndex());
+    EXPECT_EQ(0u, ring.readIndex());
+
+    ring.skipToNewest(4);
+    EXPECT_EQ(12u, ring.writeIndex());  // discarding does not unwrite
+    EXPECT_EQ(8u, ring.readIndex());
+
+    // Wrapping past the 16-sample buffer must not wrap the marks.
+    ASSERT_TRUE(ring.write(in.data(), 12));
+    ring.reset();
+    EXPECT_EQ(24u, ring.writeIndex());
+    EXPECT_EQ(24u, ring.readIndex());
+    EXPECT_EQ(0u, ring.available());
+}
+
 // A wrap-split, index-mapping, duplication, lost-sample, or stale-read defect has to surface
 // through one of three independent checks: samples within a read are consecutive, burst indices
 // strictly increase (dropped bursts appear as gaps), and every accepted burst is read exactly

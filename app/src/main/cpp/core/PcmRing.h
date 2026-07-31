@@ -9,9 +9,12 @@ namespace dumble {
  * Single-producer single-consumer ring buffer specialized for int16 PCM samples. The producer is
  * a SCHED_FIFO audio callback, so write() allocates nothing, takes no lock, and never blocks.
  *
- * Indices are ever-increasing counters masked to the buffer, not wrapped pointers, so
+ * Indices are ever-increasing 64-bit counters masked to the buffer, not wrapped pointers, so
  * `write - read` is the fill level without an ambiguous full/empty state and reset() cannot move
- * the read pointer backwards.
+ * the read pointer backwards. 64-bit so a caller holding a mark never has to reason about a wrap:
+ * 32 bits turn over after 24.85 hours of cumulative capture, and a spurt straddling that boundary
+ * would silently hand CaptureEngine a frame number 2^32 samples in the past. Lock-free on every
+ * ABI we build, so the width costs the audio callback nothing.
  *
  * Only the consumer may move readIdx_ — including in skipToNewest() and reset(). Letting the
  * producer trim the backlog would break the SPSC invariant that makes the lock-free pairing sound.
@@ -39,6 +42,15 @@ public:
      *  which every caller tolerates: a frame missed this poll is taken on the next. */
     uint32_t available() const;
 
+    /** Producer or consumer. A mark: total samples ever accepted, not a buffer offset. Two marks
+     *  delimit an absolute region of the stream — "everything written during this spurt" — which
+     *  survives whatever skipToNewest()/reset() do to the read side in between. */
+    uint64_t writeIndex() const;
+
+    /** Consumer. Where the readable region starts. Exposed so callers need not derive it from
+     *  writeIndex() - available(), which loads two indices that can move apart in between. */
+    uint64_t readIndex() const;
+
     /** Consumer. Discards all but the newest `keep` samples. */
     void skipToNewest(uint32_t keep);
 
@@ -51,8 +63,8 @@ public:
 private:
     std::vector<int16_t> buf_;
     const uint32_t mask_;
-    std::atomic<uint32_t> writeIdx_{0};
-    std::atomic<uint32_t> readIdx_{0};
+    std::atomic<uint64_t> writeIdx_{0};
+    std::atomic<uint64_t> readIdx_{0};
     std::atomic<uint64_t> droppedWrites_{0};
     std::atomic<uint64_t> skippedSamples_{0};
 };
