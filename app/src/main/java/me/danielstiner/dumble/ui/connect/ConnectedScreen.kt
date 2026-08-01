@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import android.Manifest
-import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,9 +21,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 
@@ -44,22 +42,42 @@ fun ConnectedScreen(
     onDisconnect: () -> Unit,
     onSettings: () -> Unit,
     onMicrophonePermissionResult: (Boolean) -> Unit,
+    onMicrophoneReady: () -> Unit,
     onTransmitting: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val requestMicrophone = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-        onMicrophonePermissionResult,
-    )
+    val requestPermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        // Notifications are best-effort — the foreground service runs either way, it just runs
+        // without a visible notification — so only the microphone answer gates voice.
+        onMicrophonePermissionResult(result[Manifest.permission.RECORD_AUDIO] == true)
+    }
     // This composable only exists while the connection is Synchronized, so its appearing IS
-    // reaching that state. Guarded on `microphoneGranted == null` so returning here from Chat
-    // doesn't re-prompt after the first answer.
-    LaunchedEffect(Unit) {
-        if (microphoneGranted == null) {
-            val already = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-            if (already) onMicrophonePermissionResult(true) else requestMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+    // reaching that state — and it is a visible activity, which is the only place a microphone
+    // foreground service may be started from.
+    //
+    // Keyed on the answer rather than on Unit, and driving capture from the *state* rather than
+    // from the permission callback. The answer outlives the connection it was given for, since it
+    // sits in the ViewModel: keying this on Unit and starting capture from the callback meant the
+    // second and later connections in a process never started capture at all, because nothing
+    // asked again once the answer was known.
+    LaunchedEffect(microphoneGranted) {
+        when (microphoneGranted) {
+            // No self-check first: the contract resolves already-granted permissions without
+            // showing anything, and asking for both together covers holding one but not the other.
+            null -> requestPermissions.launch(
+                buildList {
+                    add(Manifest.permission.RECORD_AUDIO)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }.toTypedArray()
+            )
+            // Idempotent: a Chat/Connected remount re-runs this, and startCapture ignores a
+            // session that already has a sender.
+            true -> onMicrophoneReady()
+            false -> {}
         }
     }
     Column(modifier.fillMaxSize()) {

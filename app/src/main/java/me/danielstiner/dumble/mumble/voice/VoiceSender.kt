@@ -23,6 +23,9 @@ class VoiceSender(
         fun pollFrame(out: ByteArray, meta: LongArray): Int
         fun setGateOpen(open: Boolean)
         fun stop()
+
+        /** Releases the engine. Called by whoever owns the session, never by the pump. */
+        fun destroy()
     }
 
     /**
@@ -182,5 +185,26 @@ class NativeCaptureHandle(private val handle: Long) : VoiceSender.CaptureHandle 
     override fun pollFrame(out: ByteArray, meta: LongArray) = NativeCapture.pollFrame(handle, out, meta)
     override fun setGateOpen(open: Boolean) = NativeCapture.setGateOpen(handle, open)
     override fun stop() = NativeCapture.stop(handle)
-    fun destroy() = NativeCapture.destroy(handle)
+    override fun destroy() = NativeCapture.destroy(handle)
+}
+
+/**
+ * Build a started capture engine, or null if the microphone could not be opened. Both failures are
+ * terminal for the session rather than retryable: libopus refusing an encoder is the only way
+ * create() returns 0, and native has already exhausted its own reopen backoff by the time start()
+ * fails. Destroys the engine on a failed start so the handle cannot leak.
+ */
+fun openNativeCapture(): VoiceSender.CaptureHandle? {
+    val handle = NativeCapture.create(TRANSMIT_BITRATE)
+    if (handle == 0L) {
+        Log.e("VoiceSender", "capture engine could not be created")
+        return null
+    }
+    val rc = NativeCapture.start(handle)
+    if (rc != 0) {
+        Log.e("VoiceSender", "capture engine could not be started ($rc)")
+        NativeCapture.destroy(handle)
+        return null
+    }
+    return NativeCaptureHandle(handle)
 }

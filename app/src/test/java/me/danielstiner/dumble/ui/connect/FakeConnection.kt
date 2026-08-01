@@ -24,6 +24,8 @@ class FakeConnection : Connection {
     var disconnectCalls = 0; private set
     val sentTexts = mutableListOf<String>()
     var sendResult = true
+    var startCaptureCalls = 0; private set
+    val transmitting = mutableListOf<Boolean>()
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         connectCalls++; lastEndpoint = endpoint
@@ -32,4 +34,6 @@ class FakeConnection : Connection {
     override fun cancelTrust() { cancelCalls++ }
     override fun disconnect() { disconnectCalls++ }
     override fun sendText(text: String): Boolean { sentTexts += text; return sendResult }
+    override fun startCapture() { startCaptureCalls++ }
+    override fun setTransmitting(on: Boolean) { transmitting += on }
 }

@@ -79,6 +79,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                         onDisconnect = vm::onDisconnect,
                         onSettings = vm::openSettings,
                         onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
+                        onMicrophoneReady = vm::onMicrophoneReady,
                         onTransmitting = vm::onTransmitting,
                         modifier = m,
                     )
