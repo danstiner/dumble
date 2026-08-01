@@ -24,8 +24,11 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.voice.AndroidAudioFocus
 import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
+import me.danielstiner.dumble.mumble.voice.AudioFocus
 import me.danielstiner.dumble.mumble.voice.AudioOut
+import me.danielstiner.dumble.mumble.voice.NoAudioFocus
 import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -53,6 +56,7 @@ class MumbleConnection internal constructor(
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
     private val startService: (server: String) -> Unit = {},
     private val stopService: () -> Unit = {},
+    private val audioFocus: AudioFocus = NoAudioFocus,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -62,6 +66,7 @@ class MumbleConnection internal constructor(
     ) : this(
         pinStore, opusCodec, { AndroidAudioOut() }, { openNativeCapture() },
         { VoiceService.start(context, it) }, { VoiceService.stop(context) },
+        AndroidAudioFocus(context),
         { MumbleTcpTransport(it) },
     )
 
@@ -216,22 +221,65 @@ class MumbleConnection internal constructor(
         // deferring it into the coroutine below leaves a window where backgrounding loses it. It
         // also has to be running before the input stream opens.
         startService(att.endpoint.host)
-        // Off the main thread: create() opens an input stream, which blocks.
+        // Advisory: a refusal is worth a log line, not a reason to refuse the user a microphone.
+        audioFocus.request { change -> onFocusChange(att, change) }
+        scope.launch(Dispatchers.IO) { openCapture(att) }
+    }
+
+    /**
+     * Focus loss tears the capture session down rather than merely closing the gate. Whatever took
+     * focus is usually holding the input device — a phone call is the case that matters — so an
+     * open stream would spend the interruption cycling Oboe's reopen backoff against a device it
+     * cannot have. This is what replaces §4's "gate the backoff on focus state": the session is
+     * cheap to rebuild, and rebuilding needs no new native state to stay coherent with a disconnect
+     * arriving concurrently on the error-callback thread.
+     *
+     * A regain rebuilds unconditionally, including after a permanent loss. Tracking permanence
+     * would only create a flag that has to be reset correctly, and being handed focus back is
+     * evidence enough that we can have it.
+     */
+    private fun onFocusChange(att: Attempt, change: AudioFocus.Change) {
+        Log.i(TAG, "audio focus $change")
         scope.launch(Dispatchers.IO) {
-            // Left running on failure: the service is also what keeps *receive* alive in the
-            // background, so tearing it down would trade a working direction for a broken one.
-            val handle = newCapture() ?: return@launch
-            val sender = VoiceSender(handle, att.transport::sendRaw)
-            val live = synchronized(lock) {
-                if (att.gen == attempt && current === att && att.sender == null) {
-                    att.capture = handle; att.sender = sender; true
-                } else false
+            when (change) {
+                AudioFocus.Change.LOST, AudioFocus.Change.LOST_TEMPORARILY -> closeCapture(att)
+                AudioFocus.Change.REGAINED -> openCapture(att)
             }
-            // Superseded while the stream was opening — teardown already ran and saw no sender,
-            // so releasing it is this coroutine's job.
-            if (!live) { handle.stop(); handle.destroy(); return@launch }
-            sender.start()
         }
+    }
+
+    /** Blocks on create(): callers are on [Dispatchers.IO]. No-op unless [att] is live and idle. */
+    private fun openCapture(att: Attempt) {
+        // Cheap pre-check so a focus callback arriving after teardown does not open a stream just
+        // to destroy it; the post-create check below is what actually closes the race.
+        if (synchronized(lock) { att.gen != attempt || current !== att || att.sender != null }) return
+        // Left running on failure: the service is also what keeps *receive* alive in the
+        // background, so tearing it down would trade a working direction for a broken one.
+        val handle = newCapture() ?: return
+        val sender = VoiceSender(handle, att.transport::sendRaw)
+        val live = synchronized(lock) {
+            if (att.gen == attempt && current === att && att.sender == null) {
+                att.capture = handle; att.sender = sender; true
+            } else false
+        }
+        // Superseded while the stream was opening — teardown already ran and saw no sender, so
+        // releasing it is this coroutine's job.
+        if (!live) { handle.stop(); handle.destroy(); return }
+        sender.start()
+    }
+
+    /** Blocks joining the pump: callers are on [Dispatchers.IO]. */
+    private fun closeCapture(att: Attempt) {
+        val handle: VoiceSender.CaptureHandle?
+        val sender: VoiceSender?
+        synchronized(lock) {
+            handle = att.capture; sender = att.sender
+            att.capture = null; att.sender = null
+        }
+        // Order matters as in teardown: stop() joins the pump, and destroying an engine a live pump
+        // is still polling is a use-after-free.
+        sender?.stop()
+        handle?.destroy()
     }
 
     override fun setTransmitting(on: Boolean) { current?.sender?.setTransmitting(on) }
@@ -262,6 +310,8 @@ class MumbleConnection internal constructor(
             att.sender?.stop()
             att.capture?.destroy()
             att.receiver.stop()
+            // After the session is down, so a late loss callback cannot race a rebuild.
+            audioFocus.abandon()
             // Last, and unconditional — the service outlives capture whenever the microphone was
             // denied or failed to open, since receive needs it either way.
             stopService()

@@ -18,6 +18,8 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import me.danielstiner.dumble.mumble.voice.AudioFocus
+import me.danielstiner.dumble.mumble.voice.FakeAudioFocus
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
@@ -389,6 +391,65 @@ class MumbleConnectionTest {
         awaitTrue("teardown must stop the pump") { handle.stopped }
         awaitTrue("teardown must destroy the engine") { handle.destroyed }
         awaitTrue("teardown must stop the service") { serviceStops == 1 }
+    }
+
+    /**
+     * Focus loss tears the capture session down instead of merely closing the gate, and a regain
+     * builds a fresh one. This is what stands in for §4's "gate the reopen backoff on focus state":
+     * proving the rebuilt session reaches the wire is what makes the substitution honest, since a
+     * teardown that could not come back would be worse than the backoff it replaced.
+     */
+    @Test fun focusLossTearsTheSessionDownAndRegainRebuildsIt() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val focus = FakeAudioFocus()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            audioFocus = focus,
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        conn.startCapture()
+        awaitTrue("focus must be requested with the session") { focus.requests == 1 }
+        awaitTrue("the engine must open") { handles.size == 1 }
+        handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
+        awaitTrue("the first session must reach the wire") { fake.sentRaw.size == 1 }
+
+        focus.deliver(AudioFocus.Change.LOST_TEMPORARILY)
+        awaitTrue("losing focus must stop the pump") { handles[0].stopped }
+        awaitTrue("losing focus must destroy the engine") { handles[0].destroyed }
+
+        focus.deliver(AudioFocus.Change.REGAINED)
+        awaitTrue("regaining focus must build a new engine") { handles.size == 2 }
+        handles[1].script(FakeCaptureHandle.Step.Frame(byteArrayOf(2), frameNumber = 2, terminator = false))
+        awaitTrue("the rebuilt session must reach the wire") { fake.sentRaw.size == 2 }
+
+        conn.disconnect()
+        awaitTrue("disconnect must abandon focus") { focus.abandons == 1 }
+        awaitTrue("disconnect must release the rebuilt engine") { handles[1].destroyed }
+    }
+
+    /** A late callback from a request we already gave up must not resurrect a dead session. */
+    @Test fun focusDeliveredAfterDisconnectRebuildsNothing() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val focus = FakeAudioFocus()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            audioFocus = focus,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.startCapture()
+        awaitTrue("the engine must open") { handles.size == 1 }
+
+        conn.disconnect()
+        awaitTrue("disconnect must abandon focus") { focus.abandons == 1 }
+        focus.deliver(AudioFocus.Change.REGAINED)
+        delay(200)
+        assertEquals("no engine may be built for a dead attempt", 1, handles.size)
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the service. */
