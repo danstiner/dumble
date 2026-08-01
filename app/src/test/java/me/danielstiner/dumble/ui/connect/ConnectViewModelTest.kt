@@ -257,4 +257,34 @@ class ConnectViewModelTest {
         advanceUntilIdle()
         assertEquals(setOf(4, 5), vm.uiState.value.speakingSessions)
     }
+
+    @Test fun microphoneGrantedStartsUnknown() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.microphoneGranted)
+    }
+
+    @Test fun microphonePermissionResultRecordsGrant() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        vm.onMicrophonePermissionResult(true)
+        advanceUntilIdle()
+        assertEquals(true, vm.uiState.value.microphoneGranted)
+    }
+
+    @Test fun microphonePermissionResultRecordsDenial() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        vm.onMicrophonePermissionResult(false)
+        advanceUntilIdle()
+        assertEquals(false, vm.uiState.value.microphoneGranted)
+    }
+
+    // onTransmitting has no production callee yet — Connection exposes no transmit surface until
+    // the pending voice-lifecycle pull request lands (see the seam's KDoc). This just pins that
+    // calling it is inert rather than a crash, so that future wiring is the only behavior change.
+    @Test fun onTransmittingIsInertUntilAVoiceSenderExists() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        vm.onTransmitting(true)
+        vm.onTransmitting(false)
+        advanceUntilIdle()
+    }
 }

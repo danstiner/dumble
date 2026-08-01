@@ -91,6 +91,8 @@ android {
     // framework is a stub. Return defaults so Log.* no-ops instead of throwing "not mocked".
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric reads the merged manifest and theme to host a Compose test activity.
+        unitTests.isIncludeAndroidResources = true
     }
     externalNativeBuild {
         cmake {
@@ -129,6 +131,13 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.bouncycastle.pkix)
+    // Compose gesture tests run on the JVM under Robolectric rather than as androidTest:
+    // CI runs testDebugUnitTest and no instrumented suite, so an androidTest would never run.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.junit)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

@@ -54,6 +54,9 @@ data class ConnectUiState(
     val unread: Int = 0,
     val chatDraft: String = "",
     val speakingSessions: Set<Int> = emptySet(),
+    // Null until the connected screen has asked; true/false is the OS answer. Also the seam a live
+    // VoiceSender would key off to start capture — see ConnectViewModel.onMicrophonePermissionResult.
+    val microphoneGranted: Boolean? = null,
 )
 
 private data class ConnSnapshot(
@@ -164,4 +167,17 @@ class ConnectViewModel @Inject constructor(
     fun onTrust() = connection.trustAndConnect()
     fun onCancelTrust() = connection.cancelTrust()
     fun onDisconnect() = connection.disconnect()
+
+    fun onMicrophonePermissionResult(granted: Boolean) {
+        form.value = form.value.copy(microphoneGranted = granted)
+    }
+
+    /**
+     * Seam for [PttButton]: press/release lands here. `Connection` has no transmit surface yet —
+     * a live connection cannot build a `VoiceSender` until the voice-lifecycle pull request this
+     * depends on merges — so there is nothing to forward to. Once it exists, this is a one-line
+     * change to call it; nothing upstream of here should need to change.
+     */
+    fun onTransmitting(active: Boolean) {
+    }
 }
