@@ -1,5 +1,8 @@
 package me.danielstiner.dumble.ui.connect
 
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,8 +21,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,6 +43,24 @@ fun ConnectScreen(
 ) {
     val idle = state.status is ConnectionStatus.Idle || state.status is ConnectionStatus.Error
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
+
+    // Asked at Connect, not at launch: it is meaningless out of context, and the answer only
+    // matters for a server on the local network. Connecting proceeds either way — a denial is not
+    // ours to override, and a public server does not need it.
+    //
+    // No SDK guard. The gate is on targetSdkVersion, which is fixed for every build we ship, so a
+    // device check would only be asking "does this permission exist here" — and below 37 it does
+    // not, so the request resolves to denied and we connect regardless. Verified on an API 36
+    // device: unguarded, it reaches the server normally.
+    val requestLocalNetwork = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { onConnect() }
+    val context = LocalContext.current
+    val connect: () -> Unit = {
+        if (ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) ==
+            PackageManager.PERMISSION_GRANTED
+        ) onConnect() else requestLocalNetwork.launch(LOCAL_NETWORK_PERMISSION)
+    }
 
     Column(modifier.fillMaxSize()) {
         TopAppBar(
@@ -71,7 +94,7 @@ fun ConnectScreen(
                 state.password, onPassword, label = { Text("Password (optional)") }, singleLine = true,
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
             )
-            Button(onClick = onConnect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = connect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
                 Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
             }
             when (val s = state.status) {
@@ -85,3 +108,6 @@ fun ConnectScreen(
         TrustDialog(state.status, onTrust = onTrust, onCancel = onCancelTrust)
     }
 }
+
+/** Inlined rather than referenced: the constant does not exist in older platform jars. */
+private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
