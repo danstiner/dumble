@@ -19,6 +19,7 @@ import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
+import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -347,6 +348,70 @@ class MumbleConnectionTest {
     }
 
     /** Polls a condition a background coroutine will satisfy, rather than sleeping a fixed time. */
+    /**
+     * The whole transmit path end to end, since every piece of it is new wiring: the service comes
+     * up before the engine is opened, the pump reaches the wire, the gate follows push-to-talk, and
+     * teardown releases all three. Asserting on `sentRaw` rather than on the sender means the test
+     * cannot pass with a pump that was built but never started.
+     */
+    @Test fun startCaptureRunsTheSendPathAndDisconnectReleasesIt() = runBlocking {
+        lateinit var fake: FakeControlTransport
+        val handle = FakeCaptureHandle()
+        val serviceStarts = CopyOnWriteArrayList<String>()
+        var serviceStops = 0
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { handle },
+            startService = { serviceStarts += it },
+            stopService = { serviceStops++ },
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
+        conn.startCapture()
+
+        awaitTrue("the microphone service must start with the server host") {
+            serviceStarts == listOf("localhost")
+        }
+        awaitTrue("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
+        val (type, payload) = fake.sentRaw.first()
+        assertEquals(TcpMessageType.UDPTunnel, type)
+        // Leading 0 is the UDP audio type byte the tunnel carries ahead of the Audio protobuf.
+        assertEquals(0, payload[0].toInt())
+
+        // setTransmitting only reaches the engine once the sender is published, which happens on
+        // the same coroutine that opened it — so this runs after the awaits above, not before.
+        conn.setTransmitting(true)
+        awaitTrue("push-to-talk must open the gate") { handle.gateOpen }
+
+        conn.disconnect()
+        awaitTrue("teardown must stop the pump") { handle.stopped }
+        awaitTrue("teardown must destroy the engine") { handle.destroyed }
+        awaitTrue("teardown must stop the service") { serviceStops == 1 }
+    }
+
+    /** Denied microphone, or an engine that would not open: receive still needs the service. */
+    @Test fun captureThatCannotOpenLeavesTheServiceRunning() = runBlocking {
+        val serviceStarts = CopyOnWriteArrayList<String>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { null },
+            startService = { serviceStarts += it },
+            stopService = {},
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        conn.startCapture()
+        awaitTrue("the service must start even when the engine will not open") {
+            serviceStarts == listOf("localhost")
+        }
+        // No engine, so push-to-talk is inert rather than a crash.
+        conn.setTransmitting(true)
+        conn.disconnect()
+    }
+
     private suspend fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (!cond() && System.currentTimeMillis() < deadline) delay(10)

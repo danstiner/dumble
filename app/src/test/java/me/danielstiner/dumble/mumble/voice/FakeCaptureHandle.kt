@@ -16,10 +16,12 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     private val steps = LinkedBlockingQueue<Step>()
     var gateOpen = false; private set
     var stopped = false; private set
+    var destroyed = false; private set
 
     fun script(vararg s: Step) = s.forEach { steps.put(it) }
     override fun setGateOpen(open: Boolean) { gateOpen = open }
     override fun stop() { stopped = true; steps.put(Step.Shutdown) }
+    override fun destroy() { destroyed = true }
 
     override fun pollFrame(out: ByteArray, meta: LongArray): Int = when (val s = steps.take()) {
         is Step.Frame -> {

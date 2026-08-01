@@ -1,0 +1,144 @@
+package me.danielstiner.dumble.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import dagger.hilt.android.AndroidEntryPoint
+import me.danielstiner.dumble.MainActivity
+import me.danielstiner.dumble.R
+import me.danielstiner.dumble.mumble.connection.Connection
+import javax.inject.Inject
+
+/**
+ * Exists for two reasons that happen to have one fix. The microphone cannot be read from the
+ * background without a `microphone`-type foreground service, and — separately — Android's
+ * background-audio hardening fails playback for an app with no visible activity and no
+ * while-in-use foreground service. That exemption is type-agnostic beyond excluding SHORT_SERVICE,
+ * so this one service covers playback too, which is why receive stops being visible-activity-only
+ * the moment this ships.
+ *
+ * Started from the foreground, always: a `microphone` service cannot be started from the
+ * background, and RECORD_AUDIO must already be granted when startForeground runs.
+ */
+@AndroidEntryPoint
+class VoiceService : Service() {
+
+    @Inject lateinit var connection: Connection
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_DISCONNECT) {
+            // Handled here rather than in a BroadcastReceiver so the thing that represents the call
+            // is the thing that ends it. Nothing else to do: disconnect tears the session down, and
+            // that teardown is what stops this service.
+            connection.disconnect()
+            return START_NOT_STICKY
+        }
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(intent?.getStringExtra(EXTRA_SERVER).orEmpty()),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } catch (t: Throwable) {
+            // ForegroundServiceStartNotAllowedException if we lost the race into the background.
+            // Dropping the service beats hard-crashing the process: the connection itself is
+            // unaffected, and transmit degrades to working only while the app is visible.
+            Log.e(TAG, "startForeground failed; stopping service", t)
+            stopSelf()
+        }
+        // Nothing to rebuild without a connection to attach to, and the connection lives in the
+        // app process — a restart with a null intent would show a notification for a session that
+        // no longer exists.
+        return START_NOT_STICKY
+    }
+
+    private fun buildNotification(server: String): Notification {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    getString(R.string.voice_channel_name),
+                    // Ongoing state, not something to interrupt for.
+                    NotificationManager.IMPORTANCE_LOW,
+                )
+            )
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(getString(R.string.voice_notification_title))
+            .setContentText(server)
+            .setOngoing(true)
+            .setContentIntent(resumeIntent())
+            // Ranks it with calls rather than with general ongoing work, which is what it is.
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                getString(R.string.voice_notification_disconnect),
+                PendingIntent.getService(
+                    this,
+                    REQUEST_DISCONNECT,
+                    Intent(this, VoiceService::class.java).setAction(ACTION_DISCONNECT),
+                    PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .build()
+    }
+
+    /**
+     * SINGLE_TOP|CLEAR_TOP reuses the running activity instead of stacking a second one on top of
+     * it. Measured, not assumed: an ACTION_MAIN/CATEGORY_LAUNCHER intent left two MainActivity
+     * records in the same task, because a task rooted by an explicit-component start does not match
+     * a launcher-style intent. The duplicate is easy to miss — Connection is a singleton, so the
+     * new activity's ViewModel shows the same live session — until Back reveals the stale copy.
+     */
+    private fun resumeIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        ),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    companion object {
+        private const val CHANNEL_ID = "voice"
+        private const val NOTIFICATION_ID = 1
+        private const val EXTRA_SERVER = "server"
+        private const val TAG = "VoiceService"
+        private const val ACTION_DISCONNECT = "me.danielstiner.dumble.DISCONNECT"
+        // Distinct from the content intent's, so the two PendingIntents cannot collide.
+        private const val REQUEST_DISCONNECT = 1
+
+        /** Caller must be foreground: a microphone service cannot be started from the background. */
+        fun start(context: Context, server: String) {
+            try {
+                context.startForegroundService(
+                    Intent(context, VoiceService::class.java).putExtra(EXTRA_SERVER, server)
+                )
+            } catch (t: Throwable) {
+                // Throws at the *caller* when the app is no longer foreground, so letting it
+                // propagate would take down whatever coroutine asked for capture.
+                Log.e(TAG, "could not start the microphone service", t)
+            }
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, VoiceService::class.java))
+        }
+    }
+}

@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.mumble.connection
 
+import android.content.Context
 import android.util.Log
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,9 @@ import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
 import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
+import me.danielstiner.dumble.mumble.voice.VoiceSender
+import me.danielstiner.dumble.mumble.voice.openNativeCapture
+import me.danielstiner.dumble.service.VoiceService
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,10 +49,21 @@ class MumbleConnection internal constructor(
     private val pinStore: PinStore,
     private val opusCodec: OpusCodec,
     private val newAudioOut: () -> AudioOut,
+    // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
+    private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
+    private val startService: (server: String) -> Unit = {},
+    private val stopService: () -> Unit = {},
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
-    @Inject constructor(pinStore: PinStore, opusCodec: OpusCodec) :
-        this(pinStore, opusCodec, { AndroidAudioOut() }, { MumbleTcpTransport(it) })
+    @Inject constructor(
+        @ApplicationContext context: Context,
+        pinStore: PinStore,
+        opusCodec: OpusCodec,
+    ) : this(
+        pinStore, opusCodec, { AndroidAudioOut() }, { openNativeCapture() },
+        { VoiceService.start(context, it) }, { VoiceService.stop(context) },
+        { MumbleTcpTransport(it) },
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -83,6 +99,10 @@ class MumbleConnection internal constructor(
         val childScope: CoroutineScope,
         val receiver: VoiceReceiver,
         @Volatile var presented: String? = null,
+        // Null until RECORD_AUDIO is granted and startCapture() succeeds; both are set together
+        // under `lock`, so a non-null sender implies a handle to destroy.
+        @Volatile var capture: VoiceSender.CaptureHandle? = null,
+        @Volatile var sender: VoiceSender? = null,
     )
 
     // Every status write goes through the lock so a bump + terminal write is atomic against stale writers.
@@ -188,6 +208,34 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
+    override fun startCapture() {
+        val att = current ?: return
+        if (att.sender != null) return
+        // Synchronously, on the caller's thread. This is called from the connected screen while it
+        // is visible, and a microphone service cannot be started once that stops being true —
+        // deferring it into the coroutine below leaves a window where backgrounding loses it. It
+        // also has to be running before the input stream opens.
+        startService(att.endpoint.host)
+        // Off the main thread: create() opens an input stream, which blocks.
+        scope.launch(Dispatchers.IO) {
+            // Left running on failure: the service is also what keeps *receive* alive in the
+            // background, so tearing it down would trade a working direction for a broken one.
+            val handle = newCapture() ?: return@launch
+            val sender = VoiceSender(handle, att.transport::sendRaw)
+            val live = synchronized(lock) {
+                if (att.gen == attempt && current === att && att.sender == null) {
+                    att.capture = handle; att.sender = sender; true
+                } else false
+            }
+            // Superseded while the stream was opening — teardown already ran and saw no sender,
+            // so releasing it is this coroutine's job.
+            if (!live) { handle.stop(); handle.destroy(); return@launch }
+            sender.start()
+        }
+    }
+
+    override fun setTransmitting(on: Boolean) { current?.sender?.setTransmitting(on) }
+
     /**
      * Release a still-current attempt whose session died on its own. Deliberately does not bump
      * [attempt] or reset any published state — the terminal Error status is what the user is
@@ -209,7 +257,14 @@ class MumbleConnection internal constructor(
         // every publish is generation-guarded.
         scope.launch(Dispatchers.IO) {
             runCatching { att.transport.close() }
+            // Before destroy(): stop() joins the pump, and destroying an engine a live pump is
+            // still polling would be a use-after-free.
+            att.sender?.stop()
+            att.capture?.destroy()
             att.receiver.stop()
+            // Last, and unconditional — the service outlives capture whenever the microphone was
+            // denied or failed to open, since receive needs it either way.
+            stopService()
         }
         // The collectors never finish on their own, and retire() does not bump `attempt`, so this
         // is the only thing that stops a retired attempt still publishing. Stays last because

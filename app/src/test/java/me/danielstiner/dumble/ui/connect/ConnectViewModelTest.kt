@@ -265,26 +265,47 @@ class ConnectViewModelTest {
     }
 
     @Test fun microphonePermissionResultRecordsGrant() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
         vm.onMicrophonePermissionResult(true)
         advanceUntilIdle()
         assertEquals(true, vm.uiState.value.microphoneGranted)
+        // Recording the answer is not what starts capture: the answer outlives the connection it
+        // was given for, so every connection starts its own session via onMicrophoneReady.
+        assertEquals(0, conn.startCaptureCalls)
     }
 
     @Test fun microphonePermissionResultRecordsDenial() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
         vm.onMicrophonePermissionResult(false)
         advanceUntilIdle()
         assertEquals(false, vm.uiState.value.microphoneGranted)
+        assertEquals(0, conn.startCaptureCalls)
     }
 
-    // onTransmitting has no production callee yet — Connection exposes no transmit surface until
-    // the pending voice-lifecycle pull request lands (see the seam's KDoc). This just pins that
-    // calling it is inert rather than a crash, so that future wiring is the only behavior change.
-    @Test fun onTransmittingIsInertUntilAVoiceSenderExists() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+    /**
+     * The defect this pins: the permission answer lives in the ViewModel and outlives the
+     * connection, so a second connection in the same process is told nothing by the permission
+     * callback. Every entry to the connected screen with the microphone granted has to start a
+     * session, and startCapture is idempotent so repeats are free.
+     */
+    @Test fun everyConnectedScreenEntryStartsItsOwnCaptureSession() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        vm.onMicrophonePermissionResult(true)
+        vm.onMicrophoneReady()
+        vm.onMicrophoneReady()
+        advanceUntilIdle()
+        assertEquals(2, conn.startCaptureCalls)
+    }
+
+    @Test fun onTransmittingDrivesTheConnectionGate() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null))
         vm.onTransmitting(true)
         vm.onTransmitting(false)
         advanceUntilIdle()
+        assertEquals(listOf(true, false), conn.transmitting)
     }
 }
