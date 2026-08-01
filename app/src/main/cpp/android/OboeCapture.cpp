@@ -34,11 +34,13 @@ oboe::Result OboeCapture::open() {
         ->setFormat(oboe::AudioFormat::I16)
         ->setSampleRate(kSampleRate)
         ->setChannelCount(kChannels)
-        // Oboe's default, and documented as optimized for low latency. VoiceCommunication would
-        // engage the platform echo canceller, noise suppressor and gain control, but generally
-        // forecloses the low-latency memory-mapped path — a trade to measure on a device rather
-        // than settle here.
-        ->setInputPreset(oboe::InputPreset::VoiceRecognition)
+        // Buys the platform echo canceller, noise suppressor and gain control — what a voice chat
+        // client wants on by default, and what nothing in core/ replaces. It costs the low-latency
+        // memory-mapped path, because the effects chain only exists on the legacy AudioRecord
+        // route: measured on a Pixel 7a, VoiceRecognition opens at a 96-frame burst (2 ms) and
+        // VoiceCommunication at 960 (20 ms). Taking the 18 ms — it buys duplex that does not
+        // echo, on a path already spending 20 ms filling a packet.
+        ->setInputPreset(oboe::InputPreset::VoiceCommunication)
         // Correctness over latency on a device that will not open at 48 kHz; Oboe resamples and
         // logActualConfig makes the deviation visible rather than silent.
         ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
