@@ -26,6 +26,9 @@ class VoiceSender(
 
         /** Releases the engine. Called by whoever owns the session, never by the pump. */
         fun destroy()
+
+        /** Diagnostics for the periodic log line; null when there is nothing to read. */
+        fun stats(): CaptureStats?
     }
 
     /**
@@ -97,8 +100,21 @@ class VoiceSender(
         // though the protobuf builder below allocates regardless.
         val frame = ByteArray(NativeCapture.MAX_PACKET_BYTES)
         val meta = LongArray(2)
+        var nextStatsAt = System.nanoTime() + STATS_INTERVAL_NANOS
         while (true) {
             val n = handle.pollFrame(frame, meta)
+            // Debug, not info: six lines a minute for a whole session is noise in a log read for
+            // anything else. Not verbose — that level is conventionally stripped from release
+            // builds, and being readable off a shipped build is the point of collecting this.
+            //
+            // Every interval for as long as the pump runs, not only while the gate is open:
+            // capture is continuous by design and discards when closed, so overruns and XRuns
+            // accrue whether or not anyone is talking. Gating the log on transmit would hide
+            // exactly the ones nobody was around to see.
+            if (System.nanoTime() >= nextStatsAt) {
+                nextStatsAt = System.nanoTime() + STATS_INTERVAL_NANOS
+                handle.stats()?.let { Log.d(TAG, it.copy(droppedFrames = droppedFrames).summary()) }
+            }
             // A packet is the nominal outcome, so it is handled here rather than as the `else` of
             // the codes below — that way `else` can mean what it should: something nobody planned
             // for. Everything past this point is non-positive.
@@ -177,6 +193,8 @@ class VoiceSender(
         const val NORMAL_TALKING_TARGET = 0
         private const val UDP_TYPE_AUDIO: Byte = 0
         private const val STUCK_PUMP_MILLIS = 1_000L
+        // Ten seconds: a minute of talking is six readable lines rather than a wall of noise.
+        private const val STATS_INTERVAL_NANOS = 10_000_000_000L
     }
 }
 
@@ -186,6 +204,7 @@ class NativeCaptureHandle(private val handle: Long) : VoiceSender.CaptureHandle 
     override fun setGateOpen(open: Boolean) = NativeCapture.setGateOpen(handle, open)
     override fun stop() = NativeCapture.stop(handle)
     override fun destroy() = NativeCapture.destroy(handle)
+    override fun stats() = CaptureStats.read(handle)
 }
 
 /**

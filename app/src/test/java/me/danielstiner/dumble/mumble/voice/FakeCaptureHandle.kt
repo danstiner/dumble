@@ -23,6 +23,10 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     override fun stop() { stopped = true; steps.put(Step.Shutdown) }
     override fun destroy() { destroyed = true }
 
+    /** Null by default: the pump must treat "no diagnostics" as ordinary, not as a failure. */
+    var stats: CaptureStats? = null
+    override fun stats() = stats
+
     override fun pollFrame(out: ByteArray, meta: LongArray): Int = when (val s = steps.take()) {
         is Step.Frame -> {
             s.bytes.copyInto(out)

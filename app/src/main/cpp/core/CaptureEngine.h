@@ -59,6 +59,15 @@ public:
     // both, so without this a broken encoder is silent and undiagnosable from the outside.
     uint64_t encodeErrors() const { return encodeErrors_.load(std::memory_order_relaxed); }
 
+    // Encode cost against the 20 ms packet budget. Mean and max together, because the mean alone
+    // hides the occasional frame that blows the budget, and the max alone says nothing about how
+    // often. Zero before the first encode rather than a division by zero.
+    uint64_t encodeMicrosMean() const {
+        const uint64_t n = encodeCount_.load(std::memory_order_relaxed);
+        return n == 0 ? 0 : encodeMicrosSum_.load(std::memory_order_relaxed) / n;
+    }
+    uint64_t encodeMicrosMax() const { return encodeMicrosMax_.load(std::memory_order_relaxed); }
+
     void setWaitMillisForTest(int ms) { waitMillis_ = ms; }
 
 private:
@@ -82,6 +91,11 @@ private:
     std::atomic<bool> streamUnavailable_{false};
     std::atomic<uint64_t> encodedPackets_{0};
     std::atomic<uint64_t> encodeErrors_{0};
+    // Written only by the pump thread, read by whoever asks for stats — atomics for the read
+    // side, relaxed because a diagnostic counter has no ordering to establish.
+    std::atomic<uint64_t> encodeCount_{0};
+    std::atomic<uint64_t> encodeMicrosSum_{0};
+    std::atomic<uint64_t> encodeMicrosMax_{0};
     // The frame_number wall clock, in samples: every sample the device has ever delivered to
     // onPcm(), counted unconditionally, monotonically increasing — the gate stops only the ring
     // writes, never this. Deliberately not named "captured": captured means written to the ring,

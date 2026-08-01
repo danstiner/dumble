@@ -25,6 +25,12 @@ public:
     oboe::Result open();
     void close();
 
+    // Diagnostics, callable from any thread. Both take streamMutex_: open() and close() replace
+    // stream_ from the app thread and from the reopen thread, so reading it unguarded would race
+    // a shared_ptr assignment.
+    int32_t xRunCount() const;
+    int32_t framesPerBurst() const;
+
 private:
     explicit OboeCapture(std::shared_ptr<CaptureEngine> engine) : engine_(std::move(engine)) {}
 
@@ -65,15 +71,15 @@ private:
     // Guards stream_ only — never onAudioReady's hot path, which doesn't touch it. open() (app
     // thread via start(), or the retry loop's own thread) and close() (app thread via stop())
     // both read and write it, with nothing else serializing them.
-    std::mutex streamMu_;
+    mutable std::mutex streamMutex_;
     std::shared_ptr<oboe::AudioStream> stream_;
 
     // Guards retriesInProgress_ and backs the interruptible backoff sleep in retryReopen(). Also
     // what gives close() a definite point after which no reopen attempt is running or will start:
     // without it, close() could return leaving a retry loop about to open a fresh stream.
-    std::mutex retryMu_;
-    std::condition_variable retryCv_;
-    int retriesInProgress_ = 0;   // guarded by retryMu_; supports overlapping retry sequences
+    std::mutex retryMutex_;
+    std::condition_variable retryCondition_;
+    int retriesInProgress_ = 0;   // guarded by retryMutex_; supports overlapping retry sequences
 
     std::atomic<bool> stopping_{false};   // latched by close(); never cleared
 };

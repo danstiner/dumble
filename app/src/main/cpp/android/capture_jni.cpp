@@ -46,6 +46,22 @@ JNIEXPORT jint JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
     return static_cast<jint>(self(h)->capture->open());
 }
 
+JNIEXPORT jlong JNICALL FN(encodeMicrosMean)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->engine->encodeMicrosMean()) : 0;
+}
+
+JNIEXPORT jlong JNICALL FN(encodeMicrosMax)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->engine->encodeMicrosMax()) : 0;
+}
+
+JNIEXPORT jlong JNICALL FN(xRunCount)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->capture->xRunCount()) : 0;
+}
+
+JNIEXPORT jlong JNICALL FN(framesPerBurst)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->capture->framesPerBurst()) : 0;
+}
+
 JNIEXPORT void JNICALL FN(stop)(JNIEnv*, jobject, jlong h) {
     if (!h) return;
     // Order matters: wake the pump before tearing the stream down, so it observes kPollShutdown
