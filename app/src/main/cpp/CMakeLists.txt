@@ -13,8 +13,17 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/opus
 
 find_package(oboe REQUIRED CONFIG)
 
-add_library(dumble SHARED opus_jni.c)
-target_link_libraries(dumble opus oboe::oboe)
+# CONFIGURE_DEPENDS for the same reason as the host harness: without it an existing .cxx build
+# tree keeps linking libdumble.so without a newly added core source until something else happens
+# to trigger a reconfigure.
+file(GLOB CORE_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
+add_library(dumble SHARED
+    opus_jni.c
+    ${CORE_SRC}
+    android/OboeCapture.cpp
+    android/capture_jni.cpp)
+target_include_directories(dumble PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(dumble opus oboe::oboe log)
 set(DUMBLE_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/dumble.map)
 target_link_options(dumble PRIVATE
     # Android 15+ ships 16 KB page-size devices; without this the loader rejects the library.

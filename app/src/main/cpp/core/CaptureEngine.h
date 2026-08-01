@@ -45,6 +45,11 @@ public:
     /** Set by the Oboe error callback around a disconnect/reopen cycle. */
     void setStreamDown(bool down);
 
+    /** Called once the platform adapter exhausts its reopen attempts. Unlike setStreamDown(),
+     *  this is terminal for the life of the engine — there is no path back — so pollFrame()
+     *  reports it as a distinct code instead of folding it into "still retrying". */
+    void setStreamUnavailable();
+
     // The ring counts dropped writes in its own vocabulary; this is the layer that knows one
     // write is one Oboe burst, and that a dropped burst at capture is an overrun.
     uint64_t overrunBursts() const { return ring_.droppedWrites(); }
@@ -74,6 +79,7 @@ private:
     std::atomic<bool> gateOpen_{false};
     std::atomic<bool> shutdown_{false};
     std::atomic<bool> streamDown_{false};
+    std::atomic<bool> streamUnavailable_{false};
     std::atomic<uint64_t> encodedPackets_{0};
     std::atomic<uint64_t> encodeErrors_{0};
     // The frame_number wall clock, in samples: every sample the device has ever delivered to

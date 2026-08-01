@@ -111,6 +111,41 @@ TEST(CaptureEngine, ShutdownAndStreamDownAreDistinguishable) {
     EXPECT_EQ(dumble::kPollShutdown, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
 }
 
+TEST(CaptureEngine, StreamUnavailableIsDistinctFromRetryAndOutranksIt) {
+    // OboeCapture sets both streamDown and streamUnavailable when it gives up reopening (the
+    // former was already true from the disconnect that started the retry sequence). A caller
+    // must see kPollUnavailable, not kPollRetry, or it would poll forever for a stream that is
+    // never coming back.
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    ASSERT_TRUE(e);
+    std::vector<uint8_t> out(4000);
+    uint64_t fn = 0; uint32_t flags = 0;
+    e->setWaitMillisForTest(1);
+
+    e->setStreamDown(true);
+    EXPECT_EQ(dumble::kPollRetry, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+
+    e->setStreamUnavailable();
+    EXPECT_EQ(dumble::kPollUnavailable, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    // Not a one-shot: every subsequent poll must keep reporting it, since there is no path back.
+    EXPECT_EQ(dumble::kPollUnavailable, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+}
+
+TEST(CaptureEngine, ShutdownOutranksStreamUnavailable) {
+    // requestShutdown() (an explicit stop()) must win even if the stream had already been
+    // declared unrecoverable — kPollShutdown, not kPollUnavailable, is what tells the pump loop
+    // to exit rather than surface a "transmit unavailable" state after the user hung up anyway.
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    ASSERT_TRUE(e);
+    std::vector<uint8_t> out(4000);
+    uint64_t fn = 0; uint32_t flags = 0;
+    e->setWaitMillisForTest(1);
+
+    e->setStreamUnavailable();
+    e->requestShutdown();
+    EXPECT_EQ(dumble::kPollShutdown, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+}
+
 TEST(CaptureEngine, ACloseThenReopenWithinOnePollIntervalMergesTheSpurts) {
     // A close immediately followed by a reopen -- button debounce, or a fast re-press -- before
     // the pump ever polls the close: the owed terminator is cancelled and both presses continue
