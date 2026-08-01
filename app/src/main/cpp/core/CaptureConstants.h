@@ -31,9 +31,24 @@ constexpr uint32_t kHighWaterSamples = 4800;                 // 100 ms
 // packet spends filling, at 200 mostly-empty wakes a second while transmitting.
 constexpr int kPollWaitMillis = kTxFrameSamples / (kSampleRate / 1000) / 4;   // 5 ms
 
+// The largest packet opus_encode can return for one frame: libopus caps its own output there
+// (`max_data_bytes = IMIN(orig_max_data_bytes, 1276)`, opus_encoder.c), and opus.h documents 1276
+// as the buffer size for a single frame. Every 20 ms frame is a single-frame packet, so this is a
+// ceiling and not an estimate — a 32 kb/s packet is nearer 80 bytes.
+constexpr int kMaxPacketBytes = 1276;
+
 // pollFrame return codes. Non-negative values are byte counts.
-constexpr int kPollRetry = -1;      // stream is down, native side is reopening — keep polling
-constexpr int kPollShutdown = -2;   // stop() was called — exit the loop
+constexpr int kPollRetry = -1;        // stream is down, native side is reopening — keep polling
+constexpr int kPollShutdown = -2;     // stop() was called — exit the loop
+// The platform adapter exhausted its reopen attempts. Distinct from kPollRetry — a caller that
+// can't tell "still trying" from "never coming back" would poll a stream that will not recover
+// for the rest of the session; this is a stop() and a user-visible "transmit unavailable" moment.
+constexpr int kPollUnavailable = -3;
+// Broken-caller codes. Separate from kPollShutdown, which they used to be folded into, because a
+// pump that exits on shutdown has done the right thing and one that exits on either of these has
+// hidden a bug in the Kotlin side behind an orderly-looking stop.
+constexpr int kPollNoSession = -4;      // null handle: create() failed, or destroy() already ran
+constexpr int kPollBufferTooSmall = -5; // `out` cannot hold a largest-case packet
 
 constexpr uint32_t kFlagTerminator = 1u;
 
