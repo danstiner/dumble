@@ -382,3 +382,29 @@ TEST(CaptureEngine, ARedundantOpenDoesNotDisturbTheSpurtAlreadyInFlight) {
 TEST(CaptureEngine, CreateFailsWhenTheEncoderCannotBeBuilt) {
     EXPECT_EQ(nullptr, CaptureEngine::create(44100, dumble::kTxFrameSamples, 40000));
 }
+
+TEST(CaptureEngine, RecordsEncodeTiming) {
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    ASSERT_TRUE(e);
+    e->setGateOpen(true);
+    std::vector<uint8_t> out(4000);
+    uint64_t fn = 0; uint32_t flags = 0;
+    auto pcm = tone(dumble::kTxFrameSamples);
+    for (int i = 0; i < 10; i++) {
+        e->onPcm(pcm.data(), pcm.size());
+        ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    }
+    // Mean over max is the pair that matters: a mean well under the 20 ms packet budget with a
+    // max near it is the signature of an encoder that mostly keeps up and occasionally does not.
+    EXPECT_GT(e->encodeMicrosMean(), 0u);
+    EXPECT_GE(e->encodeMicrosMax(), e->encodeMicrosMean());
+}
+
+TEST(CaptureEngine, EncodeTimingStaysZeroUntilSomethingIsEncoded) {
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    ASSERT_TRUE(e);
+    // Division by the count is the trap here — a mean read before the first encode must not
+    // divide by zero.
+    EXPECT_EQ(0u, e->encodeMicrosMean());
+    EXPECT_EQ(0u, e->encodeMicrosMax());
+}

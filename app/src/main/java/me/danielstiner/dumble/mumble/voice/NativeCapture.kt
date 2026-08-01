@@ -70,4 +70,14 @@ object NativeCapture {
     /** Non-zero means libopus is failing; without it a broken encoder and an idle gate both
      *  look like [pollFrame] returning 0. */
     external fun encodeErrors(handle: Long): Long
+
+    /** Microseconds per encode, against a 20 ms packet budget. Both are 0 before the first one. */
+    external fun encodeMicrosMean(handle: Long): Long
+    external fun encodeMicrosMax(handle: Long): Long
+
+    /** Oboe's own count of the callback missing its deadline. 0 with no stream open. */
+    external fun xRunCount(handle: Long): Long
+
+    /** The stream's burst size, which is what the ring's capacity has to be sized against. */
+    external fun framesPerBurst(handle: Long): Long
 }

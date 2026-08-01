@@ -74,7 +74,7 @@ oboe::Result OboeCapture::open() {
         return oboe::Result::ErrorClosed;
     }
     {
-        std::lock_guard<std::mutex> lk(streamMu_);
+        std::lock_guard<std::mutex> lk(streamMutex_);
         stream_ = newStream;
     }
     const oboe::Result s = newStream->requestStart();
@@ -87,7 +87,7 @@ oboe::Result OboeCapture::open() {
         // begins by resetting whatever it is given). Once per failed start, on the retry path
         // where failures cluster.
         {
-            std::lock_guard<std::mutex> lk(streamMu_);
+            std::lock_guard<std::mutex> lk(streamMutex_);
             if (stream_ == newStream) stream_.reset();
         }
         newStream->close();
@@ -120,24 +120,24 @@ void OboeCapture::logActualConfig(const char* phase, int64_t startMicros,
 void OboeCapture::close() {
     // Latch first: gates open() from publishing a fresh stream (checked inside open(), twice —
     // before and after the blocking openStream() call) and gates retryReopen() from starting a
-    // new attempt (checked below, under retryMu_, before incrementing retriesInProgress_).
+    // new attempt (checked below, under retryMutex_, before incrementing retriesInProgress_).
     stopping_.store(true, std::memory_order_release);
     {
         // Block until no retryReopen() invocation is running or about to start, so close() cannot
         // return while a backoff sleep on Oboe's error-callback thread is still going to wake up
         // and open a stream nobody will ever close.
-        std::unique_lock<std::mutex> lk(retryMu_);
-        retryCv_.notify_all();
-        retryCv_.wait(lk, [this] { return retriesInProgress_ == 0; });
+        std::unique_lock<std::mutex> lk(retryMutex_);
+        retryCondition_.notify_all();
+        retryCondition_.wait(lk, [this] { return retriesInProgress_ == 0; });
     }
 
     std::shared_ptr<oboe::AudioStream> s;
     {
-        std::lock_guard<std::mutex> lk(streamMu_);
+        std::lock_guard<std::mutex> lk(streamMutex_);
         s.swap(stream_);
     }
     if (!s) return;
-    // Blocking Oboe calls happen on our local copy, outside streamMu_ — holding that lock across
+    // Blocking Oboe calls happen on our local copy, outside streamMutex_ — holding that lock across
     // them risks deadlocking against Oboe's own internal locking while it tears the stream down.
     s->stop();
     s->close();
@@ -168,7 +168,7 @@ void OboeCapture::Callbacks::onErrorAfterClose(oboe::AudioStream* audioStream, o
     const std::shared_ptr<OboeCapture> capture = owner.lock();
     if (!capture) return;
     {
-        std::lock_guard<std::mutex> lk(capture->streamMu_);
+        std::lock_guard<std::mutex> lk(capture->streamMutex_);
         // Only drop the reference if it's still the stream that just errored — close() may have
         // already swapped stream_ out from under us between the error firing and this callback
         // running, since the two run on unrelated threads with no ordering guarantee either way.
@@ -185,7 +185,7 @@ void OboeCapture::retryReopen() {
     // distinct from onAudioReady's realtime thread and not subject to its no-block/no-sleep
     // rules, so an interruptible backoff sleep here is within Oboe's documented contract.
     {
-        std::lock_guard<std::mutex> lk(retryMu_);
+        std::lock_guard<std::mutex> lk(retryMutex_);
         if (stopping_.load(std::memory_order_acquire)) return;
         ++retriesInProgress_;
     }
@@ -196,7 +196,7 @@ void OboeCapture::retryReopen() {
         if (open() == oboe::Result::OK) {
             std::shared_ptr<oboe::AudioStream> s;
             {
-                std::lock_guard<std::mutex> lk(streamMu_);
+                std::lock_guard<std::mutex> lk(streamMutex_);
                 s = stream_;
             }
             logActualConfig("reopen", t0, s);
@@ -207,8 +207,8 @@ void OboeCapture::retryReopen() {
         // Exponential backoff (200, 400, 800, 1600 ms) rather than hammering openStream() while,
         // e.g., a Bluetooth codec is still negotiating. wait_for's predicate makes this
         // interruptible: close() wakes it immediately instead of waiting out the interval.
-        std::unique_lock<std::mutex> lk(retryMu_);
-        if (retryCv_.wait_for(lk, std::chrono::milliseconds(200 << (attempt - 1)),
+        std::unique_lock<std::mutex> lk(retryMutex_);
+        if (retryCondition_.wait_for(lk, std::chrono::milliseconds(200 << (attempt - 1)),
                                [this] { return stopping_.load(std::memory_order_acquire); })) {
             break;  // stop() requested; abandon the retry sequence
         }
@@ -221,10 +221,25 @@ void OboeCapture::retryReopen() {
         engine_->setStreamUnavailable();
     }
     {
-        std::lock_guard<std::mutex> lk(retryMu_);
+        std::lock_guard<std::mutex> lk(retryMutex_);
         --retriesInProgress_;
     }
-    retryCv_.notify_all();
+    retryCondition_.notify_all();
+}
+
+int32_t OboeCapture::xRunCount() const {
+    std::lock_guard<std::mutex> lock(streamMutex_);
+    if (!stream_) return 0;
+    // The direct measure of the callback missing its deadline, and so the number that settles
+    // whether signalling a condvar from onAudioReady would have been safe — i.e. whether the
+    // 5 ms timed wait in the engine can go.
+    auto count = stream_->getXRunCount();
+    return count ? count.value() : 0;
+}
+
+int32_t OboeCapture::framesPerBurst() const {
+    std::lock_guard<std::mutex> lock(streamMutex_);
+    return stream_ ? stream_->getFramesPerBurst() : 0;
 }
 
 }  // namespace dumble

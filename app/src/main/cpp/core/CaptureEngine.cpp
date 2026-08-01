@@ -157,7 +157,20 @@ int CaptureEngine::pollFrame(uint8_t* out, int outCap, uint64_t* frameNumber, ui
         return shutdown_.load(std::memory_order_acquire) ? kPollShutdown : 0;
     }
 
+    const auto encodeStart = std::chrono::steady_clock::now();
     const int bytes = encoder_->encode(scratch_.data(), assembler_.frameSamples(), out, outCap);
+    const auto encodeMicros = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - encodeStart).count());
+    encodeCount_.fetch_add(1, std::memory_order_relaxed);
+    encodeMicrosSum_.fetch_add(encodeMicros, std::memory_order_relaxed);
+    // Only the pump thread writes this, so the loop cannot spin against a competing writer; the
+    // compare_exchange is for the read side, not for contention.
+    uint64_t prevMax = encodeMicrosMax_.load(std::memory_order_relaxed);
+    while (encodeMicros > prevMax &&
+           !encodeMicrosMax_.compare_exchange_weak(prevMax, encodeMicros,
+                                                   std::memory_order_relaxed)) {}
+    // Counted before the error check: a failed encode still cost time, and hiding that would
+    // make a persistently failing encoder look free.
     if (bytes <= 0) {
         encodeErrors_.fetch_add(1, std::memory_order_relaxed);
         return 0;   // drop the frame; a libopus error is not a reason to end the stream
