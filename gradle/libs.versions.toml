@@ -19,9 +19,11 @@ datastore = "1.2.1"
 bouncycastle = "1.85"
 ktor = "3.5.1"
 oboe = "1.10.0"
+coreTelecom = "1.0.1"  # Stable; 1.1.0 is still alpha and its features are Android 16.1-gated
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-core-telecom = { group = "androidx.core", name = "core-telecom", version.ref = "coreTelecom" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }

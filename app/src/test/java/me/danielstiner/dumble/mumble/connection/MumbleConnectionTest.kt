@@ -18,11 +18,11 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
-import me.danielstiner.dumble.mumble.voice.AudioFocus
-import me.danielstiner.dumble.mumble.voice.FakeAudioFocus
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
+import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
+import me.danielstiner.dumble.mumble.voice.VoiceCall
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,7 +60,7 @@ class MumbleConnectionTest {
             conn.trustAndConnect()
 
             withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            assertEquals(sha256Hex(srv.leafCertificate.encoded), pins.get(endpoint.pinKey))
+            assertEquals(sha256Hex(srv.leafCertificate.encoded), pins.get(endpoint.address))
 
             conn.disconnect()
         } finally {
@@ -359,13 +359,11 @@ class MumbleConnectionTest {
     @Test fun startCaptureRunsTheSendPathAndDisconnectReleasesIt() = runBlocking {
         lateinit var fake: FakeControlTransport
         val handle = FakeCaptureHandle()
-        val serviceStarts = CopyOnWriteArrayList<String>()
-        var serviceStops = 0
+        val call = FakeVoiceCall()
         val conn = MumbleConnection(
             InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
             newCapture = { handle },
-            startService = { serviceStarts += it },
-            stopService = { serviceStops++ },
+            call = call,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
@@ -373,9 +371,6 @@ class MumbleConnectionTest {
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
         conn.startCapture()
 
-        awaitTrue("the microphone service must start with the server host") {
-            serviceStarts == listOf("localhost")
-        }
         awaitTrue("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
         val (type, payload) = fake.sentRaw.first()
         assertEquals(TcpMessageType.UDPTunnel, type)
@@ -390,55 +385,116 @@ class MumbleConnectionTest {
         conn.disconnect()
         awaitTrue("teardown must stop the pump") { handle.stopped }
         awaitTrue("teardown must destroy the engine") { handle.destroyed }
-        awaitTrue("teardown must stop the service") { serviceStops == 1 }
+        awaitTrue("teardown must end the call") { call.ends == 1 }
     }
 
     /**
-     * Focus loss tears the capture session down instead of merely closing the gate, and a regain
-     * builds a fresh one. This is what stands in for §4's "gate the reopen backoff on focus state":
-     * proving the rebuilt session reaches the wire is what makes the substitution honest, since a
-     * teardown that could not come back would be worse than the backoff it replaced.
+     * The call belongs to the connection, not to the microphone. Before this, the foreground service
+     * was only ever started from startCapture(), so denying RECORD_AUDIO left the session with no
+     * service at all — and receive silently reverted to working only while the activity was visible.
      */
-    @Test fun focusLossTearsTheSessionDownAndRegainRebuildsIt() = runBlocking {
+    @Test fun callStartsWithTheConnectionNotTheMicrophone() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { null },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+
+        // No startCapture() anywhere in this test: connecting alone must register the call.
+        awaitTrue("connecting must start the call with the server host") {
+            call.starts == listOf("localhost")
+        }
+        conn.disconnect()
+        awaitTrue("disconnecting must end the call") { call.ends == 1 }
+        assertEquals("a hang-up is the user's doing", listOf(VoiceCall.Reason.USER), call.endReasons)
+    }
+
+    /**
+     * A session that dies on us is not a hang-up. The platform records a different disconnect cause
+     * for each, and reporting a server failure as LOCAL would claim the user ended a call they did
+     * not.
+     */
+    @Test fun aFailedConnectEndsTheCallAsFailureNotHangUp() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }, call = call,
+        ) { FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
+        awaitTrue("a failed handshake must end the call") { call.ends == 1 }
+        assertEquals(
+            "a handshake that never produced a session is not a hang-up",
+            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons,
+        )
+    }
+
+    /** The system ending the call (a cellular call taking over) must take the session down with it. */
+    @Test fun aSystemEndedCallDisconnectsTheSession() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { null },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        call.endedBySystem()
+
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Idle } }
+        Unit
+    }
+
+    /**
+     * A hold tears the capture session down instead of merely closing the gate, and a resume builds
+     * a fresh one. This is what stands in for §4's "gate the reopen backoff on focus state": proving
+     * the rebuilt session reaches the wire is what makes the substitution honest, since a teardown
+     * that could not come back would be worse than the backoff it replaced.
+     */
+    @Test fun holdTearsTheSessionDownAndResumeRebuildsIt() = runBlocking {
         lateinit var fake: FakeControlTransport
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val focus = FakeAudioFocus()
+        val call = FakeVoiceCall()
         val conn = MumbleConnection(
             InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
-            audioFocus = focus,
+            call = call,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         conn.startCapture()
-        awaitTrue("focus must be requested with the session") { focus.requests == 1 }
         awaitTrue("the engine must open") { handles.size == 1 }
         handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
         awaitTrue("the first session must reach the wire") { fake.sentRaw.size == 1 }
 
-        focus.deliver(AudioFocus.Change.LOST_TEMPORARILY)
-        awaitTrue("losing focus must stop the pump") { handles[0].stopped }
-        awaitTrue("losing focus must destroy the engine") { handles[0].destroyed }
+        call.hold()
+        awaitTrue("a hold must stop the pump") { handles[0].stopped }
+        awaitTrue("a hold must destroy the engine") { handles[0].destroyed }
 
-        focus.deliver(AudioFocus.Change.REGAINED)
-        awaitTrue("regaining focus must build a new engine") { handles.size == 2 }
+        call.resume()
+        awaitTrue("resuming must build a new engine") { handles.size == 2 }
         handles[1].script(FakeCaptureHandle.Step.Frame(byteArrayOf(2), frameNumber = 2, terminator = false))
         awaitTrue("the rebuilt session must reach the wire") { fake.sentRaw.size == 2 }
 
         conn.disconnect()
-        awaitTrue("disconnect must abandon focus") { focus.abandons == 1 }
+        awaitTrue("disconnect must end the call") { call.ends == 1 }
         awaitTrue("disconnect must release the rebuilt engine") { handles[1].destroyed }
     }
 
-    /** A late callback from a request we already gave up must not resurrect a dead session. */
-    @Test fun focusDeliveredAfterDisconnectRebuildsNothing() = runBlocking {
+    /** A late callback from a call we already ended must not resurrect a dead session. */
+    @Test fun holdDeliveredAfterDisconnectRebuildsNothing() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val focus = FakeAudioFocus()
+        val call = FakeVoiceCall()
         val conn = MumbleConnection(
             InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
-            audioFocus = focus,
+            call = call,
         ) { FakeControlTransport { _, _ -> } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
@@ -446,30 +502,28 @@ class MumbleConnectionTest {
         awaitTrue("the engine must open") { handles.size == 1 }
 
         conn.disconnect()
-        awaitTrue("disconnect must abandon focus") { focus.abandons == 1 }
-        focus.deliver(AudioFocus.Change.REGAINED)
+        awaitTrue("disconnect must end the call") { call.ends == 1 }
+        call.resume()
         delay(200)
         assertEquals("no engine may be built for a dead attempt", 1, handles.size)
     }
 
-    /** Denied microphone, or an engine that would not open: receive still needs the service. */
-    @Test fun captureThatCannotOpenLeavesTheServiceRunning() = runBlocking {
-        val serviceStarts = CopyOnWriteArrayList<String>()
+    /** Denied microphone, or an engine that would not open: receive still needs the call's service. */
+    @Test fun captureThatCannotOpenLeavesTheCallRunning() = runBlocking {
+        val call = FakeVoiceCall()
         val conn = MumbleConnection(
             InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
             newCapture = { null },
-            startService = { serviceStarts += it },
-            stopService = {},
+            call = call,
         ) { FakeControlTransport { _, _ -> } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         conn.startCapture()
-        awaitTrue("the service must start even when the engine will not open") {
-            serviceStarts == listOf("localhost")
-        }
         // No engine, so push-to-talk is inert rather than a crash.
         conn.setTransmitting(true)
+        delay(200)
+        assertEquals("the call must survive an engine that would not open", 0, call.ends)
         conn.disconnect()
     }
 

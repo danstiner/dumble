@@ -24,16 +24,15 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
-import me.danielstiner.dumble.mumble.voice.AndroidAudioFocus
 import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
-import me.danielstiner.dumble.mumble.voice.AudioFocus
 import me.danielstiner.dumble.mumble.voice.AudioOut
-import me.danielstiner.dumble.mumble.voice.NoAudioFocus
+import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.OpusCodec
+import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
-import me.danielstiner.dumble.service.VoiceService
+import me.danielstiner.dumble.telecom.TelecomCall
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -54,9 +53,7 @@ class MumbleConnection internal constructor(
     private val newAudioOut: () -> AudioOut,
     // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
-    private val startService: (server: String) -> Unit = {},
-    private val stopService: () -> Unit = {},
-    private val audioFocus: AudioFocus = NoAudioFocus,
+    private val call: VoiceCall = NoVoiceCall,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -65,8 +62,7 @@ class MumbleConnection internal constructor(
         opusCodec: OpusCodec,
     ) : this(
         pinStore, opusCodec, { AndroidAudioOut() }, { openNativeCapture() },
-        { VoiceService.start(context, it) }, { VoiceService.stop(context) },
-        AndroidAudioFocus(context),
+        TelecomCall(context),
         { MumbleTcpTransport(it) },
     )
 
@@ -130,10 +126,16 @@ class MumbleConnection internal constructor(
             _speakingSessions.value = emptySet()
         }
         prior?.let { teardown(it) }
+        // Synchronously, on the caller's thread, and here rather than in startCapture(): this is the
+        // Connect button, so the app is definitively foreground — which the call's `microphone`
+        // foreground service requires — and tying the call to the connection rather than to the
+        // microphone is what gives a user who denied RECORD_AUDIO a service at all, and with it
+        // receive that survives backgrounding.
+        call.start(gen, endpoint, username, onActive = { active -> onCallActive(active) }, onEnded = { disconnect() })
 
         scope.launch {
-            val pin = pinStore.get(endpoint.pinKey)
-            Log.i(TAG, "connect gen=$gen endpoint=${endpoint.pinKey} user=$username storedPin=${pin != null}")
+            val pin = pinStore.get(endpoint.address)
+            Log.i(TAG, "connect gen=$gen endpoint=${endpoint.address} user=$username storedPin=${pin != null}")
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
             val sm = SessionStateMachine(transport, username, password, childScope)
@@ -155,9 +157,13 @@ class MumbleConnection internal constructor(
                 when (status) {
                     is ConnectionStatus.AwaitingTrust, is ConnectionStatus.PinMismatch ->
                         Log.i(TAG, "handshake stopped for trust decision: $status")
-                    else -> Log.w(TAG, "connect failed for ${endpoint.pinKey}", t)
+                    else -> Log.w(TAG, "connect failed for ${endpoint.address}", t)
                 }
                 publishStatus(gen, status)
+                // The handshake never produced a session, so there is nothing for the platform to
+                // hold a call open for. Without this a refused connection — or a trust prompt the
+                // user leaves sitting — keeps a registered call alive with no audio behind it.
+                call.end(gen, VoiceCall.Reason.SESSION_FAILED)
                 return@launch
             }
             if (gen != attempt) { teardown(att); return@launch }   // superseded mid-handshake
@@ -191,7 +197,7 @@ class MumbleConnection internal constructor(
         val att = current ?: return
         val presented = att.presented ?: return
         scope.launch {
-            pinStore.put(att.endpoint.pinKey, presented)
+            pinStore.put(att.endpoint.address, presented)
             connect(att.endpoint, att.username, att.password)
         }
     }
@@ -216,36 +222,24 @@ class MumbleConnection internal constructor(
     override fun startCapture() {
         val att = current ?: return
         if (att.sender != null) return
-        // Synchronously, on the caller's thread. This is called from the connected screen while it
-        // is visible, and a microphone service cannot be started once that stops being true —
-        // deferring it into the coroutine below leaves a window where backgrounding loses it. It
-        // also has to be running before the input stream opens.
-        startService(att.endpoint.host)
-        // Advisory: a refusal is worth a log line, not a reason to refuse the user a microphone.
-        audioFocus.request { change -> onFocusChange(att, change) }
         scope.launch(Dispatchers.IO) { openCapture(att) }
     }
 
     /**
-     * Focus loss tears the capture session down rather than merely closing the gate. Whatever took
-     * focus is usually holding the input device — a phone call is the case that matters — so an
-     * open stream would spend the interruption cycling Oboe's reopen backoff against a device it
-     * cannot have. This is what replaces §4's "gate the backoff on focus state": the session is
+     * A hold tears the capture session down rather than merely closing the gate. Whatever the system
+     * held us for is holding the input device — an incoming cellular call is the case that matters —
+     * so an open stream would spend the interruption cycling Oboe's reopen backoff against a device
+     * it cannot have. This is what replaces §4's "gate the backoff on focus state": the session is
      * cheap to rebuild, and rebuilding needs no new native state to stay coherent with a disconnect
      * arriving concurrently on the error-callback thread.
      *
-     * A regain rebuilds unconditionally, including after a permanent loss. Tracking permanence
-     * would only create a flag that has to be reset correctly, and being handed focus back is
-     * evidence enough that we can have it.
+     * Resolves the attempt at call time rather than closing over one, so a hold arriving after a
+     * reconnect acts on the live session instead of a dead one.
      */
-    private fun onFocusChange(att: Attempt, change: AudioFocus.Change) {
-        Log.i(TAG, "audio focus $change")
-        scope.launch(Dispatchers.IO) {
-            when (change) {
-                AudioFocus.Change.LOST, AudioFocus.Change.LOST_TEMPORARILY -> closeCapture(att)
-                AudioFocus.Change.REGAINED -> openCapture(att)
-            }
-        }
+    private fun onCallActive(active: Boolean) {
+        Log.i(TAG, "call ${if (active) "resumed" else "held"}")
+        val att = current ?: return
+        scope.launch(Dispatchers.IO) { if (active) openCapture(att) else closeCapture(att) }
     }
 
     /** Blocks on create(): callers are on [Dispatchers.IO]. No-op unless [att] is live and idle. */
@@ -294,10 +288,10 @@ class MumbleConnection internal constructor(
         val live = synchronized(lock) {
             if (att.gen == attempt && current === att) { current = null; true } else false
         }
-        if (live) teardown(att)
+        if (live) teardown(att, VoiceCall.Reason.SESSION_FAILED)
     }
 
-    private fun teardown(att: Attempt) {
+    private fun teardown(att: Attempt, reason: VoiceCall.Reason = VoiceCall.Reason.USER) {
         // Launch blocking work asynchronously, teardown() can be called from the main thread.
         // IO because both block: stop() joins the playback thread for up to a second, and
         // SSLSocket.close can stall writing close-notify to a dead peer. Socket first, since that
@@ -310,11 +304,9 @@ class MumbleConnection internal constructor(
             att.sender?.stop()
             att.capture?.destroy()
             att.receiver.stop()
-            // After the session is down, so a late loss callback cannot race a rebuild.
-            audioFocus.abandon()
-            // Last, and unconditional — the service outlives capture whenever the microphone was
-            // denied or failed to open, since receive needs it either way.
-            stopService()
+            // Last, and generation-guarded inside: a superseded attempt reaching here after a
+            // reconnect has already started the next call must not end it.
+            call.end(att.gen, reason)
         }
         // The collectors never finish on their own, and retire() does not bump `attempt`, so this
         // is the only thing that stops a retired attempt still publishing. Stays last because
