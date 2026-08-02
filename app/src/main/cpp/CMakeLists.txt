@@ -11,6 +11,17 @@ set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/opus
                  ${CMAKE_BINARY_DIR}/opus)
 
+# Optimise libopus even in a debug build. It inherits CMAKE_BUILD_TYPE, so a debug variant
+# compiles it at -O0, where encoding one 20 ms frame measured ~5 ms on a Pixel 7a against a 20 ms
+# budget — a quarter of the budget spent in third-party code nobody sets a breakpoint in, and
+# enough to make the capture instrumentation's timings say nothing about a release build.
+# Debug-only via a generator expression rather than unconditionally: target_compile_options appends
+# after the config's own flags and would win, so scoping it to Debug leaves every other
+# configuration compiling opus exactly as that configuration chose. (Today the release variant is
+# RelWithDebInfo, which already means -O2, so this changes nothing there — but it stays true if the
+# release configuration ever changes.)
+target_compile_options(opus PRIVATE $<$<CONFIG:Debug>:-O2>)
+
 find_package(oboe REQUIRED CONFIG)
 
 # CONFIGURE_DEPENDS for the same reason as the host harness: without it an existing .cxx build
