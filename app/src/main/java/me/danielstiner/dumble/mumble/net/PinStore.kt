@@ -4,7 +4,7 @@ import java.security.cert.CertificateException
 
 /**
  * User-accepted server certificate pins. The key is the connection target as the user specified it,
- * `host:port` from [MumbleEndpoint.pinKey] — nothing is read off the certificate itself. The value is [sha256Hex]
+ * `host:port` from [MumbleEndpoint.address] — nothing is read off the certificate itself. The value is [sha256Hex]
  * of the leaf certificate.
  */
 interface PinStore {

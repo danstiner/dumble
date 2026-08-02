@@ -3,14 +3,15 @@ package me.danielstiner.dumble.mumble.net
 import java.net.IDN
 
 /**
- * A connection target after canonicalization. The single owner of pin-key derivation: [host] is what
- * the socket and host-name verifier get, [pinKey] is what [PinStore] is keyed by, and they are derived
- * together so they can never disagree.
+ * A connection target after canonicalization. [host] is what the socket and host-name verifier get;
+ * [address] is the canonical `host:port` the rest of the app identifies a server by — the key
+ * [PinStore] uses and the authority of the call's `mumble://` URL. Derived together with [host] so
+ * they can never disagree.
  */
 class MumbleEndpoint private constructor(val host: String, val port: Int) {
     // host is IPv6 iff it holds >=2 colons (a lone colon is a mistyped host:port, rejected in parse),
     // so bracketing here is unambiguous and "[::1]:64738" cannot collide with a distinct endpoint.
-    val pinKey: String get() = if (host.contains(':')) "[$host]:$port" else "$host:$port"
+    val address: String get() = if (host.contains(':')) "[$host]:$port" else "$host:$port"
 
     companion object {
         const val DEFAULT_PORT = 64738

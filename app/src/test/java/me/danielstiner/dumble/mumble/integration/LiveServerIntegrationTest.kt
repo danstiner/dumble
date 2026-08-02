@@ -58,9 +58,9 @@ class LiveServerIntegrationTest {
         // bypassing trust with an accept-everything manager.
         val fingerprint = probeLeafFingerprint(target, port)
         val endpoint = MumbleEndpoint.parse(target, port)
-        val pins = InMemoryPinStore().apply { put(endpoint.pinKey, fingerprint) }
+        val pins = InMemoryPinStore().apply { put(endpoint.address, fingerprint) }
 
-        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.pinKey))
+        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.address))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = SessionStateMachine(transport, "dumble-ci", password, scope)
 
@@ -95,8 +95,8 @@ class LiveServerIntegrationTest {
 
         val fingerprint = probeLeafFingerprint(target, port)
         val endpoint = MumbleEndpoint.parse(target, port)
-        val pins = InMemoryPinStore().apply { put(endpoint.pinKey, fingerprint) }
-        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.pinKey))
+        val pins = InMemoryPinStore().apply { put(endpoint.address, fingerprint) }
+        val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.address))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = SessionStateMachine(transport, "dumble-ci-voice", password, scope)
 

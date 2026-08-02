@@ -10,26 +10,26 @@ class MumbleEndpointTest {
         val e = MumbleEndpoint.parse("example.com")
         assertEquals("example.com", e.host)
         assertEquals(64738, e.port)
-        assertEquals("example.com:64738", e.pinKey)
+        assertEquals("example.com:64738", e.address)
     }
 
     @Test fun canonicalizesCaseTrailingDotAndAliasesToOnePin() {
         val a = MumbleEndpoint.parse("Voice.Example.com", 64738)
         val b = MumbleEndpoint.parse("voice.example.com.", 64738)
         assertEquals("voice.example.com", a.host)
-        assertEquals(a.pinKey, b.pinKey)
+        assertEquals(a.address, b.address)
     }
 
     @Test fun ipv6IsBracketedOnlyInPinKey() {
         val e = MumbleEndpoint.parse("::1", 64738)
         assertEquals("::1", e.host)
-        assertEquals("[::1]:64738", e.pinKey)
+        assertEquals("[::1]:64738", e.address)
     }
 
     @Test fun toleratesPastedBracketedIpv6() {
         val e = MumbleEndpoint.parse("[::1]", 64738)
         assertEquals("::1", e.host)
-        assertEquals("[::1]:64738", e.pinKey)
+        assertEquals("[::1]:64738", e.address)
     }
 
     @Test fun lowercasesIpv6Hex() {
