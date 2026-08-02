@@ -22,10 +22,16 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Dumble">
 
+        <!-- windowSoftInputMode: unspecified defaults to adjustPan, which has the framework
+             translate the whole window up to keep the focused field visible, on top of (not
+             instead of) Compose's own imePadding()/WindowInsets.ime handling in ChatScreen —
+             double-shifting content and pushing the top bar off-screen. adjustResize leaves
+             Compose as the only thing moving content for the IME. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Dumble">
+            android:theme="@style/Theme.Dumble"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.di
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
@@ -16,6 +17,7 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.voice.LibOpusCodec
 import me.danielstiner.dumble.mumble.voice.OpusCodec
+import me.danielstiner.dumble.ui.connect.MonotonicClock
 import javax.inject.Singleton
 
 @Module
@@ -37,6 +39,9 @@ object MumbleModule {
     @Provides
     @Singleton
     fun provideOpusCodec(): OpusCodec = LibOpusCodec()
+
+    @Provides
+    fun provideMonotonicClock(): MonotonicClock = MonotonicClock { SystemClock.elapsedRealtime() }
 
     const val SERVER_CONFIG_NAME = "server_config"
 
