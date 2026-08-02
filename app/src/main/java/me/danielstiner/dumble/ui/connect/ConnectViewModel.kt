@@ -17,7 +17,6 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -45,7 +44,6 @@ data class ConnectUiState(
     val portError: String? = null,
     val hostError: String? = null,
     val status: ConnectionStatus = ConnectionStatus.Idle,
-    val serverVersion: ServerVersion? = null,
     val rttMs: Double? = null,
     val channelTree: ChannelTree = ChannelTree(),
     val messages: List<ChatMessage> = emptyList(),
@@ -57,11 +55,13 @@ data class ConnectUiState(
     // Null until the connected screen has asked; true/false is the OS answer. Outlives the
     // connection it was given for, which is why capture starts from onMicrophoneReady.
     val microphoneGranted: Boolean? = null,
+    // [MonotonicClock] reading when the session reached Connected, or null. Read the elapsed
+    // duration against the same clock, never against wall time — the two share no origin.
+    val connectedSinceMillis: Long? = null,
 )
 
 private data class ConnSnapshot(
     val status: ConnectionStatus,
-    val serverVersion: ServerVersion?,
     val rttMs: Double?,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
@@ -71,23 +71,36 @@ private data class ConnSnapshot(
 class ConnectViewModel @Inject constructor(
     private val connection: Connection,
     private val configStore: ServerConfigStore,
+    private val clock: MonotonicClock,
 ) : ViewModel() {
 
     private val form = MutableStateFlow(ConnectUiState())
 
-    // Kotlin's typed combine() maxes at 5 flows; nest the 5 connection flows into one
-    // snapshot so the top-level combine only needs form + snapshot.
+    // The push-to-talk gate as the UI knows it. connection.setTransmitting is fire-and-forget, so
+    // this is the only record of it, and speakingSessions never contains us: it is built from
+    // decoded incoming audio and our own audio is never decoded locally.
+    private val transmitting = MutableStateFlow(false)
+
+    // Kotlin's typed combine() maxes at 5 flows; nest the connection flows into one snapshot
+    // so the top-level combine only needs form + snapshot + speakingSessions + transmitting.
     private val connSnapshot = combine(
-        connection.status, connection.serverVersion, connection.roundTripMillis,
+        connection.status, connection.roundTripMillis,
         connection.channelTree, connection.messages,
-    ) { status, ver, rtt, tree, msgs -> ConnSnapshot(status, ver, rtt, tree, msgs) }
+    ) { status, rtt, tree, msgs -> ConnSnapshot(status, rtt, tree, msgs) }
 
     val uiState: StateFlow<ConnectUiState> =
-        combine(form, connSnapshot, connection.speakingSessions) { f, c, speaking ->
+        combine(form, connSnapshot, connection.speakingSessions, transmitting) { f, c, speaking, tx ->
+            val status = c.status
+            // Gated on the microphone: the gate can be open while capture never started — denied
+            // permission, or an engine that failed to open — and showing yourself speaking then
+            // would be a lie. PR 2 adds mute to this condition.
+            val me = (status as? ConnectionStatus.Connected)
+                ?.sessionId
+                ?.takeIf { tx && f.microphoneGranted == true }
             f.copy(
-                status = c.status, serverVersion = c.serverVersion, rttMs = c.rttMs,
+                status = status, rttMs = c.rttMs,
                 channelTree = c.channelTree, messages = c.messages,
-                speakingSessions = speaking,
+                speakingSessions = if (me != null) speaking + me else speaking,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -98,6 +111,9 @@ class ConnectViewModel @Inject constructor(
     // relies on the log being append-only, so instances stay stable across emissions — see
     // SessionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = connection.messages.value.lastOrNull()
+
+    /** The session [ConnectUiState.connectedSinceMillis] was stamped for; null while disconnected. */
+    private var anchoredSession: Int? = null
 
     init {
         viewModelScope.launch {
@@ -114,6 +130,23 @@ class ConnectViewModel @Inject constructor(
                 } else {
                     form.value = form.value.copy(unread = unreadAfter(msgs))
                 }
+            }
+        }
+        viewModelScope.launch {
+            connection.status.collect { s ->
+                // Keyed on the session, not on connected-ness: status is a StateFlow, so the
+                // disconnect between two calls can be conflated away, and a nullness comparison
+                // would then treat the second call as a continuation of the first.
+                val session = (s as? ConnectionStatus.Connected)?.sessionId
+                if (session == anchoredSession) return@collect
+                anchoredSession = session
+                // A drop mid-press disposes the call screen before `clickable` emits its Cancel,
+                // so the button's release never arrives; left open, the gate would mark our own
+                // row speaking for the whole of the next call.
+                transmitting.value = false
+                form.value = form.value.copy(
+                    connectedSinceMillis = session?.let { clock.millis() },
+                )
             }
         }
     }
@@ -179,6 +212,13 @@ class ConnectViewModel @Inject constructor(
      */
     fun onMicrophoneReady() = connection.startCapture()
 
-    /** Seam for [PttButton]: press and release open and close the transmit gate. */
-    fun onTransmitting(active: Boolean) = connection.setTransmitting(active)
+    /**
+     * Seam for [CallControls]: press and release open and close the transmit gate. Kept in
+     * [transmitting], not just forwarded, so it can be merged into speakingSessions above — our
+     * own session never otherwise appears there.
+     */
+    fun onTransmitting(active: Boolean) {
+        transmitting.value = active
+        connection.setTransmitting(active)
+    }
 }

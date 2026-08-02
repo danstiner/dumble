@@ -119,6 +119,9 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // Settings gear + back arrows; material3 no longer pulls the icons artifact.
     implementation(libs.androidx.compose.material.icons.core)
+    // Mic, headset, folder, call-end and equaliser glyphs for the call screen. Measured at +32 KB
+    // in the release APK: R8 strips every icon the app does not reference.
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.hilt.navigation.compose)

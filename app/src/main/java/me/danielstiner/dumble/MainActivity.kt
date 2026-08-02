@@ -5,8 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -41,57 +39,58 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
     val state by vm.uiState.collectAsStateWithLifecycle()
-    Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-        val m = Modifier.fillMaxSize().padding(padding)
-        // Settings and About overlay whatever the connection is doing, so they are checked before
-        // status rather than nested inside one branch of it.
-        when (state.route) {
-            Route.About -> AboutScreen(
-                versionName = BuildConfig.VERSION_NAME,
-                onBack = vm::back,
-                modifier = m,
-            )
-            Route.Settings -> SettingsScreen(
-                onBack = vm::back,
-                onAbout = vm::openAbout,
-                modifier = m,
-            )
-            Route.Main -> when (val s = state.status) {
-                is ConnectionStatus.Connected ->
-                    if (state.showChat) ChatScreen(
-                        messages = state.messages,
-                        mySession = s.sessionId,
-                        draft = state.chatDraft,
-                        onDraftChange = vm::onChatDraftChange,
-                        onSend = vm::sendMessage,
-                        onBack = vm::closeChat,
-                        modifier = m,
-                    ) else ConnectedScreen(
-                        server = "${state.draft.host}:${state.draft.port}",
-                        sessionId = s.sessionId,
-                        serverVersion = state.serverVersion,
-                        rttMs = state.rttMs,
-                        channelTree = state.channelTree,
-                        speaking = state.speakingSessions,
-                        unread = state.unread,
-                        microphoneGranted = state.microphoneGranted,
-                        onOpenChat = vm::openChat,
-                        onDisconnect = vm::onDisconnect,
-                        onSettings = vm::openSettings,
-                        onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
-                        onMicrophoneReady = vm::onMicrophoneReady,
-                        onTransmitting = vm::onTransmitting,
-                        modifier = m,
-                    )
-                else -> ConnectScreen(
-                    state = state,
-                    onHost = vm::onHostChange, onPort = vm::onPortChange,
-                    onUsername = vm::onUsernameChange, onPassword = vm::onPasswordChange,
-                    onConnect = vm::onConnect, onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
+    // No Scaffold here. Every screen owns one, and a Scaffold whose content is another Scaffold
+    // applies the system-bar insets twice — the inner screen's top bar then sits a status bar below
+    // where it belongs, and its bottom bar floats above the navigation bar.
+    val m = Modifier.fillMaxSize()
+    // Settings and About overlay whatever the connection is doing, so they are checked before
+    // status rather than nested inside one branch of it.
+    when (state.route) {
+        Route.About -> AboutScreen(
+            versionName = BuildConfig.VERSION_NAME,
+            onBack = vm::back,
+            modifier = m,
+        )
+        Route.Settings -> SettingsScreen(
+            onBack = vm::back,
+            onAbout = vm::openAbout,
+            modifier = m,
+        )
+        Route.Main -> when (val s = state.status) {
+            is ConnectionStatus.Connected ->
+                if (state.showChat) ChatScreen(
+                    messages = state.messages,
+                    mySession = s.sessionId,
+                    draft = state.chatDraft,
+                    onDraftChange = vm::onChatDraftChange,
+                    onSend = vm::sendMessage,
+                    onBack = vm::closeChat,
+                    modifier = m,
+                ) else ConnectedScreen(
+                    server = "${state.draft.host}:${state.draft.port}",
+                    sessionId = s.sessionId,
+                    connectedSinceMillis = state.connectedSinceMillis,
+                    rttMs = state.rttMs,
+                    channelTree = state.channelTree,
+                    speaking = state.speakingSessions,
+                    unread = state.unread,
+                    microphoneGranted = state.microphoneGranted,
+                    onOpenChat = vm::openChat,
+                    onDisconnect = vm::onDisconnect,
                     onSettings = vm::openSettings,
+                    onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
+                    onMicrophoneReady = vm::onMicrophoneReady,
+                    onTransmitting = vm::onTransmitting,
                     modifier = m,
                 )
-            }
+            else -> ConnectScreen(
+                state = state,
+                onHost = vm::onHostChange, onPort = vm::onPortChange,
+                onUsername = vm::onUsernameChange, onPassword = vm::onPasswordChange,
+                onConnect = vm::onConnect, onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
+                onSettings = vm::openSettings,
+                modifier = m,
+            )
         }
     }
 }

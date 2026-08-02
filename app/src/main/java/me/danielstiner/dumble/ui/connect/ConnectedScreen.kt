@@ -2,37 +2,49 @@ package me.danielstiner.dumble.ui.connect
 
 import android.Manifest
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.HeadsetMic
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
-import me.danielstiner.dumble.mumble.protocol.ServerVersion
-
-private const val MICROPHONE_DENIED_REASON = "Microphone permission denied — you can still hear others"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectedScreen(
     server: String,
     sessionId: Int,
-    serverVersion: ServerVersion?,
+    connectedSinceMillis: Long?,
     rttMs: Double?,
     channelTree: ChannelTree,
     speaking: Set<Int>,
@@ -80,34 +92,72 @@ fun ConnectedScreen(
             false -> {}
         }
     }
-    Column(modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Dumble") },
-            actions = {
-                IconButton(onClick = onSettings) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                }
-            },
-        )
-        Column(
-            Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Connected to $server")
-            Text("Session #$sessionId")
-            Text("Server version: ${serverVersion?.toString() ?: "—"}")
-            Text("Ping: ${rttMs?.let { "%.1f ms".format(it) } ?: "—"}")
-            ChannelTreeView(channelTree, mySession = sessionId, speaking = speaking, modifier = Modifier.weight(1f).fillMaxWidth())
-            PttButton(
-                enabled = microphoneGranted == true,
-                disabledReason = if (microphoneGranted == false) MICROPHONE_DENIED_REASON else null,
-                onTransmitting = onTransmitting,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpenChat) { Text(if (unread > 0) "Chat ($unread)" else "Chat") }
-                Button(onClick = onDisconnect) { Text("Disconnect") }
-            }
+
+    // Ticks once a second while connected. Keyed on the anchor so a reconnect restarts it, and the
+    // loop ends with the composition rather than running against a stale anchor.
+    var elapsedSeconds by remember(connectedSinceMillis) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(connectedSinceMillis) {
+        if (connectedSinceMillis == null) return@LaunchedEffect
+        while (true) {
+            // Same clock the anchor was taken from — see MonotonicClock.
+            elapsedSeconds = (SystemClock.elapsedRealtime() - connectedSinceMillis) / 1000
+            delay(1000)
         }
+    }
+
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    Box(
+                        Modifier.padding(start = 12.dp).size(40.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.HeadsetMic, null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            server, style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            statusLine(elapsedSeconds, rttMs),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenChat) {
+                        BadgedBox(badge = { if (unread > 0) Badge { Text("$unread") } }) {
+                            Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
+                        }
+                    }
+                    IconButton(onClick = onSettings) { Icon(Icons.Filled.Tune, "Settings") }
+                },
+            )
+        },
+        bottomBar = {
+            CallControls(
+                microphoneGranted = microphoneGranted,
+                onTransmitting = onTransmitting,
+                onHangUp = onDisconnect,
+            )
+        },
+    ) { padding ->
+        ChannelTreeView(
+            channelTree,
+            mySession = sessionId,
+            speaking = speaking,
+            modifier = Modifier.fillMaxSize().padding(padding),
+        )
     }
 }

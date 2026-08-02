@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import me.danielstiner.dumble.data.ServerProfile
@@ -11,9 +12,11 @@ import me.danielstiner.dumble.mumble.channeltree.Channel
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.ErrorKind
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -24,11 +27,16 @@ import java.time.Instant
 class ConnectViewModelTest {
     private val dispatcher = StandardTestDispatcher()
 
+    // JUnit builds a fresh instance per test, so this starts at 0 for each. Controllable rather
+    // than real: the reconnect assertions below compare two anchors, which a real clock can hand
+    // back identical when both stamps land in the same millisecond.
+    private val clock = FakeClock()
+
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
     @Test fun prefillsDraftFromLastUsed() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(ServerProfile("saved.example", 64738, "bob")))
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(ServerProfile("saved.example", 64738, "bob")), clock)
         advanceUntilIdle()
         assertEquals("saved.example", vm.uiState.value.draft.host)
         assertEquals("bob", vm.uiState.value.draft.username)
@@ -36,7 +44,7 @@ class ConnectViewModelTest {
 
     @Test fun invalidPortBlocksDispatchAndSetsError() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("abc")
         vm.onConnect()
         advanceUntilIdle()
@@ -46,7 +54,7 @@ class ConnectViewModelTest {
 
     @Test fun invalidHostBlocksDispatchAndSetsError() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onHostChange("voice.example.com:64738"); vm.onUsernameChange("u"); vm.onPortChange("64738")
         vm.onConnect()
         advanceUntilIdle()
@@ -57,7 +65,7 @@ class ConnectViewModelTest {
     @Test fun validConnectDispatchesAndSaves() = runTest(dispatcher) {
         val conn = FakeConnection()
         val store = FakeConfigStore(null)
-        val vm = ConnectViewModel(conn, store)
+        val vm = ConnectViewModel(conn, store, clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
         vm.onConnect()
         advanceUntilIdle()
@@ -68,7 +76,7 @@ class ConnectViewModelTest {
 
     @Test fun channelTreeFromConnectionAppearsInUiState() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.channelTree.value = ChannelTree(channels = mapOf(0 to Channel(0, null, "Root", 0)))
         advanceUntilIdle()
         assertEquals("Root", vm.uiState.value.channelTree.channels[0]?.name)
@@ -76,7 +84,7 @@ class ConnectViewModelTest {
 
     @Test fun unreadIncrementsWhileChatClosed() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.messages.value = listOf(
             ChatMessage.Remote(1, null, "hi", Instant.EPOCH),
             ChatMessage.Remote(1, null, "there", Instant.EPOCH),
@@ -89,14 +97,14 @@ class ConnectViewModelTest {
     @Test fun warmConnectionDoesNotCountPreexistingAsUnread() = runTest(dispatcher) {
         val conn = FakeConnection()
         conn.messages.value = listOf(ChatMessage.Remote(1, null, "old", Instant.EPOCH))
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         advanceUntilIdle()
         assertEquals(0, vm.uiState.value.unread)
     }
 
     @Test fun openChatResetsUnread() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.messages.value = listOf(ChatMessage.Remote(1, null, "hi", Instant.EPOCH))
         advanceUntilIdle()
         vm.openChat()
@@ -107,7 +115,7 @@ class ConnectViewModelTest {
 
     @Test fun messagesWhileOpenDoNotCount() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.openChat()
         advanceUntilIdle()
         conn.messages.value = listOf(ChatMessage.Remote(1, null, "hi", Instant.EPOCH))
@@ -117,7 +125,7 @@ class ConnectViewModelTest {
 
     @Test fun logShrinkResetsUnread() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.messages.value = listOf(
             ChatMessage.Remote(1, null, "hi", Instant.EPOCH),
             ChatMessage.Remote(1, null, "there", Instant.EPOCH),
@@ -134,7 +142,7 @@ class ConnectViewModelTest {
     // is a prior-session instance absent from the new list, so all the new messages count.
     @Test fun reconnectToAnotherServerCountsTheNewMessagesAsUnread() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.messages.value = List(5) { ChatMessage.Remote(1, null, "a$it", Instant.EPOCH) }
         advanceUntilIdle()
         vm.openChat(); advanceUntilIdle()          // read all 5 → marker = the 5th "a"
@@ -151,7 +159,7 @@ class ConnectViewModelTest {
     // tail past the marker counts (idx in the middle, not -1 and not the last element).
     @Test fun unreadCountsOnlyMessagesAfterTheReadMarker() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         val read = List(3) { ChatMessage.Remote(1, null, "a$it", Instant.EPOCH) }
         conn.messages.value = read
         advanceUntilIdle()
@@ -167,7 +175,7 @@ class ConnectViewModelTest {
     // count. Identity-miss → everything visible is unread.
     @Test fun unreadCountsNewMessagesAfterTheMarkerScrollsOff() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.messages.value = List(3) { ChatMessage.Remote(1, null, "seen$it", Instant.EPOCH) }
         advanceUntilIdle()
         vm.openChat(); advanceUntilIdle()          // marker = the last "seen"
@@ -180,7 +188,7 @@ class ConnectViewModelTest {
 
     @Test fun sendMessageClearsDraftOnSuccess() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.sendResult = true
         vm.onChatDraftChange("hi")
         vm.sendMessage()
@@ -191,7 +199,7 @@ class ConnectViewModelTest {
 
     @Test fun sendMessageTrimsAndEscapesBeforeSending() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.sendResult = true
         vm.onChatDraftChange("  a<b & \"c\"  ")
         vm.sendMessage()
@@ -203,7 +211,7 @@ class ConnectViewModelTest {
 
     @Test fun blankMessageIsNotSent() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onChatDraftChange("   ")
         vm.sendMessage()
         advanceUntilIdle()
@@ -212,7 +220,7 @@ class ConnectViewModelTest {
 
     @Test fun sendMessageKeepsDraftOnFailure() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.sendResult = false
         vm.onChatDraftChange("hi")
         vm.sendMessage()
@@ -221,7 +229,7 @@ class ConnectViewModelTest {
     }
 
     @Test fun settingsAndAboutNavigateAsNestedRoutes() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock)
         advanceUntilIdle()
         assertEquals(Route.Main, vm.uiState.value.route)
         vm.openSettings(); advanceUntilIdle()
@@ -238,7 +246,7 @@ class ConnectViewModelTest {
     /** Settings overlays the session, so connecting must not yank the user out of it. */
     @Test fun connectingLeavesAnOpenRouteAlone() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         advanceUntilIdle()
         vm.openSettings(); advanceUntilIdle()
         conn.status.value = ConnectionStatus.Connected(sessionId = 1)
@@ -251,7 +259,7 @@ class ConnectViewModelTest {
 
     @Test fun speakingSessionsReachTheUiState() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         advanceUntilIdle()
         conn.speakingSessions.value = setOf(4, 5)
         advanceUntilIdle()
@@ -259,14 +267,14 @@ class ConnectViewModelTest {
     }
 
     @Test fun microphoneGrantedStartsUnknown() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null))
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock)
         advanceUntilIdle()
         assertNull(vm.uiState.value.microphoneGranted)
     }
 
     @Test fun microphonePermissionResultRecordsGrant() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onMicrophonePermissionResult(true)
         advanceUntilIdle()
         assertEquals(true, vm.uiState.value.microphoneGranted)
@@ -277,7 +285,7 @@ class ConnectViewModelTest {
 
     @Test fun microphonePermissionResultRecordsDenial() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onMicrophonePermissionResult(false)
         advanceUntilIdle()
         assertEquals(false, vm.uiState.value.microphoneGranted)
@@ -292,7 +300,7 @@ class ConnectViewModelTest {
      */
     @Test fun everyConnectedScreenEntryStartsItsOwnCaptureSession() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onMicrophonePermissionResult(true)
         vm.onMicrophoneReady()
         vm.onMicrophoneReady()
@@ -302,10 +310,141 @@ class ConnectViewModelTest {
 
     @Test fun onTransmittingDrivesTheConnectionGate() = runTest(dispatcher) {
         val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null))
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onTransmitting(true)
         vm.onTransmitting(false)
         advanceUntilIdle()
         assertEquals(listOf(true, false), conn.transmitting)
+    }
+
+    /**
+     * speakingSessions is populated from decoded *incoming* audio, and our own audio is never
+     * decoded locally — so without this merge your row can never light up while you talk.
+     */
+    @Test fun holdingTalkMarksYourOwnRowSpeaking() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        vm.onMicrophonePermissionResult(granted = true)
+        runCurrent()
+
+        vm.onTransmitting(true)
+        runCurrent()
+        assertTrue(7 in vm.uiState.value.speakingSessions)
+
+        vm.onTransmitting(false)
+        runCurrent()
+        assertFalse(7 in vm.uiState.value.speakingSessions)
+    }
+
+    /** The gate can be open while capture never started — showing yourself speaking would be a lie. */
+    @Test fun deniedMicrophoneNeverMarksYouSpeaking() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        vm.onMicrophonePermissionResult(granted = false)
+        vm.onTransmitting(true)
+        runCurrent()
+
+        assertFalse(7 in vm.uiState.value.speakingSessions)
+    }
+
+    /**
+     * A drop mid-press disposes the call screen, and the composition is gone before `clickable`
+     * emits its Cancel — so the button's release never reaches the gate. Left open, it marks our
+     * own row speaking for the whole of the next call.
+     */
+    @Test fun aDropMidPressDoesNotLeaveTheNextSessionSpeaking() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        vm.onMicrophonePermissionResult(granted = true)
+        runCurrent()
+        vm.onTransmitting(true)
+        runCurrent()
+        assertTrue(7 in vm.uiState.value.speakingSessions)
+
+        conn.status.value = ConnectionStatus.Error(ErrorKind.DISCONNECTED, null)
+        runCurrent()
+        conn.emitConnected(sessionId = 8)
+        runCurrent()
+
+        assertFalse(8 in vm.uiState.value.speakingSessions)
+    }
+
+    /** status is a StateFlow, so the disconnect between two sessions can be conflated away. */
+    @Test fun aConflatedReconnectAlsoClosesTheGate() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        vm.onMicrophonePermissionResult(granted = true)
+        runCurrent()
+        vm.onTransmitting(true)
+        runCurrent()
+        assertTrue(7 in vm.uiState.value.speakingSessions)
+
+        conn.emitConnected(sessionId = 8)
+        runCurrent()
+
+        assertFalse(8 in vm.uiState.value.speakingSessions)
+    }
+
+    @Test fun aConflatedReconnectRestartsTheCallTimer() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        runCurrent()
+        val first = vm.uiState.value.connectedSinceMillis
+        assertNotNull(first)
+
+        // The clock has to move for a re-stamp to be distinguishable from keeping the old anchor.
+        clock.advance(5)
+        conn.emitConnected(sessionId = 8)
+        runCurrent()
+
+        assertNotEquals(first, vm.uiState.value.connectedSinceMillis)
+    }
+
+    /**
+     * Pins the anchor to the injected monotonic clock. Wall clock is what this must never be:
+     * an NTP correction or a user clock change mid-call moves `currentTimeMillis` — backwards,
+     * too — and the displayed duration would follow it.
+     */
+    @Test fun theCallAnchorIsReadFromTheMonotonicClock() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        clock.advance(9_000)
+        conn.emitConnected(sessionId = 7)
+        runCurrent()
+
+        assertEquals(9_000L, vm.uiState.value.connectedSinceMillis)
+    }
+
+    @Test fun disconnectClearsTheCallTimerAnchor() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        runCurrent()
+        assertNotNull(vm.uiState.value.connectedSinceMillis)
+
+        conn.status.value = ConnectionStatus.Error(ErrorKind.DISCONNECTED, null)
+        runCurrent()
+
+        assertNull(vm.uiState.value.connectedSinceMillis)
+    }
+
+    /** Proves the merge is a union: your own session must not crowd out or replace anyone else's. */
+    @Test fun otherSpeakersAreUnaffected() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        vm.onMicrophonePermissionResult(granted = true)
+        runCurrent()
+
+        vm.onTransmitting(true)
+        conn.emitSpeaking(setOf(9))
+        runCurrent()
+
+        assertEquals(setOf(7, 9), vm.uiState.value.speakingSessions)
     }
 }

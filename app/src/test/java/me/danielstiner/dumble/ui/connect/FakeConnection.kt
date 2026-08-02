@@ -36,4 +36,13 @@ class FakeConnection : Connection {
     override fun sendText(text: String): Boolean { sentTexts += text; return sendResult }
     override fun startCapture() { startCaptureCalls++ }
     override fun setTransmitting(on: Boolean) { transmitting += on }
+
+    fun emitConnected(sessionId: Int) { status.value = ConnectionStatus.Connected(sessionId) }
+    fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
+}
+
+/** Advances only when a test says so, so anchors taken at different moments are always distinct. */
+class FakeClock(private var now: Long = 0L) : MonotonicClock {
+    override fun millis() = now
+    fun advance(millis: Long) { now += millis }
 }
