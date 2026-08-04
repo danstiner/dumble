@@ -280,7 +280,7 @@ class ConnectViewModelTest {
         assertEquals(true, vm.uiState.value.microphoneGranted)
         // Recording the answer is not what starts capture: the answer outlives the connection it
         // was given for, so every connection starts its own session via onMicrophoneReady.
-        assertEquals(0, conn.startCaptureCalls)
+        assertEquals(0, conn.requestCaptureCalls)
     }
 
     @Test fun microphonePermissionResultRecordsDenial() = runTest(dispatcher) {
@@ -289,14 +289,14 @@ class ConnectViewModelTest {
         vm.onMicrophonePermissionResult(false)
         advanceUntilIdle()
         assertEquals(false, vm.uiState.value.microphoneGranted)
-        assertEquals(0, conn.startCaptureCalls)
+        assertEquals(0, conn.requestCaptureCalls)
     }
 
     /**
      * The defect this pins: the permission answer lives in the ViewModel and outlives the
      * connection, so a second connection in the same process is told nothing by the permission
      * callback. Every entry to the connected screen with the microphone granted has to start a
-     * session, and startCapture is idempotent so repeats are free.
+     * session, and requestCapture is idempotent so repeats are free.
      */
     @Test fun everyConnectedScreenEntryStartsItsOwnCaptureSession() = runTest(dispatcher) {
         val conn = FakeConnection()
@@ -305,7 +305,7 @@ class ConnectViewModelTest {
         vm.onMicrophoneReady()
         vm.onMicrophoneReady()
         advanceUntilIdle()
-        assertEquals(2, conn.startCaptureCalls)
+        assertEquals(2, conn.requestCaptureCalls)
     }
 
     @Test fun onTransmittingDrivesTheConnectionGate() = runTest(dispatcher) {
@@ -315,6 +315,20 @@ class ConnectViewModelTest {
         vm.onTransmitting(false)
         advanceUntilIdle()
         assertEquals(listOf(true, false), conn.transmitting)
+    }
+
+    /**
+     * The press asks for capture too, but that pairing belongs to the connection and is pinned
+     * there — CaptureLifecycleTest.aTalkPressAloneRebuildsAndTransmits. All the ViewModel owes is
+     * forwarding the edge, which onTransmittingDrivesTheConnectionGate above covers.
+     */
+    @Test fun onTransmittingDoesNotAskForCaptureItself() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onTransmitting(true)
+        vm.onTransmitting(false)
+        advanceUntilIdle()
+        assertEquals(0, conn.requestCaptureCalls)
     }
 
     /**

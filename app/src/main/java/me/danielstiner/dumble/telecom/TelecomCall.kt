@@ -45,11 +45,30 @@ class TelecomCall(private val context: Context) : VoiceCall {
 
     private val lock = Any()
     private var registered = false
-    // Generation of the live call, or [NO_CALL]. Written under [lock] from whichever thread is
-    // connecting or tearing down.
-    private var liveGen = NO_CALL
-    private var job: Job? = null
-    private var control: CallControlScope? = null
+
+    /**
+     * The platform call we currently own: claimed in [start], released by [end], [finish], or the
+     * next start()'s supersession. One reference, one lifetime — the generation, the parked addCall
+     * block, and the resume path cannot be cleared out of step. Only [control] arrives late: the
+     * platform grants it inside the addCall block, so it is filled in after the claim, under
+     * [lock] like every access to [live].
+     */
+    private class LiveCall(
+        val gen: Int,
+        val job: Job,
+        /** Raises the same resume signal a real onSetActive would. core-telecom's own doc for
+         *  addCall says onSetActive fires only "on behalf of a system service (e.g. Automotive) or
+         *  a device (e.g. Wearable)" — not for our own setActive() calls, which resolve through
+         *  their direct return value instead. Confirmed on-device: after requestActive() got
+         *  CallControlResult.Success, telecom's own dumpsys read ACTIVE, but onSetActive never
+         *  fired and no audio resumed. */
+        val onActive: (Boolean) -> Unit,
+    ) {
+        var control: CallControlScope? = null
+    }
+
+    /** Null between calls. Written under [lock] from whichever thread is connecting or tearing down. */
+    private var live: LiveCall? = null
 
     override fun start(
         gen: Int,
@@ -64,9 +83,9 @@ class TelecomCall(private val context: Context) : VoiceCall {
                 registered = true
             }
         }
-        // Built lazily so [liveGen] and [job] are published together. Started eagerly, an end() racing
-        // in between would see the new generation as live but the previous call's job, and leave
-        // this one's block parked forever.
+        // Built lazily so the claim below publishes the job together with its generation. Started
+        // eagerly, an end() racing in between would see the new generation as live but the previous
+        // call's job, and leave this one's block parked forever.
         val parked = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 manager.addCall(
@@ -85,7 +104,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
                     onSetActive = { onActive(true) },
                     onSetInactive = { onActive(false) },
                 ) {
-                    synchronized(lock) { if (gen == liveGen) control = this }
+                    synchronized(lock) { live?.takeIf { it.gen == gen }?.control = this }
                     // First thing in the block, and deliberately not behind setActive(): the
                     // platform fails the transaction and tears the call down unless a notification
                     // is posted within 5 s of the call being added, and setActive() is a suspend
@@ -122,23 +141,61 @@ class TelecomCall(private val context: Context) : VoiceCall {
                 finish(gen)
             }
         }
-        synchronized(lock) { liveGen = gen; job = parked }
+        // Claim and release in one swap. Overwriting the generation alone left the prior call
+        // unreachable — end() and finish() both guard on it — so the platform kept a call nobody
+        // could end, whose onDisconnect is wired to disconnect() and would take the replacing
+        // session down with it.
+        val (priorJob, priorControl) = synchronized(lock) {
+            val p = live
+            live = LiveCall(gen, parked, onActive)
+            p?.job to p?.control
+        }
+        supersede(priorJob, priorControl)
         parked.start()
+    }
+
+    /**
+     * The only resume path core-telecom offers: it does not tell us when the interrupting call
+     * ends, so getting the call back means asking again with the same [CallControlScope.setActive]
+     * used to go active the first time. [control] survives a hold — onSetInactive does not clear it,
+     * only end()/finish() do — so this is the same scope. A grant is reported by invoking
+     * [LiveCall.onActive] directly, because `onSetActive` does not fire for our own setActive() —
+     * see that property's KDoc for the on-device evidence.
+     *
+     * Any thread: state is read under [lock], and the transaction resolves later on [scope].
+     */
+    override fun requestActive(gen: Int) {
+        val (ctl, notify) = synchronized(lock) {
+            val l = live?.takeIf { it.gen == gen } ?: return
+            (l.control ?: return) to l.onActive
+        }
+        scope.launch {
+            // runCatching, like every other transactional call here: `ctl` is read under [lock] but
+            // the transaction resolves later, and end()/finish() may have cancelled the parked job
+            // in between — setActive() on a scope whose job is gone throws rather than returning
+            // Error. `scope` has no CoroutineExceptionHandler, so unguarded that reaches the default
+            // uncaught handler and takes the process down. Reachable: the call is held, the user
+            // presses Talk, and the interrupting call's end drives onDisconnect -> finish(gen)
+            // before this resolves.
+            runCatching { ctl.setActive() }
+                .onSuccess { result ->
+                    when (result) {
+                        is CallControlResult.Success -> notify(true)
+                        is CallControlResult.Error ->
+                            Log.w(TAG, "requestActive failed error=${result.errorCode}")
+                    }
+                }
+                .onFailure { Log.w(TAG, "requestActive threw", it) }
+        }
     }
 
     override fun end(gen: Int, reason: VoiceCall.Reason) {
         val (parked, scopeToEnd) = synchronized(lock) {
-            if (gen != liveGen) return
-            liveGen = NO_CALL
-            val pair = job to control
-            job = null; control = null
-            pair
+            val l = live?.takeIf { it.gen == gen } ?: return
+            live = null
+            l.job to l.control
         }
         VoiceService.stop(context)
-        if (scopeToEnd == null) {
-            parked?.cancel()
-            return
-        }
         // Tell the platform before dropping the coroutine: cancelling the block alone would leave
         // the OS holding a call nobody ended. REMOTE for a session that died on us and LOCAL for a
         // hang-up, so the platform's record says which actually happened. Never ERROR, however
@@ -147,9 +204,25 @@ class TelecomCall(private val context: Context) : VoiceCall {
             VoiceCall.Reason.USER -> DisconnectCause.LOCAL
             VoiceCall.Reason.SESSION_FAILED -> DisconnectCause.REMOTE
         }
+        disconnectAndCancel(parked, scopeToEnd, cause, "disconnect failed")
+    }
+
+    /**
+     * Disconnect a call we are replacing. Deliberately not [end]: that guards on [liveGen], which
+     * the caller has already claimed, and it stops the service the replacing call is about to need
+     * inside its 5 s notification budget.
+     */
+    private fun supersede(parked: Job?, scopeToEnd: CallControlScope?) {
+        // LOCAL, not REMOTE: replacing our own call is a local act. Never ERROR — see the class comment.
+        disconnectAndCancel(parked, scopeToEnd, DisconnectCause.LOCAL, "superseding disconnect failed")
+    }
+
+    /** Shared by [end] and [supersede]: disconnect the platform call, then release its parked block. */
+    private fun disconnectAndCancel(parked: Job?, scopeToEnd: CallControlScope?, cause: Int, logMessage: String) {
+        if (scopeToEnd == null) { parked?.cancel(); return }
         scope.launch {
             runCatching { scopeToEnd.disconnect(DisconnectCause(cause)) }
-                .onFailure { Log.w(TAG, "disconnect failed", it) }
+                .onFailure { Log.w(TAG, logMessage, it) }
             parked?.cancel()
         }
     }
@@ -157,19 +230,16 @@ class TelecomCall(private val context: Context) : VoiceCall {
     /** Release our side of a call the system already ended. Idempotent, and never disconnects. */
     private fun finish(gen: Int) {
         val parked = synchronized(lock) {
-            if (gen != liveGen) return
-            liveGen = NO_CALL
-            val parked = job
-            job = null; control = null
-            parked
+            val l = live?.takeIf { it.gen == gen } ?: return
+            live = null
+            l.job
         }
         VoiceService.stop(context)
-        parked?.cancel()
+        parked.cancel()
     }
 
     private companion object {
         const val TAG = "TelecomCall"
-        const val NO_CALL = -1
         const val DISPLAY_NAME = "Dumble"
     }
 }

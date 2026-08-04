@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,6 +119,15 @@ private fun TalkControl(granted: Boolean?, onTransmitting: (Boolean) -> Unit, mo
             }
         }
     }
+    // The gesture's own Cancel cannot close the gate when the button is taken away mid-press: the
+    // clickable node emits it at detach, but this composable's LaunchedEffect is cancelled in the
+    // same frame and never resumes to read it. Two fingers reach it — hold Talk, tap Chat or
+    // Settings — and so does rotating the device one-handed, which recreates the Activity under a
+    // button still held. That leaves the level set, and the level is what every later capture
+    // session re-applies, so the microphone stays live across rebuilds. Measured by deleting this
+    // line: the engine kept encoding at 50 packets/s for 22 s after the composition was destroyed,
+    // with nothing pressed. A no-op on an ordinary release, which has already cleared `pressed`.
+    DisposableEffect(Unit) { onDispose { if (pressed) onTransmitting(false) } }
     val cs = MaterialTheme.colorScheme
     ControlColumn(if (denied) "No mic" else "Talk", modifier) {
         FilledIconButton(

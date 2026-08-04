@@ -14,9 +14,11 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     }
 
     private val steps = LinkedBlockingQueue<Step>()
-    var gateOpen = false; private set
-    var stopped = false; private set
-    var destroyed = false; private set
+    // Volatile: written by the lifecycle consumer or the caller's thread, read by the test's own —
+    // awaitTrue polls these in a plain loop, which without this is free to hoist the read.
+    @Volatile var gateOpen = false; private set
+    @Volatile var stopped = false; private set
+    @Volatile var destroyed = false; private set
 
     fun script(vararg s: Step) = s.forEach { steps.put(it) }
     override fun setGateOpen(open: Boolean) { gateOpen = open }

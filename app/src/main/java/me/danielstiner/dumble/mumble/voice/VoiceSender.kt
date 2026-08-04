@@ -17,6 +17,12 @@ import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 class VoiceSender(
     private val handle: CaptureHandle,
     private val send: (TcpMessageType, ByteArray) -> Boolean,
+    /**
+     * Fired once, from the pump thread, after the pump's last use of [handle]. Whoever owns the
+     * session releases it from here — no default, because a caller that forgot would silently keep
+     * an engine alive forever.
+     */
+    private val onExit: (VoiceSender) -> Unit,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -41,7 +47,6 @@ class VoiceSender(
     @Volatile var droppedFrames = 0; private set
     @Volatile private var thread: Thread? = null
     @Volatile private var stopped = false
-    val isRunning: Boolean get() = thread?.isAlive == true
 
     /** Null while running or before the first [start]. */
     @Volatile var stopReason: StopReason? = null; private set
@@ -55,32 +60,22 @@ class VoiceSender(
     fun start() {
         if (stopped || thread != null) return
         stopReason = null
-        thread = Thread({ pump() }, "dumble-voice-send").apply { isDaemon = true; start() }
+        // finally, not a call at each return: pump() exits from six places and an exception is a
+        // seventh. The last handle use is stats() inside the loop, so this is also the earliest
+        // point at which destroying the engine is safe.
+        thread = Thread({ try { pump() } finally { onExit(this) } }, "dumble-voice-send")
+            .apply { isDaemon = true; start() }
     }
 
     /**
-     * Blocks until the pump has exited. Not instant: [CaptureHandle.stop] goes through native
-     * teardown, which waits out any reopen attempt in flight and then stops and closes the stream,
-     * so it can take hundreds of milliseconds. Call it off the main thread.
+     * Requests shutdown and returns. Deliberately does not wait: the pump can park in native code
+     * that [CaptureHandle.stop] cannot always wake, and the old join returned normally on timeout —
+     * so a caller could not tell a clean exit from a wedged one and destroyed the engine either way,
+     * with a pollFrame still running on it. [onExit] is now the only signal that the pump is gone.
      */
     fun stop() {
         stopped = true
         handle.stop()
-        thread?.let {
-            // Not a tuned deadline — the pump's real exit bound is sub-millisecond, since
-            // requestShutdown() wakes it from pollFrame's condition variable and transmit()'s
-            // trySend cannot block. This is three orders of magnitude above that, so reaching it
-            // means the pump is wedged somewhere the shutdown check cannot reach.
-            it.join(STUCK_PUMP_MILLIS)
-            if (it.isAlive) {
-                // Keeping the reference is the point of checking: start() refuses while it is set,
-                // so a pump we could not join can never be joined by a second one on the same
-                // handle. Both would then poll and transmit.
-                Log.w(TAG, "send thread did not exit within ${STUCK_PUMP_MILLIS}ms; not releasing it")
-                return
-            }
-        }
-        thread = null
     }
 
     fun setTransmitting(on: Boolean) = handle.setGateOpen(on)
@@ -192,7 +187,6 @@ class VoiceSender(
         private const val TAG = "VoiceSender"
         const val NORMAL_TALKING_TARGET = 0
         private const val UDP_TYPE_AUDIO: Byte = 0
-        private const val STUCK_PUMP_MILLIS = 1_000L
         // Ten seconds: a minute of talking is six readable lines rather than a wall of noise.
         private const val STATS_INTERVAL_NANOS = 10_000_000_000L
     }

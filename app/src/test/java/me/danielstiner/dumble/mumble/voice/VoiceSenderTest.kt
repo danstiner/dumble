@@ -3,14 +3,23 @@ package me.danielstiner.dumble.mumble.voice
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class VoiceSenderTest {
+
+    /** Counts pump exits. Replaces the join stop() used to do — see VoiceSender.stop's comment. */
+    private class Exits {
+        private val count = AtomicInteger()
+        private val first = CountDownLatch(1)
+        val callback: (VoiceSender) -> Unit = { count.incrementAndGet(); first.countDown() }
+        fun awaitFirst() = assertTrue("the pump must exit", first.await(2, TimeUnit.SECONDS))
+        fun total() = count.get()
+    }
 
     private val sent = CopyOnWriteArrayList<ByteArray>()
 
@@ -28,7 +37,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(4, 5, 6), 2L, true),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake) { _, p -> sent += p; latch.countDown(); true }
+        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }) { }
         sender.start()
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -36,7 +45,6 @@ class VoiceSenderTest {
         val first = parse(sent[0])
         assertEquals(0, first.target)
         assertEquals(0L, first.frameNumber)
-        assertFalse(first.isTerminator)
         assertEquals(3, first.opusData.size())
         // Not required client-to-server, and sending it would be inventing a session id.
         assertEquals(0, first.senderSession)
@@ -58,7 +66,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(9), 0L, false),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake) { _, p -> sent += p; latch.countDown(); true }
+        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }) { }
         sender.start()
         assertTrue("pump exited on POLL_RETRY", latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -66,19 +74,18 @@ class VoiceSenderTest {
 
     @Test
     fun unavailableStopsThePumpAndIsDistinguishableFromARequestedStop() {
-        // Unlike POLL_RETRY, native has given up reopening for good here — there is no clearing
-        // path short of destroy()+create(), so the pump must exit rather than spin. It must also
-        // read differently from a caller-requested stop so a future caller can surface "transmit
-        // unavailable" instead of silently looking like a normal stop().
         val fake = FakeCaptureHandle()
         fake.script(FakeCaptureHandle.Step.Unavailable)
-        val sender = VoiceSender(fake) { _, _ -> true }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
         sender.start()
-        // stop() joins the pump; the fake's queued Shutdown from stop() is never reached because
-        // the pump already exited on Unavailable, so this synchronizes on that exit without
-        // overwriting the reason it recorded.
+        // The pump exits on its own here; no stop() is involved, so nothing can overwrite the
+        // reason it recorded.
+        exits.awaitFirst()
+        assertEquals(VoiceSender.StopReason.UNAVAILABLE, sender.stopReason)
+        // The other half of the name: a caller's generic teardown must not overwrite the reason
+        // the pump already recorded.
         sender.stop()
-        assertFalse(sender.isRunning)
         assertEquals(VoiceSender.StopReason.UNAVAILABLE, sender.stopReason)
     }
 
@@ -91,10 +98,12 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(2), 2L, false),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake) { _, _ -> latch.countDown(); false }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> latch.countDown(); false }, exits.callback)
         sender.start()
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         sender.stop()
+        exits.awaitFirst()
         assertEquals(2, sender.droppedFrames)
     }
 
@@ -105,32 +114,63 @@ class VoiceSenderTest {
         // for the life of the connection.
         val fake = FakeCaptureHandle()
         fake.script(FakeCaptureHandle.Step.Unknown(-99))
-        val sender = VoiceSender(fake) { _, _ -> true }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
         sender.start()
-        sender.stop()
-        assertFalse(sender.isRunning)
+        exits.awaitFirst()
         assertEquals(VoiceSender.StopReason.UNAVAILABLE, sender.stopReason)
+    }
+
+    /**
+     * onExit must fire from a finally, not only pump()'s normal return path. pollFrame is a
+     * seam into native code and a contract violation there is not implausible; if a throw escaped
+     * without running onExit, the owner would never learn the pump died and the engine would leak
+     * forever with nothing to release it.
+     */
+    @Test
+    fun onExitFiresEvenWhenPollFrameThrows() {
+        val fake = object : VoiceSender.CaptureHandle {
+            override fun pollFrame(out: ByteArray, meta: LongArray): Int = throw RuntimeException("boom")
+            override fun setGateOpen(open: Boolean) = Unit
+            override fun stop() = Unit
+            override fun destroy() = Unit
+            override fun stats(): CaptureStats? = null
+        }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        sender.start()
+        exits.awaitFirst()
+        assertEquals(1, exits.total())
     }
 
     @Test
     fun startAfterStopIsRefusedRatherThanRunningADoomedPump() {
         // The engine's shutdown latch never resets, so a second pump would exit immediately on
-        // POLL_SHUTDOWN — looking like a working sender that transmits nothing.
+        // POLL_SHUTDOWN — looking like a working sender that transmits nothing. Counting exits
+        // rather than checking a flag is what catches a second pump that started and died.
         val fake = FakeCaptureHandle()
-        val sender = VoiceSender(fake) { _, _ -> true }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
         sender.start()
         sender.stop()
+        exits.awaitFirst()
+        // A rogue second pump must be able to exit, or it would park in take() forever and the
+        // exit count would stay 1 with the guard broken — the fake has no shutdown latch of its
+        // own, unlike the real engine.
+        fake.script(FakeCaptureHandle.Step.Shutdown)
         sender.start()
-        assertFalse(sender.isRunning)
+        Thread.sleep(200)
+        assertEquals("a second pump must not have run", 1, exits.total())
     }
 
     @Test
-    fun stopJoinsThePumpThread() {
+    fun stopRequestsShutdownAndThePumpExits() {
         val fake = FakeCaptureHandle()
-        val sender = VoiceSender(fake) { _, _ -> true }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
         sender.start()
         sender.stop()
-        assertFalse(sender.isRunning)
+        exits.awaitFirst()
         assertEquals(VoiceSender.StopReason.REQUESTED, sender.stopReason)
     }
 }

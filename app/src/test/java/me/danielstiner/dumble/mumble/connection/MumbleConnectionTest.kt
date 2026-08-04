@@ -127,6 +127,42 @@ class MumbleConnectionTest {
         assertEquals(ChannelTree(), conn.channelTree.value)
     }
 
+    /**
+     * The other half of [disconnectResetsChannelTree], and the one nothing covered: connect() clears
+     * the same flows disconnect() does, and only the shared helper keeps the two in step. Connecting
+     * straight over a live connection is an ordinary path — the Connect button with a different host
+     * typed in — and anything left behind is the previous server's channels and chat rendered under
+     * the new server's name.
+     */
+    @Test fun connectingOverALiveConnectionClearsThePriorSessionsState() = runBlocking {
+        val fakes = mutableListOf<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+            FakeControlTransport { _, _ -> }.also { fakes += it }
+        }
+        conn.connect(MumbleEndpoint.parse("first"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fakes[0].listener!!.onFrame(TcpFrame(
+            TcpMessageType.ChannelState.id,
+            MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
+        ))
+        fakes[0].listener!!.onFrame(TcpFrame(
+            TcpMessageType.TextMessage.id,
+            MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray(),
+        ))
+        withTimeout(5_000) { conn.channelTree.first { it.channels.containsKey(1) } }
+        withTimeout(5_000) { conn.messages.first { it.isNotEmpty() } }
+
+        conn.connect(MumbleEndpoint.parse("second"), "user", null)
+
+        // Sampled, not awaited: connect() clears under the same lock that bumps the generation, so
+        // it has already happened when the call returns, and every publish helper is gen-checked so
+        // the retired attempt cannot write these again.
+        assertEquals(ChannelTree(), conn.channelTree.value)
+        assertEquals(emptyList<ChatMessage>(), conn.messages.value)
+
+        conn.disconnect()
+    }
+
     @Test fun aSupersededAttemptLeavesChannelTreeEmpty() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
@@ -356,7 +392,7 @@ class MumbleConnectionTest {
      * teardown releases all three. Asserting on `sentRaw` rather than on the sender means the test
      * cannot pass with a pump that was built but never started.
      */
-    @Test fun startCaptureRunsTheSendPathAndDisconnectReleasesIt() = runBlocking {
+    @Test fun requestCaptureRunsTheSendPathAndDisconnectReleasesIt() = runBlocking {
         lateinit var fake: FakeControlTransport
         val handle = FakeCaptureHandle()
         val call = FakeVoiceCall()
@@ -369,7 +405,7 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
-        conn.startCapture()
+        conn.requestCapture()
 
         awaitTrue("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
         val (type, payload) = fake.sentRaw.first()
@@ -390,7 +426,7 @@ class MumbleConnectionTest {
 
     /**
      * The call belongs to the connection, not to the microphone. Before this, the foreground service
-     * was only ever started from startCapture(), so denying RECORD_AUDIO left the session with no
+     * was only ever started from requestCapture(), so denying RECORD_AUDIO left the session with no
      * service at all — and receive silently reverted to working only while the activity was visible.
      */
     @Test fun callStartsWithTheConnectionNotTheMicrophone() = runBlocking {
@@ -403,7 +439,7 @@ class MumbleConnectionTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
-        // No startCapture() anywhere in this test: connecting alone must register the call.
+        // No requestCapture() anywhere in this test: connecting alone must register the call.
         awaitTrue("connecting must start the call with the server host") {
             call.starts == listOf("localhost")
         }
@@ -452,7 +488,7 @@ class MumbleConnectionTest {
 
     /**
      * A hold tears the capture session down instead of merely closing the gate, and a resume builds
-     * a fresh one. This is what stands in for §4's "gate the reopen backoff on focus state": proving
+     * a fresh one. This is the design's substitute for gating the reopen backoff on focus state: proving
      * the rebuilt session reaches the wire is what makes the substitution honest, since a teardown
      * that could not come back would be worse than the backoff it replaced.
      */
@@ -468,7 +504,7 @@ class MumbleConnectionTest {
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
-        conn.startCapture()
+        conn.requestCapture()
         awaitTrue("the engine must open") { handles.size == 1 }
         handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
         awaitTrue("the first session must reach the wire") { fake.sentRaw.size == 1 }
@@ -498,7 +534,7 @@ class MumbleConnectionTest {
         ) { FakeControlTransport { _, _ -> } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.startCapture()
+        conn.requestCapture()
         awaitTrue("the engine must open") { handles.size == 1 }
 
         conn.disconnect()
@@ -506,6 +542,33 @@ class MumbleConnectionTest {
         call.resume()
         delay(200)
         assertEquals("no engine may be built for a dead attempt", 1, handles.size)
+    }
+
+    /**
+     * Connecting over a live connection must release the platform call it replaces. start() used to
+     * overwrite liveGen without ending anything, after which end(priorGen) was a no-op forever — the
+     * OS kept a call whose onDisconnect is wired to disconnect(), so hanging up the ghost from
+     * system UI tore down the session that replaced it.
+     */
+    @Test fun connectingOverALiveConnectionEndsThePriorCall() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { null },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("first"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        conn.connect(MumbleEndpoint.parse("second"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        assertEquals(listOf("first", "second"), call.starts)
+        awaitTrue("the superseded call must end") { call.ends == 1 }
+        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons)
+
+        conn.disconnect()
+        awaitTrue("disconnecting must end the second call") { call.ends == 2 }
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the call's service. */
@@ -519,7 +582,7 @@ class MumbleConnectionTest {
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
-        conn.startCapture()
+        conn.requestCapture()
         // No engine, so push-to-talk is inert rather than a crash.
         conn.setTransmitting(true)
         delay(200)
