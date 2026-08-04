@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +20,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -110,30 +110,40 @@ fun ConnectedScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
+                    // 24dp glyph in a 40dp circle, matching Settings' back button. The padding is
+                    // both sides on purpose: TopAppBar adds 4dp of its own and then starts the
+                    // title at this slot's full measured width, so a filled circle — which has no
+                    // inset of its own, unlike the 24dp glyph inside a stock 48dp icon button —
+                    // leaves the title 6dp away unless the slot is padded to stand in for it.
                     Box(
-                        Modifier.padding(start = 12.dp).size(40.dp).clip(CircleShape)
+                        Modifier.padding(horizontal = 12.dp).size(40.dp).clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             Icons.Filled.HeadsetMic, null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(22.dp),
+                            modifier = Modifier.size(24.dp),
                         )
                     }
                 },
+                // Style and colour for both lines come from the slot's own tokens.
                 title = {
-                    Column {
-                        Text(
-                            server, style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            statusLine(elapsedSeconds, rttMs),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        server, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        // Roboto's digits are tabular, so `1` — the narrowest of them — carries the
+                        // font's largest left side bearing: 4.8px at 22sp against 1.9px for the
+                        // subtitle's `C`, which reads as the status line hanging left of the host.
+                        // Proportional digits cut it to 2.5px. Title only, so the elapsed timer
+                        // below keeps tabular digits and does not jitter as it counts.
+                        style = LocalTextStyle.current.copy(fontFeatureSettings = "pnum"),
+                    )
+                },
+                subtitle = {
+                    Text(
+                        statusLine(elapsedSeconds, rttMs),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
                 },
                 actions = {
                     IconButton(onClick = onOpenChat) {

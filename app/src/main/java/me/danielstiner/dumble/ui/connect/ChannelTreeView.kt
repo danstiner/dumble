@@ -79,25 +79,24 @@ private fun UserRow(u: ChannelTreeRow.UserRow) {
         // depth * 12dp mirrors the header's per-level step so a user sits under its own channel.
         modifier = Modifier.padding(start = (u.depth * 12).dp),
         leadingContent = { Avatar(u) },
-        headlineContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    u.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (u.isMe) {
-                    Spacer(Modifier.width(8.dp))
-                    Badge(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ) { Text("YOU") }
-                }
-            }
-        },
         trailingContent = if (u.isSpeaking) {
             { Icon(Icons.Filled.GraphicEq, "speaking", tint = MaterialTheme.colorScheme.primary) }
         } else null,
-    )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                u.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (u.isMe) {
+                Spacer(Modifier.width(8.dp))
+                Badge(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) { Text("YOU") }
+            }
+        }
+    }
 }
 
 /**

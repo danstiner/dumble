@@ -10,7 +10,7 @@ enum class License(val displayName: String) {
 
 /**
  * One attributed component. [groupPrefix] matches a Maven group exactly or on a dot boundary,
- * so a single entry covers a whole family (all 38 androidx groups, for instance).
+ * so a single entry covers a whole family (every androidx group, for instance).
  *
  * Components with no Maven coordinate cannot be discovered from the dependency graph at all, so
  * they live outside [ATTRIBUTIONS] as their own vals — see [MUMBLE_SCHEMA], [LIBOPUS], [LIBCXX].
