@@ -1,5 +1,8 @@
 package me.danielstiner.dumble.ui.connect
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -99,6 +102,39 @@ class CallControlsTest {
         compose.onNodeWithContentDescription("Push to talk").performTouchInput { down(center) }
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Push to talk").performTouchInput { cancel() }
+        compose.waitForIdle()
+        assertEquals(listOf(true, false), events)
+    }
+
+    /**
+     * The Chat and Settings buttons swap `ConnectedScreen` out from under a held Talk
+     * (`MainActivity.kt` routes on `showChat`/`route` above the controls), and the gesture's
+     * `PressInteraction.Cancel` cannot save us: the clickable node emits it at detach, but the
+     * collector's `LaunchedEffect` job is cancelled in the same frame and never resumes to read it.
+     * Left open, the level in `MumbleConnection.transmitting` is what every later `openSession`
+     * re-applies, so one tap while held is a microphone that stays live across engine rebuilds.
+     *
+     * Leaving composition is the invariant, not the two-finger gesture that first found it: rotating
+     * the device recreates the Activity under a held button and reaches the same defect one-handed,
+     * confirmed on-device against a build with the `DisposableEffect` deleted.
+     */
+    @Test fun leavingCompositionWhileHeldClosesTheGate() {
+        val events = mutableListOf<Boolean>()
+        var onScreen by mutableStateOf(true)
+        compose.setContent {
+            if (onScreen) {
+                CallControls(microphoneGranted = true, onTransmitting = { events += it }, onHangUp = {})
+            }
+        }
+        compose.onNodeWithContentDescription("Push to talk").performTouchInput { down(center) }
+        compose.waitForIdle()
+        assertEquals(listOf(true), events)
+
+        // The second finger hitting Chat, with Talk still down. Written via runOnIdle, not from
+        // the test thread: a bare snapshot write here races invalidation delivery, and one full-
+        // suite run in ~10 caught waitForIdle returning before the recomposition it was waiting
+        // for existed — expected:<[true, false]> but was:<[true]>, with onDispose never run.
+        compose.runOnIdle { onScreen = false }
         compose.waitForIdle()
         assertEquals(listOf(true, false), events)
     }

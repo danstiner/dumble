@@ -210,7 +210,7 @@ class ConnectViewModel @Inject constructor(
      * because the answer outlives the connection it was given for — every connection has to start
      * its own capture session, not just the one that happened to prompt.
      */
-    fun onMicrophoneReady() = connection.startCapture()
+    fun onMicrophoneReady() = connection.requestCapture()
 
     /**
      * Seam for [CallControls]: press and release open and close the transmit gate. Kept in

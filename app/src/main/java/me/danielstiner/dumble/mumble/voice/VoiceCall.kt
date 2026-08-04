@@ -34,6 +34,14 @@ interface VoiceCall {
      */
     fun end(gen: Int, reason: Reason = Reason.USER)
 
+    /**
+     * Ask the platform to make a held call active again. Core-telecom delivers no signal of its own
+     * when the interrupting call ends — `onActive` fires only in answer to this — so a held session
+     * stays dead until something calls it. Ignored unless [gen] is the live call; a grant reaches the
+     * connection back through [start]'s `onActive`, same as any other resume.
+     */
+    fun requestActive(gen: Int)
+
     /** Why the call ended. The platform records a different disconnect cause for each. */
     enum class Reason { USER, SESSION_FAILED }
 }
@@ -48,4 +56,5 @@ object NoVoiceCall : VoiceCall {
         onEnded: () -> Unit,
     ) = Unit
     override fun end(gen: Int, reason: VoiceCall.Reason) = Unit
+    override fun requestActive(gen: Int) = Unit
 }

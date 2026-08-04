@@ -21,12 +21,18 @@ interface Connection {
     fun sendText(text: String): Boolean
 
     /**
-     * Start the microphone service and the capture session behind it. Call once RECORD_AUDIO is
-     * granted, from a visible activity — a microphone foreground service cannot be started from
-     * the background. At most once per session; a no-op with nothing connected.
+     * Raise "a capture session is wanted" on the live connection — a level, not an open. The
+     * session is built only while the connection is live and the platform is not holding the call,
+     * and it is rebuilt whenever that becomes true again. Call with RECORD_AUDIO granted; safe to
+     * repeat, a no-op with nothing connected.
      */
-    fun startCapture()
+    fun requestCapture()
 
-    /** Push-to-talk. No-op until [startCapture] has a session running. */
+    /**
+     * Push-to-talk. Opening the gate also asks for capture, exactly as [requestCapture] does, so a
+     * press recovers a session a terminal engine failure or a hold took away — but asynchronously,
+     * so the press that rebuilds is not the press that transmits. The intent is remembered either
+     * way: a session built while the button is still down comes up transmitting.
+     */
     fun setTransmitting(on: Boolean)
 }

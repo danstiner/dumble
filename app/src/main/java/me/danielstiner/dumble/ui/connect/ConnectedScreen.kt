@@ -86,7 +86,7 @@ fun ConnectedScreen(
                     }
                 }.toTypedArray()
             )
-            // Idempotent: a Chat/Connected remount re-runs this, and startCapture ignores a
+            // Idempotent: a Chat/Connected remount re-runs this, and requestCapture ignores a
             // session that already has a sender.
             true -> onMicrophoneReady()
             false -> {}
