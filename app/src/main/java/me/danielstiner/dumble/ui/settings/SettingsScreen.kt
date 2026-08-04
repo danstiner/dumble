@@ -42,10 +42,9 @@ fun SettingsScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             ListItem(
-                headlineContent = { Text("About") },
-                supportingContent = { Text("Version and open source licenses") },
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onAbout),
-            )
+                supportingContent = { Text("Version and open source licenses") },
+            ) { Text("About") }
         }
     }
 }
