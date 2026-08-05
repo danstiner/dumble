@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.MainActivity
 import me.danielstiner.dumble.R
@@ -23,11 +26,14 @@ import javax.inject.Inject
  * background without a `microphone`-type foreground service, and — separately — Android's
  * background-audio hardening fails playback for an app with no visible activity and no
  * while-in-use foreground service. That exemption is type-agnostic beyond excluding SHORT_SERVICE,
- * so this one service covers playback too, which is why receive stops being visible-activity-only
- * the moment this ships.
+ * so this one service covers playback too.
  *
- * Started from the foreground, always: a `microphone` service cannot be started from the
- * background, and RECORD_AUDIO must already be granted when startForeground runs.
+ * The type is per start because RECORD_AUDIO is not held when the first one happens: the service
+ * starts inside addCall's block during connect, and the microphone prompt is not shown until the
+ * connected screen. Asking for `microphone` there throws SecurityException on API 34+, measured on
+ * a fresh install — which then had no foreground service at all for its whole first session.
+ * `mediaPlayback` needs no permission and still buys the background-audio exemption; only transmit
+ * needs `microphone`.
  */
 @AndroidEntryPoint
 class VoiceService : Service() {
@@ -58,7 +64,7 @@ class VoiceService : Service() {
                 this,
                 NOTIFICATION_ID,
                 buildNotification(intent?.getStringExtra(EXTRA_SERVER).orEmpty()),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                foregroundType(),
             )
         } catch (t: Throwable) {
             // ForegroundServiceStartNotAllowedException if we lost the race into the background.
@@ -72,6 +78,19 @@ class VoiceService : Service() {
         // no longer exists.
         return START_NOT_STICKY
     }
+
+    /**
+     * Read per start, never cached: the permission can arrive between two starts, and a service
+     * that claimed `microphone` without it does not start at all.
+     */
+    private fun foregroundType(): Int =
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        }
 
     private fun buildNotification(server: String): Notification {
         val manager = getSystemService(NotificationManager::class.java)
