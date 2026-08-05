@@ -431,8 +431,10 @@ class MumbleConnection internal constructor(
         prior?.let { teardown(it) }
         // Here rather than in requestCapture(): tying the call to the connection, not the
         // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
-        // survives backgrounding. Foreground is no precondition — the `microphone` service starts
-        // inside addCall's block, 25–390 ms after this returns, beyond any caller's control.
+        // survives backgrounding — true only since the service's mediaPlayback fallback; a
+        // `microphone`-typed start threw without the permission and that user got nothing.
+        // Foreground is no precondition either — the service starts inside addCall's block,
+        // 25–390 ms after this returns, beyond any caller's control.
         call.start(
             gen, endpoint, username,
             // The generation, not the attempt: onCallActive used to resolve `current` at call time
