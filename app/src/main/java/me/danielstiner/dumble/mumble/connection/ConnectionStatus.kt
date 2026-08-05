@@ -14,6 +14,19 @@ sealed interface ConnectionStatus {
     data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
 }
 
+/**
+ * Whether the session is still going. The other four outlive the platform call that carried them —
+ * connect()'s catch ends the call but leaves its Error or trust prompt up — so a late hangup must
+ * not retire them. Exhaustive so a new status has to be classified rather than default to false.
+ */
+val ConnectionStatus.ongoing: Boolean
+    get() = when (this) {
+        ConnectionStatus.Connecting, ConnectionStatus.Handshaking, is ConnectionStatus.Connected ->
+            true
+        ConnectionStatus.Idle, is ConnectionStatus.AwaitingTrust, is ConnectionStatus.PinMismatch,
+        is ConnectionStatus.Error -> false
+    }
+
 enum class ErrorKind { CONNECT_FAILED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD }
 
 /**

@@ -84,7 +84,8 @@ class TelecomCall(private val context: Context) : VoiceCall {
 
     /** Null between calls. Consumer-confined: nothing outside [dispatch] may touch it. */
     private var live: LiveCall? = null
-    /** Consumer-confined, like [live]. */
+    /** Unlike [live], written by the Start job, not the consumer — but both run on the shared
+     *  Main dispatcher, and a second Start cannot dispatch until the first grant resolves. */
     private var registered = false
 
     override fun start(
@@ -135,20 +136,21 @@ class TelecomCall(private val context: Context) : VoiceCall {
         onActive: (Boolean) -> Unit,
         onEnded: () -> Unit,
     ) {
-        if (!registered) {
-            manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
-            registered = true
-        }
         // Deliberately not the End path: that stops the service, which the replacement needs
         // inside the platform's 5 s notification budget. LOCAL — replacing our own call is local.
         live?.let { prior ->
-            disconnect(prior, DisconnectCause.LOCAL, "superseding disconnect failed")
+            disconnect(prior, DisconnectCause.LOCAL, "superseding disconnect")
             live = null
         }
 
         val granted = CompletableDeferred<CallControlScope>()
         val job = scope.launch {
             try {
+                // Inside the try: registration throws too, and needs the same handling as addCall.
+                if (!registered) {
+                    manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+                    registered = true
+                }
                 manager.addCall(
                     attributesFor(endpoint, username),
                     onAnswer = { /* outgoing: never rings */ },
@@ -180,9 +182,12 @@ class TelecomCall(private val context: Context) : VoiceCall {
                             is CallControlResult.Success -> Unit
                             is CallControlResult.Error -> {
                                 Log.w(TAG, "setActive failed error=${result.errorCode}; ending the call")
-                                runCatching { disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
-                                onEnded()
+                                platformCall("disconnect after setActive failure") {
+                                    disconnect(DisconnectCause(DisconnectCause.LOCAL))
+                                }
+                                // Finish before onEnded — same race as onDisconnect above.
                                 send(Command.Finish(gen))
+                                onEnded()
                                 return@launch
                             }
                         }
@@ -199,9 +204,11 @@ class TelecomCall(private val context: Context) : VoiceCall {
                     VoiceService.stop(context)
                     onEnded()
                 }
-                // A CancellationException skips both — the teardown that cancelled us owns the stop
-                // and has already told the connection.
-                throw t
+                // Only cancellation propagates: this is a root launch with no
+                // CoroutineExceptionHandler, so rethrowing anything else kills the process —
+                // right after we handled it. The connection still learns, via invokeOnCompletion
+                // completing `granted` exceptionally.
+                if (t is CancellationException) throw t
             }
         }
         // A job cancelled inside addCall before entering the block would strand the await forever.
@@ -228,7 +235,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         // Before the disconnect, so the notification does not linger through that round trip;
         // still after the block's VoiceService.start, because handleStart has returned by now.
         VoiceService.stop(context)
-        disconnect(l, cause, "disconnect failed")
+        disconnect(l, cause, "disconnect")
     }
 
     /**
@@ -253,33 +260,49 @@ class TelecomCall(private val context: Context) : VoiceCall {
         val l = live?.takeIf { it.gen == gen } ?: return
         // Resolved off the consumer: a resume is a platform round trip, and resume spam must not
         // delay a teardown queued behind it. `l` is captured by value, so a later End cannot change
-        // what this sees. runCatching because setActive() on a scope whose job is gone throws
-        // rather than returning Error, and `scope` has no CoroutineExceptionHandler.
+        // what this sees.
         scope.launch {
-            runCatching { l.control.setActive() }
-                .onSuccess { result ->
-                    when (result) {
-                        is CallControlResult.Success -> l.onActive(true)
-                        is CallControlResult.Error ->
-                            Log.w(TAG, "requestActive failed error=${result.errorCode}")
-                    }
-                }
-                .onFailure { Log.w(TAG, "requestActive threw", it) }
+            // platformCall for both halves of its job: setActive() on a scope whose job is gone
+            // throws rather than returning Error and `scope` has no CoroutineExceptionHandler, and
+            // the bound stops a stalled resume leaking this coroutine, and its LiveCall, for the
+            // life of the process. A Success landing after the bound is dropped — the call goes
+            // active while capture stays released — which the next Talk press retries.
+            when (val result = platformCall("requestActive") { l.control.setActive() }) {
+                is CallControlResult.Success -> l.onActive(true)
+                is CallControlResult.Error ->
+                    Log.w(TAG, "requestActive failed error=${result.errorCode}")
+                null -> Unit
+            }
         }
     }
 
+    /**
+     * Every platform transaction goes through here, bounded: the library bounds only addCall,
+     * and one transaction stalled on a deferred the platform never completes would freeze this
+     * singleton consumer for good. 5 s matches the library's own bound and is ~15x the slowest
+     * disconnect measured (323 ms over 9 samples).
+     *
+     * Rethrows cancellation rather than runCatching, which would swallow the timeout's own
+     * CancellationException — defeating the bound and logging it as a call failure. Null means
+     * timed out or threw, both already logged.
+     */
+    private suspend fun <T> platformCall(what: String, block: suspend () -> T): T? =
+        withTimeoutOrNull(PLATFORM_TIMEOUT_MS) {
+            try {
+                block()
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                Log.w(TAG, "$what threw", t)
+                null
+            }
+        } ?: run { Log.w(TAG, "$what did not answer within ${PLATFORM_TIMEOUT_MS}ms"); null }
+
     /** Tell the platform, then release the block. Lifecycle consumer only. */
-    private suspend fun disconnect(l: LiveCall, cause: Int, logMessage: String) {
-        // The library bounds addCall (ADD_CALL_TIMEOUT, 5 s) but not disconnect — it awaits a
-        // deferred only the platform completes — and this consumer is a singleton, so unbounded
-        // means one stalled transaction freezes every future connect. 5 s matches the library's
-        // bound and is ~15x the slowest disconnect measured (323 ms over 9 samples); on timeout,
-        // at worst the platform keeps a call its own watchdog reaps.
-        withTimeoutOrNull(DISCONNECT_TIMEOUT_MS) {
-            runCatching { l.control.disconnect(DisconnectCause(cause)) }
-                .onFailure { Log.w(TAG, logMessage, it) }
-            Unit
-        } ?: Log.w(TAG, "$logMessage: timed out after ${DISCONNECT_TIMEOUT_MS}ms")
+    private suspend fun disconnect(l: LiveCall, cause: Int, what: String) {
+        // On timeout the platform at worst keeps a call its own watchdog reaps; cancelling the
+        // job regardless is what stops us waiting on it.
+        platformCall(what) { l.control.disconnect(DisconnectCause(cause)) }
         l.job.cancel()
     }
 
@@ -311,6 +334,6 @@ class TelecomCall(private val context: Context) : VoiceCall {
     private companion object {
         const val TAG = "TelecomCall"
         const val DISPLAY_NAME = "Dumble"
-        const val DISCONNECT_TIMEOUT_MS = 5_000L
+        const val PLATFORM_TIMEOUT_MS = 5_000L
     }
 }

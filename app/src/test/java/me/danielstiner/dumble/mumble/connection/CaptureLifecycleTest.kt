@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
@@ -914,6 +915,52 @@ class CaptureLifecycleTest {
             conn.status.value is ConnectionStatus.Handshaking,
         )
         conn.disconnect()
+    }
+
+    /**
+     * connect()'s catch ends the platform call on purpose while leaving AwaitingTrust up, so a
+     * late hangup for that generation used to take the fingerprint decision off screen and null
+     * `current`, which is what trustAndConnect needs.
+     */
+    @Test fun aHangupWhileAwaitingTrustDoesNotDismissThePrompt() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> throw UntrustedCertificateException("aa:bb") } }
+
+        conn.connect(MumbleEndpoint.parse("host"), "user", null)
+        awaitTrue("the connection must stop for a trust decision") {
+            conn.status.value is ConnectionStatus.AwaitingTrust
+        }
+        val prompt = conn.status.value
+
+        call.endedBySystemFor(call.startedGens[0])
+
+        delay(100)
+        assertEquals("a late hangup must not dismiss the trust prompt", prompt, conn.status.value)
+    }
+
+    /**
+     * retire() keeps the terminal Error up and does not bump `attempt`, so a later platform
+     * hangup still matches the generation — a gen-only guard let it overwrite the Error with a
+     * bare Idle, losing the reason the connect screen shows.
+     */
+    @Test fun aHangupAfterASessionFailureDoesNotEraseTheReason() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
+
+        conn.connect(MumbleEndpoint.parse("host"), "user", null)
+        awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
+        val failure = conn.status.value
+
+        call.endedBySystemFor(call.startedGens[0])
+
+        delay(100)
+        assertEquals("a late hangup must not overwrite the failure", failure, conn.status.value)
     }
 
     private suspend fun awaitTrue(what: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
