@@ -12,12 +12,11 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
  */
 interface VoiceCall {
     /**
-     * [gen] is the connection attempt's generation. [onActive] reports the system resuming the call
-     * and holding it (a cellular call arriving); [onEnded] reports the system ending it, which the
-     * connection answers by disconnecting.
+     * [gen] is the connection attempt's generation. [onActive] reports the system resuming the
+     * call and holding it (a cellular call arriving); [onEnded] reports the system ending it.
      *
-     * Must be called from the foreground: the call brings up a `microphone` foreground service, and
-     * one cannot be started from the background.
+     * Calls here apply in send order on a single consumer — an [end] arriving before the platform
+     * has granted the call is ordered, not lost — and return before their effects apply.
      */
     fun start(
         gen: Int,

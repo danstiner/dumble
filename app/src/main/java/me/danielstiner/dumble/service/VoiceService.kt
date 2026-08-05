@@ -44,6 +44,15 @@ class VoiceService : Service() {
             connection.disconnect()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_STOP) {
+            // stopSelf(startId), not stopSelf(): a stale stop loses to any start delivered after
+            // it, so a teardown for the replaced call cannot take down the service its replacement
+            // just started. No startForeground needed: commands arrive in order, so any
+            // startForegroundService promise was redeemed by the branch below before this runs —
+            // and a plain-startService creation made no promise.
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         try {
             ServiceCompat.startForeground(
                 this,
@@ -56,7 +65,7 @@ class VoiceService : Service() {
             // Dropping the service beats hard-crashing the process: the connection itself is
             // unaffected, and transmit degrades to working only while the app is visible.
             Log.e(TAG, "startForeground failed; stopping service", t)
-            stopSelf()
+            stopSelf(startId)
         }
         // Nothing to rebuild without a connection to attach to, and the connection lives in the
         // app process — a restart with a null intent would show a notification for a session that
@@ -121,6 +130,7 @@ class VoiceService : Service() {
         private const val EXTRA_SERVER = "server"
         private const val TAG = "VoiceService"
         private const val ACTION_DISCONNECT = "me.danielstiner.dumble.DISCONNECT"
+        private const val ACTION_STOP = "me.danielstiner.dumble.STOP"
         // Distinct from the content intent's, so the two PendingIntents cannot collide.
         private const val REQUEST_DISCONNECT = 1
 
@@ -138,7 +148,16 @@ class VoiceService : Service() {
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, VoiceService::class.java))
+            // Never stopService: it bypasses the intent queue and can bring the service down while
+            // a startForegroundService promise is unredeemed, killing the process with
+            // ForegroundServiceDidNotStartInTimeException — observed 25 ms apart on-device. Plain
+            // startService makes no promise, so no background-start check; it throws only for a
+            // background caller with no running service, exactly when there is nothing to stop.
+            try {
+                context.startService(Intent(context, VoiceService::class.java).setAction(ACTION_STOP))
+            } catch (t: IllegalStateException) {
+                Log.i(TAG, "no running service to stop", t)
+            }
         }
     }
 }
