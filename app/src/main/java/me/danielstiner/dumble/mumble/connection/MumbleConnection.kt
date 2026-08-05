@@ -527,7 +527,9 @@ class MumbleConnection internal constructor(
      */
     private fun endedByPlatform(gen: Int) {
         val prior = synchronized(lock) {
-            if (gen != attempt) return
+            // Status, not `current != null`: that is null for the whole Connecting window, where
+            // a hangup is exactly the one that must retire.
+            if (gen != attempt || !_status.value.ongoing) return
             retireAndClearLocked(ConnectionStatus.Idle)
         }
         prior?.let { teardown(it) }
