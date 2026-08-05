@@ -288,11 +288,9 @@ class CaptureLifecycleTest {
             "the first stream must close before the second opens: $order",
             order.indexOf("e0:stop") < order.indexOf("e1:create"),
         )
-        // Already true at this point (FakeVoiceCall.start mirrors TelecomCall.start and ends the
-        // call it supersedes synchronously, ahead of the async Release handler's own call.end), so
-        // this is a plain check, not a wait. It pins that supersede fix, not the Release handler's
-        // call.end — callEndFiresEvenWhenThePumpIsWedged is what pins that one, with no second
-        // call.start around to mask it.
+        // A plain check, not a wait: the default auto-grant supersedes during start(). Pins the
+        // supersede, not the Release handler's call.end — callEndFiresEvenWhenThePumpIsWedged
+        // pins that one, with no second call.start around to mask it.
         assertEquals("the superseded call must end exactly once", 1, call.ends)
 
         conn.disconnect()
@@ -854,6 +852,67 @@ class CaptureLifecycleTest {
 
         conn.requestCapture()
         awaitTrue("the consumer must still be alive") { opened.get() >= 2 }
+        conn.disconnect()
+    }
+
+    /**
+     * The connect-failure path — a refused server, or a trust prompt the user leaves sitting —
+     * fires call.end() while addCall may not have granted control yet. That used to cancel our own
+     * coroutine and tell the platform nothing, wedging a DIALING call for the ~125 s until the
+     * anomaly watchdog reaped it and blocking every connect in between.
+     */
+    @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = runBlocking {
+        val call = FakeVoiceCall(autoGrant = false)
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
+
+        conn.connect(MumbleEndpoint.parse("host"), "user", null)
+        awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
+        assertEquals("nothing may end before the platform grants control", 0, call.ends)
+
+        call.grantPending()
+        awaitTrue("the grant must release the pending end") { call.ends == 1 }
+        assertEquals(
+            "a failed session is not a hang-up",
+            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
+        )
+    }
+
+    /*
+     * The design also called for "a supersede while ungranted ends the prior call first" and "a
+     * Talk press while held and ungranted does not strand a resume". Verified unreachable, not
+     * forgotten: TelecomCall.handleStart ends on `granted.await()`, which suspends the single
+     * command consumer until the grant resolves, so no later command can ever observe an
+     * ungranted Start.
+     */
+
+    /**
+     * The platform can hang up a call we have already superseded — its callbacks are silenced only
+     * once the supersede cancels its job. Ungated, that hangup retired whichever session had
+     * replaced it, killing a connection the user had just asked for.
+     */
+    @Test fun aPlatformHangupOfASupersededCallDoesNotRetireTheSuccessor() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("first"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.connect(MumbleEndpoint.parse("second"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        call.endedBySystemFor(call.startedGens[0])
+
+        // A retire would take the status to Idle; the live session must be untouched.
+        delay(100)
+        assertTrue(
+            "the successor must survive the superseded call's hangup: ${conn.status.value}",
+            conn.status.value is ConnectionStatus.Handshaking,
+        )
         conn.disconnect()
     }
 

@@ -429,18 +429,17 @@ class MumbleConnection internal constructor(
             gen = attempt
         }
         prior?.let { teardown(it) }
-        // Synchronously, on the caller's thread, and here rather than in requestCapture(): this is the
-        // Connect button, so the app is definitively foreground — which the call's `microphone`
-        // foreground service requires — and tying the call to the connection rather than to the
-        // microphone is what gives a user who denied RECORD_AUDIO a service at all, and with it
-        // receive that survives backgrounding.
+        // Here rather than in requestCapture(): tying the call to the connection, not the
+        // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
+        // survives backgrounding. Foreground is no precondition — the `microphone` service starts
+        // inside addCall's block, 25–390 ms after this returns, beyond any caller's control.
         call.start(
             gen, endpoint, username,
             // The generation, not the attempt: onCallActive used to resolve `current` at call time
             // with no generation check, so a hold from a superseded call could latch onto its
             // successor and kill transmit for the session with nothing to clear it.
             onActive = { active -> send(CaptureCommand.Held(gen, !active)) },
-            onEnded = { disconnect() },
+            onEnded = { endedByPlatform(gen) },
         )
 
         scope.launch {
@@ -516,6 +515,19 @@ class MumbleConnection internal constructor(
 
     override fun disconnect() {
         val prior = synchronized(lock) { retireAndClearLocked(ConnectionStatus.Idle) }
+        prior?.let { teardown(it) }
+    }
+
+    /**
+     * The platform ended [gen]'s call. Generation-gated for the same reason `onActive` is: a hangup
+     * delivered for a call we have already superseded — its callbacks fall silent only once the
+     * supersede cancels its job — would otherwise retire the session that replaced it.
+     */
+    private fun endedByPlatform(gen: Int) {
+        val prior = synchronized(lock) {
+            if (gen != attempt) return
+            retireAndClearLocked(ConnectionStatus.Idle)
+        }
         prior?.let { teardown(it) }
     }
 
