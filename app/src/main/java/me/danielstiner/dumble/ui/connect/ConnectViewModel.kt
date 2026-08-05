@@ -1,8 +1,13 @@
 package me.danielstiner.dumble.ui.connect
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.util.escapeHTML
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -52,9 +57,11 @@ data class ConnectUiState(
     val unread: Int = 0,
     val chatDraft: String = "",
     val speakingSessions: Set<Int> = emptySet(),
-    // Null until the connected screen has asked; true/false is the OS answer. Outlives the
-    // connection it was given for, which is why capture starts from onMicrophoneReady.
-    val microphoneGranted: Boolean? = null,
+    // The OS answer, read from the system rather than remembered from a dialog. It has to survive
+    // a ViewModel that outlives no connection: the foreground service keeps the process alive after
+    // the task is swiped away, so resuming from the notification builds a fresh ViewModel over a
+    // still-live session, and a "not asked yet" value there would disable Talk for the rest of it.
+    val microphoneGranted: Boolean = false,
     // [MonotonicClock] reading when the session reached Connected, or null. Read the elapsed
     // duration against the same clock, never against wall time — the two share no origin.
     val connectedSinceMillis: Long? = null,
@@ -68,13 +75,24 @@ private data class ConnSnapshot(
 )
 
 @HiltViewModel
-class ConnectViewModel @Inject constructor(
+class ConnectViewModel internal constructor(
     private val connection: Connection,
     private val configStore: ServerConfigStore,
     private val clock: MonotonicClock,
+    // Seam: the real check needs a Context and the JVM tests have none.
+    private val microphoneHeld: () -> Boolean = { false },
 ) : ViewModel() {
+    @Inject constructor(
+        @ApplicationContext context: Context,
+        connection: Connection,
+        configStore: ServerConfigStore,
+        clock: MonotonicClock,
+    ) : this(connection, configStore, clock, {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    })
 
-    private val form = MutableStateFlow(ConnectUiState())
+    private val form = MutableStateFlow(ConnectUiState(microphoneGranted = microphoneHeld()))
 
     // The push-to-talk gate as the UI knows it. connection.setTransmitting is fire-and-forget, so
     // this is the only record of it, and speakingSessions never contains us: it is built from
@@ -96,7 +114,7 @@ class ConnectViewModel @Inject constructor(
             // would be a lie. PR 2 adds mute to this condition.
             val me = (status as? ConnectionStatus.Connected)
                 ?.sessionId
-                ?.takeIf { tx && f.microphoneGranted == true }
+                ?.takeIf { tx && f.microphoneGranted }
             f.copy(
                 status = status, rttMs = c.rttMs,
                 channelTree = c.channelTree, messages = c.messages,

@@ -28,12 +28,11 @@ import javax.inject.Inject
  * while-in-use foreground service. That exemption is type-agnostic beyond excluding SHORT_SERVICE,
  * so this one service covers playback too.
  *
- * The type is per start because RECORD_AUDIO is not held when the first one happens: the service
- * starts inside addCall's block during connect, and the microphone prompt is not shown until the
- * connected screen. Asking for `microphone` there throws SecurityException on API 34+, measured on
- * a fresh install — which then had no foreground service at all for its whole first session.
- * `mediaPlayback` needs no permission and still buys the background-audio exemption; only transmit
- * needs `microphone`.
+ * The type is per start because the answer can differ between starts and asking for `microphone`
+ * without RECORD_AUDIO throws SecurityException on API 34+ — which once left the first session of
+ * every install with no foreground service at all. `mediaPlayback` needs no permission and still
+ * buys the background-audio exemption, so a user who refuses the microphone still receives; only
+ * transmit needs `microphone`.
  */
 @AndroidEntryPoint
 class VoiceService : Service() {

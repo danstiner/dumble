@@ -266,10 +266,16 @@ class ConnectViewModelTest {
         assertEquals(setOf(4, 5), vm.uiState.value.speakingSessions)
     }
 
-    @Test fun microphoneGrantedStartsUnknown() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock)
+    @Test fun microphoneGrantedStartsFromTheSystemNotFromADialog() = runTest(dispatcher) {
+        // Regression: the state used to start null and only a dialog could fill it in. The
+        // foreground service keeps the process alive after the task is swiped away, so resuming
+        // from the notification builds a fresh ViewModel over a live session — and a null there
+        // disabled Talk for the rest of it with no way back.
+        val held = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock) { true }
+        val notHeld = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock) { false }
         advanceUntilIdle()
-        assertNull(vm.uiState.value.microphoneGranted)
+        assertEquals(true, held.uiState.value.microphoneGranted)
+        assertEquals(false, notHeld.uiState.value.microphoneGranted)
     }
 
     @Test fun microphonePermissionResultRecordsGrant() = runTest(dispatcher) {

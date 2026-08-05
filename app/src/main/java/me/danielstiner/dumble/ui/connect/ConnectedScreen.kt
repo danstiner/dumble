@@ -1,10 +1,6 @@
 package me.danielstiner.dumble.ui.connect
 
-import android.Manifest
-import android.os.Build
 import android.os.SystemClock
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,48 +45,24 @@ fun ConnectedScreen(
     channelTree: ChannelTree,
     speaking: Set<Int>,
     unread: Int,
-    microphoneGranted: Boolean?,
+    microphoneGranted: Boolean,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
     onSettings: () -> Unit,
-    onMicrophonePermissionResult: (Boolean) -> Unit,
     onMicrophoneReady: () -> Unit,
     onTransmitting: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val requestPermissions = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { result ->
-        // Notifications are best-effort — the foreground service runs either way, it just runs
-        // without a visible notification — so only the microphone answer gates voice.
-        onMicrophonePermissionResult(result[Manifest.permission.RECORD_AUDIO] == true)
-    }
-    // This composable only exists while the connection is Synchronized, so its appearing IS
-    // reaching that state — and it is a visible activity, which is the only place a microphone
-    // foreground service may be started from.
+    // Keyed on the answer, and driving capture from the *state* rather than from the permission
+    // callback, which is raised on the connect screen before this composable exists. The answer
+    // outlives the connection it was given for, since it sits in the ViewModel: starting capture
+    // from the callback meant the second and later connections in a process never started capture
+    // at all, because nothing asked again once the answer was known.
     //
-    // Keyed on the answer rather than on Unit, and driving capture from the *state* rather than
-    // from the permission callback. The answer outlives the connection it was given for, since it
-    // sits in the ViewModel: keying this on Unit and starting capture from the callback meant the
-    // second and later connections in a process never started capture at all, because nothing
-    // asked again once the answer was known.
+    // Idempotent: a Chat/Connected remount re-runs this, and requestCapture ignores a session that
+    // already has a sender.
     LaunchedEffect(microphoneGranted) {
-        when (microphoneGranted) {
-            // No self-check first: the contract resolves already-granted permissions without
-            // showing anything, and asking for both together covers holding one but not the other.
-            null -> requestPermissions.launch(
-                buildList {
-                    add(Manifest.permission.RECORD_AUDIO)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }.toTypedArray()
-            )
-            // Idempotent: a Chat/Connected remount re-runs this, and requestCapture ignores a
-            // session that already has a sender.
-            true -> onMicrophoneReady()
-            false -> {}
-        }
+        if (microphoneGranted) onMicrophoneReady()
     }
 
     // Ticks once a second while connected. Keyed on the anchor so a reconnect restarts it, and the
