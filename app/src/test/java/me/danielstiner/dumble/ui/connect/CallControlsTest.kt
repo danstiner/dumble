@@ -54,22 +54,6 @@ class CallControlsTest {
         ).assertIsNotEnabled()
     }
 
-    /**
-     * While the first-launch permission dialog is up the answer is unknown, not "no". Claiming a
-     * denial there is a lie, and screen readers announce it before the user has even answered.
-     */
-    @Test fun aPendingPermissionIsNotReportedAsADenial() {
-        compose.setContent {
-            CallControls(microphoneGranted = null, onTransmitting = {}, onHangUp = {})
-        }
-        compose.onNodeWithText("No mic").assertDoesNotExist()
-        compose.onNodeWithContentDescription(
-            "Microphone permission denied — you can still hear others",
-        ).assertDoesNotExist()
-        // Still not pressable: capture has not started, so an open gate would transmit nothing.
-        compose.onNodeWithContentDescription("Push to talk").assertIsNotEnabled()
-    }
-
     /** Placeholders for later PRs — they must not look tappable until that work lands. */
     @Test fun deafenAndSpeakerAreDisabled() {
         compose.setContent {

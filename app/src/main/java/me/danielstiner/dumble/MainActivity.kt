@@ -78,7 +78,6 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onOpenChat = vm::openChat,
                     onDisconnect = vm::onDisconnect,
                     onSettings = vm::openSettings,
-                    onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
                     onMicrophoneReady = vm::onMicrophoneReady,
                     onTransmitting = vm::onTransmitting,
                     modifier = m,
@@ -87,7 +86,9 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                 state = state,
                 onHost = vm::onHostChange, onPort = vm::onPortChange,
                 onUsername = vm::onUsernameChange, onPassword = vm::onPasswordChange,
-                onConnect = vm::onConnect, onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
+                onConnect = vm::onConnect,
+                onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
+                onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
                 onSettings = vm::openSettings,
                 modifier = m,
             )
@@ -102,7 +103,8 @@ private fun ConnectPreview() {
         ConnectScreen(
             state = ConnectUiState(),
             onHost = {}, onPort = {}, onUsername = {}, onPassword = {},
-            onConnect = {}, onTrust = {}, onCancelTrust = {}, onSettings = {},
+            onConnect = {}, onMicrophonePermissionResult = {},
+            onTrust = {}, onCancelTrust = {}, onSettings = {},
         )
     }
 }

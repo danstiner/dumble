@@ -59,7 +59,7 @@ private const val MICROPHONE_DENIED_REASON =
  */
 @Composable
 fun CallControls(
-    microphoneGranted: Boolean?,
+    microphoneGranted: Boolean,
     onTransmitting: (Boolean) -> Unit,
     onHangUp: () -> Unit,
     modifier: Modifier = Modifier,
@@ -100,13 +100,15 @@ fun CallControls(
  * The caption cannot hold the full denial reason, so it goes to `contentDescription` where screen
  * readers and the long-press tooltip still carry it.
  *
- * [granted] is null until the OS answers. That is not a denial: the permission dialog is up, and
- * labelling the button "No mic" there announces a refusal the user has not made yet. Disabled and
- * unremarkable is the honest rendering — capture has not started either way.
+ * [granted] is the system's answer as of the last connect or ViewModel construction, never a "not
+ * asked yet" — the permission is requested on the connect screen, before this composable can
+ * exist — so false here is a real refusal and saying "No mic" is honest. It can go stale only one
+ * way: a grant from system Settings mid-session does not kill the process, and that reads false
+ * until the next connect. A revoke does kill it, so a stale true is impossible.
  */
 @Composable
-private fun TalkControl(granted: Boolean?, onTransmitting: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    val denied = granted == false
+private fun TalkControl(granted: Boolean, onTransmitting: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val denied = !granted
     val interactions = remember { MutableInteractionSource() }
     var pressed by remember { mutableStateOf(false) }
     LaunchedEffect(interactions) {
@@ -132,7 +134,7 @@ private fun TalkControl(granted: Boolean?, onTransmitting: (Boolean) -> Unit, mo
     ControlColumn(if (denied) "No mic" else "Talk", modifier) {
         FilledIconButton(
             onClick = {},
-            enabled = granted == true,
+            enabled = granted,
             interactionSource = interactions,
             modifier = Modifier.fillMaxWidth().height(72.dp).semantics {
                 contentDescription = if (denied) MICROPHONE_DENIED_REASON else "Push to talk"
