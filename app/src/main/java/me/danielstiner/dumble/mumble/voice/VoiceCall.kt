@@ -23,6 +23,7 @@ interface VoiceCall {
         endpoint: MumbleEndpoint,
         username: String,
         onActive: (active: Boolean) -> Unit,
+        onRoutes: (AudioRoutes) -> Unit,
         onEnded: () -> Unit,
     )
 
@@ -41,6 +42,14 @@ interface VoiceCall {
      */
     fun requestActive(gen: Int)
 
+    /**
+     * Route call audio to [routeId] — one of the ids last reported through [start]'s `onRoutes`.
+     * Ignored unless [gen] is the live call, and dropped with a log if that endpoint has since gone
+     * away. Fire-and-forget: the move comes back through `onRoutes` if the platform makes it, so
+     * nothing here assumes it happened.
+     */
+    fun requestRoute(gen: Int, routeId: String)
+
     /** Why the call ended. The platform records a different disconnect cause for each. */
     enum class Reason { USER, SESSION_FAILED }
 }
@@ -52,8 +61,10 @@ object NoVoiceCall : VoiceCall {
         endpoint: MumbleEndpoint,
         username: String,
         onActive: (Boolean) -> Unit,
+        onRoutes: (AudioRoutes) -> Unit,
         onEnded: () -> Unit,
     ) = Unit
     override fun end(gen: Int, reason: VoiceCall.Reason) = Unit
     override fun requestActive(gen: Int) = Unit
+    override fun requestRoute(gen: Int, routeId: String) = Unit
 }

@@ -3,6 +3,7 @@ package me.danielstiner.dumble.ui.connect
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,8 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
@@ -29,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import me.danielstiner.dumble.mumble.voice.AudioRoute
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.routeMenuNeeded
+import me.danielstiner.dumble.mumble.voice.speakerToggleTarget
 
 // A wide pill normally, squarer while active. The shape change is what reads as "on" across the
 // room, ahead of any colour difference.
@@ -52,7 +58,8 @@ private val controlActiveShape = RoundedCornerShape(percent = 30)
  * Push-to-talk and mute are alternatives for the same slot, not separate controls: a mute button is
  * meaningless when the gate is already closed by default, so only Talk appears here. Deafen is not
  * redundant with push-to-talk — it is about not hearing others, not about not transmitting. Speaker
- * is still a disabled placeholder; it becomes the audio-route picker (PR 3).
+ * is now the audio-route control, which reads [AudioRoutes.available] to decide whether it is a
+ * speaker toggle or a menu — see [RouteControl].
  *
  * [deafened] and [talkBlock] are the server's answer, not the last tap, so both lag a round trip and
  * that is deliberate — see `ConnectViewModel.onToggleDeafen`.
@@ -61,8 +68,10 @@ private val controlActiveShape = RoundedCornerShape(percent = 30)
 fun CallControls(
     talkBlock: TalkBlock?,
     deafened: Boolean,
+    audioRoutes: AudioRoutes,
     onTransmitting: (Boolean) -> Unit,
     onToggleDeafen: () -> Unit,
+    onSelectRoute: (String) -> Unit,
     onHangUp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -83,10 +92,7 @@ fun CallControls(
                 description = if (deafened) "Undeafen — you cannot hear anyone" else "Deafen",
                 active = deafened, onClick = onToggleDeafen, modifier = Modifier.weight(1f),
             )
-            ControlButton(
-                icon = Icons.AutoMirrored.Filled.VolumeUp, label = "Speaker",
-                enabled = false, onClick = {}, modifier = Modifier.weight(1f),
-            )
+            RouteControl(audioRoutes, onSelectRoute, Modifier.weight(1f))
             ControlButton(
                 icon = Icons.Filled.CallEnd, label = "Disconnect", onClick = onHangUp,
                 // A fixed deep red rather than the theme's error colour, which goes pale on dark and
@@ -161,6 +167,75 @@ private fun TalkControl(
     }
 }
 
+/**
+ * The audio-route control, in the stock phone app's two modes — see [routeMenuNeeded] for the rule
+ * and where it was verified.
+ *
+ * With no Bluetooth device around there are at most three routes and one of them is the speaker, so
+ * the control is a plain speaker toggle: a menu to choose between "speaker" and "not speaker" is a
+ * tap and a decision spent on a binary. Once a Bluetooth device appears the choice stops being
+ * binary and the control becomes a menu anchored to itself.
+ *
+ * The caption names the current route in both modes rather than the stock app's fixed "Speaker" /
+ * "Audio" — with a device name available, "OpenRun by Shokz" says everything the icon and the label
+ * were separately trying to.
+ *
+ * Highlighted on speaker in toggle mode (that is what the toggle is *about*), and on anything but
+ * the earpiece in menu mode, matching `SpeakerButtonInfo`'s `isChecked` in each branch.
+ */
+@Composable
+private fun RouteControl(
+    routes: AudioRoutes,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val current = routes.current
+    val menuMode = routeMenuNeeded(routes.available)
+    // Saveable, not remember: a rotation with the picker open otherwise drops it, and the user is
+    // back where they started with no idea why. Caught on device by rotating mid-pick.
+    //
+    // Keyed on menuMode, which resets it on every mode flip. Leaving menu mode drops the menu from
+    // composition without any dismiss firing, so an unkeyed `true` outlives the menu it described
+    // and reopens it unasked when Bluetooth comes back — the rotation defect's twin.
+    var menuOpen by rememberSaveable(menuMode) { mutableStateOf(false) }
+    val toggleTarget = if (menuMode) null else speakerToggleTarget(routes.available, current)
+    // Whatever is actually known, in order: the route the platform has named, then the destination
+    // a tap would reach — the latter only in toggle mode, where the tap goes straight there with no
+    // menu in between to read. Both can be absent, and independently: `available` and `current` are
+    // separate collectors, so a frame arrives with routes but no current yet, and that used to read
+    // as the bare "Audio output" of a dead control while the button was live with somewhere to go.
+    val known = listOfNotNull(
+        current?.label,
+        toggleTarget?.let { "tap for ${it.label}" },
+    ).joinToString(", ")
+    // The Box is the menu's anchor, so it takes the caller's weight and the button fills it.
+    Box(modifier) {
+        ControlButton(
+            icon = routeIcon(current?.type ?: AudioRoute.Type.UNKNOWN),
+            label = current?.label ?: "Audio",
+            description = if (known.isEmpty()) "Audio output" else "Audio output — $known",
+            // menuMode implies a Bluetooth device is in `available`, so there is always something to
+            // open; the toggle has to check, because "speaker and nothing else" has no destination.
+            enabled = menuMode || toggleTarget != null,
+            active = if (menuMode) {
+                current != null && current.type != AudioRoute.Type.EARPIECE
+            } else {
+                current?.type == AudioRoute.Type.SPEAKER
+            },
+            onClick = {
+                if (menuMode) menuOpen = true else toggleTarget?.let { onSelect(it.id) }
+            },
+            opensMenu = menuMode,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // Only composed in menu mode: a dropdown anchored to a button that never opens one is a
+        // popup waiting for a state change that cannot happen.
+        if (menuMode) {
+            AudioRouteMenu(menuOpen, routes, onSelect = onSelect, onDismiss = { menuOpen = false })
+        }
+    }
+}
+
 private fun talkCaption(block: TalkBlock?) = when (block) {
     null -> "Talk"
     TalkBlock.NO_MICROPHONE -> "No mic"
@@ -194,6 +269,7 @@ private fun ControlButton(
     active: Boolean = false,
     container: Color? = null,
     content: Color? = null,
+    opensMenu: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     ControlColumn(label, modifier) {
@@ -210,7 +286,15 @@ private fun ControlButton(
                 contentColor = content ?: if (active) cs.inverseOnSurface else cs.onSurface,
             ),
         ) {
-            Icon(icon, null, modifier = Modifier.size(26.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, modifier = Modifier.size(26.dp))
+                // The stock app's "more" indicator (`setShouldShowMoreIndicator(!nonBluetoothMode)`):
+                // the only thing distinguishing a button that acts from one that offers a choice.
+                // A chevron, not ArrowDropDown's filled triangle — the phone app's is the open "v".
+                if (opensMenu) {
+                    Icon(Icons.Filled.ExpandMore, null, modifier = Modifier.size(22.dp))
+                }
+            }
         }
     }
 }

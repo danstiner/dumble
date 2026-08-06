@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -14,6 +15,8 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.mumble.voice.AudioRoute
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -576,5 +579,29 @@ class ConnectViewModelTest {
         runCurrent()
 
         assertEquals(setOf(7, 9), vm.uiState.value.speakingSessions)
+    }
+
+    @Test fun routesReachTheUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        backgroundScope.launch { vm.uiState.collect { } }
+        runCurrent()
+
+        val speaker = AudioRoute("id-speaker", AudioRoute.Type.SPEAKER)
+        conn.audioRoutes.value = AudioRoutes(listOf(speaker), speaker)
+        runCurrent()
+
+        assertEquals(listOf(speaker), vm.uiState.value.audioRoutes.available)
+        assertEquals(speaker, vm.uiState.value.audioRoutes.current)
+    }
+
+    /** Fire-and-forget, like deafen: the id goes down, the answer comes back through the flow. */
+    @Test fun pickingARouteForwardsItsId() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+
+        vm.onSelectRoute("id-bluetooth")
+
+        assertEquals(listOf("id-bluetooth"), conn.routeRequests)
     }
 }

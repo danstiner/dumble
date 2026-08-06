@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -20,8 +21,75 @@ import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.voice.AudioRoute
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.service.VoiceService
+
+// Internal, not private: RouteWiringTest drives this directly. A swapped constant here would map
+// every endpoint to UNKNOWN, which the menu still renders and still forwards taps for — it would
+// show only as wrong icons and a control stuck in toggle mode, so this is worth a headless test.
+internal fun CallEndpointCompat.toAudioRoute() = AudioRoute(
+    id = identifier.toString(),
+    type = when (type) {
+        CallEndpointCompat.TYPE_BLUETOOTH -> AudioRoute.Type.BLUETOOTH
+        CallEndpointCompat.TYPE_WIRED_HEADSET -> AudioRoute.Type.WIRED_HEADSET
+        CallEndpointCompat.TYPE_SPEAKER -> AudioRoute.Type.SPEAKER
+        CallEndpointCompat.TYPE_EARPIECE -> AudioRoute.Type.EARPIECE
+        CallEndpointCompat.TYPE_STREAMING -> AudioRoute.Type.STREAMING
+        else -> AudioRoute.Type.UNKNOWN
+    },
+    name = name.toString(),
+)
+
+/**
+ * A call's route state. Built before the addCall block runs, because the endpoint collectors live
+ * *inside* that block and so start before `TelecomCall.LiveCall` exists — the same reason `granted`
+ * is that closure's own deferred rather than a lookup of `live`. Confined to Main, which both the
+ * block's collectors and the lifecycle consumer run on.
+ *
+ * Internal, not private: `RouteWiringTest` drives it headlessly — `available`/`current` take
+ * `CallEndpointCompat` directly, which needs an Android runtime (Robolectric, same as
+ * `CallControlsTest`) but no platform call.
+ */
+internal class RouteState(private val onRoutes: (AudioRoutes) -> Unit) {
+    var available: List<CallEndpointCompat> = emptyList()
+    var current: CallEndpointCompat? = null
+    /**
+     * Flips the instant this call is decided over. `job.cancel()` — what actually stops the
+     * collectors that write [available] and [current] — cannot run that early: every end path calls
+     * it only after a platform round trip (cancelling sooner would cancel the call's own
+     * `CallControlScope`, breaking the very call being ended). [publish] checks this itself, so a
+     * flow emission queued behind the decision but ahead of the cancellation still updates the
+     * fields but raises nothing, and no stale `onRoutes` call reaches a call already given up on.
+     * Self-contained, unlike a lookup of `live`: these collectors run before `LiveCall` exists and
+     * must never read that field.
+     */
+    var retired = false
+
+    /**
+     * Maps to our type, dedupes, sorts, and hands the pair up — or does nothing if [retired].
+     *
+     * Dedupes by [AudioRoute.id], keeping the first occurrence. Only reachable below API 34, and
+     * only without BLUETOOTH_CONNECT: there `EndpointUtils` substitutes the literal
+     * "Bluetooth Device" for every name it cannot read, and `CallEndpointUuidTracker` keys the uuid
+     * on that name, so two paired devices collapse to one id. Left undeduped the menu would render
+     * two identical rows, both ticked, the second unreachable — `handleRequestRoute` resolves ids
+     * with `firstOrNull`, which always finds the first. At 34+ the name comes straight from the
+     * platform's own `CallEndpoint` and is the real device name: measured on a Pixel 7a at API 37,
+     * where revoking BLUETOOTH_CONNECT left the row reading "OpenRun by Shokz" either way. minSdk
+     * is 30, so the old path is still live and this still earns its keep.
+     */
+    fun publish() {
+        if (retired) return
+        onRoutes(
+            AudioRoutes(
+                available.map { it.toAudioRoute() }.distinctBy { it.id }.sorted(),
+                current?.toAudioRoute(),
+            ),
+        )
+    }
+}
 
 /**
  * Registers the Mumble session as a platform call through Jetpack Telecom, which is what puts the
@@ -55,6 +123,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
             val endpoint: MumbleEndpoint,
             val username: String,
             val onActive: (Boolean) -> Unit,
+            val onRoutes: (AudioRoutes) -> Unit,
             val onEnded: () -> Unit,
         ) : Command
         /** We are ending the call and owe the platform a disconnect. */
@@ -62,6 +131,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         /** The platform ended it; release our side only. */
         data class Finish(val gen: Int) : Command
         data class RequestActive(val gen: Int) : Command
+        data class RequestRoute(val gen: Int, val routeId: String) : Command
     }
 
     // UNLIMITED is what makes trySend total: every entry point is non-suspending on an arbitrary
@@ -80,6 +150,8 @@ class TelecomCall(private val context: Context) : VoiceCall {
          *  never for our own setActive() calls. Confirmed on-device: after a Success, dumpsys read
          *  ACTIVE but onSetActive never fired and no audio resumed. */
         val onActive: (Boolean) -> Unit,
+        /** Shared with the addCall block's collectors, which write it; the consumer only reads. */
+        val routes: RouteState,
     )
 
     /** Null between calls. Consumer-confined: nothing outside [dispatch] may touch it. */
@@ -93,8 +165,9 @@ class TelecomCall(private val context: Context) : VoiceCall {
         endpoint: MumbleEndpoint,
         username: String,
         onActive: (Boolean) -> Unit,
+        onRoutes: (AudioRoutes) -> Unit,
         onEnded: () -> Unit,
-    ) = send(Command.Start(gen, endpoint, username, onActive, onEnded))
+    ) = send(Command.Start(gen, endpoint, username, onActive, onRoutes, onEnded))
 
     override fun end(gen: Int, reason: VoiceCall.Reason) = send(
         // REMOTE for a session that died on us and LOCAL for a hang-up, so the platform's record
@@ -110,6 +183,8 @@ class TelecomCall(private val context: Context) : VoiceCall {
 
     override fun requestActive(gen: Int) = send(Command.RequestActive(gen))
 
+    override fun requestRoute(gen: Int, routeId: String) = send(Command.RequestRoute(gen, routeId))
+
     /** Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed. */
     private fun send(c: Command) {
         commands.trySend(c).onFailure { Log.e(TAG, "dropped telecom command: $c", it) }
@@ -117,10 +192,11 @@ class TelecomCall(private val context: Context) : VoiceCall {
 
     private suspend fun dispatch(c: Command) {
         when (c) {
-            is Command.Start -> handleStart(c.gen, c.endpoint, c.username, c.onActive, c.onEnded)
+            is Command.Start -> handleStart(c.gen, c.endpoint, c.username, c.onActive, c.onRoutes, c.onEnded)
             is Command.End -> handleEnd(c.gen, c.cause)
             is Command.Finish -> handleFinish(c.gen)
             is Command.RequestActive -> handleRequestActive(c.gen)
+            is Command.RequestRoute -> handleRequestRoute(c.gen, c.routeId)
         }
     }
 
@@ -134,15 +210,18 @@ class TelecomCall(private val context: Context) : VoiceCall {
         endpoint: MumbleEndpoint,
         username: String,
         onActive: (Boolean) -> Unit,
+        onRoutes: (AudioRoutes) -> Unit,
         onEnded: () -> Unit,
     ) {
         // Deliberately not the End path: that stops the service, which the replacement needs
         // inside the platform's 5 s notification budget. LOCAL — replacing our own call is local.
         live?.let { prior ->
+            prior.routes.retired = true
             disconnect(prior, DisconnectCause.LOCAL, "superseding disconnect")
             live = null
         }
 
+        val routes = RouteState(onRoutes)
         val granted = CompletableDeferred<CallControlScope>()
         val job = scope.launch {
             try {
@@ -159,7 +238,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
                     // no ordering against this Finish. Program order puts Finish first, so
                     // handleEnd finds `live` cleared and no-ops instead of disconnecting a call
                     // the platform already tore down.
-                    onDisconnect = { send(Command.Finish(gen)); onEnded() },
+                    onDisconnect = { routes.retired = true; send(Command.Finish(gen)); onEnded() },
                     onSetActive = { onActive(true) },
                     onSetInactive = { onActive(false) },
                 ) {
@@ -182,6 +261,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
                             is CallControlResult.Success -> Unit
                             is CallControlResult.Error -> {
                                 Log.w(TAG, "setActive failed error=${result.errorCode}; ending the call")
+                                routes.retired = true
                                 platformCall("disconnect after setActive failure") {
                                     disconnect(DisconnectCause(DisconnectCause.LOCAL))
                                 }
@@ -193,6 +273,12 @@ class TelecomCall(private val context: Context) : VoiceCall {
                         }
                         awaitCancellation()
                     }
+                    // Separate launches, not one collector over both: core-telecom's own KDoc says
+                    // a Flow not wrapped in its own launch block is never collected.
+                    launch {
+                        availableEndpoints.collect { routes.available = it; routes.publish() }
+                    }
+                    launch { currentCallEndpoint.collect { routes.current = it; routes.publish() } }
                 }
             } catch (t: Throwable) {
                 if (t !is CancellationException) {
@@ -219,7 +305,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         }
         // Throws when registration failed; correct — the consumer logs it, `live` stays null, and
         // the connection has already been told.
-        live = LiveCall(gen, job, granted.await(), onActive)
+        live = LiveCall(gen, job, granted.await(), onActive, routes)
     }
 
     /**
@@ -232,6 +318,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         // whole — a stop hoisted above this line kills the service the replacement is running on.
         val l = live?.takeIf { it.gen == gen } ?: return
         live = null
+        l.routes.retired = true
         // Before the disconnect, so the notification does not linger through that round trip;
         // still after the block's VoiceService.start, because handleStart has returned by now.
         VoiceService.stop(context)
@@ -274,6 +361,24 @@ class TelecomCall(private val context: Context) : VoiceCall {
                 null -> Unit
             }
         }
+    }
+
+    /**
+     * Move the call's audio to [routeId]. Ignored unless [gen] is the live call. Lifecycle consumer
+     * only.
+     */
+    private fun handleRequestRoute(gen: Int, routeId: String) {
+        val l = live?.takeIf { it.gen == gen } ?: return
+        val ep = l.routes.available.firstOrNull { it.identifier.toString() == routeId }
+        if (ep == null) {
+            // The endpoint went away between the menu rendering and the tap; the collector has
+            // already published its replacement, so there is nothing to repair.
+            Log.w(TAG, "requestRoute: endpoint $routeId is gone")
+            return
+        }
+        // Off the consumer, exactly as requestActive is: a stalled route change must not delay a
+        // teardown queued behind it.
+        scope.launch { platformCall("requestRoute") { l.control.requestEndpointChange(ep) } }
     }
 
     /**

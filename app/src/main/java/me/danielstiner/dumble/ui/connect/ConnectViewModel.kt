@@ -22,6 +22,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -62,6 +63,9 @@ data class ConnectUiState(
     // second copy of the truth to drift.
     val deafened: Boolean = false,
     val talkBlock: TalkBlock? = null,
+    // The platform's answer, not the last tap — same discipline as [deafened]. One round trip of
+    // lag on the caption, and no second copy of the truth to drift.
+    val audioRoutes: AudioRoutes = AudioRoutes(),
     // The OS answer, read from the system rather than remembered from a dialog. It has to survive
     // a ViewModel that outlives no connection: the foreground service keeps the process alive after
     // the task is swiped away, so resuming from the notification builds a fresh ViewModel over a
@@ -77,6 +81,7 @@ private data class ConnSnapshot(
     val rttMs: Double?,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
+    val audioRoutes: AudioRoutes,
 )
 
 @HiltViewModel
@@ -108,8 +113,8 @@ class ConnectViewModel internal constructor(
     // so the top-level combine only needs form + snapshot + speakingSessions + transmitting.
     private val connSnapshot = combine(
         connection.status, connection.roundTripMillis,
-        connection.channelTree, connection.messages,
-    ) { status, rtt, tree, msgs -> ConnSnapshot(status, rtt, tree, msgs) }
+        connection.channelTree, connection.messages, connection.audioRoutes,
+    ) { status, rtt, tree, msgs, routes -> ConnSnapshot(status, rtt, tree, msgs, routes) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(form, connSnapshot, connection.speakingSessions, transmitting) { f, c, speaking, tx ->
@@ -127,6 +132,7 @@ class ConnectViewModel internal constructor(
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 deafened = me?.selfDeaf == true,
                 talkBlock = block,
+                audioRoutes = c.audioRoutes,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -255,4 +261,10 @@ class ConnectViewModel internal constructor(
      * last intent for the second, which is what keeps that harmless.
      */
     fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
+
+    /**
+     * Seam for the route control. Fire-and-forget for the same reason deafen is: the platform's answer
+     * arrives through [ConnectUiState.audioRoutes], so nothing here guesses where audio went.
+     */
+    fun onSelectRoute(routeId: String) = connection.requestAudioRoute(routeId)
 }

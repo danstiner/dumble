@@ -18,6 +18,8 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import me.danielstiner.dumble.mumble.voice.AudioRoute
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
@@ -588,6 +590,99 @@ class MumbleConnectionTest {
         delay(200)
         assertEquals("the call must survive an engine that would not open", 0, call.ends)
         conn.disconnect()
+    }
+
+    private fun routes(vararg types: AudioRoute.Type, current: AudioRoute.Type? = null): AudioRoutes {
+        val available = types.map { AudioRoute("id-$it", it) }
+        return AudioRoutes(available, current?.let { c -> available.first { it.type == c } })
+    }
+
+    /** The platform's answer is the only source; nothing local invents a route. */
+    @Test fun routesFromTheLiveCallReachTheUi() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        call.emitRoutes(routes(AudioRoute.Type.EARPIECE, AudioRoute.Type.SPEAKER, current = AudioRoute.Type.EARPIECE))
+
+        awaitTrue("routes must reach the flow") { conn.audioRoutes.value.available.size == 2 }
+        assertEquals(AudioRoute.Type.EARPIECE, conn.audioRoutes.value.current?.type)
+    }
+
+    /**
+     * A collector inside a cancelled addCall block can still emit — cancellation is asynchronous —
+     * so the generation guard is what stops a dead call repainting the live one's control.
+     */
+    @Test fun routesFromASupersededCallAreDropped() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        val staleGen = call.startedGens.first()
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        call.emitRoutesFor(staleGen, routes(AudioRoute.Type.BLUETOOTH, current = AudioRoute.Type.BLUETOOTH))
+
+        assertEquals(AudioRoutes(), conn.audioRoutes.value)
+    }
+
+    /** Every other published flow is cleared on retire; a survivor here would paint the next
+     *  session's control with the last one's headset. */
+    @Test fun disconnectClearsTheRoutes() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        call.emitRoutes(routes(AudioRoute.Type.SPEAKER, current = AudioRoute.Type.SPEAKER))
+        awaitTrue("routes must reach the flow first") { conn.audioRoutes.value.current != null }
+
+        conn.disconnect()
+
+        awaitTrue("teardown must clear the routes") { conn.audioRoutes.value == AudioRoutes() }
+    }
+
+    /** The UI carries no generation, so the connection has to supply the live one. */
+    @Test fun selectingARouteAddressesTheLiveCall() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        conn.requestAudioRoute("id-SPEAKER")
+
+        awaitTrue("the pick must reach the call") { call.routeRequests == listOf("id-SPEAKER") }
+    }
+
+    @Test fun selectingARouteWithNothingConnectedIsANoOp() = runBlocking {
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle() },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.requestAudioRoute("id-SPEAKER")
+
+        assertEquals(emptyList<String>(), call.routeRequests)
     }
 
     private suspend fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {

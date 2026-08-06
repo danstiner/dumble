@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,12 +49,14 @@ fun ConnectedScreen(
     microphoneGranted: Boolean,
     talkBlock: TalkBlock?,
     deafened: Boolean,
+    audioRoutes: AudioRoutes,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
     onSettings: () -> Unit,
     onMicrophoneReady: () -> Unit,
     onTransmitting: (Boolean) -> Unit,
     onToggleDeafen: () -> Unit,
+    onSelectRoute: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Keyed on the answer, and driving capture from the *state* rather than from the permission
@@ -134,8 +137,10 @@ fun ConnectedScreen(
             CallControls(
                 talkBlock = talkBlock,
                 deafened = deafened,
+                audioRoutes = audioRoutes,
                 onTransmitting = onTransmitting,
                 onToggleDeafen = onToggleDeafen,
+                onSelectRoute = onSelectRoute,
                 onHangUp = onDisconnect,
             )
         },

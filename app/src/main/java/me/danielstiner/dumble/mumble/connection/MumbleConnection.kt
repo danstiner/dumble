@@ -28,6 +28,7 @@ import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
 import me.danielstiner.dumble.mumble.voice.AudioOut
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.mumble.voice.VoiceCall
@@ -87,6 +88,8 @@ class MumbleConnection internal constructor(
     override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
+    private val _audioRoutes = MutableStateFlow(AudioRoutes())
+    override val audioRoutes: StateFlow<AudioRoutes> = _audioRoutes.asStateFlow()
 
     init {
         // One point that mirrors every status transition to logcat, whichever path set it.
@@ -219,6 +222,7 @@ class MumbleConnection internal constructor(
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
+    private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == attempt) _audioRoutes.value = r }
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
@@ -418,6 +422,7 @@ class MumbleConnection internal constructor(
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
+        _audioRoutes.value = AudioRoutes()
         return prior
     }
 
@@ -441,6 +446,7 @@ class MumbleConnection internal constructor(
             // with no generation check, so a hold from a superseded call could latch onto its
             // successor and kill transmit for the session with nothing to clear it.
             onActive = { active -> send(CaptureCommand.Held(gen, !active)) },
+            onRoutes = { r -> publishRoutes(gen, r) },
             onEnded = { endedByPlatform(gen) },
         )
 
@@ -538,6 +544,14 @@ class MumbleConnection internal constructor(
     override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
     override fun setSelfDeaf(on: Boolean) { current?.sm?.setSelfDeaf(on) }
+
+    override fun requestAudioRoute(routeId: String) {
+        // The live attempt supplies the generation the UI does not carry. TelecomCall re-checks it
+        // on its consumer, so a route tapped as a session dies is dropped rather than applied to
+        // its successor.
+        val att = current ?: return
+        call.requestRoute(att.gen, routeId)
+    }
 
     override fun requestCapture() {
         val att = current ?: return

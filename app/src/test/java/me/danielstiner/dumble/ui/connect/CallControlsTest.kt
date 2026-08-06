@@ -7,12 +7,15 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import me.danielstiner.dumble.mumble.voice.AudioRoute
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -35,11 +38,13 @@ class CallControlsTest {
     private fun controls(
         talkBlock: TalkBlock? = null,
         deafened: Boolean = false,
+        audioRoutes: AudioRoutes = AudioRoutes(),
         onTransmitting: (Boolean) -> Unit = {},
         onToggleDeafen: () -> Unit = {},
+        onSelectRoute: (String) -> Unit = {},
         onHangUp: () -> Unit = {},
     ) = compose.setContent {
-        CallControls(talkBlock, deafened, onTransmitting, onToggleDeafen, onHangUp)
+        CallControls(talkBlock, deafened, audioRoutes, onTransmitting, onToggleDeafen, onSelectRoute, onHangUp)
     }
 
     /** The whole point of the control: the gate opens on press and closes on release, not on click. */
@@ -78,11 +83,9 @@ class CallControlsTest {
         ).assertIsNotEnabled()
     }
 
-    /** Speaker is still a placeholder (PR 3) — it must not look tappable until that work lands. */
-    @Test fun speakerIsDisabled() {
+    /** Mute must not come back as a separate slot — it is Talk's alternative, not an addition. */
+    @Test fun thereIsNoSeparateMuteControl() {
         controls()
-        compose.onNodeWithContentDescription("Speaker").assertIsNotEnabled()
-        // Mute must not come back as a separate slot — it is Talk's alternative, not an addition.
         compose.onNodeWithContentDescription("Mute").assertDoesNotExist()
     }
 
@@ -119,8 +122,9 @@ class CallControlsTest {
         var block by mutableStateOf<TalkBlock?>(null)
         compose.setContent {
             CallControls(
-                talkBlock = block, deafened = false,
-                onTransmitting = { events += it }, onToggleDeafen = {}, onHangUp = {},
+                talkBlock = block, deafened = false, audioRoutes = AudioRoutes(),
+                onTransmitting = { events += it }, onToggleDeafen = {}, onSelectRoute = {},
+                onHangUp = {},
             )
         }
         compose.onNodeWithContentDescription("Push to talk").performTouchInput { down(center) }
@@ -173,8 +177,9 @@ class CallControlsTest {
         compose.setContent {
             if (onScreen) {
                 CallControls(
-                    talkBlock = null, deafened = false,
-                    onTransmitting = { events += it }, onToggleDeafen = {}, onHangUp = {},
+                    talkBlock = null, deafened = false, audioRoutes = AudioRoutes(),
+                    onTransmitting = { events += it }, onToggleDeafen = {}, onSelectRoute = {},
+                    onHangUp = {},
                 )
             }
         }
@@ -213,12 +218,211 @@ class CallControlsTest {
     @Test fun aControlsDescriptionSitsOnItsClickableNode() {
         controls()
         compose.onNode(
-            hasContentDescription("Speaker") and hasClickAction(),
+            hasContentDescription("Audio output") and hasClickAction(),
             useUnmergedTree = true,
         ).assertIsNotEnabled()
         compose.onNode(
             hasContentDescription("Disconnect") and hasClickAction(),
             useUnmergedTree = true,
         ).assertIsEnabled()
+    }
+
+    private val earpiece = AudioRoute("id-earpiece", AudioRoute.Type.EARPIECE)
+    private val speaker = AudioRoute("id-speaker", AudioRoute.Type.SPEAKER)
+    private val wired = AudioRoute("id-wired", AudioRoute.Type.WIRED_HEADSET)
+    private val shokz = AudioRoute("id-bt", AudioRoute.Type.BLUETOOTH, "OpenRun by Shokz")
+
+    /**
+     * No Bluetooth, so the choice is binary and the control routes straight there without a menu —
+     * the stock app's `nonBluetoothMode`.
+     */
+    @Test fun withoutBluetoothTheControlIsAToggle() {
+        val picked = mutableListOf<String>()
+        controls(
+            audioRoutes = AudioRoutes(listOf(speaker, earpiece), earpiece),
+            onSelectRoute = { picked += it },
+        )
+
+        compose.onNodeWithContentDescription(
+            "Audio output — Earpiece, tap for Speaker",
+        ).performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("id-speaker"), picked)
+    }
+
+    /** …and back off it again. Leaving the speaker lands on the earpiece with nothing plugged in. */
+    @Test fun theToggleComesBackOffSpeaker() {
+        val picked = mutableListOf<String>()
+        controls(
+            audioRoutes = AudioRoutes(listOf(speaker, earpiece), speaker),
+            onSelectRoute = { picked += it },
+        )
+
+        compose.onNodeWithContentDescription(
+            "Audio output — Speaker, tap for Earpiece",
+        ).performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("id-earpiece"), picked)
+    }
+
+    /**
+     * A wired headset alone does *not* earn a menu. Stock switches on Bluetooth only
+     * (`SpeakerButtonInfo`), and leaving the speaker prefers the wired headset over the earpiece
+     * (`ROUTE_WIRED_OR_EARPIECE`). The prototype triggered its picker on wired too; that was its own
+     * invention, and this pins the difference.
+     */
+    @Test fun aWiredHeadsetAloneStillGetsAToggle() {
+        val picked = mutableListOf<String>()
+        controls(
+            audioRoutes = AudioRoutes(listOf(wired, speaker), speaker),
+            onSelectRoute = { picked += it },
+        )
+
+        compose.onNodeWithContentDescription(
+            "Audio output — Speaker, tap for Wired headset",
+        ).performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("id-wired"), picked)
+    }
+
+    /** With Bluetooth around the tap opens the menu and commits to nothing on its own. */
+    @Test fun withBluetoothTheControlOpensAMenuInsteadOfRouting() {
+        val picked = mutableListOf<String>()
+        controls(
+            audioRoutes = AudioRoutes(listOf(shokz, speaker, earpiece), earpiece),
+            onSelectRoute = { picked += it },
+        )
+
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+
+        assertEquals(emptyList<String>(), picked)
+        compose.onNodeWithContentDescription("OpenRun by Shokz").assertExists()
+    }
+
+    /** The caption names the current selection — this is a picker, not a toggle. */
+    @Test fun theRouteButtonNamesTheCurrentRoute() {
+        controls(audioRoutes = AudioRoutes(listOf(earpiece, speaker), earpiece))
+
+        compose.onNodeWithText("Earpiece").assertExists()
+    }
+
+    /** Nothing is routable without a call, and a button that does nothing should not invite a tap. */
+    @Test fun noRoutesDisablesTheRouteButton() {
+        controls(audioRoutes = AudioRoutes())
+
+        compose.onNodeWithContentDescription("Audio output").assertIsNotEnabled()
+    }
+
+    /**
+     * Clicks the middle row: not [available]'s first entry (shokz) and not the current route
+     * (earpiece, which is also the last entry here). A regression that always emitted the first
+     * row's id, or always echoed the current route's id, would each fail this differently than
+     * clicking either edge would catch alone.
+     */
+    @Test fun pickingARouteEmitsItsId() {
+        val picked = mutableListOf<String>()
+        controls(
+            audioRoutes = AudioRoutes(listOf(shokz, speaker, earpiece), earpiece),
+            onSelectRoute = { picked += it },
+        )
+
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Speaker").performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("id-speaker"), picked)
+    }
+
+    /** The check has to be reachable to a screen reader, so it rides the row's own description. */
+    @Test fun theCurrentRouteIsMarkedInTheMenu() {
+        controls(audioRoutes = AudioRoutes(listOf(shokz, earpiece), earpiece))
+
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
+        compose.onNodeWithContentDescription("OpenRun by Shokz").assertExists()
+    }
+
+    /**
+     * Rotating with the picker open used to drop it — a plain [remember] does not survive the
+     * activity being recreated. Found by rotating the phone mid-pick; the menu vanished with no
+     * explanation and the call screen came back underneath.
+     */
+    @Test fun theMenuSurvivesTheActivityBeingRecreated() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            CallControls(null, false, AudioRoutes(listOf(shokz, earpiece), earpiece), {}, {}, {}, {})
+        }
+
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
+    }
+
+    /**
+     * …but surviving must not mean outliving the menu itself. Leaving menu mode drops the dropdown
+     * from composition without any dismiss firing, so an unkeyed `rememberSaveable` held `true` and
+     * reopened the menu the moment Bluetooth returned — a menu the user never asked for, over a call
+     * screen they were looking at. The `menuMode` key is what resets it.
+     */
+    @Test fun theMenuDoesNotReopenWhenBluetoothReturns() {
+        var routes by mutableStateOf(AudioRoutes(listOf(shokz, speaker, earpiece), earpiece))
+        compose.setContent {
+            CallControls(null, false, routes, {}, {}, {}, {})
+        }
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
+
+        // The headset leaves mid-call: the control falls back to a toggle and the menu goes with it.
+        routes = AudioRoutes(listOf(speaker, earpiece), earpiece)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
+
+        // …and comes back. No tap in between, so no menu.
+        routes = AudioRoutes(listOf(shokz, speaker, earpiece), earpiece)
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
+    }
+
+    /**
+     * `available` and `current` are separate collectors, so a frame lands with routes but no current
+     * route yet. The button is live and has somewhere to go in that frame, and used to describe
+     * itself with the bare "Audio output" it shows when there is nothing to route at all — the one
+     * string a screen reader gets, identical for a working control and a dead one.
+     */
+    @Test fun theToggleNamesItsDestinationBeforeThePlatformNamesTheRoute() {
+        controls(audioRoutes = AudioRoutes(listOf(speaker, earpiece), current = null))
+
+        compose.onNodeWithContentDescription("Audio output — tap for Speaker").assertIsEnabled()
+    }
+
+    /** The same latch by the other route in: a new call must not inherit the last one's open menu. */
+    @Test fun theMenuDoesNotReopenOnTheNextCall() {
+        var routes by mutableStateOf(AudioRoutes(listOf(shokz, earpiece), earpiece))
+        compose.setContent {
+            CallControls(null, false, routes, {}, {}, {}, {})
+        }
+        compose.onNodeWithContentDescription("Audio output — Earpiece").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
+
+        routes = AudioRoutes()
+        compose.waitForIdle()
+        routes = AudioRoutes(listOf(shokz, earpiece), earpiece)
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
     }
 }
