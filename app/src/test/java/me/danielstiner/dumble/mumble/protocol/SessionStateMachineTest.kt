@@ -28,7 +28,10 @@ class SessionStateMachineTest {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()
         val sentRaw = mutableListOf<Pair<TcpMessageType, ByteArray>>()
         var closed = false
+        /** Refuse sends, standing in for a full queue or an already-closed transport. */
+        var sendResult = true
         override fun send(type: TcpMessageType, message: MessageLite): Boolean {
+            if (!sendResult) return false
             sent += type to message; return true
         }
         override fun sendRaw(type: TcpMessageType, payload: ByteArray): Boolean {
@@ -379,6 +382,154 @@ class SessionStateMachineTest {
         assertFalse(sm.sendText("hi"))
         assertTrue(ch.sent.none { it.first == TcpMessageType.TextMessage })
         assertTrue(sm.messages.value.isEmpty())
+    }
+
+    /** Every UserState this machine has sent, in order. */
+    private fun FakeChannel.userStates() =
+        sent.filter { it.first == TcpMessageType.UserState }.map { it.second as MumbleProtos.UserState }
+
+    private fun synchronizedMachine(ch: FakeChannel, scope: CoroutineScope, session: Int = 4) =
+        SessionStateMachine(ch, "tester", null, scope).apply {
+            start()
+            onFrame(frame(TcpMessageType.ServerSync,
+                MumbleProtos.ServerSync.newBuilder().setSession(session).build()))
+        }
+
+    @Test
+    fun deafenSendsSelfDeafAndSelfMuteForOurSession() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        assertTrue(sm.setSelfDeaf(true))
+
+        val sent = ch.userStates().single()
+        assertEquals(4, sent.session)
+        assertTrue(sent.selfDeaf)
+        assertTrue(sent.selfMute)
+    }
+
+    @Test
+    fun undeafenAfterAPlainDeafenClearsBoth() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.setSelfDeaf(true)
+        assertTrue(sm.setSelfDeaf(false))
+
+        val sent = ch.userStates().last()
+        assertFalse(sent.selfDeaf)
+        assertFalse(sent.selfMute)
+    }
+
+    /**
+     * The stranding regression. A double-tap lands inside one round trip, so the second ask arrives
+     * with the tree — and therefore the UI's idea of `deafened` — unchanged, and reaches this as a
+     * repeat. Recomputing it against state the first send already moved is what used to emit
+     * `self_mute=true` here, leaving the user muted with no control able to clear it.
+     *
+     * Asserts every frame, not just the last: the bug was a *differing second* message, and
+     * asserting only the last one passes against the broken version.
+     */
+    @Test
+    fun undeafenTappedTwiceSendsTheSameMessageTwice() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+        sm.setSelfDeaf(true)
+
+        sm.setSelfDeaf(false)
+        sm.setSelfDeaf(false)
+
+        val undeafens = ch.userStates().drop(1)
+        assertEquals(2, undeafens.size)
+        undeafens.forEach {
+            assertFalse("every undeafen must clear self_deaf", it.selfDeaf)
+            assertFalse("every undeafen must clear self_mute", it.selfMute)
+        }
+    }
+
+    /**
+     * The same break from the other side: a repeated deafen must not recompute `unmuteOnUndeaf`
+     * against its own first send, which would flip the debt down and make the eventual undeafen keep
+     * the mute. The frames alone cannot show this — the *following* undeafen is the assertion.
+     */
+    @Test
+    fun deafenTappedTwiceKeepsTheUnmuteDebt() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.setSelfDeaf(true)
+        sm.setSelfDeaf(true)
+        sm.setSelfDeaf(false)
+
+        assertFalse("the debt survived, so the undeafen must unmute", ch.userStates().last().selfMute)
+    }
+
+    /**
+     * Swallowing repeats would also fix the two tests above, and would leave the button dead for the
+     * session: murmur silently rate-limits UserState addressed at the sender and never applies the
+     * dropped message, after which every later tap matches the recorded intent and is swallowed too.
+     */
+    @Test
+    fun aRepeatStillReachesTheWire() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.setSelfDeaf(true)
+        sm.setSelfDeaf(true)
+
+        assertEquals(2, ch.userStates().size)
+    }
+
+    /**
+     * A refusal is reported rather than swallowed, and the retry still puts a complete deafen on the
+     * wire.
+     *
+     * It does **not** pin `setSelfDeaf`'s "only advance the intent on a successful enqueue" guard,
+     * despite looking like it should — dropping that guard passes this test. Only deafen can move
+     * `selfMute` today, so the reachable intents are just (F,F,F) and (T,T,T), and from either one a
+     * recorded-but-unsent intent and an unmoved one emit the same frame on every retry. The guard is
+     * still correct and becomes observable the day a mute control lands; until then nothing here
+     * defends it. Confirmed by mutation.
+     */
+    @Test
+    fun aRefusedSendIsReportedAndTheRetryStillReachesTheWire() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        ch.sendResult = false
+        assertFalse(sm.setSelfDeaf(true))
+        assertTrue("a refused send must not reach the wire", ch.userStates().isEmpty())
+        ch.sendResult = true
+
+        assertTrue(sm.setSelfDeaf(true))
+        val sent = ch.userStates().single()
+        assertTrue(sent.selfDeaf)
+        assertTrue(sent.selfMute)
+    }
+
+    /** No optimistic echo: the tree only moves when the server says so. */
+    @Test
+    fun deafenDoesNotTouchTheTreeUntilTheServerEchoes() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(4).setName("me").setChannelId(0).build()))
+
+        sm.setSelfDeaf(true)
+        assertFalse(sm.channelTree.value.users[4]!!.selfDeaf)
+
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(4).setSelfDeaf(true).setSelfMute(true).build()))
+        assertTrue(sm.channelTree.value.users[4]!!.selfDeaf)
+    }
+
+    @Test
+    fun setSelfDeafBeforeSynchronizedIsANoOp() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        assertFalse(sm.setSelfDeaf(true))
+        assertTrue(ch.sent.none { it.first == TcpMessageType.UserState })
     }
 
     @Test

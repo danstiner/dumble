@@ -24,7 +24,10 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
  * at a time and never nested, so fields touched only by them need no further synchronization. The
  * ping ticker runs on its own coroutine, so state it shares with the frame handler is volatile or in
  * a [MutableStateFlow]. `start()` runs on the caller's thread, a third context, so the job handles
- * it writes are volatile.
+ * it writes are volatile. `setSelfDeaf` runs there too, and its sent-state field is volatile by that
+ * same convention — the reader coroutine never touches it, so this is consistency, not a guarded
+ * race. It is one immutable value rather than three booleans so the three cannot be read torn apart
+ * from each other.
  */
 class SessionStateMachine(
     private val channel: ControlChannel,
@@ -78,6 +81,13 @@ class SessionStateMachine(
 
     @Volatile private var deadlineJob: Job? = null
     @Volatile private var pingJob: Job? = null
+
+    /**
+     * What [setSelfDeaf] last put on the wire. Distinct from [channelTree], which is what the server
+     * believes and what the UI renders — see [DeafenState.deafen] for why advancing from the echo
+     * instead of from this strands the user muted.
+     */
+    @Volatile private var sent = DeafenState()
 
     /** Written by the ping ticker, read by the frame handler on another coroutine. */
     @Volatile private var lastPingSentNanos = 0L
@@ -245,6 +255,45 @@ class SessionStateMachine(
         )
         val senderName = _channelTree.value.users[session]?.name
         if (ok) appendMessage(ChatMessage.Remote(session, senderName, body, clock()))
+        return ok
+    }
+
+    /**
+     * Deafen or undeafen. Returns whether it was enqueued; a no-op until Synchronized.
+     *
+     * `self_mute` rides along because murmur forces mute on when deaf goes on
+     * (`Server::msgUserState`) and never takes it back off, so an undeafen that sends `self_deaf`
+     * alone leaves the user muted with no control in this app able to clear it.
+     * [DeafenState.deafen] owns the exact coupling, including which undeafens keep an existing mute.
+     *
+     * A repeat — the same ask arriving again before the server has answered the first, which is what
+     * a double-tap produces, since the UI's `deafened` cannot have moved yet — **re-sends [sent]
+     * verbatim**. Advancing again would run [DeafenState.deafen] against state its own first run
+     * just moved; returning early would leave the button dead, because murmur silently rate-limits
+     * UserState addressed at the sender and never applies the dropped message, after which every
+     * later tap would match [sent] and be dropped here too.
+     *
+     * No optimistic echo, unlike [sendText]: the server broadcasts UserState back to the sender, so
+     * the reducer applies it and the UI shows what the server believes. Safe to call off the reader
+     * thread — channel.send only enqueues.
+     */
+    fun setSelfDeaf(on: Boolean): Boolean {
+        val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false
+        val next = if (on != sent.selfDeaf) sent.deafen(on) else sent
+        val ok = channel.send(
+            TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder()
+                .setSession(session)
+                .setSelfDeaf(next.selfDeaf)
+                .setSelfMute(next.selfMute)
+                .build(),
+        )
+        // Advanced only on a successful enqueue: a refused send must not leave this claiming
+        // something the wire never carried, or the retry advances from a state that never existed.
+        // Not observable while deafen is the only thing that moves self_mute — both paths emit the
+        // same frames from the two reachable intents — so no test defends it; it becomes load
+        // bearing the day a mute control lands. Keep it.
+        if (ok) sent = next
         return ok
     }
 

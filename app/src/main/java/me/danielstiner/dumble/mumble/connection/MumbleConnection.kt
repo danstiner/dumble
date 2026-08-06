@@ -537,6 +537,8 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
 
+    override fun setSelfDeaf(on: Boolean) { current?.sm?.setSelfDeaf(on) }
+
     override fun requestCapture() {
         val att = current ?: return
         send(CaptureCommand.Acquire(att))

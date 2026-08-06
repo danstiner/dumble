@@ -46,11 +46,14 @@ fun ConnectedScreen(
     speaking: Set<Int>,
     unread: Int,
     microphoneGranted: Boolean,
+    talkBlock: TalkBlock?,
+    deafened: Boolean,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
     onSettings: () -> Unit,
     onMicrophoneReady: () -> Unit,
     onTransmitting: (Boolean) -> Unit,
+    onToggleDeafen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Keyed on the answer, and driving capture from the *state* rather than from the permission
@@ -129,8 +132,10 @@ fun ConnectedScreen(
         },
         bottomBar = {
             CallControls(
-                microphoneGranted = microphoneGranted,
+                talkBlock = talkBlock,
+                deafened = deafened,
                 onTransmitting = onTransmitting,
+                onToggleDeafen = onToggleDeafen,
                 onHangUp = onDisconnect,
             )
         },

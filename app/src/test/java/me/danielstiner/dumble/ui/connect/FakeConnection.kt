@@ -26,6 +26,7 @@ class FakeConnection : Connection {
     var sendResult = true
     var requestCaptureCalls = 0; private set
     val transmitting = mutableListOf<Boolean>()
+    val selfDeaf = mutableListOf<Boolean>()
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         connectCalls++; lastEndpoint = endpoint
@@ -36,6 +37,8 @@ class FakeConnection : Connection {
     override fun sendText(text: String): Boolean { sentTexts += text; return sendResult }
     override fun requestCapture() { requestCaptureCalls++ }
     override fun setTransmitting(on: Boolean) { transmitting += on }
+
+    override fun setSelfDeaf(on: Boolean) { selfDeaf += on }
 
     fun emitConnected(sessionId: Int) { status.value = ConnectionStatus.Connected(sessionId) }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
