@@ -57,6 +57,11 @@ data class ConnectUiState(
     val unread: Int = 0,
     val chatDraft: String = "",
     val speakingSessions: Set<Int> = emptySet(),
+    // Read back from our own row in the channel tree rather than remembered from the tap: the
+    // server decides, and it can refuse or force this. One round trip of lag on the button, and no
+    // second copy of the truth to drift.
+    val deafened: Boolean = false,
+    val talkBlock: TalkBlock? = null,
     // The OS answer, read from the system rather than remembered from a dialog. It has to survive
     // a ViewModel that outlives no connection: the foreground service keeps the process alive after
     // the task is swiped away, so resuming from the notification builds a fresh ViewModel over a
@@ -109,16 +114,19 @@ class ConnectViewModel internal constructor(
     val uiState: StateFlow<ConnectUiState> =
         combine(form, connSnapshot, connection.speakingSessions, transmitting) { f, c, speaking, tx ->
             val status = c.status
-            // Gated on the microphone: the gate can be open while capture never started — denied
-            // permission, or an engine that failed to open — and showing yourself speaking then
-            // would be a lie. PR 2 adds mute to this condition.
-            val me = (status as? ConnectionStatus.Connected)
-                ?.sessionId
-                ?.takeIf { tx && f.microphoneGranted }
+            val session = (status as? ConnectionStatus.Connected)?.sessionId
+            val me = session?.let { c.channelTree.users[it] }
+            val block = talkBlock(me, f.microphoneGranted)
+            // Gated on the block rather than the microphone alone: the gate can be open while
+            // nothing we send is carried — a denied permission, an engine that never opened, or a
+            // server discarding us — and showing yourself speaking then would be a lie.
+            val speakingMe = session?.takeIf { tx && block == null }
             f.copy(
                 status = status, rttMs = c.rttMs,
                 channelTree = c.channelTree, messages = c.messages,
-                speakingSessions = if (me != null) speaking + me else speaking,
+                speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
+                deafened = me?.selfDeaf == true,
+                talkBlock = block,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -239,4 +247,12 @@ class ConnectViewModel internal constructor(
         transmitting.value = active
         connection.setTransmitting(active)
     }
+
+    /**
+     * Reads the current value off [uiState] — the server's answer — rather than taking it from the
+     * caller, so the button and this can never disagree about what "the other one" means. Two taps
+     * inside one round trip therefore ask for the same thing twice; the state machine re-sends its
+     * last intent for the second, which is what keeps that harmless.
+     */
+    fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
 }

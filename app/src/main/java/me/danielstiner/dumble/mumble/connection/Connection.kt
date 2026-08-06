@@ -35,4 +35,15 @@ interface Connection {
      * way: a session built while the button is still down comes up transmitting.
      */
     fun setTransmitting(on: Boolean)
+
+    /**
+     * Deafen or undeafen. Enforcement is entirely the server's — no playback path reads `self_deaf`;
+     * murmur stops sending to a deaf receiver, so this saves bandwidth rather than muting locally.
+     *
+     * Fire-and-forget — nothing local reads back, because the server broadcasts the resulting
+     * `UserState` to us like any other user's and the channel tree is what the UI renders. A no-op
+     * until synchronized, and safe to repeat: a repeat re-sends the last intent rather than
+     * recomputing it.
+     */
+    fun setSelfDeaf(on: Boolean)
 }

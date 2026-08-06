@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -44,23 +45,24 @@ import androidx.compose.ui.unit.dp
 private val controlPillShape = RoundedCornerShape(percent = 50)
 private val controlActiveShape = RoundedCornerShape(percent = 30)
 
-private const val MICROPHONE_DENIED_REASON =
-    "Microphone permission denied — you can still hear others"
-
 /**
  * The call screen's bottom bar. Buttons take equal weight so they are wide pills with large touch
  * targets rather than small circles, matching the stock phone app.
  *
  * Push-to-talk and mute are alternatives for the same slot, not separate controls: a mute button is
- * meaningless when the gate is already closed by default, so only Talk appears here. Deafen and
- * Speaker are disabled placeholders for later PRs — Deafen needs `self_deaf` on the wire (PR 2), and
- * Speaker becomes the audio-route picker (PR 3). Deafen is not redundant with push-to-talk: it is
- * about not hearing others, not about not transmitting.
+ * meaningless when the gate is already closed by default, so only Talk appears here. Deafen is not
+ * redundant with push-to-talk — it is about not hearing others, not about not transmitting. Speaker
+ * is still a disabled placeholder; it becomes the audio-route picker (PR 3).
+ *
+ * [deafened] and [talkBlock] are the server's answer, not the last tap, so both lag a round trip and
+ * that is deliberate — see `ConnectViewModel.onToggleDeafen`.
  */
 @Composable
 fun CallControls(
-    microphoneGranted: Boolean,
+    talkBlock: TalkBlock?,
+    deafened: Boolean,
     onTransmitting: (Boolean) -> Unit,
+    onToggleDeafen: () -> Unit,
     onHangUp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -71,10 +73,15 @@ fun CallControls(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            TalkControl(microphoneGranted, onTransmitting, Modifier.weight(1f))
+            TalkControl(talkBlock, onTransmitting, Modifier.weight(1f))
             ControlButton(
-                icon = Icons.Filled.Headphones, label = "Deafen",
-                enabled = false, onClick = {}, modifier = Modifier.weight(1f),
+                icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
+                label = "Deafen",
+                // The caption stays "Deafen" — a label that renamed itself under the user's thumb
+                // reads as the button having moved. Shape and colour carry the state, and this
+                // spells it out for screen readers.
+                description = if (deafened) "Undeafen — you cannot hear anyone" else "Deafen",
+                active = deafened, onClick = onToggleDeafen, modifier = Modifier.weight(1f),
             )
             ControlButton(
                 icon = Icons.AutoMirrored.Filled.VolumeUp, label = "Speaker",
@@ -97,18 +104,22 @@ fun CallControls(
  * to it would see one, and the interaction source is the supported way to observe press and release
  * while keeping the button's semantics, ripple and disabled handling.
  *
- * The caption cannot hold the full denial reason, so it goes to `contentDescription` where screen
- * readers and the long-press tooltip still carry it.
+ * The caption cannot hold a full explanation, so the reason goes to `contentDescription` where
+ * screen readers and the long-press tooltip still carry it.
  *
- * [granted] is the system's answer as of the last connect or ViewModel construction, never a "not
- * asked yet" — the permission is requested on the connect screen, before this composable can
- * exist — so false here is a real refusal and saying "No mic" is honest. It can go stale only one
- * way: a grant from system Settings mid-session does not kill the process, and that reads false
- * until the next connect. A revoke does kill it, so a stale true is impossible.
+ * [block] can change mid-press, unlike the microphone answer it replaced: an admin mute, a channel
+ * suppress, or a deafen from a second finger all disable this button under a held thumb. Compose
+ * disposes the button's interactions on disable and emits `PressInteraction.Cancel`, which the
+ * collector below treats as a release — without that the transmit level stays raised and every
+ * rebuilt capture session re-applies it. Pinned by `talkDisabledWhileHeldClosesTheGate`, and
+ * measured on device by muting a held talker from another client.
  */
 @Composable
-private fun TalkControl(granted: Boolean, onTransmitting: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    val denied = !granted
+private fun TalkControl(
+    block: TalkBlock?,
+    onTransmitting: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val interactions = remember { MutableInteractionSource() }
     var pressed by remember { mutableStateOf(false) }
     LaunchedEffect(interactions) {
@@ -131,13 +142,13 @@ private fun TalkControl(granted: Boolean, onTransmitting: (Boolean) -> Unit, mod
     // with nothing pressed. A no-op on an ordinary release, which has already cleared `pressed`.
     DisposableEffect(Unit) { onDispose { if (pressed) onTransmitting(false) } }
     val cs = MaterialTheme.colorScheme
-    ControlColumn(if (denied) "No mic" else "Talk", modifier) {
+    ControlColumn(talkCaption(block), modifier) {
         FilledIconButton(
             onClick = {},
-            enabled = granted,
+            enabled = block == null,
             interactionSource = interactions,
             modifier = Modifier.fillMaxWidth().height(72.dp).semantics {
-                contentDescription = if (denied) MICROPHONE_DENIED_REASON else "Push to talk"
+                contentDescription = talkDescription(block)
             },
             shape = if (pressed) controlActiveShape else controlPillShape,
             colors = IconButtonDefaults.filledIconButtonColors(
@@ -150,13 +161,37 @@ private fun TalkControl(granted: Boolean, onTransmitting: (Boolean) -> Unit, mod
     }
 }
 
+private fun talkCaption(block: TalkBlock?) = when (block) {
+    null -> "Talk"
+    TalkBlock.NO_MICROPHONE -> "No mic"
+    TalkBlock.DEAFENED -> "Deafened"
+    TalkBlock.MUTED -> "Muted"
+}
+
+private fun talkDescription(block: TalkBlock?) = when (block) {
+    null -> "Push to talk"
+    TalkBlock.NO_MICROPHONE -> "Microphone permission denied — you can still hear others"
+    TalkBlock.DEAFENED -> "Undeafen to talk"
+    // Deliberately not "the server has muted you": the cause can be our own self_mute, and will be
+    // routinely once a mute control exists. States the consequence, which is true for all three.
+    TalkBlock.MUTED -> "Muted — the server will not carry your audio"
+}
+
+/**
+ * The description goes in a `semantics {}` block on the button rather than on the [Icon], which is
+ * where it used to be: that put the label on a separate, non-clickable node, so `uiautomator` saw
+ * two nodes per control and the one carrying the text reported `enabled=true` even for a disabled
+ * button. [TalkControl] always did it this way.
+ */
 @Composable
 private fun ControlButton(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    description: String = label,
     enabled: Boolean = true,
+    active: Boolean = false,
     container: Color? = null,
     content: Color? = null,
 ) {
@@ -165,14 +200,17 @@ private fun ControlButton(
         FilledIconButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(72.dp),
-            shape = controlPillShape,
+            modifier = Modifier.fillMaxWidth().height(72.dp)
+                .semantics { contentDescription = description },
+            // Mirrors TalkControl's pressed styling, so "on" reads the same way whichever control
+            // is holding it.
+            shape = if (active) controlActiveShape else controlPillShape,
             colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = container ?: cs.surfaceBright,
-                contentColor = content ?: cs.onSurface,
+                containerColor = container ?: if (active) cs.inverseSurface else cs.surfaceBright,
+                contentColor = content ?: if (active) cs.inverseOnSurface else cs.onSurface,
             ),
         ) {
-            Icon(icon, label, modifier = Modifier.size(26.dp))
+            Icon(icon, null, modifier = Modifier.size(26.dp))
         }
     }
 }
