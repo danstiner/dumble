@@ -24,6 +24,8 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
     val endReasons = CopyOnWriteArrayList<VoiceCall.Reason>()
     /** Generation per requestActive(), in order — so a test can assert a Talk press asked, or didn't. */
     val activeRequests = CopyOnWriteArrayList<Int>()
+    /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
+    val routeRequests = CopyOnWriteArrayList<String>()
 
     private val lock = Any()
     private var liveGen = NO_CALL
@@ -39,6 +41,9 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
     // Per generation, not one field: a stale hold from a superseded call is exactly the failure the
     // connection's generation check exists to stop, and a single field cannot express one.
     private val onActive = ConcurrentHashMap<Int, (Boolean) -> Unit>()
+    // Per generation for the same reason onActive is: a route update from a superseded call is
+    // exactly what the connection's generation guard exists to drop.
+    private val onRoutes = ConcurrentHashMap<Int, (AudioRoutes) -> Unit>()
     private val onEnded = ConcurrentHashMap<Int, () -> Unit>()
 
     override fun start(
@@ -46,6 +51,7 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
         endpoint: MumbleEndpoint,
         username: String,
         onActive: (Boolean) -> Unit,
+        onRoutes: (AudioRoutes) -> Unit,
         onEnded: () -> Unit,
     ) {
         synchronized(lock) {
@@ -60,6 +66,7 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
             pendingGen = gen
             pendingEnd = null
             this.onActive[gen] = onActive
+            this.onRoutes[gen] = onRoutes
             this.onEnded[gen] = onEnded
         }
         if (autoGrant) grant(gen)
@@ -106,6 +113,19 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
         activeRequests += gen
         Unit
     }
+
+    override fun requestRoute(gen: Int, routeId: String): Unit = synchronized(lock) {
+        // Mirrors the real generation guard. Deliberately does not echo the route back: the
+        // platform confirms through onRoutes, so a test drives that itself via emitRoutes().
+        if (gen != liveGen) return
+        routeRequests += routeId
+        Unit
+    }
+
+    /** Deliver a route update to a specific generation, live or not — same reason as [holdFor]. */
+    fun emitRoutesFor(gen: Int, routes: AudioRoutes) { onRoutes[gen]?.invoke(routes) }
+
+    fun emitRoutes(routes: AudioRoutes) = emitRoutesFor(liveGen, routes)
 
     // hold(), resume(), and endedBySystem() no-op once end() has run: liveGen is NO_CALL then,
     // matching a platform call that is no longer registered.

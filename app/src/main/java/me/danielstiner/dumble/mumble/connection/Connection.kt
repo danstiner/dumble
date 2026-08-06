@@ -5,6 +5,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
+import me.danielstiner.dumble.mumble.voice.AudioRoutes
 
 /** The coordinator surface the UI depends on — narrow so the ViewModel can be tested with a fake. */
 interface Connection {
@@ -14,6 +15,14 @@ interface Connection {
     val channelTree: StateFlow<ChannelTree>
     val messages: StateFlow<List<ChatMessage>>
     val speakingSessions: StateFlow<Set<Int>>
+
+    /**
+     * What the platform offers for call audio and what it is using. Cleared to empty by connect()
+     * and disconnect() — but not by a session that fails on its own: retiring it deliberately
+     * leaves every published flow, this one included, holding the dead session's last values until
+     * the next connect() clears them, the same as `status` staying on its terminal `Error`.
+     */
+    val audioRoutes: StateFlow<AudioRoutes>
     fun connect(endpoint: MumbleEndpoint, username: String, password: String?)
     fun trustAndConnect()
     fun cancelTrust()
@@ -46,4 +55,11 @@ interface Connection {
      * recomputing it.
      */
     fun setSelfDeaf(on: Boolean)
+
+    /**
+     * Route call audio to [routeId], one of [audioRoutes]' available ids. Fire-and-forget, and a
+     * no-op with nothing connected: the platform's answer arrives back through [audioRoutes], so
+     * the control never shows a route the platform has not confirmed.
+     */
+    fun requestAudioRoute(routeId: String)
 }

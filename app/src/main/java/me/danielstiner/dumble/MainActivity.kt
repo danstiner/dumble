@@ -77,12 +77,14 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     microphoneGranted = state.microphoneGranted,
                     talkBlock = state.talkBlock,
                     deafened = state.deafened,
+                    audioRoutes = state.audioRoutes,
                     onOpenChat = vm::openChat,
                     onDisconnect = vm::onDisconnect,
                     onSettings = vm::openSettings,
                     onMicrophoneReady = vm::onMicrophoneReady,
                     onTransmitting = vm::onTransmitting,
                     onToggleDeafen = vm::onToggleDeafen,
+                    onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )
             else -> ConnectScreen(
