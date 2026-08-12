@@ -1,27 +1,15 @@
 #include "core/PcmRing.h"
+#include <bit>
 #include <cassert>
-#include <cstdlib>
 #include <cstring>
 
 namespace dumble {
 
-namespace {
-uint32_t roundUpToPowerOfTwo(uint32_t n) {
-    uint32_t cap = 1;
-    while (cap < n) {
-        cap <<= 1;
-        if (cap == 0) std::abort();  // more than 2^31 samples requested; not a real ring
-    }
-    return cap;
-}
-}  // namespace
-
 PcmRing::PcmRing(uint32_t minCapacitySamples)
-    : buf_(roundUpToPowerOfTwo(minCapacitySamples)), mask_(uint32_t(buf_.size()) - 1) {
+    : buf_(std::bit_ceil(minCapacitySamples)), mask_(uint32_t(buf_.size()) - 1) {
     // The rounding above keeps release builds robust; this catches the caller confusion —
     // asking for one size and silently getting another — in the builds that can still catch it.
-    assert(minCapacitySamples != 0 &&
-           (minCapacitySamples & (minCapacitySamples - 1)) == 0 &&
+    assert(minCapacitySamples != 0 && std::has_single_bit(minCapacitySamples) &&
            "capacity should already be a power of two; rounding up is a release safety net");
 }
 
