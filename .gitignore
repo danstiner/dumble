@@ -4,6 +4,8 @@
 local.properties
 /build
 /captures
+# Host-side CMake tree for the core/ unit tests (cmake -S app/src/main/cpp/host)
+/app/src/main/cpp/host/build/
 .externalNativeBuild
 .cxx
 .kotlin/
