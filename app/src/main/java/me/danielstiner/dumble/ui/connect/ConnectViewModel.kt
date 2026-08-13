@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.TimeSource
 import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -52,7 +53,8 @@ data class ConnectUiState(
     val portError: String? = null,
     val hostError: String? = null,
     val status: ConnectionStatus = ConnectionStatus.Idle,
-    val rttMs: Double? = null,
+    val roundTripTime: Duration? = null,
+    val lastServerReplyAt: ComparableTimeMark? = null,
     val channelTree: ChannelTree = ChannelTree(),
     val messages: List<ChatMessage> = emptyList(),
     val showChat: Boolean = false,
@@ -81,7 +83,7 @@ data class ConnectUiState(
 
 private data class ConnSnapshot(
     val status: ConnectionStatus,
-    val rttMs: Double?,
+    val roundTripTime: Duration?,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
     val audioRoutes: AudioRoutes,
@@ -112,15 +114,18 @@ class ConnectViewModel internal constructor(
     // decoded incoming audio and our own audio is never decoded locally.
     private val transmitting = MutableStateFlow(false)
 
-    // Kotlin's typed combine() maxes at 5 flows; nest the connection flows into one snapshot
-    // so the top-level combine only needs form + snapshot + speakingSessions + transmitting.
+    // Kotlin's typed combine() maxes at 5 flows; nest the connection flows into one snapshot so the
+    // top-level stays inside it too. Both are at five now — the next flow either joins ConnSnapshot
+    // or needs a second one.
     private val connSnapshot = combine(
-        connection.status, connection.roundTripMillis,
+        connection.status, connection.roundTripTime,
         connection.channelTree, connection.messages, connection.audioRoutes,
     ) { status, rtt, tree, msgs, routes -> ConnSnapshot(status, rtt, tree, msgs, routes) }
 
     val uiState: StateFlow<ConnectUiState> =
-        combine(form, connSnapshot, connection.speakingSessions, transmitting) { f, c, speaking, tx ->
+        combine(
+            form, connSnapshot, connection.speakingSessions, transmitting, connection.lastServerReplyAt,
+        ) { f, c, speaking, tx, pingReplyAt ->
             val status = c.status
             val session = (status as? ConnectionStatus.Connected)?.sessionId
             val me = session?.let { c.channelTree.users[it] }
@@ -130,7 +135,7 @@ class ConnectViewModel internal constructor(
             // server discarding us — and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { tx && block == null }
             f.copy(
-                status = status, rttMs = c.rttMs,
+                status = status, roundTripTime = c.roundTripTime, lastServerReplyAt = pingReplyAt,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 deafened = me?.selfDeaf == true,

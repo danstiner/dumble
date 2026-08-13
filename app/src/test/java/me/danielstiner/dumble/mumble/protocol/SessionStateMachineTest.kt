@@ -8,7 +8,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
@@ -18,6 +20,10 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.time.TestTimeSource
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import java.time.Instant
 import kotlin.concurrent.thread
 
@@ -42,6 +48,18 @@ class SessionStateMachineTest {
 
     private fun frame(type: TcpMessageType, message: MessageLite) =
         TcpFrame(type.id, message.toByteArray())
+
+    /** The server's echo of the most recent ping — the same timestamp, which is what the handler matches on. */
+    private fun replyToLastPing(ch: FakeChannel): TcpFrame {
+        val ping = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        return frame(TcpMessageType.Ping, MumbleProtos.Ping.newBuilder().setTimestamp(ping.timestamp).build())
+    }
+
+    private fun synchronizedSm(ch: FakeChannel, scope: CoroutineScope): SessionStateMachine {
+        val sm = SessionStateMachine(ch, "tester", null, scope).apply { start() }
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
+        return sm
+    }
 
     @Test
     fun sendsVersionThenAuthenticateOnStart() = runTest {
@@ -103,16 +121,177 @@ class SessionStateMachineTest {
         assertEquals("could not send Authenticate", state.detail)
     }
 
-    // The ping send is deliberately not fatal: a full queue is backpressure, and a closed transport
-    // is a death the reader already reports. Pin that, so treating it as fatal fails here.
+    // ---- ping liveness -------------------------------------------------------------------
+    //
+    // The machine publishes the *instant* of the last reply, not a duration: the duration is stale
+    // the moment it is written and what changes it is the passage of time, so the UI derives it
+    // against its own clock (ConnectedScreen, which already does this for the call duration).
+    // These tests derive it the same way. elapsedMillis is injected off the test scheduler because
+    // the value is real elapsed time and android.os.SystemClock returns 0 under
+    // returnDefaultValues; driving it separately from delay() is also what lets the suspend case
+    // below be expressed at all.
+
+    /**
+     * Advance the scheduler and the real clock together, which is what an awake device does. The
+     * source moves first: the tick fires inside advanceTimeBy and reads the clock as it goes, so
+     * advancing the scheduler first would have it observe the pre-advance time.
+     */
+    private fun TestScope.advanceBoth(bootClock: TestTimeSource, millis: Long) {
+        bootClock += millis.milliseconds
+        advanceTimeBy(millis)
+    }
+
+    // runCurrent so the ping coroutine's body actually starts here. It marks the anchor the
+    // silence is measured from, and scope.launch only queues it -- without this the anchor is taken
+    // one advance late and every silence reads an interval short.
+    private fun TestScope.pingSm(ch: ControlChannel, bootClock: TestTimeSource): SessionStateMachine {
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock).apply { start() }
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
+        runCurrent()
+        return sm
+    }
+
+    /** What the UI computes: elapsedNow() on the published mark, which needs no clock of its own. */
+    private fun pingAge(sm: SessionStateMachine): Duration =
+        sm.lastServerReplyAt.value?.elapsedNow() ?: Duration.ZERO
+
+    // A link replying every interval never reads degraded. Silence oscillates between zero and one
+    // interval by construction -- it is time since the last reply, and the link is only asked once
+    // per interval -- which is why the threshold sits at three.
     @Test
-    fun aPingThatCannotBeQueuedDoesNotEndTheSession() = runTest {
+    fun anAnsweredLinkNeverReadsDegraded() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+
+        repeat(6) {
+            advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+            sm.onFrame(replyToLastPing(ch))
+            assertEquals(Duration.ZERO, pingAge(sm))
+        }
+    }
+
+    @Test
+    fun aSilentServerAgesTheLastReply() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        val first = pingAge(sm)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        val second = pingAge(sm)
+
+        assertTrue("age must grow while nothing replies, was $first then $second", second > first)
+        assertTrue("two intervals of age must not yet read degraded",
+            second < SessionStateMachine.DEGRADED_PING_AGE)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        assertTrue("three intervals of age must read degraded",
+            pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+    }
+
+    @Test
+    fun aReplyResetsTheAgeImmediately() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+        repeat(4) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+
+        sm.onFrame(replyToLastPing(ch))
+
+        assertEquals(Duration.ZERO, pingAge(sm))
+    }
+
+    // A round trip of several intervals is a slow link, not a dead one. Every reply on it lands
+    // after the next tick has re-stamped, so matching only the newest stamp would register no reply
+    // at all and the link would read permanently silent while answering every ping. A duration does
+    // not care which ping a reply names, so this needs no rule about outstanding pings.
+    @Test
+    fun aRoundTripOfSeveralIntervalsNeverReadsDegraded() = runTest {
+        for (lagIntervals in 1..3) {
+            val ch = FakeChannel()
+            val bootClock = TestTimeSource()
+            val sm = pingSm(ch, bootClock)
+            val pings = mutableListOf<TcpFrame>()
+
+            repeat(8) {
+                advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+                pings += replyToLastPing(ch)
+                pings.getOrNull(pings.size - 1 - lagIntervals)?.let { r -> sm.onFrame(r) }
+                if (it >= lagIntervals) {
+                    assertTrue(
+                        "lag $lagIntervals: a link replying to every ping must not read degraded, " +
+                            "was ${pingAge(sm)}",
+                        pingAge(sm) < SessionStateMachine.DEGRADED_PING_AGE,
+                    )
+                }
+            }
+            assertTrue("the round trip must still be reported", sm.roundTripTime.value != null)
+        }
+    }
+
+    // A reply for a long-superseded ping still clears the silence: whichever ping it names, the
+    // link spoke. Dan's call 2026-08-13, replacing the earlier rule that rejected a superseded
+    // reply outright -- that rule cannot coexist with tolerating a round trip longer than the
+    // interval, since both are replies arriving after their successor was sent.
+    @Test
+    fun aLateReplyForASupersededPingIsStillTheLinkSpeaking() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        val stale = replyToLastPing(ch)
+        repeat(3) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+
+        sm.onFrame(stale)
+        assertEquals(Duration.ZERO, pingAge(sm))
+
+        // And silence resuming climbs again from there, so a dying link is still reported.
+        repeat(3) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+    }
+
+    // The blind spot a count of unanswered pings could not see. delay() schedules on
+    // CLOCK_MONOTONIC, so a suspended CPU fires no ticks at all and a counter of unanswered pings
+    // reads zero straight through the outage -- while the server, whose reap runs on its own wall
+    // clock, has already dropped us. Publishing the instant rather than a per-tick duration is what
+    // makes this visible without a tick having to fire at all: real time moves, so the derived
+    // silence moves with it.
+    @Test
+    fun timeAsleepCountsTowardTheAge() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        sm.onFrame(replyToLastPing(ch))
+        assertEquals(Duration.ZERO, pingAge(sm))
+
+        // Real time moves and the scheduler does not: no tick can fire, exactly as in a doze.
+        bootClock += 45.seconds
+
+        assertTrue(
+            "a doze past the server's reap must read as silence, was ${pingAge(sm)}",
+            pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE,
+        )
+    }
+
+    // A ping that never reached the wire is two claims, both load-bearing: it cannot be answered,
+    // so the silence keeps growing, and it is not fatal -- a full queue or a dead transport must
+    // not end the session, since the reader already reports that death on its own path.
+    @Test
+    fun aPingThatCannotBeQueuedStillAgesButIsNotFatal() = runTest {
         val ch = FailingChannel(TcpMessageType.Ping)
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val bootClock = TestTimeSource()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock)
+            .apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(9).build()))
+        runCurrent()
 
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS * 3 + 100)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS * 4 + 100)
 
+        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
         assertEquals(ConnectionState.Synchronized(9), sm.state.value)
     }
 
@@ -597,20 +776,20 @@ class SessionStateMachineTest {
     }
 
     @Test
-    fun pingEchoPublishesRoundTripTime() = runTest {
+    fun aPingReplyPublishesTheRoundTrip() = runTest {
         val ch = FakeChannel()
-        // Nonzero baseline: with a zero baseline an implementation that forgot to subtract the
-        // send time would produce the same answer and the test would prove nothing.
-        var now = 1_000_000L
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clockNanos = { now }).apply { start() }
-        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 100)
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
 
-        now = 6_000_000L   // 5 milliseconds after the ping was sent
+        // The reply carries the stamp we sent, so the round trip is however long it took to come
+        // back — not the age of the newest ping, which is what a locally-remembered send time
+        // would measure.
         val echoed = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        bootClock += 5.milliseconds
         sm.onFrame(frame(TcpMessageType.Ping, echoed))
 
-        assertEquals(5.0, sm.roundTripMillis.value!!, 0.001)
+        assertEquals(5.milliseconds, sm.roundTripTime.value)
     }
 
     // The failure path is covered; this covers the success path staying successful — a deadline

@@ -11,6 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.TimeSource
+import me.danielstiner.dumble.time.BootTimeSource
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.ChannelTreeReducers
 import me.danielstiner.dumble.mumble.chat.ChatMessage
@@ -20,14 +26,11 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
 /**
  * Drives the control-channel handshake to [ConnectionState.Synchronized].
  *
- * Threading: the transport delivers [onFrame] and [onClosed] from its single reader coroutine, one
- * at a time and never nested, so fields touched only by them need no further synchronization. The
- * ping ticker runs on its own coroutine, so state it shares with the frame handler is volatile or in
- * a [MutableStateFlow]. `start()` runs on the caller's thread, a third context, so the job handles
- * it writes are volatile. `setSelfDeaf` runs there too, and its sent-state field is volatile by that
- * same convention — the reader coroutine never touches it, so this is consistency, not a guarded
- * race. It is one immutable value rather than three booleans so the three cannot be read torn apart
- * from each other.
+ * Threading: [onFrame] and [onClosed] arrive on the transport's single reader coroutine, one at a
+ * time and never nested, so fields only they touch need no synchronization. Anything shared with
+ * the ping ticker or with `start()`/`setSelfDeaf` (a third, caller thread) is volatile or a
+ * [MutableStateFlow]. [sent] is one immutable value rather than three booleans so its parts cannot
+ * be read torn apart.
  */
 class SessionStateMachine(
     private val channel: ControlChannel,
@@ -36,12 +39,14 @@ class SessionStateMachine(
     private val scope: CoroutineScope,
     private val clockNanos: () -> Long = System::nanoTime,
     private val clock: () -> Instant = Instant::now,
+    // Counts deep sleep, unlike clockNanos. See BootTimeSource.
+    private val bootClock: TimeSource.WithComparableMarks = BootTimeSource,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
-    private val _roundTripMillis = MutableStateFlow<Double?>(null)
-    val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
+    private val _roundTripTime = MutableStateFlow<Duration?>(null)
+    val roundTripTime: StateFlow<Duration?> = _roundTripTime.asStateFlow()
 
     private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
     val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
@@ -89,8 +94,22 @@ class SessionStateMachine(
      */
     @Volatile private var sent = DeafenState()
 
-    /** Written by the ping ticker, read by the frame handler on another coroutine. */
-    @Volatile private var lastPingSentNanos = 0L
+    /** The wire wants a number and Duration arithmetic wants a mark; this bridges them. */
+    private val pingOrigin = bootClock.markNow()
+
+    private val _lastServerReplyAt = MutableStateFlow<ComparableTimeMark?>(null)
+
+    /**
+     * When the server last said anything: seeded at ServerSync, then advanced by each ping reply.
+     * Null only before Synchronized. Seeded rather than left null so a server that completes the
+     * handshake and then answers no ping still ages — otherwise it would read healthy forever.
+     * The UI ages this against [DEGRADED_PING_AGE]; nothing here ends a session on it.
+     *
+     * An instant, not an age, because what changes an age is the passage of time — deriving it in
+     * the UI's own tick also means a doze shows up, which a count of unanswered pings cannot see:
+     * [delay] stops with the CPU, so no tick fires to do the counting.
+     */
+    val lastServerReplyAt: StateFlow<ComparableTimeMark?> = _lastServerReplyAt.asStateFlow()
 
     /**
      * No-op unless this is the first attempt on a fresh machine. The transport's reader is already
@@ -152,11 +171,9 @@ class SessionStateMachine(
                 ) {
                     deadlineJob?.cancel()
                     startPings()
-                    // The server drops over-cap packets silently, with no error to the client, so
-                    // without this the symptom is undiagnosable one-way audio. Adaptation is out
-                    // of scope. ACCOUNTED_BITRATE is derived from the encoder's own rate rather
-                    // than written down again here, so the two cannot drift apart — a drift would
-                    // mis-calibrate the one warning that explains the symptom.
+                    // Over-cap packets are dropped silently, so the symptom is otherwise
+                    // undiagnosable one-way audio. ACCOUNTED_BITRATE derives from the encoder's
+                    // own rate so the two cannot drift.
                     if (sync.maxBandwidth in 1 until ACCOUNTED_BITRATE) {
                         Log.w(TAG, "server max_bandwidth=${sync.maxBandwidth} is below our fixed " +
                             "$ACCOUNTED_BITRATE — the server will silently drop audio packets " +
@@ -165,11 +182,15 @@ class SessionStateMachine(
                 }
             }
             TcpMessageType.Ping -> {
-                // The server echoes our timestamp; anything else is a server-initiated ping.
-                // Ignore echoes before we have ever sent one, where 0 would match an unset field.
-                val echo = MumbleProtos.Ping.parseFrom(frame.payload)
-                if (lastPingSentNanos != 0L && echo.timestamp == lastPingSentNanos) {
-                    _roundTripMillis.value = (clockNanos() - lastPingSentNanos) / 1_000_000.0
+                // The reply carries the stamp we sent, so it dates itself however many pings are
+                // in flight. The guards replace matching: a server-initiated Ping has no timestamp,
+                // and an unset uint64 reads as 0.
+                val sent = MumbleProtos.Ping.parseFrom(frame.payload).timestamp
+                val now = bootClock.markNow()
+                val roundTrip = now - (pingOrigin + sent.nanoseconds)
+                if (sent > 0 && roundTrip >= Duration.ZERO && roundTrip < PING_REPLY_MAX_AGE) {
+                    _roundTripTime.value = roundTrip
+                    _lastServerReplyAt.value = now
                 }
             }
             TcpMessageType.Reject -> {
@@ -217,16 +238,13 @@ class SessionStateMachine(
             }
 
             TcpMessageType.PermissionDenied -> {
-                // The server never acks a delivered TextMessage and gives no id to tie a rejection to
-                // the message that caused it, so — like the reference client — surface it as its own
-                // notice rather than trying to roll back the optimistic echo. Structured, not worded:
-                // the UI turns the reason into (someday localized) text.
+                // No id ties a rejection to the message that caused it, so — like the reference
+                // client — surface it as its own notice rather than rolling back the echo.
                 val pd = MumbleProtos.PermissionDenied.parseFrom(frame.payload)
                 appendMessage(ChatMessage.Denied(denyReason(pd), clock()))
             }
 
-            // Raw UDP packet bytes, not a protobuf UDPTunnel message — the message of that name
-            // in Mumble.proto is dead code and is never serialized by either end.
+            // Raw UDP packet bytes: Mumble.proto's UDPTunnel message is dead code, never sent.
             TcpMessageType.UDPTunnel -> audioListener?.onTunneledAudio(frame.payload, clockNanos())
 
             // Deliberately ignored — see the design's non-goals.
@@ -261,21 +279,16 @@ class SessionStateMachine(
     /**
      * Deafen or undeafen. Returns whether it was enqueued; a no-op until Synchronized.
      *
-     * `self_mute` rides along because murmur forces mute on when deaf goes on
-     * (`Server::msgUserState`) and never takes it back off, so an undeafen that sends `self_deaf`
-     * alone leaves the user muted with no control in this app able to clear it.
-     * [DeafenState.deafen] owns the exact coupling, including which undeafens keep an existing mute.
+     * `self_mute` rides along because murmur forces mute on with deaf (`Server::msgUserState`) and
+     * never takes it back off; [DeafenState.deafen] owns the coupling.
      *
-     * A repeat — the same ask arriving again before the server has answered the first, which is what
-     * a double-tap produces, since the UI's `deafened` cannot have moved yet — **re-sends [sent]
-     * verbatim**. Advancing again would run [DeafenState.deafen] against state its own first run
-     * just moved; returning early would leave the button dead, because murmur silently rate-limits
-     * UserState addressed at the sender and never applies the dropped message, after which every
-     * later tap would match [sent] and be dropped here too.
+     * A repeat ask — a double-tap, before the server has answered — re-sends [sent] verbatim.
+     * Advancing again would run [DeafenState.deafen] against state it just moved; returning early
+     * would deaden the button, since murmur silently rate-limits UserState aimed at the sender and
+     * every later tap would then match [sent] too.
      *
-     * No optimistic echo, unlike [sendText]: the server broadcasts UserState back to the sender, so
-     * the reducer applies it and the UI shows what the server believes. Safe to call off the reader
-     * thread — channel.send only enqueues.
+     * No optimistic echo, unlike [sendText]: the server broadcasts UserState back, so the reducer
+     * shows what it believes. Safe off the reader thread — channel.send only enqueues.
      */
     fun setSelfDeaf(on: Boolean): Boolean {
         val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false
@@ -305,30 +318,50 @@ class SessionStateMachine(
         else -> DenyReason.Other(pd.reason.ifBlank { null })
     }
 
+    /** Tags a ping log line with the session it belongs to — otherwise unattributable in logcat. */
+    private val sessionId: Int?
+        get() = (_state.value as? ConnectionState.Synchronized)?.sessionId
+
+    /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
     /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
     private fun startPings() {
         pingJob = scope.launch {
+            var lastTick = bootClock.markNow()
+            var degraded = false
+            _lastServerReplyAt.value = lastTick
             while (true) {
                 delay(PING_INTERVAL_MS)
-                lastPingSentNanos = clockNanos()
-                // Not fatal, unlike the handshake sends. A false here means the queue is full or
-                // the transport is already closed — backpressure, or a death the reader is already
-                // reporting. Neither is evidence this session is dead. Liveness belongs to the echo
-                // that does not come back, which nothing watches yet.
+                val now = bootClock.markNow()
+                val sinceLast = now - lastTick
+                if (sinceLast > PING_GAP_WARN) {
+                    Log.w(TAG, "no ping sent for ${sinceLast.inWholeMilliseconds}ms session=$sessionId")
+                }
+                lastTick = now
+                // On the edge, not the level: the log is the trail a past outage leaves behind.
+                val pingAge = _lastServerReplyAt.value?.let { now - it } ?: Duration.ZERO
+                if (pingAge >= DEGRADED_PING_AGE && !degraded) {
+                    degraded = true
+                    Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId")
+                } else if (pingAge < DEGRADED_PING_AGE && degraded) {
+                    degraded = false
+                    Log.i(TAG, "ping replies resumed session=$sessionId")
+                }
+                // Not fatal, unlike the handshake sends: backpressure, or a death the reader
+                // already reports. Either way the ping goes unanswered and ages.
                 channel.send(
                     TcpMessageType.Ping,
-                    MumbleProtos.Ping.newBuilder().setTimestamp(lastPingSentNanos).build(),
+                    MumbleProtos.Ping.newBuilder()
+                        .setTimestamp((now - pingOrigin).inWholeNanoseconds)
+                        .build(),
                 )
             }
         }
     }
 
     /**
-     * The transport reports the channel has closed. This ends the session whether it interrupts the
-     * handshake or drops an established one — [ConnectionState.Synchronized] is not terminal against a
-     * real disconnect. An existing [ConnectionState.Failed] is preserved so a specific reason (a
-     * during-handshake reject, or the deadline's timeout) wins over the generic close that follows it.
-     * The channel is already closed here, so unlike [fail] this does not close it again.
+     * Ends the session whether it interrupts the handshake or drops an established one. An existing
+     * [ConnectionState.Failed] is preserved so a specific reason beats the generic close that
+     * follows it. The channel is already closed, so unlike [fail] this does not close it again.
      */
     fun onClosed(cause: Throwable?) {
         deadlineJob?.cancel()
@@ -340,9 +373,8 @@ class SessionStateMachine(
     }
 
     /**
-     * First failure wins. The deadline coroutine runs outside the transport's listener lock and
-     * mutates the same state, so a plain check-then-write loses the race it is meant to settle —
-     * whichever failure actually ended the session must be the one reported.
+     * First failure wins. The deadline coroutine mutates the same state outside the transport's
+     * listener lock, so a plain check-then-write loses the race it exists to settle.
      */
     private fun fail(reason: FailReason, detail: String?, cause: Throwable? = null) {
         val failed = ConnectionState.Failed(reason, detail, cause = cause)
@@ -364,5 +396,13 @@ class SessionStateMachine(
         const val HANDSHAKE_DEADLINE_MS = 15_000L
         const val PING_INTERVAL_MS = 5_000L
         const val MAX_MESSAGES = 1000
+        /** Three intervals: two replies must go missing, and still inside Murmur's 30 s reap. */
+        val DEGRADED_PING_AGE = (PING_INTERVAL_MS * 3).milliseconds
+
+        /** Real-time gap between sends worth logging: we may already have been reaped, doze or not. */
+        val PING_GAP_WARN = (PING_INTERVAL_MS * 3).milliseconds
+
+        /** Round trip past which a reply is not plausibly ours — stands in for matching. */
+        val PING_REPLY_MAX_AGE = (PING_INTERVAL_MS * 6).milliseconds
     }
 }

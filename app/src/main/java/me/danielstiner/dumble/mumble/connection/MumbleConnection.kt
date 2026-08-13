@@ -12,6 +12,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.time.Duration
+import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -80,8 +82,10 @@ class MumbleConnection internal constructor(
     override val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
     private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
     override val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
-    private val _roundTripMillis = MutableStateFlow<Double?>(null)
-    override val roundTripMillis: StateFlow<Double?> = _roundTripMillis.asStateFlow()
+    private val _roundTripTime = MutableStateFlow<Duration?>(null)
+    override val roundTripTime: StateFlow<Duration?> = _roundTripTime.asStateFlow()
+    private val _lastServerReplyAt = MutableStateFlow<ComparableTimeMark?>(null)
+    override val lastServerReplyAt: StateFlow<ComparableTimeMark?> = _lastServerReplyAt.asStateFlow()
     private val _channelTree = MutableStateFlow(ChannelTree())
     override val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -218,7 +222,8 @@ class MumbleConnection internal constructor(
     // Every status write goes through the lock so a bump + terminal write is atomic against stale writers.
     private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == attempt) _status.value = s }
     private fun publishVersion(gen: Int, v: ServerVersion?) = synchronized(lock) { if (gen == attempt) _serverVersion.value = v }
-    private fun publishRtt(gen: Int, r: Double?) = synchronized(lock) { if (gen == attempt) _roundTripMillis.value = r }
+    private fun publishRtt(gen: Int, r: Duration?) = synchronized(lock) { if (gen == attempt) _roundTripTime.value = r }
+    private fun publishPingReplyAt(gen: Int, at: ComparableTimeMark?) = synchronized(lock) { if (gen == attempt) _lastServerReplyAt.value = at }
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
@@ -418,7 +423,7 @@ class MumbleConnection internal constructor(
         val prior = current
         current = null; attempt += 1
         _status.value = status
-        _serverVersion.value = null; _roundTripMillis.value = null
+        _serverVersion.value = null; _roundTripTime.value = null; _lastServerReplyAt.value = null
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
@@ -498,7 +503,8 @@ class MumbleConnection internal constructor(
                 }
             }
             childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
-            childScope.launch { sm.roundTripMillis.collect { publishRtt(gen, it) } }
+            childScope.launch { sm.roundTripTime.collect { publishRtt(gen, it) } }
+            childScope.launch { sm.lastServerReplyAt.collect { publishPingReplyAt(gen, it) } }
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
