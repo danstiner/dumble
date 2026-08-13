@@ -1,5 +1,8 @@
 package me.danielstiner.dumble.ui.connect
 
+import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import kotlin.time.Duration
+
 /**
  * The top bar's second line. Session id and server version deliberately do not appear: they are
  * fixed for the whole session and diagnostic rather than call state, and `MumbleConn` already logs
@@ -8,10 +11,14 @@ package me.danielstiner.dumble.ui.connect
  * Pure so the hour rollover and the missing-ping case are pinned by tests rather than by looking at
  * a running app an hour into a call.
  */
-internal fun statusLine(elapsedSeconds: Long?, rttMs: Double?): String = buildString {
+internal fun statusLine(elapsedSeconds: Long?, roundTripTime: Duration?, pingAge: Duration): String = buildString {
     append("Connected")
     if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
-    if (rttMs != null) append(" · ").append("%.0f ms".format(rttMs))
+    // Either the latency or the outage, never both: a round trip measured before the replies
+    // stopped is not evidence about a link that is currently silent.
+    if (pingAge >= SessionStateMachine.DEGRADED_PING_AGE) append(" · ").append("no response")
+    // Rounded, not truncated: a loopback round trip under a millisecond should read 1 ms, not 0.
+    else if (roundTripTime != null) append(" · ").append("%.0f ms".format(roundTripTime.inWholeMicroseconds / 1000.0))
 }
 
 /** `M:SS`, widening to `H:MM:SS` once a call passes an hour. */

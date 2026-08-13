@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.ui.connect
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration
 import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -13,7 +15,8 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 class FakeConnection : Connection {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     override val serverVersion = MutableStateFlow<ServerVersion?>(null)
-    override val roundTripMillis = MutableStateFlow<Double?>(null)
+    override val roundTripTime = MutableStateFlow<Duration?>(null)
+    override val lastServerReplyAt = MutableStateFlow<ComparableTimeMark?>(null)
     override val channelTree = MutableStateFlow(ChannelTree())
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())

@@ -26,6 +26,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TestTimeSource
 import kotlin.time.Duration.Companion.seconds
 import java.time.Instant
@@ -609,5 +610,25 @@ class ConnectViewModelTest {
         vm.onSelectRoute("id-bluetooth")
 
         assertEquals(listOf("id-bluetooth"), conn.routeRequests)
+    }
+
+    @Test fun lastServerReplyAtFromConnectionAppearsInUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        val mark = clock.markNow()
+        conn.lastServerReplyAt.value = mark
+        advanceUntilIdle()
+        assertEquals(mark, vm.uiState.value.lastServerReplyAt)
+    }
+
+    // The round trip must still arrive once the two share a combine — the restructure in Step 4 is
+    // exactly where that would silently break.
+    @Test fun theRoundTripStillReachesUiStateAfterTheLinkCombine() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.roundTripTime.value = 12.5.milliseconds
+        advanceUntilIdle()
+        // the boxed and primitive overloads there.
+        assertEquals(12.5.milliseconds, vm.uiState.value.roundTripTime)
     }
 }

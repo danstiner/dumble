@@ -1,6 +1,5 @@
 package me.danielstiner.dumble.ui.connect
 
-import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +43,8 @@ fun ConnectedScreen(
     server: String,
     sessionId: Int,
     connectedSince: ComparableTimeMark?,
-    rttMs: Double?,
+    roundTripTime: Duration?,
+    lastServerReplyAt: ComparableTimeMark?,
     channelTree: ChannelTree,
     speaking: Set<Int>,
     unread: Int,
@@ -74,13 +75,21 @@ fun ConnectedScreen(
 
     // Ticks once a second while connected. Keyed on the anchor so a reconnect restarts it, and the
     // loop ends with the composition rather than running against a stale anchor.
+    //
+    // Both values are an instant plus the passage of time, so one loop produces both rather than
+    // the ping silence being pushed from the session at the ping interval: that would publish a
+    // duration already stale when written, and quantise the readout to five seconds when the user
+    // is looking at a one-second clock.
     var elapsedSeconds by remember(connectedSince) { mutableStateOf<Long?>(null) }
-    LaunchedEffect(connectedSince) {
+    var pingAge by remember(connectedSince) { mutableStateOf(Duration.ZERO) }
+    LaunchedEffect(connectedSince, lastServerReplyAt) {
         if (connectedSince == null) return@LaunchedEffect
         while (true) {
-            // elapsedNow() reads the clock the mark came from, so this cannot drift onto another —
+            // elapsedNow() reads the clock each mark came from, so neither can drift onto another —
             // see BootTimeSource for why it has to be the one that counts sleep.
             elapsedSeconds = connectedSince.elapsedNow().inWholeSeconds
+            // null means no ping has gone out yet, which is silence nobody can be blamed for.
+            pingAge = lastServerReplyAt?.elapsedNow() ?: Duration.ZERO
             delay(1000)
         }
     }
@@ -121,7 +130,7 @@ fun ConnectedScreen(
                 },
                 subtitle = {
                     Text(
-                        statusLine(elapsedSeconds, rttMs),
+                        statusLine(elapsedSeconds, roundTripTime, pingAge),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 },

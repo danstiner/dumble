@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.mumble.connection
 
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.time.Duration
+import kotlin.time.ComparableTimeMark
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -11,7 +13,16 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 interface Connection {
     val status: StateFlow<ConnectionStatus>
     val serverVersion: StateFlow<ServerVersion?>
-    val roundTripMillis: StateFlow<Double?>
+    val roundTripTime: StateFlow<Duration?>
+
+    /**
+     * When the server last said anything — seeded at ServerSync, then advanced by each ping reply;
+     * null while disconnected. The UI ages it against `SessionStateMachine.DEGRADED_PING_AGE`.
+     *
+     * The instant rather than the age, because the age is stale the moment it is published and
+     * what changes it is the passage of time; the UI derives it against its own clock.
+     */
+    val lastServerReplyAt: StateFlow<ComparableTimeMark?>
     val channelTree: StateFlow<ChannelTree>
     val messages: StateFlow<List<ChatMessage>>
     val speakingSessions: StateFlow<Set<Int>>
