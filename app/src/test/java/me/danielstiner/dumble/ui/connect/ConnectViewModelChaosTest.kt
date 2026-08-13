@@ -13,6 +13,7 @@ import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.time.TestTimeSource
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -65,7 +66,7 @@ class ConnectViewModelChaosTest {
         try {
             val heldInitially = Random(seed).nextBoolean()
             val conn = FakeConnection()
-            val vm = ConnectViewModel(conn, FakeConfigStore(null), FakeClock()) { heldInitially }
+            val vm = ConnectViewModel(conn, FakeConfigStore(null), TestTimeSource()) { heldInitially }
 
             // A connectable draft so onConnect() picks below actually reach conn.connect() instead
             // of dead-ending on port/host validation, which is not this test's concern.

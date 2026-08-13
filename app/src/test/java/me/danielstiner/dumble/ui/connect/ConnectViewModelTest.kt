@@ -26,6 +26,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlin.time.TestTimeSource
+import kotlin.time.Duration.Companion.seconds
 import java.time.Instant
 
 class ConnectViewModelTest {
@@ -34,7 +36,7 @@ class ConnectViewModelTest {
     // JUnit builds a fresh instance per test, so this starts at 0 for each. Controllable rather
     // than real: the reconnect assertions below compare two anchors, which a real clock can hand
     // back identical when both stamps land in the same millisecond.
-    private val clock = FakeClock()
+    private val clock = TestTimeSource()
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
@@ -527,30 +529,34 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         runCurrent()
-        val first = vm.uiState.value.connectedSinceMillis
+        val first = vm.uiState.value.connectedSince
         assertNotNull(first)
 
         // The clock has to move for a re-stamp to be distinguishable from keeping the old anchor.
-        clock.advance(5)
+        clock += 5.seconds
         conn.emitConnected(sessionId = 8)
         runCurrent()
 
-        assertNotEquals(first, vm.uiState.value.connectedSinceMillis)
+        assertNotEquals(first, vm.uiState.value.connectedSince)
     }
 
     /**
-     * Pins the anchor to the injected monotonic clock. Wall clock is what this must never be:
-     * an NTP correction or a user clock change mid-call moves `currentTimeMillis` — backwards,
+     * Pins the anchor to the injected time source, and pins that the elapsed duration is read from
+     * the mark rather than recomputed against some other clock. Wall clock is what this must never
+     * be: an NTP correction or a user clock change mid-call moves `currentTimeMillis` — backwards,
      * too — and the displayed duration would follow it.
      */
-    @Test fun theCallAnchorIsReadFromTheMonotonicClock() = runTest(dispatcher) {
+    @Test fun theCallAnchorIsMarkedOnTheInjectedTimeSource() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
-        clock.advance(9_000)
+        clock += 9.seconds
         conn.emitConnected(sessionId = 7)
         runCurrent()
+        val anchor = requireNotNull(vm.uiState.value.connectedSince)
 
-        assertEquals(9_000L, vm.uiState.value.connectedSinceMillis)
+        clock += 42.seconds
+
+        assertEquals(42.seconds, anchor.elapsedNow())
     }
 
     @Test fun disconnectClearsTheCallTimerAnchor() = runTest(dispatcher) {
@@ -558,12 +564,12 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         runCurrent()
-        assertNotNull(vm.uiState.value.connectedSinceMillis)
+        assertNotNull(vm.uiState.value.connectedSince)
 
         conn.status.value = ConnectionStatus.Error(ErrorKind.DISCONNECTED, null)
         runCurrent()
 
-        assertNull(vm.uiState.value.connectedSinceMillis)
+        assertNull(vm.uiState.value.connectedSince)
     }
 
     /** Proves the merge is a union: your own session must not crowd out or replace anyone else's. */

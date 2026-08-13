@@ -69,7 +69,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                 ) else ConnectedScreen(
                     server = "${state.draft.host}:${state.draft.port}",
                     sessionId = s.sessionId,
-                    connectedSinceMillis = state.connectedSinceMillis,
+                    connectedSince = state.connectedSince,
                     rttMs = state.rttMs,
                     channelTree = state.channelTree,
                     speaking = state.speakingSessions,

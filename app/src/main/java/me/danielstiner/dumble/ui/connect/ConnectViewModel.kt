@@ -12,6 +12,8 @@ import io.ktor.util.escapeHTML
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.time.TimeSource
+import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -71,9 +73,10 @@ data class ConnectUiState(
     // the task is swiped away, so resuming from the notification builds a fresh ViewModel over a
     // still-live session, and a "not asked yet" value there would disable Talk for the rest of it.
     val microphoneGranted: Boolean = false,
-    // [MonotonicClock] reading when the session reached Connected, or null. Read the elapsed
-    // duration against the same clock, never against wall time — the two share no origin.
-    val connectedSinceMillis: Long? = null,
+    // Marked on [BootTimeSource] when the session reached Connected, or null. A mark rather than a
+    // reading so the elapsed duration can only be taken against the clock that produced it —
+    // elapsedNow() — instead of against wall time, with which it shares no origin.
+    val connectedSince: ComparableTimeMark? = null,
 )
 
 private data class ConnSnapshot(
@@ -88,7 +91,7 @@ private data class ConnSnapshot(
 class ConnectViewModel internal constructor(
     private val connection: Connection,
     private val configStore: ServerConfigStore,
-    private val clock: MonotonicClock,
+    private val timeSource: TimeSource.WithComparableMarks,
     // Seam: the real check needs a Context and the JVM tests have none.
     private val microphoneHeld: () -> Boolean = { false },
 ) : ViewModel() {
@@ -96,8 +99,8 @@ class ConnectViewModel internal constructor(
         @ApplicationContext context: Context,
         connection: Connection,
         configStore: ServerConfigStore,
-        clock: MonotonicClock,
-    ) : this(connection, configStore, clock, {
+        timeSource: TimeSource.WithComparableMarks,
+    ) : this(connection, configStore, timeSource, {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
     })
@@ -144,7 +147,7 @@ class ConnectViewModel internal constructor(
     // SessionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = connection.messages.value.lastOrNull()
 
-    /** The session [ConnectUiState.connectedSinceMillis] was stamped for; null while disconnected. */
+    /** The session [ConnectUiState.connectedSince] was marked for; null while disconnected. */
     private var anchoredSession: Int? = null
 
     init {
@@ -177,7 +180,7 @@ class ConnectViewModel internal constructor(
                 // row speaking for the whole of the next call.
                 transmitting.value = false
                 form.value = form.value.copy(
-                    connectedSinceMillis = session?.let { clock.millis() },
+                    connectedSince = session?.let { timeSource.markNow() },
                 )
             }
         }
