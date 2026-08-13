@@ -50,7 +50,3 @@ class FakeConnection : Connection {
 }
 
 /** Advances only when a test says so, so anchors taken at different moments are always distinct. */
-class FakeClock(private var now: Long = 0L) : MonotonicClock {
-    override fun millis() = now
-    fun advance(millis: Long) { now += millis }
-}

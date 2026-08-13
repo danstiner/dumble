@@ -22,6 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import kotlin.time.ComparableTimeMark
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,7 +42,7 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 fun ConnectedScreen(
     server: String,
     sessionId: Int,
-    connectedSinceMillis: Long?,
+    connectedSince: ComparableTimeMark?,
     rttMs: Double?,
     channelTree: ChannelTree,
     speaking: Set<Int>,
@@ -73,12 +74,13 @@ fun ConnectedScreen(
 
     // Ticks once a second while connected. Keyed on the anchor so a reconnect restarts it, and the
     // loop ends with the composition rather than running against a stale anchor.
-    var elapsedSeconds by remember(connectedSinceMillis) { mutableStateOf<Long?>(null) }
-    LaunchedEffect(connectedSinceMillis) {
-        if (connectedSinceMillis == null) return@LaunchedEffect
+    var elapsedSeconds by remember(connectedSince) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(connectedSince) {
+        if (connectedSince == null) return@LaunchedEffect
         while (true) {
-            // Same clock the anchor was taken from — see MonotonicClock.
-            elapsedSeconds = (SystemClock.elapsedRealtime() - connectedSinceMillis) / 1000
+            // elapsedNow() reads the clock the mark came from, so this cannot drift onto another —
+            // see BootTimeSource for why it has to be the one that counts sleep.
+            elapsedSeconds = connectedSince.elapsedNow().inWholeSeconds
             delay(1000)
         }
     }

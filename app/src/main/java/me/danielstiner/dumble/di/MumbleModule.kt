@@ -17,7 +17,8 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.voice.LibOpusCodec
 import me.danielstiner.dumble.mumble.voice.OpusCodec
-import me.danielstiner.dumble.ui.connect.MonotonicClock
+import me.danielstiner.dumble.time.BootTimeSource
+import kotlin.time.TimeSource
 import javax.inject.Singleton
 
 @Module
@@ -41,7 +42,7 @@ object MumbleModule {
     fun provideOpusCodec(): OpusCodec = LibOpusCodec()
 
     @Provides
-    fun provideMonotonicClock(): MonotonicClock = MonotonicClock { SystemClock.elapsedRealtime() }
+    fun provideTimeSource(): TimeSource.WithComparableMarks = BootTimeSource
 
     const val SERVER_CONFIG_NAME = "server_config"
 
