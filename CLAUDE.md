@@ -13,6 +13,15 @@ Agent cycles are cheap; committed code is debt. Spend extra passes — rewrites,
 - Terse output: one-line assumptions and tradeoffs; ask only when genuinely ambiguous.
 - If a rule here is obviously wrong for the situation, break it.
 
+## Non-goals
+
+Out of scope by decision, not by omission. Treat a request that assumes one of these as a
+misunderstanding worth raising before writing code.
+
+- Positional audio. Mumble ships a speaker's coordinates beside the audio (`positional_data`), and
+  the desktop client renders 3D voice from them; dumble does not. Voice is mono end to end, which
+  is why nothing on the playout path carries a channel count.
+
 ## Reasoning Process
 
 1. Question requirements: If a request seems wrong, unnecessary, or contradicts evidence, push back before writing code.
