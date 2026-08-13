@@ -23,6 +23,7 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
+import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import org.junit.Assert.assertEquals
@@ -233,16 +234,22 @@ class MumbleConnectionTest {
 
     @Test fun speakingSessionsPopulateThenClearOnDisconnect() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val codec = FakeOpusCodec()
+        val playout = FakePlayoutEngine()
+        // Unlike VoiceReceiverTest, nothing here drives the tick cadence by hand: a blocking
+        // take() would wedge the playback thread on the very first fillQuantum() and every
+        // disconnect() below would then wait out its 1 s join.
+        playout.blockWhenEmpty = false
         val out = FakeAudioOut()
-        val conn = MumbleConnection(InMemoryPinStore(), codec, { out }) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { out }, newPlayout = { playout }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
-        // One 60 ms packet satisfies VoiceReceiver's 60 ms prebuffer (PREBUFFER_SAMPLES) in a
-        // single frame, so the playout starts producing on the very next tick.
+        // Scripted before the packet arrives: onTunneledAudio's admission notifies idleLock, which
+        // is what wakes a parked playback thread to pick this tick back up. Scripting it after
+        // would race that wakeup and could leave it sitting unconsumed.
+        playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
@@ -265,9 +272,9 @@ class MumbleConnectionTest {
         // the receiver was released. stop() is handed to a coroutine, hence the poll.
         awaitTrue("teardown must close the AudioOut") { out.closed }
         // Awaited, not sampled: out.close() runs in loop()'s finally, before the thread dies, while
-        // stop() closes the decoders only after join() returns. Asserting straight off out.closed
+        // stop() destroys the engine only after join() returns. Asserting straight off out.closed
         // reads that gap and fails whenever stop()'s coroutine is slow to be scheduled.
-        awaitTrue("teardown must close every decoder") { codec.decodersClosed == codec.decodersCreated }
+        awaitTrue("teardown must destroy the playout engine") { playout.destroyed }
     }
 
     /**
@@ -277,15 +284,17 @@ class MumbleConnectionTest {
      */
     @Test fun aFailedSessionReleasesTheReceiver() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val codec = FakeOpusCodec()
+        val playout = FakePlayoutEngine()
+        playout.blockWhenEmpty = false
         val out = FakeAudioOut()
-        val conn = MumbleConnection(InMemoryPinStore(), codec, { out }) {
+        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { out }, newPlayout = { playout }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
-        // Reach the receiver first, so there is a live decoder and an open output to release.
+        // Reach the receiver first, so there is a live playout and an open output to release.
+        playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
@@ -302,8 +311,8 @@ class MumbleConnectionTest {
 
         awaitTrue("a failed session must close the AudioOut") { out.closed }
         // Awaited for the same reason as in the disconnect test: the output closes on the playback
-        // thread's way out, the decoders only once stop() has joined it.
-        awaitTrue("a failed session must close every decoder") { codec.decodersClosed == codec.decodersCreated }
+        // thread's way out, the engine only once stop() has joined it.
+        awaitTrue("a failed session must destroy the playout engine") { playout.destroyed }
         // The error must survive the teardown — it is what the user is looking at.
         assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
     }
@@ -330,6 +339,7 @@ class MumbleConnectionTest {
                 lateinit var fake: FakeControlTransport
                 val conn = MumbleConnection(
                     InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut().also { outs += it } },
+                    newPlayout = { FakePlayoutEngine().also { it.blockWhenEmpty = false } },
                 ) {
                     // Rejected from inside connect(), so the session is already Failed by the time
                     // the state collector is launched — well before the receiver would start.
@@ -373,7 +383,10 @@ class MumbleConnectionTest {
         }
         val outs = CopyOnWriteArrayList<FakeAudioOut>()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = MumbleConnection(pins, FakeOpusCodec(), { FakeAudioOut().also { outs += it } }) {
+        val conn = MumbleConnection(
+            pins, FakeOpusCodec(), { FakeAudioOut().also { outs += it } },
+            newPlayout = { FakePlayoutEngine().also { it.blockWhenEmpty = false } },
+        ) {
             FakeControlTransport { _, _ -> }.also { transports += it }
         }
 

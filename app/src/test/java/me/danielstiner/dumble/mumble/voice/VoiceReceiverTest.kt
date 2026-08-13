@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec.Companion.packet
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -24,45 +25,50 @@ class VoiceReceiverTest {
         override fun close() { closed = true }
     }
 
-    /** For tests that never call start(), so an unexpected playback thread fails loudly. */
+    /** outFactory must never run: for tests where the playback loop never gets built at all —
+     *  either start() is never reached, or newEngine() itself refuses — so an unexpected call
+     *  fails loudly rather than silently opening an output nothing should have opened. */
     private val unusedOut: () -> AudioOut = { error("playback thread must not start") }
 
-    private fun audioPayload(session: Int, tenMsFrames: Int): ByteArray {
+    private fun audioPayload(session: Int, tenMsFrames: Int, terminator: Boolean = false): ByteArray {
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(session)
             .setOpusData(ByteString.copyFrom(packet(tenMsFrames)))
+            .setIsTerminator(terminator)
             .build()
         return byteArrayOf(0) + audio.toByteArray()
     }
 
+    /** Polls [cond] until it is true or [timeoutMillis] elapses, then asserts it — the loop
+     *  parking/pacing this class drives means most assertions are about eventual state, not an
+     *  instant one. */
+    private fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (!cond() && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertTrue(message, cond())
+    }
+
     @Test
-    fun routesToPerSenderDecoders() {
-        val codec = FakeOpusCodec()
-        val latch = CountDownLatch(4)
-        val out = LatchingOut(latch)
-        val rx = VoiceReceiver(codec) { out }
-
-        // Offered before start(), so no playback thread exists to tick while this runs. LatchingOut
-        // never blocks, so once started the loop is unpaced: a stall between these offers was
-        // enough for session 1 to drain, reach RETIRE_IDLE_TICKS, and be removed — after which the
-        // third packet allocates a third decoder and both assertions below fail.
-        // 60 ms each meets the prebuffer immediately.
-        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-        rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6))
-        // A second packet for a session already in the map. Without it the assertion below holds
-        // for a per-packet decoder just as well as a per-sender one, so it would not test what it
-        // names.
-        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-        assertEquals("one decoder per speaker, not per packet", 2, codec.decodersCreated)
-
+    fun routesEachPacketToTheEngine() {
+        val fake = FakePlayoutEngine()
+        // Nothing here drives the tick cadence by hand: every offer wakes the loop, and a
+        // blocking take() on an exhausted script would wedge it there, so stop() would wait out
+        // its full 1 s join and leave a daemon thread parked for the rest of the test JVM.
+        fake.blockWhenEmpty = false
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
         rx.start()
         try {
-            assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
+            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+            rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6, terminator = true))
+
+            assertEquals("every packet must reach the engine", 2, fake.offered.size)
+            assertEquals(1, fake.offered[0].first)
+            assertFalse("only the second packet set the terminator flag", fake.offered[0].third)
+            assertEquals(2, fake.offered[1].first)
+            assertTrue("the terminator flag must reach the engine", fake.offered[1].third)
         } finally {
             rx.stop()
         }
-        assertTrue("output not closed by stop()", out.closed)
-        assertEquals("stop() must close every decoder it created", 2, codec.decodersClosed)
     }
 
     @Test
@@ -77,10 +83,11 @@ class VoiceReceiverTest {
             override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
             override fun close() = closed.countDown()
         }
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(3)))
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 3, tenMsFrames = 6))
             assertTrue("loop did not exit after a failed write", closed.await(5, TimeUnit.SECONDS))
             assertEquals("a failed write must stop the loop, not be retried", 1, writes.get())
             // The write that failed happened on a producing tick, so the set had just been
@@ -94,10 +101,17 @@ class VoiceReceiverTest {
 
     @Test
     fun audioArrivingAfterStopAllocatesNothing() {
-        val codec = FakeOpusCodec()
+        val fake = FakePlayoutEngine()
+        // Racily rather than always: the loop can drain the whole script and park before the
+        // packet below is posted, and that packet's notifyAll then wakes it into a tick the script
+        // cannot serve. Blocking there costs stop() its full 1 s join, and the destroyed assertion
+        // fails outright.
+        fake.blockWhenEmpty = false
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
         val latch = CountDownLatch(1)
         val out = LatchingOut(latch)
-        val rx = VoiceReceiver(codec) { out }
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
             rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
@@ -105,16 +119,16 @@ class VoiceReceiverTest {
         } finally {
             rx.stop()
         }
-        val afterStop = codec.decodersCreated
+        val offeredBeforeStop = fake.offered.size
 
-        // The reader is a separate thread from stop(), so a packet can still be in flight when the
-        // sweep finishes. offer() answering false makes the retry take a *fresh* playout, so an
-        // ungated late packet does not merely get dropped — it allocates a native decoder into a
-        // map nothing will ever sweep again, one per session, for the life of the process.
+        // The reader is a separate thread from stop(), so a packet can still be in flight when
+        // stop() latches. Retirement is native now, so the only thing left to prove here is that
+        // the reader itself is gated — a late packet must never reach an engine that is about to
+        // be destroyed.
         rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6))
 
-        assertEquals("a packet arriving after stop() must not allocate", afterStop, codec.decodersCreated)
-        assertEquals("every decoder must still be closed", codec.decodersCreated, codec.decodersClosed)
+        assertEquals("a packet arriving after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
+        assertTrue("the engine must still be destroyed", fake.destroyed)
     }
 
     /**
@@ -130,9 +144,11 @@ class VoiceReceiverTest {
     fun startAfterStopIsRefused() {
         val built = AtomicInteger()
         val latch = CountDownLatch(1)
-        val rx = VoiceReceiver(FakeOpusCodec()) { built.incrementAndGet(); LatchingOut(latch) }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { built.incrementAndGet(); LatchingOut(latch) }
         rx.start()
-        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
         assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
         rx.stop()
         assertEquals(1, built.get())
@@ -149,10 +165,8 @@ class VoiceReceiverTest {
         lateinit var rx: VoiceReceiver
         val out = object : AudioOut {
             override fun write(pcm: ShortArray, n: Int): Boolean {
-                // Sampled here rather than polled from the test thread. This fake never blocks, so
-                // unlike a real AudioTrack it imposes no pacing: the whole 60 ms spurt drains in
-                // microseconds and "speaking" is over before a poller can see it. loop() publishes
-                // the set before it writes, so any write is a valid observation point.
+                // Sampled here rather than polled from the test thread. loop() publishes the set
+                // before it writes, so any write is a valid observation point.
                 speakingAtWrite.compareAndSet(null, rx.speakingSessions.value)
                 latch.countDown()
                 return true
@@ -160,73 +174,103 @@ class VoiceReceiverTest {
             override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
             override fun close() = Unit
         }
-        rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(9)))
+        fake.scriptSilence(1)
+        rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 9, tenMsFrames = 6))
             assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
             assertEquals(setOf(9), speakingAtWrite.get())
             // Drained is a terminal state, so waiting for it cannot lose a race the way waiting
             // for "speaking" can.
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.speakingSessions.value.isNotEmpty() && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
-            assertEquals("speaking must clear once the playout drains", emptySet<Int>(), rx.speakingSessions.value)
+            awaitTrue("speaking must clear once the playout drains") { rx.speakingSessions.value.isEmpty() }
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /**
+     * The cap is enforced natively now; the only thing left on this side is that a capped
+     * response does not stop the reader from routing packets, and a session already admitted
+     * keeps working once native clears room for it.
+     */
+    @Test
+    fun logsTheSpeakerCapOnce() {
+        val fake = FakePlayoutEngine()
+        fake.offerResult = NativePlayout.OFFER_SPEAKER_CAP
+        fake.blockWhenEmpty = false
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
+        rx.start()
+        try {
+            repeat(8) { rx.onTunneledAudio(audioPayload(session = it, tenMsFrames = 6)) }
+            assertEquals("every packet must still reach the engine even while capped", 8, fake.offered.size)
+
+            fake.offerResult = NativePlayout.OFFER_ACCEPTED
+            rx.onTunneledAudio(audioPayload(session = 0, tenMsFrames = 6))
+            assertEquals("the reader must keep working after the cap trips", 9, fake.offered.size)
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /**
+     * Unlike the cap and oversize-payload codes above, OFFER_ENGINE_UNUSABLE is session-terminal —
+     * a wrong branch here silently kills receive for the rest of the session, with a green suite
+     * everywhere else, since nothing else exercises this code.
+     */
+    @Test
+    fun engineUnusableDisablesReceiveForTheSession() {
+        val fake = FakePlayoutEngine()
+        fake.offerResult = NativePlayout.OFFER_ENGINE_UNUSABLE
+        fake.blockWhenEmpty = false
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
+        rx.start()
+        try {
+            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+            assertEquals("engine-unusable must latch and stop further offers", 1, fake.offered.size)
         } finally {
             rx.stop()
         }
     }
 
     @Test
-    fun capsConcurrentSpeakers() {
-        val codec = FakeOpusCodec()
-        // Deliberately not started: with no playback thread nothing drains and nothing retires,
-        // so the map only grows — which is the case the cap exists for.
-        val rx = VoiceReceiver(codec, unusedOut)
-        repeat(MAX_SPEAKERS + 8) { rx.onTunneledAudio(audioPayload(session = it, tenMsFrames = 6)) }
-        // Decoders are the thing the cap exists to bound: a playout allocates one eagerly in its
-        // constructor. packetSamples only counts offers, which happen after that construction, so
-        // it alone would not catch an implementation that allocated past the cap and discarded.
-        assertEquals("sessions past the cap must not allocate", MAX_SPEAKERS, codec.decodersCreated)
-        assertEquals(MAX_SPEAKERS, codec.packetSamplesCalls)
-
-        // A speaker already in the map keeps working — the cap turns away new sessions, it does
-        // not mute the channel once it trips.
-        rx.onTunneledAudio(audioPayload(session = 0, tenMsFrames = 6))
-        assertEquals(MAX_SPEAKERS, codec.decodersCreated)
-        assertEquals(MAX_SPEAKERS + 1, codec.packetSamplesCalls)
-    }
-
-    @Test
     fun ignoresUnknownTypeByte() {
-        val codec = FakeOpusCodec()
-        // Not started: admission is synchronous on this thread, so decodersCreated is a
-        // deterministic assertion where sampling speakingSessions would be vacuous.
-        val rx = VoiceReceiver(codec, unusedOut)
+        val fake = FakePlayoutEngine()
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
+        rx.start()
+        try {
+            // The body must be a *valid* Audio message, differing from an accepted packet only in
+            // the type byte. With a garbage body the malformed-protobuf path would reject it
+            // anyway, and the test would pass just as well with the type check deleted.
+            val wrongType = audioPayload(session = 1, tenMsFrames = 6).also { it[0] = 99 }
+            rx.onTunneledAudio(wrongType)
+            rx.onTunneledAudio(ByteArray(0))
 
-        // The body must be a *valid* Audio message, differing from an accepted packet only in the
-        // type byte. With a garbage body the malformed-protobuf path would reject it anyway, and
-        // the test would pass just as well with the type check deleted.
-        val wrongType = audioPayload(session = 1, tenMsFrames = 6).also { it[0] = 99 }
-        rx.onTunneledAudio(wrongType)
-        rx.onTunneledAudio(ByteArray(0))
-
-        assertEquals("a non-audio type byte must not reach a playout", 0, codec.decodersCreated)
-        assertEquals(0, codec.packetSamplesCalls)
+            assertEquals("a non-audio type byte must not reach the engine", 0, fake.offered.size)
+        } finally {
+            rx.stop()
+        }
     }
 
     @Test
     fun ignoresMalformedProtobufBody() {
-        val codec = FakeOpusCodec()
-        val rx = VoiceReceiver(codec, unusedOut)
+        val fake = FakePlayoutEngine()
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
+        rx.start()
+        try {
+            // Valid type byte, garbage body. The property under test is that this does not
+            // propagate: MumbleTcpTransport's reader catches Throwable and tears the whole session
+            // down, so an escaping parse failure would take chat and channels with it.
+            rx.onTunneledAudio(byteArrayOf(0, -1, -1, -1, -1, -1))
 
-        // Valid type byte, garbage body. The property under test is that this does not propagate:
-        // MumbleTcpTransport's reader catches Throwable and tears the whole session down, so an
-        // escaping parse failure would take chat and channels with it.
-        rx.onTunneledAudio(byteArrayOf(0, -1, -1, -1, -1, -1))
-
-        assertEquals(0, codec.decodersCreated)
+            assertEquals(0, fake.offered.size)
+        } finally {
+            rx.stop()
+        }
     }
 
     /**
@@ -238,23 +282,20 @@ class VoiceReceiverTest {
     fun aSpurtPublishesStatsWhenItEnds() {
         val out = FakeAudioOut(writeSleepMillis = 0)
         out.nextStats = OutputStats(latencyMs = 42.0, underrunsTotal = 7)
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
             // Drained is terminal, so waiting on it cannot lose a race the way waiting on
             // "speaking" can.
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
-            val stats = rx.playoutStats.value
-            assertNotNull("a spurt must publish stats when it ends", stats)
+            awaitTrue("a spurt must publish stats when it ends") { rx.playoutStats.value != null }
+            val stats = rx.playoutStats.value!!
             // Every underrun the platform counted was already there when the spurt began, so the
             // spurt itself is clean. Without the baseline this would report 7.
-            assertEquals(0, stats!!.underruns)
-            // Six full quanta and nothing else: every packet spans whole 10 ms frames, so no tick
-            // can come up short. A concealment condition of "produced anything" would report 6.
+            assertEquals(0, stats.underruns)
+            // A clean tick from the engine, and nothing else, so no gap can have been counted.
             assertEquals("a clean spurt has no gaps", 0, stats.concealedTicks)
         } finally {
             rx.stop()
@@ -262,46 +303,40 @@ class VoiceReceiverTest {
     }
 
     /**
-     * The counter is loop-owned rather than per-speaker precisely so this cannot go negative when
-     * a speaker retires mid-spurt and takes its count out of the sum.
+     * The counter is native and monotonic, and the loop subtracts a spurt-start baseline from it
+     * exactly the way it does for the platform's underrun count.
      */
     @Test
     fun aPartialTickCountsAsConcealment() {
         val out = FakeAudioOut(writeSleepMillis = 0)
-        val codec = FakeOpusCodec()
-        val rx = VoiceReceiver(codec) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1), concealed = true))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            // The packet nominally spans 60 ms, but nextDecodeSamples forces its one decode to
-            // yield only 240 samples — half a quantum — and nothing else is queued behind it, so
-            // the entire spurt is that single partial tick. Every packet otherwise spans whole
-            // 10 ms frames, so a full quantum is the only thing a tick can normally produce; a
-            // short decode is what breaks that alignment.
-            codec.nextDecodeSamples = 240
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
+            awaitTrue("a zero-padded tick is an audible gap and must be counted") {
+                (rx.playoutStats.value?.concealedTicks ?: 0) >= 1
             }
-            assertTrue(
-                "a zero-padded tick is an audible gap and must be counted",
-                (rx.playoutStats.value?.concealedTicks ?: 0) >= 1,
-            )
         } finally {
             rx.stop()
         }
     }
 
     /**
-     * [aPartialTickCountsAsConcealment] alone cannot tell "resets to 0 before the spurt" apart
-     * from "never touched again": with a single spurt, both look identical. This drives a glitchy
-     * spurt followed by a clean one on the same session — a deleted reset would leak spurt 1's
-     * count into spurt 2's published stats, contradicting the "current talk spurt, not
-     * cumulative" contract on [PlayoutStats.concealedTicks].
+     * [aPartialTickCountsAsConcealment] alone cannot tell "the baseline was rearmed at this
+     * spurt's close" apart from "never touched again": with a single spurt, both look identical.
+     * This drives a glitchy spurt followed by a clean one on the same session — a baseline that
+     * failed to rearm would leak spurt 1's count into spurt 2's published stats, contradicting the
+     * "current talk spurt, not cumulative" contract on [PlayoutStats.concealedTicks].
      *
-     * Spurt 1 is engineered to always publish a nonzero count, so seeing 0 later can only be
-     * spurt 2's own publish — never a stale read of spurt 1's value, and the separate write-count
-     * check rules out "spurt 2 never started" rather than leaving that to a bare timeout.
+     * The closing tick between the two spurts reports a nonzero active-speaker count, but not for
+     * the reason a bounded idle wait might suggest — nothing in [FakePlayoutEngine.script] ever
+     * notifies idleLock, so an unbounded wait here would park the loop forever with no way to
+     * retry fillQuantum(). The nonzero count keeps that wait bounded (10 ms) purely so the loop
+     * gets back around to calling fillQuantum() again at all; what actually picks spurt 2's tick
+     * back up once this test scripts it is [FakePlayoutEngine.fillQuantum]'s own `ticks.take()`,
+     * which blocks until `put()` regardless of any wait.
      */
     @Test
     fun concealedTicksDoesNotCarryAcrossSpurts() {
@@ -311,41 +346,26 @@ class VoiceReceiverTest {
             override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
             override fun close() = Unit
         }
-        val codec = FakeOpusCodec()
-        val rx = VoiceReceiver(codec) { out }
+        val fake = FakePlayoutEngine()
+        val rx = VoiceReceiver({ fake }) { out }
+        fake.script(
+            FakePlayoutEngine.Tick(producing = listOf(1), concealed = true),
+            FakePlayoutEngine.Tick(activeSpeakers = 1),
+        )
         rx.start()
         try {
-            // Spurt 1: force the first decode short, same technique as
-            // aPartialTickCountsAsConcealment, so this spurt is guaranteed to publish >=1.
-            codec.nextDecodeSamples = 240
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val firstDeadline = System.currentTimeMillis() + 5_000
-            while ((rx.playoutStats.value?.concealedTicks ?: 0) == 0 && System.currentTimeMillis() < firstDeadline) {
-                Thread.sleep(5)
+            awaitTrue("first spurt must accrue a concealed tick") {
+                (rx.playoutStats.value?.concealedTicks ?: 0) >= 1
             }
-            assertTrue(
-                "first spurt must accrue a concealed tick",
-                (rx.playoutStats.value?.concealedTicks ?: 0) >= 1,
-            )
             val writesAfterFirstSpurt = writes.get()
 
-            // Spurt 2: clean, same session, no short decode.
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val startDeadline = System.currentTimeMillis() + 5_000
-            while (writes.get() == writesAfterFirstSpurt && System.currentTimeMillis() < startDeadline) {
-                Thread.sleep(5)
+            // Spurt 2: clean, same session, no concealment.
+            fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+            fake.scriptSilence(1)
+            awaitTrue("second spurt never produced audio") { writes.get() > writesAfterFirstSpurt }
+            awaitTrue("a clean spurt must not inherit the previous spurt's concealment count") {
+                rx.playoutStats.value?.concealedTicks == 0
             }
-            assertTrue("second spurt never produced audio", writes.get() > writesAfterFirstSpurt)
-
-            val secondDeadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value?.concealedTicks != 0 && System.currentTimeMillis() < secondDeadline) {
-                Thread.sleep(5)
-            }
-            assertEquals(
-                "a clean spurt must not inherit the previous spurt's concealment count",
-                0,
-                rx.playoutStats.value?.concealedTicks,
-            )
         } finally {
             rx.stop()
         }
@@ -357,12 +377,6 @@ class VoiceReceiverTest {
      * the count is null, and none of them can tell `stats.underrunsTotal - it` apart from a plain
      * `0`. This is the only test that moves the platform counter between the baseline read and the
      * publish, so it is the only one that pins the subtraction itself.
-     *
-     * The counter is stepped from inside outputStats() rather than from the test thread: the
-     * baseline is read on the spurt's first producing tick and this spurt is 60 ms long, so a test
-     * thread racing to move the counter in between would usually lose. outputStats() is only ever
-     * called at a spurt's baseline read and at its publishes, so "first call" is unambiguously the
-     * baseline.
      *
      * Three underruns precede the spurt and two more land inside it: a count that forgot to
      * subtract the baseline reports 5, and one that published the baseline reports 3.
@@ -378,14 +392,13 @@ class VoiceReceiverTest {
             )
             override fun close() = Unit
         }
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
+            awaitTrue("a spurt must publish stats when it ends") { rx.playoutStats.value != null }
             assertEquals(
                 "only the underruns inside this spurt count; the 3 that preceded it are the baseline",
                 2,
@@ -399,14 +412,14 @@ class VoiceReceiverTest {
     @Test
     fun statsCarryEachSpeakersBufferedDepth() {
         val out = FakeAudioOut(writeSleepMillis = 0)
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.depthsBySession = mapOf(4 to 960)
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(4)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 4, tenMsFrames = 6))
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
+            awaitTrue("a spurt must publish stats when it ends") { rx.playoutStats.value != null }
             // The map is keyed by session so a per-speaker view needs no extra plumbing later.
             assertTrue("session 4 missing from depths", rx.playoutStats.value!!.bufferedSamples.containsKey(4))
         } finally {
@@ -415,53 +428,57 @@ class VoiceReceiverTest {
     }
 
     /**
-     * Every other test drives one ~60 ms spurt, so writesThisSpurt never gets near
+     * Every other test drives one short spurt, so writesThisSpurt never gets near
      * WRITES_PER_SAMPLE (100) and the periodic mid-spurt sample never fires — proven by the fact
      * that raising WRITES_PER_SAMPLE to Int.MAX_VALUE leaves every other test green.
      *
-     * A dedicated feeder thread keeps offering packets for this session in a tight loop, with no
-     * pacing of its own, for as long as the test needs — so supply is never the bottleneck and the
-     * spurt cannot end on its own mid-poll. That makes speakingSessions a reliable discriminator:
-     * the loop clears it to empty before every end-of-spurt publish and leaves it non-empty before
-     * every periodic one, and with supply guaranteed the first publish this test observes can only
-     * be reached by staying non-empty through write 100 — i.e. the periodic path.
+     * A dedicated feeder thread keeps pushing producing ticks onto the fake, with no pacing of its
+     * own, for as long as the test needs — so supply is never the bottleneck and the spurt cannot
+     * end on its own mid-poll. That makes speakingSessions a reliable discriminator: the loop
+     * clears it to empty before every end-of-spurt publish and leaves it non-empty before every
+     * periodic one, and with supply guaranteed the first publish this test observes can only be
+     * reached by staying non-empty through write 100 — i.e. the periodic path.
      *
-     * The depth assertion is FINDING F4: `statsCarryEachSpeakersBufferedDepth` only checks
-     * containsKey(4), so replacing the depth map's body with a constant 0 leaves it green. Depth is
-     * ~0 at every end-of-spurt sample (nothing left queued), so this is only checkable mid-spurt —
-     * which is exactly the sample this test captures.
+     * The depth is a fixed nonzero value for the whole test rather than modeling real drainage:
+     * `statsCarryEachSpeakersBufferedDepth` only checks containsKey(4), so a depth map that always
+     * reports 0 would leave that test green. This test is what pins a mid-spurt sample to a real
+     * depth rather than the ~0 an end-of-spurt one would have.
      */
     @Test
     fun aLongSpurtPublishesAPeriodicSampleWhileStillRunning() {
         val out = FakeAudioOut(writeSleepMillis = 1)
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.depthsBySession = mapOf(4 to 480)
+        val rx = VoiceReceiver({ fake }) { out }
         val feederRunning = AtomicBoolean(true)
         val feeder = Thread({
+            // Paced roughly to the 1 ms write, not left fully unthrottled: unlike the old
+            // per-speaker jitter buffer, FakePlayoutEngine's tick queue is unbounded, so a feeder
+            // that outruns consumption by orders of magnitude grows it without limit for as long
+            // as the test runs.
             while (feederRunning.get()) {
-                rx.onTunneledAudio(audioPayload(session = 4, tenMsFrames = 6))
+                fake.script(FakePlayoutEngine.Tick(producing = listOf(4)))
+                Thread.sleep(0, 200_000)
             }
         }, "test-feeder").apply { isDaemon = true }
         rx.start()
         feeder.start()
         try {
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(1)
-            }
-            val stats = rx.playoutStats.value
+            awaitTrue("no publish arrived before the deadline") { rx.playoutStats.value != null }
+            val stats = rx.playoutStats.value!!
             val speaking = rx.speakingSessions.value
-            assertNotNull("no publish arrived before the deadline", stats)
             assertTrue(
                 "a publish with an empty speaking set is the end-of-spurt sample, not the periodic one",
                 speaking.contains(4),
             )
             assertTrue(
                 "a mid-spurt sample must show a real jitter-buffer depth, not the ~0 an end-of-spurt one has",
-                (stats!!.bufferedSamples[4] ?: 0) > 0,
+                (stats.bufferedSamples[4] ?: 0) > 0,
             )
         } finally {
             feederRunning.set(false)
             feeder.join(5_000)
+            fake.scriptSilence(1)
             rx.stop()
         }
     }
@@ -499,23 +516,23 @@ class VoiceReceiverTest {
             }
             override fun close() = Unit
         }
-        rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        rx = VoiceReceiver({ fake }) { out }
         val feederRunning = AtomicBoolean(true)
         val feeder = Thread({
+            // See aLongSpurtPublishesAPeriodicSampleWhileStillRunning for why this is paced
+            // rather than a bare spin: FakePlayoutEngine's tick queue is unbounded.
             while (feederRunning.get()) {
-                rx.onTunneledAudio(audioPayload(session = 4, tenMsFrames = 6))
+                fake.script(FakePlayoutEngine.Tick(producing = listOf(4)))
+                Thread.sleep(0, 200_000)
             }
         }, "test-feeder").apply { isDaemon = true }
         rx.start()
         feeder.start()
         try {
-            val deadline = System.currentTimeMillis() + 20_000
-            while (writes.get() < 300 && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
+            awaitTrue("the spurt never reached 300 writes", timeoutMillis = 20_000) { writes.get() >= 300 }
             val wrote = writes.get()
             val sampled = samples.get()
-            assertTrue("the spurt never reached 300 writes; got $wrote", wrote >= 300)
             assertTrue("a long spurt must keep sampling, not sample once and stop", sampled >= 2)
             assertTrue(
                 "sampled $sampled times in $wrote writes; the periodic sample is not rate-limited",
@@ -524,6 +541,7 @@ class VoiceReceiverTest {
         } finally {
             feederRunning.set(false)
             feeder.join(5_000)
+            fake.scriptSilence(1)
             rx.stop()
         }
     }
@@ -532,21 +550,10 @@ class VoiceReceiverTest {
      * Instrumentation must never reach the loop's fatal catch (Throwable). Voice is additive: a
      * stats bug silencing a call would be worse than the bug.
      *
-     * A latch on the first few writes is not enough: publishStats only runs at a spurt boundary
-     * or every 100 writes, and this spurt is six writes, so a latch(3) is satisfied well before
-     * the throw is even attempted — it would pass just as well against a `publishStats` with no
-     * guard at all. The throw has to actually be given a chance to kill the loop, and then the
-     * test has to look for a survivor: a second spurt fed in after the first one has fully
-     * drained (and so has already been through the end-of-spurt publish). If the guard is gone,
-     * `stopped` is true by the time the second spurt arrives, so onTunneledAudio drops it at its
-     * first line and the write count never moves again.
-     *
-     * The first-write latch below is load-bearing, not decorative: without it, polling
-     * speakingSessions for "empty" races the loop's own starting state — both are emptySet(), so
-     * a poll that lands before the spurt has even begun observes "drained" immediately and the
-     * rest of the test proceeds against a spurt that never actually finished (caught by hand:
-     * an earlier version of this test passed against the very mutation it exists to catch,
-     * because writesAfterFirstSpurt came back 0).
+     * The first-write latch is load-bearing, not decorative: without it, polling speakingSessions
+     * for "empty" races the loop's own starting state — both are emptySet(), so a poll that lands
+     * before the spurt has even begun observes "drained" immediately and the rest of the test
+     * proceeds against a spurt that never actually finished.
      */
     @Test
     fun aThrowingOutputStatsDoesNotStopPlayback() {
@@ -561,32 +568,23 @@ class VoiceReceiverTest {
             override fun outputStats(): OutputStats = error("stats are broken")
             override fun close() = Unit
         }
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(
+            FakePlayoutEngine.Tick(producing = listOf(1)),
+            FakePlayoutEngine.Tick(activeSpeakers = 1),
+        )
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            // Synchronizes on the spurt having actually started, so speakingSessions is known
-            // non-empty before the drain-wait below can mistake "not yet begun" for "finished".
             assertTrue("no audio written", firstWrite.await(5, TimeUnit.SECONDS))
-
-            // Drained is terminal, so waiting on it cannot lose a race the way waiting on
-            // "speaking" can. It is also exactly the drain that fires the end-of-spurt publish.
-            val firstDeadline = System.currentTimeMillis() + 5_000
-            while (rx.speakingSessions.value.isNotEmpty() && System.currentTimeMillis() < firstDeadline) {
-                Thread.sleep(5)
-            }
-            assertEquals("first spurt must fully drain", emptySet<Int>(), rx.speakingSessions.value)
+            awaitTrue("first spurt must fully drain") { rx.speakingSessions.value.isEmpty() }
             val writesAfterFirstSpurt = writes.get()
 
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val secondDeadline = System.currentTimeMillis() + 5_000
-            while (writes.get() == writesAfterFirstSpurt && System.currentTimeMillis() < secondDeadline) {
-                Thread.sleep(5)
-            }
-            assertTrue(
+            fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+            fake.scriptSilence(1)
+            awaitTrue(
                 "a stats failure at the first spurt's end stopped playback for the next spurt",
-                writes.get() > writesAfterFirstSpurt,
-            )
+            ) { writes.get() > writesAfterFirstSpurt }
         } finally {
             rx.stop()
         }
@@ -608,17 +606,15 @@ class VoiceReceiverTest {
             }
             override fun close() = Unit
         }
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val deadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-                Thread.sleep(5)
-            }
-            val stats = rx.playoutStats.value
-            assertNotNull("the spurt must still publish latency and depths", stats)
-            assertNull("a failed baseline must not yield a count", stats!!.underruns)
+            awaitTrue("the spurt must still publish latency and depths") { rx.playoutStats.value != null }
+            val stats = rx.playoutStats.value!!
+            assertNull("a failed baseline must not yield a count", stats.underruns)
             assertEquals(12.0, stats.latencyMs!!, 1e-9)
         } finally {
             rx.stop()
@@ -631,11 +627,6 @@ class VoiceReceiverTest {
      * `.getOrNull() ?: underrunBaseline`. This drives two spurts: the first's baseline read
      * succeeds, the second's throws, and a stale-fallback mutant would report the second spurt's
      * counts relative to the first spurt's baseline instead of null.
-     *
-     * The throwing call is armed only after the test has confirmed the first spurt fully
-     * published, rather than by hardcoding a call index: outputStats() is only ever called at a
-     * spurt's baseline read and at its publish, so the first call after a confirmed spurt-1
-     * publish is unambiguously spurt 2's baseline, however many calls spurt 1 itself needed.
      */
     @Test
     fun aStaleBaselineDoesNotLeakIntoTheNextSpurt() {
@@ -646,8 +637,8 @@ class VoiceReceiverTest {
             override fun write(pcm: ShortArray, n: Int): Boolean = true
             override fun outputStats(): OutputStats {
                 val call = calls.incrementAndGet()
-                // Fires exactly once, on the first call after the test arms it — see the class
-                // doc above for why that call is guaranteed to be spurt 2's baseline read.
+                // Fires exactly once, on the first call after the test arms it — the class doc
+                // above is why that call is guaranteed to be spurt 2's baseline read.
                 if (armThrow.get() && thrown.compareAndSet(false, true)) {
                     error("second spurt's baseline read failed")
                 }
@@ -655,35 +646,32 @@ class VoiceReceiverTest {
             }
             override fun close() = Unit
         }
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(
+            FakePlayoutEngine.Tick(producing = listOf(1)),
+            FakePlayoutEngine.Tick(activeSpeakers = 1),
+        )
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val firstDeadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == null && System.currentTimeMillis() < firstDeadline) {
-                Thread.sleep(5)
-            }
+            awaitTrue("first spurt must publish") { rx.playoutStats.value != null }
             val firstSpurt = rx.playoutStats.value
-            assertNotNull("first spurt must publish", firstSpurt)
             assertNotNull("first spurt's baseline read must succeed", firstSpurt!!.underruns)
             // Drained is terminal, so waiting on it (rather than on the publish alone) cannot
             // race a spurt that has published but not yet fully cleared speakingSessions.
-            val idleDeadline = System.currentTimeMillis() + 5_000
-            while (rx.speakingSessions.value.isNotEmpty() && System.currentTimeMillis() < idleDeadline) {
-                Thread.sleep(5)
+            awaitTrue("first spurt must fully drain before the second begins") {
+                rx.speakingSessions.value.isEmpty()
             }
-            assertEquals("first spurt must fully drain before the second begins", emptySet<Int>(), rx.speakingSessions.value)
 
             armThrow.set(true)
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            val secondDeadline = System.currentTimeMillis() + 5_000
-            while (rx.playoutStats.value == firstSpurt && System.currentTimeMillis() < secondDeadline) {
-                Thread.sleep(5)
+            fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+            fake.scriptSilence(1)
+            awaitTrue("second spurt must still publish despite the baseline failure") {
+                rx.playoutStats.value != null && rx.playoutStats.value != firstSpurt
             }
-            val secondSpurt = rx.playoutStats.value
-            assertNotNull("second spurt must still publish latency/depth despite the baseline failure", secondSpurt)
+            val secondSpurt = rx.playoutStats.value!!
             assertTrue("the armed baseline call was never reached", thrown.get())
-            assertNull("a failed baseline must not fall back to the previous spurt's count", secondSpurt!!.underruns)
+            assertNull("a failed baseline must not fall back to the previous spurt's count", secondSpurt.underruns)
         } finally {
             rx.stop()
         }
@@ -692,17 +680,82 @@ class VoiceReceiverTest {
     @Test
     fun statsAreClearedWhenTheLoopExits() {
         val out = FakeAudioOut(writeSleepMillis = 0)
-        val rx = VoiceReceiver(FakeOpusCodec()) { out }
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        fake.scriptSilence(1)
+        val rx = VoiceReceiver({ fake }) { out }
         rx.start()
-        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-        val deadline = System.currentTimeMillis() + 5_000
-        while (rx.playoutStats.value == null && System.currentTimeMillis() < deadline) {
-            Thread.sleep(5)
-        }
-        assertNotNull(rx.playoutStats.value)
+        awaitTrue("a spurt must publish stats when it ends") { rx.playoutStats.value != null }
         rx.stop()
         // The loop owns the flow while alive and has to hand it back empty, or a stats page shows
         // the previous call's numbers after a disconnect.
         assertNull("stats outlived the playback loop", rx.playoutStats.value)
+    }
+
+    @Test
+    fun refusedBuffersStopThePlaybackLoop() {
+        val fake = FakePlayoutEngine()
+        fake.refuseBuffers = true
+        val writes = AtomicInteger()
+        val out = object : AudioOut {
+            override fun write(pcm: ShortArray, n: Int): Boolean { writes.incrementAndGet(); return true }
+            override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
+            override fun close() = Unit
+        }
+        val receiver = VoiceReceiver({ fake }) { out }
+        receiver.start()
+        fake.script(FakePlayoutEngine.Tick(producing = listOf(1)))
+        // The loop must not treat the refusal as "nobody is speaking" and park: it has to stop,
+        // because a negative return does not block and spinning on it burns a core at
+        // THREAD_PRIORITY_URGENT_AUDIO.
+        awaitTrue("loop did not stop after a refused buffer") { fake.destroyed }
+        assertEquals("nothing should have been written", 0, writes.get())
+    }
+
+    @Test
+    fun theEngineIsDestroyedExactlyOnceWhenTheLoopExits() {
+        val fake = FakePlayoutEngine()
+        val receiver = VoiceReceiver({ fake }) { FakeAudioOut() }
+        receiver.start()
+        fake.scriptSilence(1)
+        receiver.stop()
+        // Double-free is the historical bug class here (see VoiceReceiver.stop()'s join
+        // discipline), so this pins the exact count rather than merely "at least once".
+        assertEquals("engine must be destroyed exactly once", 1, fake.destroyCalls.get())
+    }
+
+    /**
+     * newEngine() returning null — libopus unreachable, the same way outFactory can fail to build
+     * an AudioOut — must degrade receive to silence for the session: latched, no playback thread,
+     * and in particular no AudioOut ever built. unusedOut fails loudly if that guarantee slips.
+     */
+    @Test
+    fun anUnavailableEngineDisablesReceiveWithoutTouchingAudioOut() {
+        val rx = VoiceReceiver({ null }, unusedOut)
+        rx.start()
+        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+        assertEquals(emptySet<Int>(), rx.speakingSessions.value)
+        // Refused exactly like a start() after a real stop() — see startAfterStopIsRefused.
+        rx.start()
+        rx.stop()
+    }
+
+    /**
+     * Mirrors MumbleConnection.teardown(): an attempt superseded before publish, superseded
+     * mid-handshake, or one whose transport.connect() throws all call stop() on a receiver whose
+     * start() was never reached. newEngine must never run on that path — the bug this guards
+     * against built the engine eagerly at construction, leaking one per such attempt regardless of
+     * whether it ever played anything. builds staying 0 proves both that nothing was allocated and,
+     * trivially, that nothing was leaked: there is nothing to free.
+     */
+    @Test
+    fun stopWithoutEverStartingBuildsNoEngine() {
+        val builds = AtomicInteger()
+        val rx = VoiceReceiver({ builds.incrementAndGet(); FakePlayoutEngine() }, unusedOut)
+        rx.stop()
+        assertEquals("a receiver that never started must never build an engine", 0, builds.get())
+        // start() after stop() stays refused, so a late guard success can't allocate one either.
+        rx.start()
+        assertEquals(0, builds.get())
     }
 }
