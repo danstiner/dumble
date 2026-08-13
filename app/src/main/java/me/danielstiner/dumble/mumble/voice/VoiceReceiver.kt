@@ -238,6 +238,7 @@ class VoiceReceiver(
         var writesThisSpurt = 0
         var underrunBaseline: Int? = null
         var concealedBaseline = 0L
+        var droppedBaseline = 0L
 
         val out = try {
             outFactory()
@@ -263,33 +264,38 @@ class VoiceReceiver(
                 if (producing == 0) {
                     _speakingSessions.value = emptySet()
                     if (inSpurt) {
-                        publishStats(engine, out, underrunBaseline, concealedBaseline,
-                                     statSessions, statDepths, counters)
+                        val published = publishStats(engine, out, underrunBaseline,
+                                                     concealedBaseline, droppedBaseline,
+                                                     statSessions, statDepths, counters)
                         inSpurt = false
-                        // Rearmed once, here at the spurt's close, rather than on every idle tick
-                        // that follows: the native counter cannot move while idle — concealment
-                        // requires a producing tick, and idle means every live speaker produced
-                        // nothing this tick — so the value read here holds unchanged until the
-                        // next spurt's first tick. Reading it on every idle poll instead would cost
-                        // a JNI call and a native mutex acquisition per poll, ~100x/s while a
-                        // speaker is merely prebuffering, for a number that cannot have changed.
-                        // Not read at the next spurt's *open* for the same reason as before:
-                        // fillQuantum() for that spurt's opening tick already ran by the time that
-                        // branch checks, so a partial-fill opening tick would already have bumped
-                        // the counter by the time the baseline was read there.
-                        val n = engine.readStats(statSessions, statDepths, counters)
-                        if (n < 0) {
-                            // Our arrays, our bug — see fillQuantum's refusal above. Left
-                            // unresolved, every future spurt would silently stop publishing
-                            // concealment: publishStats hits this same refusal on its own
-                            // readStats() call and gives up on the whole reading, not just the
-                            // baseline.
-                            if (!statsRefusedReported) {
-                                statsRefusedReported = true
-                                Log.e(TAG, "playout engine refused our stats buffers; concealment baseline is stale")
-                            }
-                        } else {
+                        if (published) {
+                            // Rearmed from the reading publishStats just took, not a second
+                            // readStats: a drop landing between the two would otherwise be
+                            // published in neither spurt — excluded from this one, subtracted out
+                            // of the next. It also saves a JNI call and a native mutex
+                            // acquisition per spurt.
+                            //
+                            // Rearmed once here rather than on every idle tick that follows,
+                            // because concealment cannot move while idle: it requires a producing
+                            // tick, and idle means every live speaker produced nothing. Polling
+                            // instead would cost that JNI call ~100x/s while a speaker is merely
+                            // prebuffering, for a number that cannot have changed. And not at the
+                            // next spurt's *open*, because fillQuantum() for that spurt's opening
+                            // tick has already run by the time that branch checks — a partial-fill
+                            // opening tick would vanish into its own baseline.
                             concealedBaseline = counters[NativePlayout.COUNTER_CONCEALED_TICKS]
+                            // One caveat the concealment argument does not carry: the drop counter
+                            // *can* move while idle, because the reader thread fills queues the
+                            // loop is not draining yet. Those drops land in the next spurt's
+                            // window, which is where they belong — a backlog thrown away while a
+                            // speaker prebuffers is that spurt's burst, not the previous one's.
+                            droppedBaseline = counters[NativePlayout.COUNTER_DROPPED_PACKETS]
+                        } else if (!statsRefusedReported) {
+                            // Our arrays, our bug — see fillQuantum's refusal above. Left
+                            // unresolved, every future spurt would silently stop publishing:
+                            // publishStats gives up on the whole reading, not just the baseline.
+                            statsRefusedReported = true
+                            Log.e(TAG, "playout engine refused our stats buffers; baselines are stale")
                         }
                     }
                     // Nothing to block on. Do NOT zero-fill to keep the clock: that would leave
@@ -325,7 +331,7 @@ class VoiceReceiver(
                 } else if (++writesThisSpurt >= WRITES_PER_SAMPLE) {
                     writesThisSpurt = 0
                     publishStats(engine, out, underrunBaseline, concealedBaseline,
-                                 statSessions, statDepths, counters)
+                                 droppedBaseline, statSessions, statDepths, counters)
                 }
             }
         } catch (t: Throwable) {
@@ -343,32 +349,44 @@ class VoiceReceiver(
     }
 
     /**
-     * Wrapped whole: the loop's catch (Throwable) is fatal to playback, and instrumentation must
-     * never be able to reach it. A failed [underrunBaseline] publishes a null count rather than
-     * subtracting a stale one, which would be wrong for the entire spurt.
+     * Every path is wrapped: the loop's catch (Throwable) is fatal to playback, and instrumentation
+     * must never be able to reach it. A failed [underrunBaseline] publishes a null count rather
+     * than subtracting a stale one, which would be wrong for the entire spurt.
+     *
+     * True when `counters` holds a reading good enough to rearm the caller's baselines from, which
+     * turns on [engine] alone: neither a platform that cannot answer nor a failure to present the
+     * sample may cost the next spurt its baseline.
      */
     private fun publishStats(
         engine: PlayoutEngine,
         out: AudioOut,
         underrunBaseline: Int?,
         concealedBaseline: Long,
+        droppedBaseline: Long,
         sessions: IntArray,
         depths: IntArray,
         counters: LongArray,
-    ) {
+    ): Boolean {
+        // Refused, or thrown: publishing off untouched scratch would report a spurt's worth of
+        // zeros as if they were measurements.
+        val speakers = runCatching { engine.readStats(sessions, depths, counters) }.getOrDefault(-1)
+        if (speakers < 0) return false
+        // Everything below is presentation. Wrapped so it cannot reach the loop's fatal catch, and
+        // outside the decision above so that it cannot withhold the rearm either: the counters are
+        // already good, and a baseline left stale corrupts the next spurt as well as this one.
         runCatching {
-            val reading = out.outputStats()
-            val speakers = engine.readStats(sessions, depths, counters)
-            // Negative means the arrays were refused; publishing off untouched scratch would
-            // report a spurt's worth of zeros as if they were measurements.
-            if (speakers < 0) return@runCatching
+            // Tolerated separately from the counters: a platform that cannot answer costs the two
+            // fields derived from it, not the sample.
+            val reading = runCatching { out.outputStats() }.getOrNull()
             val buffered = HashMap<Int, Int>(speakers)
             for (i in 0 until speakers) buffered[sessions[i]] = depths[i]
             val stats = PlayoutStats(
-                latencyMs = reading.latencyMs,
-                underruns = underrunBaseline?.let { reading.underrunsTotal - it },
+                latencyMs = reading?.latencyMs,
+                underruns = reading?.let { r -> underrunBaseline?.let { r.underrunsTotal - it } },
                 concealedTicks =
                     (counters[NativePlayout.COUNTER_CONCEALED_TICKS] - concealedBaseline).toInt(),
+                droppedPackets =
+                    (counters[NativePlayout.COUNTER_DROPPED_PACKETS] - droppedBaseline).toInt(),
                 bufferedSamples = buffered,
             )
             _playoutStats.value = stats
@@ -376,6 +394,7 @@ class VoiceReceiver(
             // being readable off a shipped build is the point of collecting this at all.
             Log.d(TAG, stats.summary())
         }
+        return true
     }
 
     private companion object {

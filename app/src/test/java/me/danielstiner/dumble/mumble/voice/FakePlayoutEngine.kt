@@ -9,12 +9,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * cadence exactly.
  */
 class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
-    /** One tick: which sessions produced, how many speakers are live, and whether the tick was
-     *  short of a full quantum (which the real engine counts as concealment). */
+    /** One tick: which sessions produced, how many speakers are live, whether the tick was
+     *  short of a full quantum (which the real engine counts as concealment), and how many packets
+     *  the jitter queues threw away. Drops are charged to a tick only because ticks are the test's
+     *  clock — natively they accrue on the reader thread, on offer(). */
     data class Tick(
         val producing: List<Int> = emptyList(),
         val activeSpeakers: Int = producing.size,
         val concealed: Boolean = false,
+        val dropped: Int = 0,
     )
 
     private val ticks = LinkedBlockingQueue<Tick>()
@@ -40,6 +43,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
 
     @Volatile private var concealedTicks = 0L
+    @Volatile private var droppedPackets = 0L
 
     /** True (the default) suits VoiceReceiverTest: the test drives the cadence, so an exhausted
      *  script should park the loop rather than manufacture silence. MumbleConnectionTest's
@@ -64,6 +68,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         val tick = if (blockWhenEmpty) ticks.take() else ticks.poll() ?: Tick()
         if (refuseBuffers) return NativePlayout.ERROR_BUFFER_TOO_SMALL
         if (tick.concealed) concealedTicks++
+        droppedPackets += tick.dropped
         status[NativePlayout.STATUS_ACTIVE_SPEAKERS] = tick.activeSpeakers
         tick.producing.forEachIndexed { i, session -> status[1 + i] = session }
         // Non-silent audio so a test can tell a written quantum from an unwritten one.
@@ -74,7 +79,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     override fun readStats(sessions: IntArray, depths: IntArray, counters: LongArray): Int {
         if (refuseBuffers) return NativePlayout.ERROR_BUFFER_TOO_SMALL
         counters[NativePlayout.COUNTER_CONCEALED_TICKS] = concealedTicks
-        counters[NativePlayout.COUNTER_DROPPED_PACKETS] = 0
+        counters[NativePlayout.COUNTER_DROPPED_PACKETS] = droppedPackets
         depthsBySession.entries.forEachIndexed { i, (session, depth) ->
             sessions[i] = session
             depths[i] = depth

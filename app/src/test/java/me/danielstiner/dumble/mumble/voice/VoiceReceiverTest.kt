@@ -295,8 +295,10 @@ class VoiceReceiverTest {
             // Every underrun the platform counted was already there when the spurt began, so the
             // spurt itself is clean. Without the baseline this would report 7.
             assertEquals(0, stats.underruns)
-            // A clean tick from the engine, and nothing else, so no gap can have been counted.
+            // A clean tick from the engine, and nothing else, so no gap can have been counted
+            // and nothing can have been thrown away.
             assertEquals("a clean spurt has no gaps", 0, stats.concealedTicks)
+            assertEquals("a clean spurt drops nothing", 0, stats.droppedPackets)
         } finally {
             rx.stop()
         }
@@ -365,6 +367,80 @@ class VoiceReceiverTest {
             awaitTrue("second spurt never produced audio") { writes.get() > writesAfterFirstSpurt }
             awaitTrue("a clean spurt must not inherit the previous spurt's concealment count") {
                 rx.playoutStats.value?.concealedTicks == 0
+            }
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /**
+     * The one instrument that would show the 32-slot packet pool capping a 10 ms sender's backlog
+     * at 320 ms, which is the receive path's one documented behaviour delta. It has to reach the
+     * flow, and it has to be scoped to the spurt the way concealment is — a cumulative count would
+     * report every earlier burst of the session against whatever spurt happened to be running.
+     *
+     * Two spurts on the same session, for the reason [concealedTicksDoesNotCarryAcrossSpurts]
+     * needs two: with one, "rearmed at the spurt's close" and "never touched again" look the same.
+     */
+    @Test
+    fun droppedPacketsAreCountedFromTheSpurtBaseline() {
+        val out = FakeAudioOut(writeSleepMillis = 0)
+        val fake = FakePlayoutEngine()
+        val rx = VoiceReceiver({ fake }) { out }
+        fake.script(
+            FakePlayoutEngine.Tick(producing = listOf(1), dropped = 5),
+            // activeSpeakers keeps the closing park bounded so the loop comes back around for
+            // spurt 2 — see concealedTicksDoesNotCarryAcrossSpurts for why that matters.
+            FakePlayoutEngine.Tick(activeSpeakers = 1),
+        )
+        rx.start()
+        try {
+            awaitTrue("the spurt must report the drops the engine counted") {
+                rx.playoutStats.value?.droppedPackets == 5
+            }
+            // Scripted only now: the baseline is rearmed in the same loop iteration that published
+            // the reading above, so appending spurt 2 afterwards cannot race it.
+            fake.script(FakePlayoutEngine.Tick(producing = listOf(1), dropped = 3))
+            fake.scriptSilence(1)
+            awaitTrue("a spurt must report its own drops, not the session's running total") {
+                rx.playoutStats.value?.droppedPackets == 3
+            }
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /**
+     * The platform reading and the engine's own counters fail independently, so a broken AudioOut
+     * costs the two fields derived from it and nothing else. It must not cost the sample, and —
+     * because the baselines are rearmed only when a reading was good — it must not cost the next
+     * spurt either: suppressing the whole publication would leave spurt 2 measuring against
+     * spurt 1's baseline and reporting 8 drops instead of 3.
+     */
+    @Test
+    fun aThrowingOutputStatsStillPublishesTheEnginesOwnCounters() {
+        val out = object : AudioOut {
+            override fun write(pcm: ShortArray, n: Int): Boolean = true
+            override fun outputStats(): OutputStats = error("stats are broken")
+            override fun close() = Unit
+        }
+        val fake = FakePlayoutEngine()
+        val rx = VoiceReceiver({ fake }) { out }
+        fake.script(
+            FakePlayoutEngine.Tick(producing = listOf(1), dropped = 5),
+            FakePlayoutEngine.Tick(activeSpeakers = 1),
+        )
+        rx.start()
+        try {
+            awaitTrue("the engine's own numbers must survive a broken AudioOut") {
+                rx.playoutStats.value?.droppedPackets == 5
+            }
+            assertNull("a broken AudioOut cannot report latency", rx.playoutStats.value?.latencyMs)
+            assertNull("nor underruns", rx.playoutStats.value?.underruns)
+            fake.script(FakePlayoutEngine.Tick(producing = listOf(1), dropped = 3))
+            fake.scriptSilence(1)
+            awaitTrue("the baseline must rearm even though the platform reading failed") {
+                rx.playoutStats.value?.droppedPackets == 3
             }
         } finally {
             rx.stop()
