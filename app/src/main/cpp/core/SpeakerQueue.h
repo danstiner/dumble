@@ -53,15 +53,24 @@ public:
      *  silence — an audible gap the caller counts. */
     int drain(int16_t* out, int frames);
 
-    /** Engine mutex held. Closes the tick: updates idle accounting and the prebuffer re-arm.
-     *  Returns true once this queue has retired and its slot must be released. */
-    bool endTick(bool produced);
+    struct Tick {
+        bool retire;     // this queue is done; its slot must be released
+        bool concealed;  // the listener heard a gap this tick
+    };
+
+    /** Engine mutex held. Closes the tick with what drain() returned: updates idle accounting and
+     *  the prebuffer re-arm, and judges whether the tick concealed a gap. */
+    Tick endTick(int produced, int frames);
 
     /** Engine mutex held. Encoded audio waiting, in samples — the jitter-buffer depth. The PCM
      *  fifo is deliberately excluded: it is bounded at one quantum plus one frame and says nothing
      *  about how much delay the network has added. */
     int queuedSamples() const { return queuedSamples_; }
 
+    /** Engine mutex held. Packets this queue threw away: overflowed past either bound, or with a
+     *  payload libopus could not price. Oversized packets are not counted — PlayoutEngine refuses
+     *  those before the mutex and reports them with their own status code. */
+    int droppedPackets() const { return droppedPackets_; }
 
 private:
     SpeakerQueue(std::unique_ptr<AudioDecoder> decoder, int maxQuantumSamples);
@@ -80,7 +89,11 @@ private:
     int head_ = 0;
     int count_ = 0;
     int queuedSamples_ = 0;
+    int droppedPackets_ = 0;
     bool prebuffered_ = false;
+    // Whether this spurt was closed by its sender rather than merely stopping. Only endTick's
+    // concealment judgement reads it: without it, every normal end of speech looks like a dropout.
+    bool terminated_ = false;
 
     // Playback-thread-only below.
     PcmRing fifo_;

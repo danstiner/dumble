@@ -65,7 +65,12 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool ter
     const int span = len > 0 ? AudioDecoder::packetSamples(data, len, sampleRate_) : 0;
     std::lock_guard<std::mutex> guard(mutex_);
     const int slot = slotFor(session);
-    if (slot == -1) return kOfferSpeakerCap;
+    // Counted here because there is no queue to charge it to: a capped session's packets are as
+    // lost as ones a live queue overflowed away, and this is the counter that says so.
+    if (slot == -1) {
+        droppedPackets_++;
+        return kOfferSpeakerCap;
+    }
     if (slot == -2) return kOfferEngineUnusable;
     // False means exactly one thing here — libopus could not parse a span out of the header, so
     // the payload cannot be scheduled. SpeakerQueue's other refusal, an oversized packet, is
@@ -130,7 +135,10 @@ int PlayoutEngine::fillQuantum(int16_t* out, int frames, int32_t* sessions, int3
             producing++;
         }
         std::lock_guard<std::mutex> guard(mutex_);
-        if (queue->endTick(produced > 0)) {
+        const SpeakerQueue::Tick tick = queue->endTick(produced, frames);
+        if (tick.concealed) concealedTicks_++;
+        if (tick.retire) {
+            droppedPackets_ += queue->droppedPackets();
             queues_[i].reset();
             slots_.release(i);
         }
@@ -144,5 +152,19 @@ int PlayoutEngine::fillQuantum(int16_t* out, int frames, int32_t* sessions, int3
     return producing;
 }
 
+int PlayoutEngine::readStats(int32_t* sessions, int32_t* depths, int64_t* counters) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    int n = 0;
+    int64_t dropped = droppedPackets_;
+    slots_.forEach([&](int i) {
+        sessions[n] = sessions_[i];
+        depths[n] = queues_[i]->queuedSamples();
+        dropped += queues_[i]->droppedPackets();
+        n++;
+    });
+    counters[kCounterConcealedTicks] = concealedTicks_;
+    counters[kCounterDroppedPackets] = dropped;
+    return n;
+}
 
 }  // namespace dumble::playout
