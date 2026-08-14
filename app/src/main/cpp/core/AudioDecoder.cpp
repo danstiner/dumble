@@ -17,7 +17,7 @@ std::unique_ptr<AudioDecoder> AudioDecoder::create(int sampleRate, int channels)
 
 int AudioDecoder::packetSamples(const uint8_t* data, int len, int sampleRate) {
     // Header-only: opus_packet_get_nb_frames reads the TOC byte plus, for code 3, the frame-count
-    // byte, and uses `len` for nothing but its own too-short checks. So this prices a packet
+    // byte, and uses `len` for nothing but its own too-short checks. So this measures a packet
     // before its payload is copied, and never touches the payload however long `len` claims to be.
     return opus_packet_get_nb_samples(data, len, sampleRate);
 }

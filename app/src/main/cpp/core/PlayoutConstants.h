@@ -77,7 +77,7 @@ constexpr int kOfferPacketTooLarge = 2;
 constexpr int kOfferEngineUnusable = 3;
 constexpr int kOfferMalformedPacket = 4;
 
-// fillQuantum() and readStats() error code, negative so it cannot collide with a speaker count.
+// fillQuantum() error code, negative so it cannot collide with a speaker count.
 // The caller's buffers, not ours — separate from "no audio" (return 0), because a caller that
 // cannot tell "I allocated my buffers too small" from "nobody is speaking" has hidden a bug in the
 // Kotlin side behind an orderly-looking silence. See CaptureConstants.h for the same reasoning and

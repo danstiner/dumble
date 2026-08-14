@@ -43,7 +43,7 @@ public:
 
     /** Closes the tick, re-arming the prebuffer gate once the spurt has fully played out — this
      *  queue is empty and the decoder emitted nothing. On idle rather than on the terminator
-     *  frame, so the tail of a spurt plays out first and a spurt whose terminator never arrives
+     *  packet, so the tail of a spurt plays out first and a spurt whose terminator never arrives
      *  still re-arms. It takes the decoder's answer because an empty queue alone does not mean
      *  idle: packets already popped may still be playing out downstream. */
     void endTick(bool decoderProduced);
