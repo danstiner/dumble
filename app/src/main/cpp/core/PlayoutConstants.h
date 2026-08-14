@@ -87,5 +87,20 @@ constexpr int kErrorBufferTooSmall = -1;
 // Direct C++ callers take the two as separate parameters and never see this.
 constexpr int kStatusActiveSpeakers = 0;
 
+// Indices into readStats' `counters` array. Monotonic since engine construction: the caller
+// subtracts a talk-spurt baseline, the way it already does for the platform's underrun counter.
+//
+// kCounterDroppedPackets counts packets the jitter queues threw away — past kPacketSlots or
+// kHighWaterSamples, or unpriceable by libopus — plus packets refused because kMaxSpeakers was
+// already met. Oversized packets are deliberately excluded: they are refused before the engine
+// mutex is taken and already carry kOfferPacketTooLarge, so counting them would put lock traffic
+// on the garbage path for a condition the caller can already see.
+//
+// kCounterConcealedTicks counts gaps, not their length: a tick that produced less than a full
+// quantum, or the leading tick of a mid-spurt stall. See SpeakerQueue::endTick for why a stall can
+// only be caught on its first tick.
+constexpr int kCounterConcealedTicks = 0;
+constexpr int kCounterDroppedPackets = 1;
+constexpr int kCounterCount = 2;
 
 }  // namespace dumble::playout

@@ -57,7 +57,7 @@ int tick(SpeakerQueue& q, int16_t* out, bool* retiredOut = nullptr) {
         q.decodeInto(scratch, len);
     }
     const int produced = q.drain(out, kQuantum);
-    const bool retired = q.endTick(produced > 0);
+    const bool retired = q.endTick(produced, kQuantum).retire;
     if (retiredOut) *retiredOut = retired;
     return produced;
 }
@@ -191,6 +191,7 @@ TEST(SpeakerQueue, OverflowDropsOldestAndIsCappedInSamples) {
     const Packet p = encode(6);   // 60 ms each; 10 of them is 600 ms
     for (int i = 0; i < 20; i++) offer(*q, p);
     EXPECT_LE(q->queuedSamples(), pl::kHighWaterSamples);
+    EXPECT_GT(q->droppedPackets(), 0);
 }
 
 TEST(SpeakerQueue, OverflowIsAlsoCappedInSlots) {
@@ -198,35 +199,39 @@ TEST(SpeakerQueue, OverflowIsAlsoCappedInSlots) {
     const Packet p = encode(1);   // 10 ms each; the sample cap alone would allow 60
     for (int i = 0; i < pl::kPacketSlots + 10; i++) offer(*q, p);
     EXPECT_LE(q->queuedSamples(), pl::kPacketSlots * 480);
+    EXPECT_GT(q->droppedPackets(), 0);
 }
 
-TEST(SpeakerQueue, AnOversizedPacketIsRefused) {
+TEST(SpeakerQueue, AnOversizedPacketIsRefusedButNotCounted) {
     // Unreachable in production — PlayoutEngine::offer refuses it first and answers
-    // kOfferPacketTooLarge — so this is defence in depth ahead of the memcpy, nothing more.
+    // kOfferPacketTooLarge — so counting it here would double-count if it ever became reachable.
     auto q = newQueue();
     const std::vector<uint8_t> huge(pl::kMaxPacketBytes + 1, 0x00);
     EXPECT_FALSE(q->offer(huge.data(), int(huge.size()), 480, false));
     EXPECT_EQ(0, q->queuedSamples());
+    EXPECT_EQ(0, q->droppedPackets());
 }
 
-TEST(SpeakerQueue, AnUnpriceablePayloadIsRefused) {
+TEST(SpeakerQueue, AnUnpriceablePayloadIsRefusedAndCounted) {
     // What PlayoutEngine hands down when AudioDecoder::packetSamples cannot read the Opus header:
-    // a real payload with no span. It cannot be scheduled, so the refusal is how the engine
-    // learns to answer kOfferMalformedPacket rather than reporting acceptance.
+    // a real payload with no span. It cannot be scheduled, and before this counter existed it
+    // vanished with no signal at all.
     auto q = newQueue();
     const Packet p = encode(1);
     EXPECT_FALSE(q->offer(p.bytes.data(), int(p.bytes.size()), 0, false));
     EXPECT_EQ(0, q->queuedSamples());
+    EXPECT_EQ(1, q->droppedPackets());
 }
 
 TEST(SpeakerQueue, AnUnpriceablePayloadStillHonoursItsTerminator) {
     // The latch is the only thing that releases a tail below kPrebufferSamples, so dropping it
     // along with the malformed payload strands the 10 ms already queued until the speaker stalls
-    // out a second later — or splices it onto the front of that speaker's next spurt.
+    // out ten seconds later — or splices it onto the front of that speaker's next spurt.
     auto q = newQueue();
     const Packet p = encode(1);
     ASSERT_TRUE(offer(*q, p));
     EXPECT_FALSE(q->offer(p.bytes.data(), int(p.bytes.size()), 0, true));
+    EXPECT_EQ(1, q->droppedPackets());
     EXPECT_EQ(480, drainSpurt(*q));
 }
 
@@ -288,3 +293,23 @@ TEST(SpeakerQueue, PopPacketRefusesAnOutputSmallerThanThePacket) {
     EXPECT_LT(q->popPacket(tiny, 1), 0);
 }
 
+// The 32-slot pool caps a 10 ms sender's backlog at 320 ms, tighter than kHighWaterSamples would
+// allow on its own. This is the playout path's one deliberate departure from the Kotlin jitter
+// buffer it replaced, and the only bound a real stall would reveal, so both halves of the claim
+// are pinned here rather than left to the comment on kPacketSlots.
+TEST(SpeakerQueue, ATenMsSenderIsCappedByThePoolAt320ms) {
+    auto q = newQueue();
+    const Packet p = encode(1);
+    for (int i = 0; i < 200; i++) offer(*q, p);
+    EXPECT_EQ(pl::kPacketSlots * 480, q->queuedSamples());
+    EXPECT_LT(q->queuedSamples(), pl::kHighWaterSamples) << "the sample bound must not have bound";
+    EXPECT_EQ(200 - pl::kPacketSlots, q->droppedPackets());
+}
+
+TEST(SpeakerQueue, ATwentyMsSenderIsCappedBySamplesAt600ms) {
+    auto q = newQueue();
+    const Packet p = encode(2);
+    for (int i = 0; i < 200; i++) offer(*q, p);
+    EXPECT_EQ(pl::kHighWaterSamples, q->queuedSamples());
+    EXPECT_LT(q->queuedSamples(), pl::kPacketSlots * 960) << "the pool must not have bound";
+}

@@ -34,6 +34,7 @@ void SpeakerQueue::dropOldest() {
     queuedSamples_ -= slots_[head_].spanSamples;
     head_ = (head_ + 1) & kSlotMask;
     count_--;
+    droppedPackets_++;
 }
 
 bool SpeakerQueue::offer(const uint8_t* data, int len, int spanSamples, bool terminator) {
@@ -42,9 +43,11 @@ bool SpeakerQueue::offer(const uint8_t* data, int len, int spanSamples, bool ter
     // here would only double-count a protocol violation the caller already sees.
     if (len > kMaxPacketBytes) return false;
     // AudioDecoder::packetSamples could not price the header, so there is no span to charge the
-    // queue for and the payload cannot be scheduled. A payload-free terminator is not a refusal:
-    // it prices to nothing by definition.
+    // queue for and the payload cannot be scheduled. Counted rather than dropped in silence, which
+    // is what this used to do. A payload-free terminator is not a drop: it prices to nothing by
+    // definition.
     const bool priced = len == 0 || spanSamples > 0;
+    if (!priced) droppedPackets_++;
     if (priced && len > 0) {
         // Drop before insert, not after: the pool is fixed, so there is no transient state in
         // which an extra packet exists.
@@ -60,7 +63,10 @@ bool SpeakerQueue::offer(const uint8_t* data, int len, int spanSamples, bool ter
     // Latches rather than playing immediately: offer runs on the reader thread and must not touch
     // the fifo or the decoder, which are playback-thread-only. Only the drained path in endTick
     // re-arms it, so a terminator cannot clear the gate mid-spurt and strand the tail.
-    if (terminator) prebuffered_ = true;
+    if (terminator) {
+        prebuffered_ = true;
+        terminated_ = true;
+    }
     return priced;
 }
 
@@ -94,19 +100,35 @@ int SpeakerQueue::drain(int16_t* out, int frames) {
     return taken;
 }
 
-bool SpeakerQueue::endTick(bool produced) {
-    idleTicks_ = produced ? 0 : idleTicks_ + 1;
+SpeakerQueue::Tick SpeakerQueue::endTick(int produced, int frames) {
     const bool drained = count_ == 0;
+    // Two shapes of one defect. Real audio short of a quantum is a splice — drain zero-padded the
+    // rest, which a listener hears as a gap. Nothing at all, while the gate is open and no
+    // terminator has explained the stop, is that same gap at full width: the case the partial
+    // count cannot see, and the loud one. Both guards earn their place — prebuffered_ excludes a
+    // spurt that has not opened its gate yet, which is quiet by design, and terminated_ excludes
+    // speech that simply ended, which would otherwise bill one gap per utterance.
+    //
+    // In practice PlayoutEngine charges a stall once rather than per tick, but that falls out of
+    // the re-arm below, not from a rule here: its decode loop empties the pool on the tick that
+    // produced nothing, so the next tick is drained and the gate has already closed. This counts
+    // gaps, not their duration, and a server that never sends terminators books one per spurt.
+    const bool concealed =
+        produced > 0 ? produced < frames : prebuffered_ && !terminated_;
+    idleTicks_ = produced > 0 ? 0 : idleTicks_ + 1;
     // Fully drained: re-arm so the next talk spurt rebuilds its playout margin. On idle rather
     // than on the terminator frame, so the tail of a spurt plays out first and a spurt whose
     // terminator never arrives still re-arms.
-    if (!produced && drained) prebuffered_ = false;
+    if (produced <= 0 && drained) {
+        prebuffered_ = false;
+        terminated_ = false;
+    }
     // Two windows, because "produced nothing this tick" means two different things. Once the pool
     // is drained it means the speaker stopped talking, which is the short window. While packets
     // remain it means the prebuffer gate has not opened yet — a spurt is silent for its first
     // kPrebufferSamples, and the loop ticks faster than 100 Hz while doing so because each
     // arriving packet wakes it, so charging those as idle would retire a speaker before it plays.
-    return idleTicks_ >= (drained ? kRetireIdleTicks : kStallIdleTicks);
+    return {idleTicks_ >= (drained ? kRetireIdleTicks : kStallIdleTicks), concealed};
 }
 
 }  // namespace dumble::playout

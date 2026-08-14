@@ -40,6 +40,9 @@ public:
      */
     int fillQuantum(int16_t* out, int frames, int32_t* sessions, int32_t* liveSpeakers);
 
+    /** Any thread. Returns the live speaker count, filling `sessions` and `depths` to match and
+     *  `counters` with kCounterCount monotonic values. */
+    int readStats(int32_t* sessions, int32_t* depths, int64_t* counters);
 
 private:
     PlayoutEngine(int sampleRate, int maxQuantumSamples, int maxSpeakers);
@@ -56,6 +59,8 @@ private:
     SlotSet slots_;
     int32_t sessions_[SlotSet::kCapacity] = {};
     std::unique_ptr<SpeakerQueue> queues_[SlotSet::kCapacity];
+    int64_t concealedTicks_ = 0;
+    int64_t droppedPackets_ = 0;
 
     // Playback-thread-only scratch, sized once at construction so no tick allocates.
     std::vector<int32_t> accumulator_;
