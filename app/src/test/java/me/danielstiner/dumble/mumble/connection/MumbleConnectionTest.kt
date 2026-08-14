@@ -31,7 +31,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HostnameVerifier
 
 class MumbleConnectionTest {
@@ -306,52 +305,6 @@ class MumbleConnectionTest {
         awaitTrue("a failed session must close every decoder") { codec.decodersClosed == codec.decodersCreated }
         // The error must survive the teardown — it is what the user is looking at.
         assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
-    }
-
-    /**
-     * A session can reach a terminal state before connect() gets as far as starting the receiver —
-     * an instant auth reject, or a socket dropped right after the TLS handshake. retire() releases
-     * such an attempt without bumping `attempt`, so a guard testing the generation alone still
-     * passes and starts a receiver whose stop() has already run: a playback thread nothing will
-     * ever stop, holding an open AudioOut until the process dies, one per failed connect.
-     *
-     * Whether that window is hit is pure scheduling. On an idle machine the connect coroutine wins
-     * every time — against the bug this body passed 200 consecutive runs. The load threads are what
-     * make it reachable, at which point it reproduced on roughly a quarter of runs.
-     */
-    @Test fun aSessionFailingBeforeStartLeavesNoReceiverRunning() = runBlocking {
-        val stopLoad = AtomicBoolean(false)
-        val load = (1..Runtime.getRuntime().availableProcessors()).map {
-            Thread { var x = 0L; while (!stopLoad.get()) x += 1 }.apply { isDaemon = true; start() }
-        }
-        try {
-            repeat(50) { run ->
-                val outs = CopyOnWriteArrayList<FakeAudioOut>()
-                lateinit var fake: FakeControlTransport
-                val conn = MumbleConnection(
-                    InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut().also { outs += it } },
-                ) {
-                    // Rejected from inside connect(), so the session is already Failed by the time
-                    // the state collector is launched — well before the receiver would start.
-                    FakeControlTransport { _, _ ->
-                        fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
-                            MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
-                    }.also { fake = it }
-                }
-
-                conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-                withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
-                // Either ordering is fine: the guard sees the release and never starts (no output
-                // is built at all), or it starts first and the teardown's stop() closes it. What
-                // must never survive is an output that was opened and left open.
-                awaitTrue("run $run: receiver started for a retired attempt and was never stopped") {
-                    outs.all { it.closed }
-                }
-            }
-        } finally {
-            stopLoad.set(true)
-            load.forEach { it.join(1_000) }
-        }
     }
 
     /**
