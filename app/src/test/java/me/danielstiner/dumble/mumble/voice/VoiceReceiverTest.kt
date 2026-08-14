@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.voice.FakeOpusCodec.Companion.packet
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -33,6 +34,35 @@ class VoiceReceiverTest {
             .setOpusData(ByteString.copyFrom(packet(tenMsFrames)))
             .build()
         return byteArrayOf(0) + audio.toByteArray()
+    }
+
+    /**
+     * The ordering MumbleConnection can produce and cannot easily be driven from there: an attempt
+     * killed by an instant auth reject is retired — which calls stop() — before connect()'s
+     * coroutine gets as far as start(). Without the one-way latch that is a playback thread nothing
+     * will ever stop, holding an open AudioOut until the process dies, one per failed connect.
+     *
+     * Tested here rather than through MumbleConnection because the invariant is this class's: there
+     * the same window is a race between two coroutines that has to be lost on purpose.
+     */
+    @Test
+    fun startAfterStopNeverRunsAPlaybackThread() {
+        val opened = CountDownLatch(1)
+        val rx = VoiceReceiver(FakeOpusCodec()) {
+            opened.countDown()
+            LatchingOut(CountDownLatch(1))
+        }
+
+        rx.stop()
+        rx.start()
+
+        // loop() builds its output before anything else, so a thread that did start would trip
+        // this well inside the wait. The assertion is on the negative, so a slow machine can only
+        // make it pass — never fail.
+        assertFalse(
+            "start() after stop() ran a playback thread",
+            opened.await(500, TimeUnit.MILLISECONDS),
+        )
     }
 
     @Test
