@@ -16,8 +16,10 @@ namespace dumble::playout {
 constexpr int kMaxSpeakers = 64;
 
 // 120 ms at 48 kHz, the largest legal Opus packet, so a malformed or unusually long packet cannot
-// overrun the decode scratch.
-constexpr int kMaxFrameSamples = 5760;
+// overrun the decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and
+// one in bytes. Packet and not frame — the largest single Opus frame is the 20 ms kTxFrameSamples,
+// and 40 ms and up are multi-frame packets.
+constexpr int kMaxPacketSamples = 5760;
 
 // 60 ms. Playout margin armed at the start of each talk spurt. TCP removes reordering and loss but
 // not head-of-line burstiness, and a pipeline fed at exactly 1x real time carries no margin of its

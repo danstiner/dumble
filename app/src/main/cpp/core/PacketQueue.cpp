@@ -12,11 +12,11 @@ constexpr int kSlotMask = kPacketSlots - 1;
 // Slot narrows both fields to uint16_t. Neither bound is close to the limit, but a silent
 // truncation here would corrupt depth accounting rather than fail, so it is a compile error.
 static_assert(kMaxPacketBytes <= UINT16_MAX);
-static_assert(kMaxFrameSamples <= UINT16_MAX);
+static_assert(kMaxPacketSamples <= UINT16_MAX);
 
 // Why the drop loop below needs no guard against emptying the queue: one packet cannot exceed the
-// cap on its own, because the largest legal Opus frame is a fraction of it.
-static_assert(kMaxFrameSamples <= kHighWaterSamples);
+// cap on its own, because the largest legal Opus packet is a fraction of it.
+static_assert(kMaxPacketSamples <= kHighWaterSamples);
 
 }  // namespace
 
@@ -32,8 +32,8 @@ bool PacketQueue::offer(const uint8_t* data, int len, int spanSamples, bool term
     if (len > kMaxPacketBytes) return false;
     // Accept packets that either contain decodable samples or are empty terminator packets.
     // The upper bound is what makes Slot's uint16_t span safe: PlayoutEngine only ever measures a
-    // real Opus header, so a span past the largest legal frame means a caller we do not have.
-    const bool accepted = len == 0 || (spanSamples > 0 && spanSamples <= kMaxFrameSamples);
+    // real Opus header, so a span past the largest legal packet means a caller we do not have.
+    const bool accepted = len == 0 || (spanSamples > 0 && spanSamples <= kMaxPacketSamples);
     if (accepted && len > 0) {
         // Drop before insert, not after: the pool is fixed, so there is no transient state in
         // which an extra packet exists.
