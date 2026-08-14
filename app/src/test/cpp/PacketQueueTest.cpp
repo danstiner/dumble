@@ -184,14 +184,14 @@ TEST(PacketQueue, AnOversizedPacketIsRefusedAlongWithItsTerminator) {
     EXPECT_EQ(-1, popTag(q)) << "the refused packet's terminator opened the gate";
 }
 
-TEST(PacketQueue, AnUnpriceablePayloadIsRefused) {
+TEST(PacketQueue, AnUnmeasurablePayloadIsRefused) {
     PacketQueue q;
     EXPECT_FALSE(offer(q, packet(1, /*spanSamples=*/0)));
     EXPECT_TRUE(q.empty());
     EXPECT_EQ(0, q.depthSamples());
 }
 
-TEST(PacketQueue, AnUnpriceablePayloadStillHonoursItsTerminator) {
+TEST(PacketQueue, AnUnmeasurablePayloadStillHonoursItsTerminator) {
     PacketQueue q;
     ASSERT_TRUE(offer(q, packet(4)));
     EXPECT_FALSE(offer(q, packet(9, /*spanSamples=*/0), /*terminator=*/true));

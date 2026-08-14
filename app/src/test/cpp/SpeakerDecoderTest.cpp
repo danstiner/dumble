@@ -14,12 +14,12 @@ namespace pl = dumble::playout;
 
 constexpr int kQuantum = 480;
 
-// A real Opus packet spanning `tenMsFrames` * 10 ms — this side of the seam needs payloads libopus
+// A real Opus packet spanning `tenMsUnits` * 10 ms — this side of the seam needs payloads libopus
 // will actually accept, unlike PacketQueue, which never looks at the bytes.
-std::vector<uint8_t> encode(int tenMsFrames) {
+std::vector<uint8_t> encode(int tenMsUnits) {
     static auto enc =
         dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 40000).release();
-    const int samples = tenMsFrames * 480;
+    const int samples = tenMsUnits * 480;
     std::vector<int16_t> pcm(samples);
     for (int i = 0; i < samples; i++)
         pcm[i] = int16_t(8000 * std::sin(2.0 * M_PI * 440.0 * i / dumble::kSampleRate));
@@ -104,7 +104,7 @@ TEST(SpeakerDecoder, APayloadLibopusRefusesDecodesToNothing) {
     EXPECT_EQ(0, d->available());
 }
 
-TEST(SpeakerDecoder, TheLargestLegalFrameFits) {
+TEST(SpeakerDecoder, TheLargestLegalPacketFits) {
     // kMaxPacketSamples is 120 ms, the largest Opus packet — the decode scratch is sized for
     // exactly this and nothing bounds-checks libopus but that number.
     auto d = newDecoder();
