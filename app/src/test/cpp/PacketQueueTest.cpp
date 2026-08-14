@@ -152,7 +152,7 @@ TEST(PacketQueue, HighWaterCapsTheQueueInSamples) {
 
 TEST(PacketQueue, HighWaterDropsTheOldestFirst) {
     PacketQueue q;
-    const int span = pl::kMaxFrameSamples;
+    const int span = pl::kMaxPacketSamples;
     for (uint8_t i = 0; i < 8; i++) ASSERT_TRUE(offer(q, packet(i, span)));
     // The survivors are the newest, so the first pop is not tag 0.
     EXPECT_GT(popTag(q), 0);
@@ -166,14 +166,14 @@ TEST(PacketQueue, SlotsCapTheQueueEvenBelowHighWater) {
     EXPECT_EQ(pl::kPacketSlots, drainCount(q));
 }
 
-TEST(PacketQueue, ASpanLongerThanTheLargestOpusFrameIsRefused) {
+TEST(PacketQueue, ASpanLongerThanTheLargestOpusPacketIsRefused) {
     // Nothing PlayoutEngine measures can exceed this, so the bound is defence in depth — but it
     // is also what keeps Slot's uint16_t span from truncating a caller's number in silence.
     PacketQueue q;
-    EXPECT_FALSE(offer(q, packet(5, pl::kMaxFrameSamples + 1)));
+    EXPECT_FALSE(offer(q, packet(5, pl::kMaxPacketSamples + 1)));
     EXPECT_TRUE(q.empty());
-    EXPECT_TRUE(offer(q, packet(6, pl::kMaxFrameSamples)));
-    EXPECT_EQ(pl::kMaxFrameSamples, q.depthSamples());
+    EXPECT_TRUE(offer(q, packet(6, pl::kMaxPacketSamples)));
+    EXPECT_EQ(pl::kMaxPacketSamples, q.depthSamples());
 }
 
 TEST(PacketQueue, AnOversizedPacketIsRefusedAlongWithItsTerminator) {

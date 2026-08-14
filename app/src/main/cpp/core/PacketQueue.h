@@ -28,7 +28,7 @@ public:
     PacketQueue();
 
     /** False when the payload was refused: a non-empty payload whose `spanSamples` is not a legal
-     *  Opus frame length, or — unreachable from PlayoutEngine, which checks first — one longer
+     *  Opus packet length, or — unreachable from PlayoutEngine, which checks first — one longer
      *  than kMaxPacketBytes, the one case that discards the terminator too. Otherwise the
      *  terminator is honoured whether or not anything was queued: `data` may be null when `len` is
      *  0, and either way the latch is what releases a tail below kPrebufferSamples. */

@@ -54,9 +54,9 @@ TEST(AudioDecoder, RoundTripsEveryPacketDuration) {
         const std::vector<uint8_t> packet = encodePacket(frameSamples);
         auto dec = AudioDecoder::create(dumble::kSampleRate, dumble::kChannels);
         ASSERT_TRUE(dec);
-        std::vector<int16_t> out(dumble::playout::kMaxFrameSamples);
+        std::vector<int16_t> out(dumble::playout::kMaxPacketSamples);
         const int n = dec->decode(packet.data(), int(packet.size()), out.data(),
-                                  dumble::playout::kMaxFrameSamples);
+                                  dumble::playout::kMaxPacketSamples);
         EXPECT_EQ(frameSamples, n) << "at " << frameSamples << " samples";
         EXPECT_GT(meanEnergy(out.data(), n), 1000.0) << "decoded silence at " << frameSamples;
     }
@@ -98,7 +98,7 @@ TEST(AudioDecoder, DecodeRejectsGarbage) {
     const std::vector<uint8_t> garbage(40, 0xFF);
     auto dec = AudioDecoder::create(dumble::kSampleRate, dumble::kChannels);
     ASSERT_TRUE(dec);
-    std::vector<int16_t> out(dumble::playout::kMaxFrameSamples);
+    std::vector<int16_t> out(dumble::playout::kMaxPacketSamples);
     EXPECT_LE(dec->decode(garbage.data(), int(garbage.size()), out.data(),
-                          dumble::playout::kMaxFrameSamples), 0);
+                          dumble::playout::kMaxPacketSamples), 0);
 }
