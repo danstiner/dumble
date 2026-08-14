@@ -224,3 +224,20 @@ TEST(PacketQueue, QueuedSamplesTracksOffersAndPops) {
     EXPECT_EQ(0, drainCount(q) >= 0 ? q.depthSamples() : -1);
     EXPECT_TRUE(q.empty());
 }
+
+TEST(PacketQueue, ResetDropsEverythingQueuedAndRearmsTheGate) {
+    // The state a slot must not carry to its next sender. Armed and mid-spurt, so both halves are
+    // live: packets are queued and the gate is open.
+    PacketQueue q;
+    arm(q);
+    ASSERT_GE(q.depthSamples(), pl::kPrebufferSamples);
+    ASSERT_GE(popTag(q), 0) << "the gate should be open before reset";
+
+    q.reset();
+
+    EXPECT_TRUE(q.empty());
+    EXPECT_EQ(0, q.depthSamples());
+    // The gate is armed again, so one packet is not enough to play.
+    EXPECT_TRUE(offer(q, packet(9)));
+    EXPECT_EQ(-1, popTag(q)) << "reset left the prebuffer gate open";
+}

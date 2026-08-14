@@ -48,6 +48,10 @@ public:
      *  idle: packets already popped may still be playing out downstream. */
     void endTick(bool decoderProduced);
 
+    /** Returns the queue to its just-constructed state, for a slot about to serve a different
+     *  sender. The pool itself is left alone: slots past `count_` are never read. */
+    void reset();
+
     /** Encoded audio waiting, in samples — the jitter-buffer depth. A duration, not a quantity
      *  held: what this queue stores is bytes, at whatever sample count the caller measured. */
     int depthSamples() const { return depthSamples_; }

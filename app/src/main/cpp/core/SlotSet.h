@@ -39,6 +39,6 @@ private:
 };
 
 static_assert(kMaxSpeakers <= SlotSet::kCapacity,
-              "one uint64_t of occupancy is the whole reason kMaxSpeakers is 64");
+              "occupancy is one uint64_t, so kMaxSpeakers cannot exceed its width");
 
 }  // namespace dumble::playout
