@@ -191,6 +191,30 @@ class VoiceReceiverTest {
     }
 
     /**
+     * A peer sending nothing but unparseable payloads must not take the reader down with it, and
+     * must not poison the session for the good packets that follow. This is the shape a truncated
+     * or hostile stream takes, so it arrives at the packet rate.
+     */
+    @Test
+    fun keepsReadingThroughMalformedPayloads() {
+        val fake = FakePlayoutEngine()
+        fake.offerResult = NativePlayout.OFFER_MALFORMED_PACKET
+        fake.blockWhenEmpty = false
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
+        rx.start()
+        try {
+            repeat(8) { rx.onTunneledAudio(audioPayload(session = 3, tenMsFrames = 6)) }
+            assertEquals("a malformed payload must not stop the reader", 8, fake.offered.size)
+
+            fake.offerResult = NativePlayout.OFFER_ACCEPTED
+            rx.onTunneledAudio(audioPayload(session = 3, tenMsFrames = 6))
+            assertEquals("the session must still work after garbage", 9, fake.offered.size)
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /**
      * The cap is enforced natively now; the only thing left on this side is that a capped
      * response does not stop the reader from routing packets, and a session already admitted
      * keeps working once native clears room for it.

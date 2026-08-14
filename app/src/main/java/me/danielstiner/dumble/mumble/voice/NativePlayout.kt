@@ -16,6 +16,11 @@ object NativePlayout {
     const val OFFER_PACKET_TOO_LARGE = 2
     const val OFFER_ENGINE_UNUSABLE = 3
 
+    /** The payload was not a parseable Opus packet, so it was dropped rather than queued. Its own
+     *  code because a peer sending nothing but these is otherwise indistinguishable from one whose
+     *  audio is merely overflowing the jitter bounds — both only move the dropped-packet count. */
+    const val OFFER_MALFORMED_PACKET = 4
+
     /** Negative return from [fillQuantum] or [readStats]: the arrays this side passed are too
      *  small, or `frames` is out of range. A bug here, never a condition to handle — it is a
      *  distinct code for the reason `CaptureConstants.h`'s `kPollBufferTooSmall` is, so an

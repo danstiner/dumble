@@ -78,6 +78,10 @@ class VoiceReceiver(
     // produce on every packet, not a bug to fail loud about per-packet.
     private var oversizeReported = false
 
+    // Same again. Unparseable payloads are the shape a truncated or hostile stream takes, so they
+    // arrive at the packet rate or not at all.
+    private var malformedReported = false
+
     // Same reasoning again, but for the playback thread's own bug class rather than the reader's:
     // a readStats() this side sized wrong would otherwise refuse silently on every spurt close for
     // the rest of the session.
@@ -217,6 +221,10 @@ class VoiceReceiver(
                 NativePlayout.OFFER_PACKET_TOO_LARGE -> if (!oversizeReported) {
                     oversizeReported = true
                     Log.w(TAG, "dropping oversized opus payload")
+                }
+                NativePlayout.OFFER_MALFORMED_PACKET -> if (!malformedReported) {
+                    malformedReported = true
+                    Log.w(TAG, "dropping unparseable opus payload")
                 }
             }
             idleLock.notifyAll()
