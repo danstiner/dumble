@@ -22,6 +22,10 @@ int AudioDecoder::packetSamples(const uint8_t* data, int len, int sampleRate) {
     return opus_packet_get_nb_samples(data, len, sampleRate);
 }
 
+void AudioDecoder::reset() {
+    opus_decoder_ctl(dec_, OPUS_RESET_STATE);
+}
+
 AudioDecoder::~AudioDecoder() {
     opus_decoder_destroy(dec_);
 }

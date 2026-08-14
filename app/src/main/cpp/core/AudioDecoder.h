@@ -23,6 +23,10 @@ public:
      *  `out` — it does no bounds checking of its own — so it must be the real capacity. */
     int decode(const uint8_t* data, int len, int16_t* out, int outCap);
 
+    /** Drops the inter-packet prediction state, so the next packet decodes as the start of a
+     *  stream. Needed only when one decoder is handed from one sender to another. */
+    void reset();
+
 private:
     explicit AudioDecoder(OpusDecoder* dec) : dec_(dec) {}
 

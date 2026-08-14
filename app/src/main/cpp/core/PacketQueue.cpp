@@ -67,6 +67,13 @@ int PacketQueue::pop(uint8_t* out, int outCap) {
     return slot.len;
 }
 
+void PacketQueue::reset() {
+    head_ = 0;
+    count_ = 0;
+    depthSamples_ = 0;
+    gateOpen_ = false;
+}
+
 void PacketQueue::endTick(bool decoderProduced) {
     if (!decoderProduced && count_ == 0) gateOpen_ = false;
 }

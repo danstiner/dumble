@@ -38,6 +38,12 @@ public:
      *  reaches this point is a payload that parsed as a header and then failed to decode. */
     void decode(const uint8_t* data, int len);
 
+    /** Returns the stage to its just-constructed state, for a slot about to serve a different
+     *  sender: libopus keeps prediction state between packets, and it must not carry one
+     *  speaker's history into another's first packet. Consumer side, like the rest of this
+     *  class — PcmRing only lets its consumer move the read index. */
+    void reset();
+
     /** Decoded samples buffered. */
     int available() const;
 
