@@ -7,7 +7,7 @@ namespace dumble::playout {
 
 std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuantumSamples,
                                                      int maxSpeakers) {
-    if (maxSpeakers <= 0 || maxSpeakers > SlotSet::kCapacity) return nullptr;
+    if (maxSpeakers <= 0 || maxSpeakers > kMaxSpeakers) return nullptr;
     // One probe, with the exact call a speaker will make, rather than restating SpeakerDecoder's
     // range check here and letting the two drift. It proves libopus is reachable now instead of
     // on the first packet, where the only symptom would be permanent silence, and it proves
@@ -92,7 +92,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions, int
         PacketQueue* queue;
         SpeakerDecoder* decoder;
     };
-    Live live[SlotSet::kCapacity];
+    Live live[kMaxSpeakers];
     int liveCount = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);

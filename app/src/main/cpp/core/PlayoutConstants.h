@@ -6,14 +6,16 @@ namespace dumble::playout {
 // A nested namespace, not bare `dumble`: CaptureConstants.h already owns kHighWaterSamples and
 // kMaxPacketBytes at that scope, with different values for the transmit side.
 
-// Concurrent per-speaker queues we will allocate. Exactly one machine word of occupancy — see
-// SlotSet — and far above any plausible channel population, so it bites only on a server inventing
-// sessions. The desktop client has no equivalent cap. No slot is held for free: a draining one
-// evaporates within kRetireIdleTicks, one stalled below the prebuffer gate within kStallIdleTicks.
-// That bounds the memory but not the denial — parking all 64 costs one packet per session per
-// second, which the server we connected to can trivially afford, and every real speaker then gets
-// kOfferSpeakerCap. No untrusted peer can reach it, and the server could mute us outright anyway.
-constexpr int kMaxSpeakers = 64;
+// Concurrent speakers we mix, and — since PlayoutEngine builds them all up front — what the
+// playout path costs in memory. Past about eight overlapping voices nothing is intelligible
+// anyway, so this is sized for the tail rather than for the mix: a slot is also held by a speaker
+// draining its last packets (kRetireIdleTicks) and by one stalled below the prebuffer gate
+// (kStallIdleTicks, ~1 s), so a channel with rapid turn-taking holds more slots than it has
+// talkers. The desktop client has no equivalent cap. It bounds the memory but not the denial —
+// parking every slot costs one packet per session per second, which the server we connected to
+// can trivially afford, and every real speaker then gets kOfferSpeakerCap. No untrusted peer can
+// reach it, and the server could mute us outright anyway.
+constexpr int kMaxSpeakers = 16;
 
 // 120 ms at 48 kHz, the largest legal Opus packet, so a malformed or unusually long packet cannot
 // overrun the decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and

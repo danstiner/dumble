@@ -29,10 +29,10 @@ namespace dumble::playout {
  */
 class PlayoutEngine {
 public:
-    /** Null when maxSpeakers exceeds the one machine word of occupancy SlotSet holds — a mismatch
-     *  with the caller's array sizing, caught here rather than as an out-of-bounds write at 100 Hz
-     *  — or when a speaker could not be built at all, which covers both libopus being unreachable
-     *  and maxQuantumSamples being outside what the per-speaker buffer sizing can represent. */
+    /** Null when maxSpeakers exceeds kMaxSpeakers — a mismatch with the caller's array sizing,
+     *  caught here rather than as an out-of-bounds write at 100 Hz — or when a speaker could not
+     *  be built at all, which covers both libopus being unreachable and maxQuantumSamples being
+     *  outside what the per-speaker buffer sizing can represent. */
     static std::unique_ptr<PlayoutEngine> create(int sampleRate, int maxQuantumSamples,
                                                  int maxSpeakers);
 
@@ -63,12 +63,12 @@ private:
 
     std::mutex mutex_;
     SlotSet slots_;
-    int32_t sessions_[SlotSet::kCapacity] = {};
-    std::unique_ptr<PacketQueue> queues_[SlotSet::kCapacity];
-    std::unique_ptr<SpeakerDecoder> decoders_[SlotSet::kCapacity];
+    int32_t sessions_[kMaxSpeakers] = {};
+    std::unique_ptr<PacketQueue> queues_[kMaxSpeakers];
+    std::unique_ptr<SpeakerDecoder> decoders_[kMaxSpeakers];
     // Consecutive ticks a claimed slot has produced nothing. Reset on claim, since slots are
     // reused and a stale count would retire a new speaker early.
-    int idleTicks_[SlotSet::kCapacity] = {};
+    int idleTicks_[kMaxSpeakers] = {};
 
     // Playback-thread-only scratch, sized once at construction so no tick allocates.
     std::vector<int32_t> accumulator_;

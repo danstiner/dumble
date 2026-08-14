@@ -46,9 +46,11 @@ void arm(PlayoutEngine& e, int32_t session, int count = 6) {
 
 }  // namespace
 
-TEST(PlayoutEngine, CreateRejectsMoreSpeakersThanTheBitmaskHolds) {
-    EXPECT_FALSE(PlayoutEngine::create(dumble::kSampleRate, kQuantum,
-                                       pl::kMaxSpeakers + 1));
+TEST(PlayoutEngine, CreateRejectsMoreSpeakersThanTheCap) {
+    // The engine sizes its per-slot arrays from kMaxSpeakers, so a caller asking for more is an
+    // out-of-bounds write at ~100 Hz, not a bigger channel.
+    EXPECT_FALSE(PlayoutEngine::create(dumble::kSampleRate, kQuantum, pl::kMaxSpeakers + 1));
+    EXPECT_FALSE(PlayoutEngine::create(dumble::kSampleRate, kQuantum, 0));
 }
 
 TEST(PlayoutEngine, AnIdleEngineProducesNothing) {
