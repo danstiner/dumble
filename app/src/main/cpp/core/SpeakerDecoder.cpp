@@ -36,6 +36,11 @@ int SpeakerDecoder::available() const {
     return int(fifo_.available());
 }
 
+void SpeakerDecoder::reset() {
+    decoder_->reset();
+    fifo_.reset();
+}
+
 int SpeakerDecoder::drain(int16_t* out, int samples) {
     const int taken = int(fifo_.readUpTo(out, uint32_t(samples)));
     if (taken < samples) std::memset(out + taken, 0, size_t(samples - taken) * sizeof(int16_t));

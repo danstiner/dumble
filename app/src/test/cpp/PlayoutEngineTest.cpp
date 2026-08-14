@@ -290,3 +290,53 @@ TEST(PlayoutEngine, ASpurtStalledBelowThePrebufferEventuallyReleasesItsSlot) {
     for (int i = 0; i < pl::kStallIdleTicks + 2 && live != 0; i++) live = liveThisTick(*e, pcm);
     EXPECT_EQ(0, live);
 }
+
+TEST(PlayoutEngine, AReclaimedSlotDoesNotInheritStrandedPackets) {
+    // The stall window is the one retirement path that fires with packets still queued, so it is
+    // what makes the reset load-bearing: without it the next sender to land on this slot inherits
+    // a stranded packet and plays a syllable of someone else's voice.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), false));
+    std::vector<int16_t> pcm(kQuantum);
+    int live = 1;
+    for (int i = 0; i < pl::kStallIdleTicks + 2 && live != 0; i++) live = liveThisTick(*e, pcm);
+    ASSERT_EQ(0, live) << "the stalled speaker never released its slot";
+
+    // Exactly kPrebufferSamples from a new sender, which must come back as exactly six ticks. A
+    // seventh would be session 7's stranded packet.
+    arm(*e, 8, 6);
+    EXPECT_EQ(6, drainSpurt(*e));
+}
+
+TEST(PlayoutEngine, AReclaimedSlotDecodesLikeAFreshOne) {
+    // The decoder half of the same contract. libopus predicts across packets, so a slot handed
+    // from one sender to the next must start over — otherwise session 8's first quantum carries
+    // the tail of session 7's voice. Compared against a fresh engine, which is the definition.
+    //
+    // One payload, offered to both: encode()'s encoder is a static and predicts across calls, so
+    // re-encoding the same PCM for the second engine would compare two different packets.
+    const std::vector<uint8_t> p = encode(1);
+    const auto armWith = [&p](PlayoutEngine& e, int32_t session) {
+        for (int i = 0; i < 6; i++)
+            ASSERT_EQ(pl::kOfferAccepted, e.offer(session, p.data(), int(p.size()), false));
+    };
+
+    std::vector<int16_t> reused(kQuantum), fresh(kQuantum), pcm(kQuantum);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+
+    auto e = newEngine();
+    armWith(*e, 7);
+    ASSERT_EQ(6, drainSpurt(*e));
+    for (int i = 0; i < pl::kRetireIdleTicks + 1; i++) liveThisTick(*e, pcm);
+    ASSERT_EQ(0, liveThisTick(*e, pcm)) << "session 7 never released its slot";
+    armWith(*e, 8);
+    ASSERT_EQ(1, e->fillQuantum(reused.data(), kQuantum, speaking.data(), &live));
+
+    auto clean = newEngine();
+    armWith(*clean, 8);
+    ASSERT_EQ(1, clean->fillQuantum(fresh.data(), kQuantum, speaking.data(), &live));
+
+    EXPECT_EQ(fresh, reused);
+}

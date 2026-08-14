@@ -111,3 +111,35 @@ TEST(SpeakerDecoder, TheLargestLegalFrameFits) {
     decode(*d, encode(12));
     EXPECT_EQ(pl::kMaxPacketSamples, d->available());
 }
+
+TEST(SpeakerDecoder, ResetDropsBufferedAudio) {
+    auto d = newDecoder();
+    decode(*d, encode(2));
+    ASSERT_GT(d->available(), 0);
+    d->reset();
+    EXPECT_EQ(0, d->available());
+}
+
+TEST(SpeakerDecoder, ResetDropsTheDecodersHistory) {
+    // The reason reset() exists: PlayoutEngine hands one decoder from sender to sender, and
+    // libopus predicts across packets. A reused decoder must produce what a fresh one would, or
+    // the new speaker's first packet carries the previous speaker's tail.
+    const std::vector<uint8_t> other = encode(2);
+    const std::vector<uint8_t> first = encode(1);
+
+    auto fresh = newDecoder();
+    decode(*fresh, first);
+    std::vector<int16_t> expected(kQuantum);
+    ASSERT_EQ(kQuantum, fresh->drain(expected.data(), kQuantum));
+
+    auto reused = newDecoder();
+    decode(*reused, other);
+    std::vector<int16_t> discard(kQuantum);
+    reused->drain(discard.data(), kQuantum);
+    reused->reset();
+    decode(*reused, first);
+    std::vector<int16_t> got(kQuantum);
+    ASSERT_EQ(kQuantum, reused->drain(got.data(), kQuantum));
+
+    EXPECT_EQ(expected, got);
+}

@@ -19,6 +19,10 @@ namespace dumble::playout {
  * engine is the one place that holds both, and the pop-then-decode loop in fillQuantum is where
  * they meet — one lock acquisition per packet, and no decode inside it.
  *
+ * Every speaker is built by create() and lives as long as the engine. A slot is claimed, reset
+ * and released, never allocated — so offer() takes no malloc under the mutex a playback thread is
+ * waiting on, and the pointers below are fixed for the engine's lifetime.
+ *
  * Retirement lives here rather than in either half: a slot is this class's to claim and release,
  * and neither half alone can tell a speaker that has stopped talking from one still waiting out
  * its prebuffer.
@@ -53,8 +57,8 @@ public:
 private:
     PlayoutEngine(int sampleRate, int maxQuantumSamples, int maxSpeakers);
 
-    /** Mutex held. Slot for this session, claiming and building one if needed; -1 when the cap is
-     *  reached, -2 when a speaker could not be built. */
+    /** Mutex held. Slot for this session, claiming a free one if needed; -1 when the cap is
+     *  reached. */
     int slotFor(int32_t session);
 
     const int sampleRate_;
@@ -64,8 +68,10 @@ private:
     std::mutex mutex_;
     SlotSet slots_;
     int32_t sessions_[kMaxSpeakers] = {};
-    std::unique_ptr<PacketQueue> queues_[kMaxSpeakers];
-    std::unique_ptr<SpeakerDecoder> decoders_[kMaxSpeakers];
+    // One entry per slot, built by create() and never rebuilt — which is what lets the playback
+    // thread hold a pointer into them across an unlocked decode.
+    std::vector<PacketQueue> queues_;
+    std::vector<std::unique_ptr<SpeakerDecoder>> decoders_;
     // Consecutive ticks a claimed slot has produced nothing. Reset on claim, since slots are
     // reused and a stale count would retire a new speaker early.
     int idleTicks_[kMaxSpeakers] = {};
