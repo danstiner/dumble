@@ -1,8 +1,7 @@
 #include <gtest/gtest.h>
-#include <cmath>
 #include <memory>
 #include <vector>
-#include "core/AudioEncoder.h"
+#include "TestTone.h"
 #include "core/CaptureConstants.h"
 #include "core/PlayoutConstants.h"
 #include "core/SpeakerDecoder.h"
@@ -17,17 +16,7 @@ constexpr int kQuantum = 480;
 // A real Opus packet spanning `tenMsUnits` * 10 ms — this side of the seam needs payloads libopus
 // will actually accept, unlike PacketQueue, which never looks at the bytes.
 std::vector<uint8_t> encode(int tenMsUnits) {
-    static auto enc =
-        dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 40000).release();
-    const int samples = tenMsUnits * 480;
-    std::vector<int16_t> pcm(samples);
-    for (int i = 0; i < samples; i++)
-        pcm[i] = int16_t(8000 * std::sin(2.0 * M_PI * 440.0 * i / dumble::kSampleRate));
-    std::vector<uint8_t> bytes(pl::kMaxPacketBytes);
-    const int n = enc->encode(pcm.data(), samples, bytes.data(), int(bytes.size()));
-    EXPECT_GT(n, 0);
-    bytes.resize(n > 0 ? n : 0);
-    return bytes;
+    return dumble::testtone::encodeTone(tenMsUnits * 480);
 }
 
 std::unique_ptr<SpeakerDecoder> newDecoder() {
