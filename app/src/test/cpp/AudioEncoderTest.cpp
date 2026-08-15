@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <cmath>
+#include "TestTone.h"
 #include <opus.h>
 #include <vector>
 #include "core/CaptureConstants.h"
@@ -15,9 +15,7 @@ double roundTripToneEnergy(int bitrate, int* bytesOut) {
     EXPECT_TRUE(enc);
     if (!enc) return 0;
 
-    std::vector<int16_t> pcm(dumble::kTxFrameSamples);
-    for (int i = 0; i < dumble::kTxFrameSamples; i++)
-        pcm[i] = int16_t(8000 * std::sin(2.0 * M_PI * 440.0 * i / dumble::kSampleRate));
+    const std::vector<int16_t> pcm = dumble::testtone::tone(dumble::kTxFrameSamples);
 
     std::vector<uint8_t> packet(4000);
     const int bytes =
@@ -35,9 +33,7 @@ double roundTripToneEnergy(int bitrate, int* bytesOut) {
     opus_decoder_destroy(dec);
     EXPECT_EQ(dumble::kTxFrameSamples, samples);
 
-    double energy = 0;
-    for (int s : back) energy += double(s) * s;
-    return energy / dumble::kTxFrameSamples;
+    return dumble::testtone::meanEnergy(back.data(), dumble::kTxFrameSamples);
 }
 
 }  // namespace

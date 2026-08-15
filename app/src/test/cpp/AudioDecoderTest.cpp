@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include <cmath>
 #include <opus.h>
 #include <vector>
+#include "TestTone.h"
 #include "core/AudioDecoder.h"
 #include "core/AudioEncoder.h"
 #include "core/CaptureConstants.h"
@@ -10,31 +10,12 @@
 namespace {
 
 using dumble::playout::AudioDecoder;
+using dumble::testtone::meanEnergy;
+using dumble::testtone::tone;
 
-// A 440 Hz tone `samples` long, loud enough that a decode producing silence is unmistakable.
-std::vector<int16_t> tone(int samples) {
-    std::vector<int16_t> pcm(samples);
-    for (int i = 0; i < samples; i++)
-        pcm[i] = int16_t(8000 * std::sin(2.0 * M_PI * 440.0 * i / dumble::kSampleRate));
-    return pcm;
-}
-
-// One packet of `frameSamples` duration, encoded at a typical Mumble bitrate.
+// One packet of `frameSamples` duration — fresh encoder, so each is a spurt opener.
 std::vector<uint8_t> encodePacket(int frameSamples) {
-    auto enc = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 40000);
-    EXPECT_TRUE(enc);
-    const std::vector<int16_t> pcm = tone(frameSamples);
-    std::vector<uint8_t> packet(dumble::playout::kMaxPacketBytes);
-    const int bytes = enc->encode(pcm.data(), frameSamples, packet.data(), int(packet.size()));
-    EXPECT_GT(bytes, 0);
-    packet.resize(bytes > 0 ? bytes : 0);
-    return packet;
-}
-
-double meanEnergy(const int16_t* pcm, int n) {
-    double energy = 0;
-    for (int i = 0; i < n; i++) energy += double(pcm[i]) * pcm[i];
-    return energy / n;
+    return dumble::testtone::encodeToneAlone(frameSamples);
 }
 
 }  // namespace
