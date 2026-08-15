@@ -1,15 +1,17 @@
 #include "core/PacketQueue.h"
 #include <bit>
+#include <cassert>
+#include <cstdlib>
 #include <cstring>
 
 namespace dumble::playout {
 namespace {
 
-// kPacketSlots is a power of two so the ring wrap is a mask.
-static_assert(std::has_single_bit(unsigned(kPacketSlots)));
-constexpr int kSlotMask = kPacketSlots - 1;
+// kMaxQueuedPackets is a power of two so the ring wrap is a mask.
+static_assert(std::has_single_bit(unsigned(kMaxQueuedPackets)));
+constexpr int kEntryMask = kMaxQueuedPackets - 1;
 
-// Slot narrows both fields to uint16_t. Neither bound is close to the limit, but a silent
+// Entry narrows both fields to uint16_t. Neither bound is close to the limit, but a silent
 // truncation here would corrupt depth accounting rather than fail, so it is a compile error.
 static_assert(kMaxPacketBytes <= UINT16_MAX);
 static_assert(kMaxPacketSamples <= UINT16_MAX);
@@ -20,62 +22,81 @@ static_assert(kMaxPacketSamples <= kHighWaterSamples);
 
 }  // namespace
 
-PacketQueue::PacketQueue() : pool_(size_t(kPacketSlots) * kMaxPacketBytes) {}
+PacketQueue::PacketQueue() : pool_(size_t(kMaxQueuedPackets) * kMaxPacketBytes) {}
 
 void PacketQueue::dropOldest() {
-    depthSamples_ -= slots_[head_].spanSamples;
-    head_ = (head_ + 1) & kSlotMask;
+    samples_ -= entries_[head_].samples;
+    head_ = (head_ + 1) & kEntryMask;
     count_--;
 }
 
-bool PacketQueue::offer(const uint8_t* data, int len, int spanSamples, bool terminator) {
-    if (len > kMaxPacketBytes) return false;
-    // Accept packets that either contain decodable samples or are empty terminator packets.
-    // The upper bound is what makes Slot's uint16_t span safe: PlayoutEngine only ever measures a
-    // real Opus header, so a span past the largest legal packet means a caller we do not have.
-    const bool accepted = len == 0 || (spanSamples > 0 && spanSamples <= kMaxPacketSamples);
-    if (accepted && len > 0) {
+void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminator) {
+    // Caller should already check the packet, these document the contract. No peer can reach any
+    // of them — an oversized or unmeasurable packet is refused and reported before this is called
+    // — so a failure here is a bug in the caller.
+    assert(len <= kMaxPacketBytes && "packet is larger than one pool entry");
+    assert(samples <= kMaxPacketSamples && "packet has more samples than the largest Opus packet");
+    assert((len > 0) == (samples > 0) && "a packet either has bytes and samples, or neither");
+    // The one contract enforced in release too, because it is the only one whose consequence is
+    // the memcpy below overrunning the pool. There is nothing to recover from a broken caller,
+    // and a tombstone beats corruption.
+    if (len > kMaxPacketBytes) std::abort();
+    // Only push an entry for packets that contain audio samples.
+    if (samples > 0) {
         // Drop before insert, not after: the pool is fixed, so there is no transient state in
         // which an extra packet exists.
-        if (count_ == kPacketSlots) dropOldest();
-        const int tail = (head_ + count_) & kSlotMask;
+        if (count_ == kMaxQueuedPackets) dropOldest();
+        const int tail = (head_ + count_) & kEntryMask;
         std::memcpy(pool_.data() + size_t(tail) * kMaxPacketBytes, data, size_t(len));
-        slots_[tail] = Slot{uint16_t(len), uint16_t(spanSamples)};
+        entries_[tail] = Entry{uint16_t(len), uint16_t(samples)};
         count_++;
-        depthSamples_ += spanSamples;
-        while (depthSamples_ > kHighWaterSamples) dropOldest();
+        samples_ += samples;
+        while (samples_ > kHighWaterSamples) dropOldest();
     }
-    // Latches rather than opening the gate for one pop: only the drained path in endTick re-arms
-    // it, so a terminator cannot clear the gate mid-spurt and strand the tail.
-    if (terminator) gateOpen_ = true;
-    return accepted;
+    // Open the playout gate immediately when a spurt terminates so whatever we have queued plays.
+    // endTick will close the gate again once the queue drains. Clearing emptyAtPop_ is what lets
+    // the latch survive an endTick already in flight: the engine may have seen this queue empty at
+    // its last pop, and a terminator landing before its endTick says the spurt is complete — the
+    // re-arm must not close the gate over it, or a short spurt below the prebuffer never plays.
+    if (terminator) {
+        gateOpen_ = true;
+        emptyAtPop_ = false;
+    }
 }
 
 int PacketQueue::pop(uint8_t* out, int outCap) {
     // Do not start playout until we have sufficient pre-roll buffer.
     if (!gateOpen_) {
-        if (depthSamples_ < kPrebufferSamples) return 0;
+        if (samples_ < kPrebufferSamples) {
+            emptyAtPop_ = count_ == 0;
+            return 0;
+        }
         gateOpen_ = true;
     }
-    if (count_ == 0) return 0;
-    const Slot& slot = slots_[head_];
-    if (slot.len > outCap) return -1;
-    std::memcpy(out, pool_.data() + size_t(head_) * kMaxPacketBytes, size_t(slot.len));
-    depthSamples_ -= slot.spanSamples;
-    head_ = (head_ + 1) & kSlotMask;
+    if (count_ == 0) {
+        emptyAtPop_ = true;
+        return 0;
+    }
+    emptyAtPop_ = false;
+    const Entry& entry = entries_[head_];
+    if (entry.len > outCap) return -1;
+    std::memcpy(out, pool_.data() + size_t(head_) * kMaxPacketBytes, size_t(entry.len));
+    samples_ -= entry.samples;
+    head_ = (head_ + 1) & kEntryMask;
     count_--;
-    return slot.len;
+    return entry.len;
 }
 
 void PacketQueue::reset() {
     head_ = 0;
     count_ = 0;
-    depthSamples_ = 0;
+    samples_ = 0;
     gateOpen_ = false;
+    emptyAtPop_ = false;
 }
 
 void PacketQueue::endTick(bool decoderProduced) {
-    if (!decoderProduced && count_ == 0) gateOpen_ = false;
+    if (!decoderProduced && emptyAtPop_) gateOpen_ = false;
 }
 
 }  // namespace dumble::playout

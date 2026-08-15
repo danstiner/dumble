@@ -19,8 +19,9 @@ std::unique_ptr<SpeakerDecoder> SpeakerDecoder::create(int sampleRate, int maxQu
 SpeakerDecoder::SpeakerDecoder(std::unique_ptr<AudioDecoder> decoder, int maxQuantumSamples)
     : decoder_(std::move(decoder)),
       // One tick decodes only while below a quantum and one decode adds at most one packet, so this
-      // is the fifo's exact occupancy bound. bit_ceil because PcmRing asserts a power-of-two
-      // request rather than silently rounding a caller's number.
+      // is the fifo's exact occupancy bound. bit_ceil because PcmRing wants a power of two: it
+      // rounds up on its own in release but only asserts in debug, so rounding here keeps this
+      // bound equal to the capacity the ring actually builds.
       fifo_(std::bit_ceil(uint32_t(maxQuantumSamples + kMaxPacketSamples))),
       decodeScratch_(kMaxPacketSamples) {}
 

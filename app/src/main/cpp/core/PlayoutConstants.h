@@ -6,15 +6,17 @@ namespace dumble::playout {
 // A nested namespace, not bare `dumble`: CaptureConstants.h already owns kHighWaterSamples and
 // kMaxPacketBytes at that scope, with different values for the transmit side.
 
-// Concurrent speakers we mix. Past about eight overlapping voices nothing is intelligible anyway,
-// so this is sized for the tail rather than for the mix: a slot is also held by a speaker draining
-// its last packets (kRetireIdleTicks) and by one stalled below the prebuffer gate
-// (kStallIdleTicks, ~1 s), so a channel with rapid turn-taking holds more slots than it has
-// talkers. The desktop client has no equivalent cap. It bounds the memory but not the denial —
+// Concurrent speakers we mix — the intelligibility bound itself: past about eight overlapping
+// voices nothing is intelligible anyway. A slot is also held by a speaker draining its last
+// packets (kRetireIdleTicks) and by one stalled below the prebuffer gate (kStallIdleTicks, ~1 s),
+// so a channel with rapid turn-taking can hold more slots than it has talkers and briefly park a
+// real speaker at kOfferSpeakerCap — accepted: the held slots retire on their own inside a
+// second, and a mix that crowded is already unintelligible.
+// The desktop client has no equivalent cap. It bounds the memory but not the denial —
 // parking every slot costs one packet per session per second, which the server we connected to
 // can trivially afford, and every real speaker then gets kOfferSpeakerCap. No untrusted peer can
 // reach it, and the server could mute us outright anyway.
-constexpr int kMaxSpeakers = 16;
+constexpr int kMaxSpeakers = 8;
 
 // 120 ms at 48 kHz, the largest legal Opus packet, so a malformed or unusually long packet cannot
 // overrun the decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and
@@ -49,12 +51,12 @@ constexpr int kRetireIdleTicks = 10;
 // a click, not as speech.
 constexpr int kStallIdleTicks = 100;
 
-// Preallocated packet slots per speaker. 32 slots is 320 ms from a 10 ms sender and 1.9 s from a
+// Packets a speaker's queue can hold at once. 32 is 320 ms from a 10 ms sender and 1.9 s from a
 // 60 ms one, so kHighWaterSamples binds first at every packet duration of 20 ms and above.
 // Deliberately tighter than kHighWaterSamples for a 10 ms sender: a stall long enough to strand
 // more than 320 ms has already produced an audible gap, and playing the whole backlog converts
 // that gap into standing latency instead of removing it.
-constexpr int kPacketSlots = 32;
+constexpr int kMaxQueuedPackets = 32;
 
 // Per-slot payload capacity, and the threshold above which offer() answers kOfferPacketTooLarge.
 // 1276 is libopus's own ceiling on encoder output for any packet (opus_encoder.c,
@@ -64,19 +66,12 @@ constexpr int kPacketSlots = 32;
 // nothing that could send one is a peer we serve.
 constexpr int kMaxPacketBytes = 1276;
 
-// offer() status codes. Only kOfferEngineUnusable is terminal for the session; the others are
-// conditions a misbehaving server can produce at will, so the caller latches its logs rather than
-// treating them as failures.
-//
-// kOfferMalformedPacket is the one that needs a code of its own rather than folding into the
-// dropped-packet counter: a peer sending nothing but unparseable payloads otherwise looks exactly
-// like a legitimate burst overflowing the queue bounds, and every offer answers kOfferAccepted
-// while the audio goes nowhere.
+// offer() status codes. Every one is a condition a misbehaving server can produce at will, so the
+// caller latches its logs rather than treating them as failures.
 constexpr int kOfferAccepted = 0;
 constexpr int kOfferSpeakerCap = 1;
 constexpr int kOfferPacketTooLarge = 2;
-constexpr int kOfferEngineUnusable = 3;
-constexpr int kOfferMalformedPacket = 4;
+constexpr int kOfferMalformedPacket = 3;
 
 // fillQuantum() error code, negative so it cannot collide with a speaker count.
 // The caller's buffers, not ours — separate from "no audio" (return 0), because a caller that

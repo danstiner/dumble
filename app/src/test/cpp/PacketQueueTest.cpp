@@ -16,15 +16,15 @@ constexpr int kFrame = 960;
 // an identity tag and the whole suite runs without libopus.
 struct Packet {
     std::vector<uint8_t> bytes;
-    int spanSamples = 0;
+    int samples = 0;
 };
 
-Packet packet(uint8_t tag, int spanSamples = kFrame, int len = 40) {
-    return Packet{std::vector<uint8_t>(size_t(len), tag), spanSamples};
+Packet packet(uint8_t tag, int samples = kFrame, int len = 40) {
+    return Packet{std::vector<uint8_t>(size_t(len), tag), samples};
 }
 
-bool offer(PacketQueue& q, const Packet& p, bool terminator = false) {
-    return q.offer(p.bytes.data(), int(p.bytes.size()), p.spanSamples, terminator);
+void offer(PacketQueue& q, const Packet& p, bool terminator = false) {
+    q.offer(p.bytes.data(), int(p.bytes.size()), p.samples, terminator);
 }
 
 // Pops one packet, returning its tag, or -1 when the gate is closed and the pool empty.
@@ -38,7 +38,7 @@ int popTag(PacketQueue& q) {
 // Enough packets to clear kPrebufferSamples, tagged from `first`.
 void arm(PacketQueue& q, uint8_t first = 0) {
     const int needed = (pl::kPrebufferSamples + kFrame - 1) / kFrame;
-    for (int i = 0; i < needed; i++) ASSERT_TRUE(offer(q, packet(uint8_t(first + i))));
+    for (int i = 0; i < needed; i++) offer(q, packet(uint8_t(first + i)));
 }
 
 int drainCount(PacketQueue& q) {
@@ -59,24 +59,24 @@ TEST(PacketQueue, PopIsClosedUntilThePrebufferIsMet) {
     PacketQueue q;
     int queued = 0;
     for (uint8_t i = 0; queued + kFrame < pl::kPrebufferSamples; i++) {
-        ASSERT_TRUE(offer(q, packet(i)));
+        offer(q, packet(i));
         queued += kFrame;
         EXPECT_EQ(-1, popTag(q)) << "gate opened at " << q.depthSamples() << " samples";
     }
-    ASSERT_TRUE(offer(q, packet(99)));
+    offer(q, packet(99));
     ASSERT_GE(q.depthSamples(), pl::kPrebufferSamples);
     EXPECT_GE(popTag(q), 0);
 }
 
 TEST(PacketQueue, PopReturnsPacketsInArrivalOrder) {
     PacketQueue q;
-    for (uint8_t i = 0; i < 6; i++) ASSERT_TRUE(offer(q, packet(uint8_t(10 + i))));
+    for (uint8_t i = 0; i < 6; i++) offer(q, packet(uint8_t(10 + i)));
     for (int i = 0; i < 6; i++) EXPECT_EQ(10 + i, popTag(q));
 }
 
 TEST(PacketQueue, PopReportsTheStoredLength) {
     PacketQueue q;
-    for (int i = 0; i < 8; i++) ASSERT_TRUE(offer(q, packet(uint8_t(i), kFrame, 7 + i)));
+    for (int i = 0; i < 8; i++) offer(q, packet(uint8_t(i), kFrame, 7 + i));
     uint8_t out[pl::kMaxPacketBytes];
     EXPECT_EQ(7, q.pop(out, int(sizeof out)));
     EXPECT_EQ(8, q.pop(out, int(sizeof out)));
@@ -84,14 +84,14 @@ TEST(PacketQueue, PopReportsTheStoredLength) {
 
 TEST(PacketQueue, ATerminatorOpensTheGateBelowThePrebuffer) {
     PacketQueue q;
-    ASSERT_TRUE(offer(q, packet(3), /*terminator=*/true));
+    offer(q, packet(3), /*terminator=*/true);
     ASSERT_LT(q.depthSamples(), pl::kPrebufferSamples);
     EXPECT_EQ(3, popTag(q));
 }
 
 TEST(PacketQueue, WithoutATerminatorAShortSpurtStaysClosed) {
     PacketQueue q;
-    ASSERT_TRUE(offer(q, packet(3)));
+    offer(q, packet(3));
     EXPECT_EQ(-1, popTag(q));
 }
 
@@ -102,7 +102,7 @@ TEST(PacketQueue, TheGateStaysOpenAcrossAnEmptyPoolWhileTheSpurtRuns) {
     ASSERT_TRUE(q.empty());
     // Still mid-spurt: the decoder is producing, so endTick must not re-arm the gate.
     q.endTick(/*decoderProduced=*/true);
-    ASSERT_TRUE(offer(q, packet(42)));
+    offer(q, packet(42));
     EXPECT_EQ(42, popTag(q));
 }
 
@@ -111,8 +111,32 @@ TEST(PacketQueue, GoingIdleReArmsThePrebuffer) {
     arm(q);
     EXPECT_GT(drainCount(q), 0);
     q.endTick(/*decoderProduced=*/false);
-    ASSERT_TRUE(offer(q, packet(42)));
+    offer(q, packet(42));
     EXPECT_EQ(-1, popTag(q)) << "gate stayed open into the next spurt";
+}
+
+TEST(PacketQueue, ReArmTrustsTheEmptinessSeenAtPopOverThePresent) {
+    PacketQueue q;
+    arm(q);
+    EXPECT_GT(drainCount(q), 0);
+    // The next spurt's first packet lands between the caller's last pop and its endTick — the
+    // engine decodes other speakers in between. The gate must still re-arm: that packet is a new
+    // spurt, not licence to keep playing.
+    offer(q, packet(42));
+    q.endTick(/*decoderProduced=*/false);
+    EXPECT_EQ(-1, popTag(q)) << "the late arrival rode the old spurt's gate past the prebuffer";
+}
+
+TEST(PacketQueue, ALateTerminatorLatchSurvivesTheReArm) {
+    PacketQueue q;
+    arm(q);
+    EXPECT_GT(drainCount(q), 0);
+    // A complete short spurt — packet plus terminator — lands in the same window. Unlike a bare
+    // packet, the terminator is an explicit verdict that the spurt is whole: the latch must beat
+    // the re-arm, or the spurt sits below the prebuffer forever and is reset away at retirement.
+    offer(q, packet(42), /*terminator=*/true);
+    q.endTick(/*decoderProduced=*/false);
+    EXPECT_EQ(42, popTag(q)) << "endTick closed the gate over the terminator latch";
 }
 
 TEST(PacketQueue, EndTickDoesNotReArmWhilePacketsRemain) {
@@ -129,15 +153,15 @@ TEST(PacketQueue, TerminatorDoesNotReArmTheGateMidSpurt) {
     PacketQueue q;
     arm(q, 30);
     ASSERT_EQ(30, popTag(q));
-    ASSERT_TRUE(offer(q, packet(90), /*terminator=*/true));
+    offer(q, packet(90), /*terminator=*/true);
     q.endTick(/*decoderProduced=*/true);
     EXPECT_EQ(31, popTag(q));
 }
 
 TEST(PacketQueue, TheTailOfASpurtIsNotStranded) {
     PacketQueue q;
-    ASSERT_TRUE(offer(q, packet(1)));
-    ASSERT_TRUE(offer(q, packet(2), /*terminator=*/true));
+    offer(q, packet(1));
+    offer(q, packet(2), /*terminator=*/true);
     EXPECT_EQ(2, drainCount(q));
 }
 
@@ -145,7 +169,7 @@ TEST(PacketQueue, HighWaterCapsTheQueueInSamples) {
     PacketQueue q;
     const int span = pl::kHighWaterSamples / 8;
     for (uint8_t i = 0; i < 20; i++) {
-        ASSERT_TRUE(offer(q, packet(i, span)));
+        offer(q, packet(i, span));
         EXPECT_LE(q.depthSamples(), pl::kHighWaterSamples);
     }
 }
@@ -153,55 +177,51 @@ TEST(PacketQueue, HighWaterCapsTheQueueInSamples) {
 TEST(PacketQueue, HighWaterDropsTheOldestFirst) {
     PacketQueue q;
     const int span = pl::kMaxPacketSamples;
-    for (uint8_t i = 0; i < 8; i++) ASSERT_TRUE(offer(q, packet(i, span)));
+    for (uint8_t i = 0; i < 8; i++) offer(q, packet(i, span));
     // The survivors are the newest, so the first pop is not tag 0.
     EXPECT_GT(popTag(q), 0);
 }
 
 TEST(PacketQueue, SlotsCapTheQueueEvenBelowHighWater) {
     PacketQueue q;
-    // Small spans so kHighWaterSamples cannot bind before kPacketSlots does.
-    const int span = pl::kHighWaterSamples / (4 * pl::kPacketSlots);
-    for (uint8_t i = 0; i < pl::kPacketSlots + 8; i++) ASSERT_TRUE(offer(q, packet(i, span)));
-    EXPECT_EQ(pl::kPacketSlots, drainCount(q));
+    // Small spans so kHighWaterSamples cannot bind before kMaxQueuedPackets does.
+    const int span = pl::kHighWaterSamples / (4 * pl::kMaxQueuedPackets);
+    for (uint8_t i = 0; i < pl::kMaxQueuedPackets + 8; i++) offer(q, packet(i, span));
+    EXPECT_EQ(pl::kMaxQueuedPackets, drainCount(q));
 }
 
-TEST(PacketQueue, ASpanLongerThanTheLargestOpusPacketIsRefused) {
-    // Nothing PlayoutEngine measures can exceed this, so the bound is defence in depth — but it
-    // is also what keeps Slot's uint16_t span from truncating a caller's number in silence.
+#ifndef NDEBUG
+// Slot narrows the span to uint16_t, and no caller can exceed the bound — PlayoutEngine measures
+// with libopus, which cannot report past 120 ms at a rate it accepts. Debug builds assert the
+// reasoning rather than branch on it; NDEBUG compiles the assert away and this test with it.
+TEST(PacketQueueDeathTest, DebugBuildsRejectAPacketBreakingTheContract) {
     PacketQueue q;
-    EXPECT_FALSE(offer(q, packet(5, pl::kMaxPacketSamples + 1)));
-    EXPECT_TRUE(q.empty());
-    EXPECT_TRUE(offer(q, packet(6, pl::kMaxPacketSamples)));
-    EXPECT_EQ(pl::kMaxPacketSamples, q.depthSamples());
+    EXPECT_DEATH(offer(q, packet(5, pl::kMaxPacketSamples + 1)), "largest Opus packet");
+    // Bytes without samples: PlayoutEngine sends an unmeasurable payload down as no payload.
+    EXPECT_DEATH(offer(q, packet(5, /*samples=*/0)), "bytes and samples, or neither");
 }
+#endif
 
-TEST(PacketQueue, AnOversizedPacketIsRefusedAlongWithItsTerminator) {
+// Unguarded, unlike the two above: this contract holds in release as well, being the only one
+// whose consequence is corruption rather than a wrong answer.
+TEST(PacketQueueDeathTest, AnOversizedPacketCrashesRatherThanOverrunningThePool) {
     PacketQueue q;
     const std::vector<uint8_t> big(pl::kMaxPacketBytes + 1, 7);
-    EXPECT_FALSE(q.offer(big.data(), int(big.size()), kFrame, /*terminator=*/true));
-    ASSERT_TRUE(offer(q, packet(1)));
-    EXPECT_EQ(-1, popTag(q)) << "the refused packet's terminator opened the gate";
+    EXPECT_DEATH(q.offer(big.data(), int(big.size()), kFrame, false), "");
 }
 
-TEST(PacketQueue, AnUnmeasurablePayloadIsRefused) {
+TEST(PacketQueue, TheLargestLegalSpanFits) {
+    // The top of the range Slot's uint16_t has to hold. Bounding it is the caller's job, since the
+    // caller is what measures the packet — see PlayoutEngine::offer.
     PacketQueue q;
-    EXPECT_FALSE(offer(q, packet(1, /*spanSamples=*/0)));
-    EXPECT_TRUE(q.empty());
-    EXPECT_EQ(0, q.depthSamples());
-}
-
-TEST(PacketQueue, AnUnmeasurablePayloadStillHonoursItsTerminator) {
-    PacketQueue q;
-    ASSERT_TRUE(offer(q, packet(4)));
-    EXPECT_FALSE(offer(q, packet(9, /*spanSamples=*/0), /*terminator=*/true));
-    EXPECT_EQ(4, popTag(q));
+    offer(q, packet(6, pl::kMaxPacketSamples));
+    EXPECT_EQ(pl::kMaxPacketSamples, q.depthSamples());
 }
 
 TEST(PacketQueue, ATagOnlyFrameIsNotQueuedButItsTerminatorIsHonoured) {
     PacketQueue q;
-    ASSERT_TRUE(offer(q, packet(4)));
-    EXPECT_TRUE(q.offer(nullptr, 0, 0, /*terminator=*/true));
+    offer(q, packet(4));
+    q.offer(nullptr, 0, 0, /*terminator=*/true);
     EXPECT_EQ(1, drainCount(q));
 }
 
@@ -238,6 +258,6 @@ TEST(PacketQueue, ResetDropsEverythingQueuedAndRearmsTheGate) {
     EXPECT_TRUE(q.empty());
     EXPECT_EQ(0, q.depthSamples());
     // The gate is armed again, so one packet is not enough to play.
-    EXPECT_TRUE(offer(q, packet(9)));
+    offer(q, packet(9));
     EXPECT_EQ(-1, popTag(q)) << "reset left the prebuffer gate open";
 }

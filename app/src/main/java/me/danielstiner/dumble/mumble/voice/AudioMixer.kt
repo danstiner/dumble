@@ -9,7 +9,8 @@ import kotlin.math.tanh
  *
  * Call pattern: once per playback quantum: zero `acc`, [accumulate] each active speaker's
  * PCM into it, then [finalizeMix] once into the buffer handed to AudioTrack. The accumulator
- * cannot overflow: worst case is [MAX_SPEAKERS] full-scale streams, 2^21, against Int's 2^31.
+ * cannot overflow: worst case is [MAX_SPEAKERS] full-scale streams, MAX_SPEAKERS * 2^15, far
+ * inside Int for any cap below 2^16.
  *
  * Desktop Mumble hard-clips its mix; we chose to round the corner with tanh instead to
  * reduce distortion when multiple speakers peak at the same instant. A broadcast-style
@@ -30,7 +31,7 @@ object AudioMixer {
 
     fun finalizeMix(acc: IntArray, dst: ShortArray, n: Int) {
         for (i in 0 until n) {
-            // Int math is safe: |acc| ≤ MAX_SPEAKERS * 2^15 = 2^21, so no overflow and no
+            // Int math is safe: |acc| ≤ MAX_SPEAKERS * 2^15, far inside Int, so no overflow and no
             // -Int.MIN_VALUE negation edge.
             val x = acc[i]
             val ax = if (x < 0) -x else x

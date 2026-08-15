@@ -10,7 +10,8 @@ namespace dumble::playout {
  *
  * Call pattern, once per playback quantum: zero `acc`, mixAccumulate each active speaker's PCM
  * into it, then mixFinalize once into the buffer handed to the output. The accumulator cannot
- * overflow: worst case is kMaxSpeakers full-scale streams, 2^21, against int32's 2^31.
+ * overflow: worst case is kMaxSpeakers full-scale streams, kMaxSpeakers * 2^15, which Mixer.cpp
+ * static_asserts against int32 so the bound follows the constant.
  *
  * Desktop Mumble hard-clips its mix; we round the corner with tanh instead to reduce distortion
  * when multiple speakers peak at the same instant. A broadcast-style envelope limiter would add

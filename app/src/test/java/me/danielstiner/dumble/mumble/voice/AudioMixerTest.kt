@@ -29,7 +29,7 @@ class AudioMixerTest {
 
     @Test
     fun worstCaseSpeakerCountStillLimits() {
-        // The loudest input the contract allows: MAX_SPEAKERS full-scale streams (2^21).
+        // The loudest input the contract allows: MAX_SPEAKERS full-scale streams.
         // finalizeMix's Int math relies on this bound; anything beyond is out of contract.
         val neg = IntArray(1)
         val pos = IntArray(1)
