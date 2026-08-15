@@ -35,8 +35,14 @@ const val RETIRE_IDLE_TICKS = 10
 /** Backstop window for a spurt that stalled below [PREBUFFER_SAMPLES] and never got a terminator
  *  — a sender that died mid-spurt. It produces nothing and never drains, so the short window
  *  above can never apply to it and the slot would be held for the life of the connection. That is
- *  a way to fill [MAX_SPEAKERS] with 60 ms of audio apiece and deny voice to everyone real. */
-const val STALL_IDLE_TICKS = 1000
+ *  a way to fill [MAX_SPEAKERS] with 60 ms of audio apiece and deny voice to everyone real.
+ *
+ *  ~1 s, matching the native engine's kStallIdleTicks, and a ceiling rather than a period: the
+ *  playback loop parks 10 ms at a time while any speaker is live, and every arriving packet wakes
+ *  it early. Sized from what the fragment is worth, not from how long a link can stall — the most
+ *  this window can protect is the sub-60 ms of audio sitting below the prebuffer gate, and audio
+ *  spliced in a second after it was spoken is heard as a click, not as speech. */
+const val STALL_IDLE_TICKS = 100
 
 /** Concurrent per-speaker queues we will allocate, bounding what a server can make us hold at
  *  ~28 KB of Java arrays each (an 8192-short ring plus the decode scratch) plus a native
@@ -45,6 +51,10 @@ const val STALL_IDLE_TICKS = 1000
  *  so it bounds nothing. What keeps that survivable is retiring on drain: every live slot has
  *  to be re-fed within [RETIRE_IDLE_TICKS] or it evaporates, so holding N of them costs
  *  sustained bandwidth rather than one packet apiece. This cap is the hard ceiling on top of
- *  that pricing. Sized far above any plausible channel population, so it bites only on a
- *  server inventing sessions. */
-const val MAX_SPEAKERS = 64
+ *  that pricing.
+ *
+ *  Kept equal to the native engine's kMaxSpeakers (PlayoutConstants.h) — the intelligibility
+ *  bound: past about eight overlapping voices nothing is intelligible anyway. A wider gate here
+ *  would admit sessions whose every native offer() answers kOfferSpeakerCap once voice flows
+ *  through PlayoutEngine: audio silently dropped rather than refused at the door. */
+const val MAX_SPEAKERS = 8

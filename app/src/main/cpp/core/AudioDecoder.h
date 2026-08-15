@@ -12,7 +12,9 @@ public:
     /** Null when libopus rejects the parameters or cannot allocate. */
     static std::unique_ptr<AudioDecoder> create(int sampleRate, int channels);
 
-    /** Samples this packet decodes to, or a negative libopus error. Reads at most two bytes. */
+    /** Samples this packet decodes to, or non-positive when libopus will not schedule it. Test
+     *  `<= 0`, not `< 0`: a code 3 packet claiming zero frames parses and measures at zero.
+     *  Reads at most two bytes. */
     static int packetSamples(const uint8_t* data, int len, int sampleRate);
 
     ~AudioDecoder();

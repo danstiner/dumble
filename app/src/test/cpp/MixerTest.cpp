@@ -30,7 +30,7 @@ TEST(Mixer, DoubleTalkDoesNotClip) {
 }
 
 TEST(Mixer, WorstCaseSpeakerCountStillLimits) {
-    // The loudest input the contract allows: kMaxSpeakers full-scale streams (2^21). mixFinalize's
+    // The loudest input the contract allows: kMaxSpeakers full-scale streams. mixFinalize's
     // int32 math relies on this bound; anything beyond is out of contract.
     int32_t neg[1] = {0};
     int32_t pos[1] = {0};
