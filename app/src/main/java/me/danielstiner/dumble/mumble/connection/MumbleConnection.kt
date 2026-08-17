@@ -37,6 +37,7 @@ import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
+import me.danielstiner.dumble.mumble.voice.openNativePlayout
 import me.danielstiner.dumble.telecom.TelecomCall
 import java.net.SocketTimeoutException
 import javax.inject.Inject
@@ -61,6 +62,10 @@ class MumbleConnection internal constructor(
     private val newAudioOut: () -> AudioOut,
     // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
+    // Defaulted to no receive at all, the same way newCapture defaults to no send: a JVM test
+    // that never overrides this never touches System.loadLibrary. Real callers get
+    // openNativePlayout() from the @Inject constructor below.
+    private val newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
     private val call: VoiceCall = NoVoiceCall,
     // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
     private val stuckPumpMillis: Long = 1_000L,
@@ -72,6 +77,7 @@ class MumbleConnection internal constructor(
         opusCodec: OpusCodec,
     ) : this(
         pinStore, opusCodec, { AndroidAudioOut(context) }, { openNativeCapture() },
+        { openNativePlayout() },
         TelecomCall(context),
         newTransport = { MumbleTcpTransport(it) },
     )
@@ -461,7 +467,10 @@ class MumbleConnection internal constructor(
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
             val sm = SessionStateMachine(transport, username, password, childScope)
-            val receiver = VoiceReceiver(opusCodec, newAudioOut)
+            // newPlayout itself, not its result: VoiceReceiver only calls it from start(), and
+            // only an attempt that survives every guard below ever reaches that call. Building
+            // the engine here, eagerly, is what used to leak one per superseded/failed attempt.
+            val receiver = VoiceReceiver(newPlayout, newAudioOut)
             val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { teardown(att); return@launch }   // superseded before publish
@@ -510,7 +519,9 @@ class MumbleConnection internal constructor(
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
             // Start the receiver if we are still on the current attempt. Guarded to avoid racing
             // with teardown(), which could leave a dangling playback thread. Both halves matter:
-            // retire() clears `current` without bumping `attempt`.
+            // retire() clears `current` without bumping `attempt`. Every earlier return in this
+            // function skips this line, so an attempt that never gets here never calls newPlayout()
+            // — see the comment where `receiver` is built.
             synchronized(lock) { if (gen == attempt && current === att) receiver.start() }
         }
     }

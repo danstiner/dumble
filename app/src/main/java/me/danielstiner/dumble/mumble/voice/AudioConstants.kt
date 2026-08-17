@@ -44,17 +44,9 @@ const val RETIRE_IDLE_TICKS = 10
  *  spliced in a second after it was spoken is heard as a click, not as speech. */
 const val STALL_IDLE_TICKS = 100
 
-/** Concurrent per-speaker queues we will allocate, bounding what a server can make us hold at
- *  ~28 KB of Java arrays each (an 8192-short ring plus the decode scratch) plus a native
- *  decoder. The desktop client has no equivalent cap and is genuinely unbounded here — its
- *  `ClientUser` lookup gates on the session list, which a hostile server writes via UserState,
- *  so it bounds nothing. What keeps that survivable is retiring on drain: every live slot has
- *  to be re-fed within [RETIRE_IDLE_TICKS] or it evaporates, so holding N of them costs
- *  sustained bandwidth rather than one packet apiece. This cap is the hard ceiling on top of
- *  that pricing.
- *
- *  Kept equal to the native engine's kMaxSpeakers (PlayoutConstants.h) — the intelligibility
- *  bound: past about eight overlapping voices nothing is intelligible anyway. A wider gate here
- *  would admit sessions whose every native offer() answers kOfferSpeakerCap once voice flows
- *  through PlayoutEngine: audio silently dropped rather than refused at the door. */
+/** Twin of the native engine's kMaxSpeakers (PlayoutConstants.h), where the reasoning for the
+ *  number lives: the intelligibility bound, past which nothing is intelligible anyway. Concurrent
+ *  speakers are the engine's to cap now, so what this bounds on this side is allocation — it sizes
+ *  the arrays the playback loop hands across the JNI seam, and the seam validates their lengths
+ *  against native's own cap. Undersize them and every call is refused, so these must not drift. */
 const val MAX_SPEAKERS = 8
