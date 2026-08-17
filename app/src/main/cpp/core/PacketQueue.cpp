@@ -28,6 +28,7 @@ void PacketQueue::dropOldest() {
     samples_ -= entries_[head_].samples;
     head_ = (head_ + 1) & kEntryMask;
     count_--;
+    droppedPackets_++;
 }
 
 void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminator) {
@@ -61,6 +62,7 @@ void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminat
     if (terminator) {
         gateOpen_ = true;
         emptyAtPop_ = false;
+        terminated_ = true;
     }
 }
 
@@ -93,10 +95,15 @@ void PacketQueue::reset() {
     samples_ = 0;
     gateOpen_ = false;
     emptyAtPop_ = false;
+    terminated_ = false;
+    droppedPackets_ = 0;
 }
 
 void PacketQueue::endTick(bool decoderProduced) {
-    if (!decoderProduced && emptyAtPop_) gateOpen_ = false;
+    if (!decoderProduced && emptyAtPop_) {
+        gateOpen_ = false;
+        terminated_ = false;
+    }
 }
 
 }  // namespace dumble::playout

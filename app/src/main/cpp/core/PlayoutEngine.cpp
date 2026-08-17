@@ -33,7 +33,12 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool ter
 
     std::lock_guard<std::mutex> guard(mutex_);
     const int slot = slotFor(session);
-    if (slot < 0) return kOfferSpeakerCap;
+    // Charged to the engine because there is no queue to charge it to: a capped session's packets
+    // are as lost as ones a live queue overflowed away.
+    if (slot < 0) {
+        droppedPackets_++;
+        return kOfferSpeakerCap;
+    }
     PacketQueue& queue = queues_[slot];
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator);
@@ -71,7 +76,9 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
 
     // Pop under the lock, decode and mix outside it. The packet is copied through packetScratch_
     // rather than decoded in place because offer() may overwrite that pool entry during decode.
-    bool produced[kMaxSpeakers];
+    // Samples each speaker produced, not merely whether it did: the concealment rule below needs
+    // to tell a full quantum from a short one zero-padded around a gap.
+    int produced[kMaxSpeakers];
     for (int n = 0; n < liveCount; n++) {
         PacketQueue& queue = queues_[live[n]];
         SpeakerDecoder& decoder = *decoders_[live[n]];
@@ -84,8 +91,8 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);
         }
-        produced[n] = decoder.drain(speakerOut_.data(), samples) > 0;
-        if (produced[n]) mixAccumulate(accumulator_.data(), speakerOut_.data(), samples);
+        produced[n] = decoder.drain(speakerOut_.data(), samples);
+        if (produced[n] > 0) mixAccumulate(accumulator_.data(), speakerOut_.data(), samples);
     }
     mixFinalize(accumulator_.data(), out, samples);
 
@@ -96,10 +103,18 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
         for (int n = 0; n < liveCount; n++) {
             const int i = live[n];
             PacketQueue& queue = queues_[i];
+            const bool audible = produced[n] > 0;
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
-            if (produced[n]) sessions[producing++] = sessions_[i];
-            queue.endTick(produced[n]);
-            idleTicks_[i] = produced[n] ? 0 : idleTicks_[i] + 1;
+            if (audible) sessions[producing++] = sessions_[i];
+            // Judged before endTick, which closes the gate speaking() reads. A stall is charged
+            // once per gap, not per tick, which falls out of the re-arm: the tick that produced
+            // nothing emptied the queue, so endTick closes the gate and the next tick is no
+            // longer speaking. speaking() is read here rather than snapshotted with `produced`,
+            // so a terminator that landed during the decodes is honoured — the end of speech is
+            // not a dropout.
+            if (audible ? produced[n] < samples : queue.speaking()) concealedTicks_++;
+            queue.endTick(audible);
+            idleTicks_[i] = audible ? 0 : idleTicks_[i] + 1;
             // Two windows, because "produced nothing this tick" means two different things. Once
             // the queue is drained it means the speaker stopped talking, the short window. While
             // packets remain it means the prebuffer gate has not opened yet — a spurt is silent
@@ -113,7 +128,10 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
                 // the only side allowed to move its read index, and the only one that can see the
                 // slot idle. The stall window retires with packets still queued, so this is not
                 // defensive. decoder->reset() under the mutex is fine — it is a small memset, not
-                // a decode, and retirement is rare.
+                // a decode, and retirement is rare. Harvest the queue's tally first: reset()
+                // clears it, and a channel that dropped audio all session must not report zero
+                // the moment its speaker goes quiet.
+                droppedPackets_ += queue.droppedPackets();
                 queue.reset();
                 decoders_[i]->reset();
                 slots_.clear(i);
@@ -122,6 +140,27 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
         *liveSpeakers = slots_.count();
     }
     return producing;
+}
+
+PlayoutEngine::Stats PlayoutEngine::stats() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    Stats out;
+    int n = 0;
+    // Live queues carry their own tally until they retire into droppedPackets_, so the total is
+    // the sum of the two — and both under one lock, since retirement moves a tally from one to
+    // the other and a read straddling it would count that speaker twice or not at all.
+    int64_t dropped = droppedPackets_;
+    for (int i = 0; i < kMaxSpeakers; i++) {
+        if (!slots_.test(i)) continue;
+        out.sessions[n] = sessions_[i];
+        out.depths[n] = queues_[i].depthSamples();
+        dropped += queues_[i].droppedPackets();
+        n++;
+    }
+    out.speakers = n;
+    out.concealedTicks = concealedTicks_;
+    out.droppedPackets = dropped;
+    return out;
 }
 
 PlayoutEngine::PlayoutEngine(int sampleRate, int maxQuantumSamples)

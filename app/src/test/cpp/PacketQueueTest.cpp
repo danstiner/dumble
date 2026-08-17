@@ -172,6 +172,7 @@ TEST(PacketQueue, HighWaterCapsTheQueueInSamples) {
         offer(q, packet(i, span));
         EXPECT_LE(q.depthSamples(), pl::kHighWaterSamples);
     }
+    EXPECT_GT(q.droppedPackets(), 0) << "audio was thrown away with nothing to show for it";
 }
 
 TEST(PacketQueue, HighWaterDropsTheOldestFirst) {
@@ -187,6 +188,7 @@ TEST(PacketQueue, SlotsCapTheQueueEvenBelowHighWater) {
     // Small spans so kHighWaterSamples cannot bind before kMaxQueuedPackets does.
     const int span = pl::kHighWaterSamples / (4 * pl::kMaxQueuedPackets);
     for (uint8_t i = 0; i < pl::kMaxQueuedPackets + 8; i++) offer(q, packet(i, span));
+    EXPECT_EQ(8, q.droppedPackets());
     EXPECT_EQ(pl::kMaxQueuedPackets, drainCount(q));
 }
 
@@ -260,4 +262,62 @@ TEST(PacketQueue, ResetDropsEverythingQueuedAndRearmsTheGate) {
     // The gate is armed again, so one packet is not enough to play.
     offer(q, packet(9));
     EXPECT_EQ(-1, popTag(q)) << "reset left the prebuffer gate open";
+}
+
+TEST(PacketQueue, ResetClearsTheDropTally) {
+    // The engine harvests the tally into its own total at retirement, so a slot that kept it
+    // would bill the next sender for the last one's losses on every stats() read.
+    PacketQueue q;
+    for (uint8_t i = 0; i < pl::kMaxQueuedPackets + 4; i++) offer(q, packet(i, 480));
+    ASSERT_GT(q.droppedPackets(), 0);
+    q.reset();
+    EXPECT_EQ(0, q.droppedPackets());
+}
+
+TEST(PacketQueue, ResetClearsTheSendersTerminator) {
+    // reset() restores the just-constructed state whole.
+    PacketQueue q;
+    arm(q);
+    q.offer(nullptr, 0, 0, /*terminator=*/true);
+    ASSERT_FALSE(q.speaking());
+    q.reset();
+    arm(q);
+    ASSERT_GE(popTag(q), 0);
+    EXPECT_TRUE(q.speaking()) << "reset kept the last sender's terminator";
+}
+
+TEST(PacketQueue, SpeakingIsFalseUntilTheGateOpens) {
+    // A spurt still building its prebuffer is quiet by design. Counting those ticks as dropouts
+    // would swamp the metric with the one silence that is always expected.
+    PacketQueue q;
+    EXPECT_FALSE(q.speaking());
+    offer(q, packet(1));
+    EXPECT_FALSE(q.speaking()) << "one packet is below kPrebufferSamples";
+    arm(q, 2);
+    ASSERT_GE(popTag(q), 0) << "the gate should have opened";
+    EXPECT_TRUE(q.speaking());
+}
+
+TEST(PacketQueue, ATerminatedSpurtIsNotSpeaking) {
+    // The other half: speech that ended normally must not read as a dropout, or the metric fires
+    // once per utterance and means nothing.
+    PacketQueue q;
+    arm(q);
+    ASSERT_GE(popTag(q), 0);
+    ASSERT_TRUE(q.speaking());
+    q.offer(nullptr, 0, 0, /*terminator=*/true);
+    EXPECT_FALSE(q.speaking());
+}
+
+TEST(PacketQueue, GoingIdleClearsTheTerminatorForTheNextSpurt) {
+    // Both flags re-arm together. A terminated_ left set would make the next spurt's stall
+    // invisible for the life of the slot.
+    PacketQueue q;
+    arm(q);
+    q.offer(nullptr, 0, 0, /*terminator=*/true);
+    ASSERT_EQ(pl::kPrebufferSamples / kFrame, drainCount(q));
+    q.endTick(/*decoderProduced=*/false);
+    arm(q);
+    ASSERT_GE(popTag(q), 0);
+    EXPECT_TRUE(q.speaking());
 }

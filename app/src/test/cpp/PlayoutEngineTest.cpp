@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <climits>
+#include <atomic>
+#include <random>
+#include <thread>
 #include <vector>
 #include "TestTone.h"
 #include "core/AudioDecoder.h"
@@ -31,6 +34,33 @@ void arm(PlayoutEngine& e, int32_t session, int count = 6) {
     for (int i = 0; i < count; i++)
         EXPECT_EQ(pl::kOfferAccepted, e.offer(session, p.data(), int(p.size()), false));
 }
+
+int producingThisTick(PlayoutEngine& e, std::vector<int16_t>& pcm) {
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    return e.fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
+}
+
+int liveThisTick(PlayoutEngine& e, std::vector<int16_t>& pcm) {
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    e.fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
+    return live;
+}
+
+// Ticks until the engine stops producing, returning how many ticks carried audio.
+int drainSpurt(PlayoutEngine& e, int maxTicks = 500) {
+    std::vector<int16_t> pcm(kQuantum);
+    int ticks = 0;
+    for (int i = 0; i < maxTicks; i++) {
+        if (producingThisTick(e, pcm) == 0) break;
+        ticks++;
+    }
+    return ticks;
+}
+
+int64_t droppedOf(PlayoutEngine& e) { return e.stats().droppedPackets; }
+int64_t concealedOf(PlayoutEngine& e) { return e.stats().concealedTicks; }
 
 }  // namespace
 
@@ -151,12 +181,14 @@ TEST(PlayoutEngine, ReportsAPayloadLibopusCannotParse) {
     auto e = newEngine();
     EXPECT_EQ(pl::kOfferMalformedPacket, e->offer(1, malformed, 2, false));
     // A refused payload without a terminator claims nothing: a sender of pure garbage must not
-    // occupy a speaker slot others could use.
+    // occupy a speaker slot others could use. Nor is it a drop — kOfferMalformedPacket already
+    // reported it.
     std::vector<int16_t> pcm(kQuantum);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = -1;
     e->fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
     EXPECT_EQ(0, live) << "a refused payload claimed a slot";
+    EXPECT_EQ(0, droppedOf(*e)) << "a refused payload was double-reported as a drop";
     // The next good packet from this session claims one normally and plays.
     const std::vector<uint8_t> good = encode(1);
     EXPECT_EQ(pl::kOfferAccepted, e->offer(1, good.data(), int(good.size()), false));
@@ -200,6 +232,115 @@ TEST(PlayoutEngine, RefusesAnOversizedPacket) {
     auto e = newEngine();
     const std::vector<uint8_t> huge(pl::kMaxPacketBytes + 1, 0x00);
     EXPECT_EQ(pl::kOfferPacketTooLarge, e->offer(1, huge.data(), int(huge.size()), false));
+    EXPECT_EQ(0, droppedOf(*e)) << "a refused payload was double-reported as a drop";
+}
+
+TEST(PlayoutEngine, CountsAPacketTheSpeakerCapRefused) {
+    // No queue exists to charge it to, so the engine's own tally is the only place a capped
+    // session's lost audio can show up at all.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    for (int32_t s = 0; s < pl::kMaxSpeakers; s++)
+        ASSERT_EQ(pl::kOfferAccepted, e->offer(s, p.data(), int(p.size()), false));
+    ASSERT_EQ(0, droppedOf(*e));
+    ASSERT_EQ(pl::kOfferSpeakerCap, e->offer(9999, p.data(), int(p.size()), false));
+    EXPECT_EQ(1, droppedOf(*e));
+}
+
+TEST(PlayoutEngine, ReportsEachSpeakersBufferedDepth) {
+    auto e = newEngine();
+    arm(*e, 4, 3);
+    arm(*e, 8, 6);
+    const PlayoutEngine::Stats stats = e->stats();
+    ASSERT_EQ(2, stats.speakers);
+    for (int i = 0; i < stats.speakers; i++) {
+        if (stats.sessions[i] == 4) EXPECT_EQ(3 * 480, stats.depths[i]);
+        if (stats.sessions[i] == 8) EXPECT_EQ(6 * 480, stats.depths[i]);
+    }
+}
+
+TEST(PlayoutEngine, ARetiredSpeakersDropsSurviveItsSlot) {
+    // The tally lives on the queue, which retirement resets. Harvested first, or a channel that
+    // dropped audio all session reports zero the moment the speaker goes quiet.
+    auto e = newEngine();
+    // One past kMaxQueuedPackets, so the queue drops exactly one for backlog. Well under
+    // kHighWaterSamples at this span, so the packet-count bound is the one that binds.
+    const std::vector<uint8_t> p = encode(1);
+    for (int i = 0; i < pl::kMaxQueuedPackets + 1; i++)
+        ASSERT_EQ(pl::kOfferAccepted, e->offer(5, p.data(), int(p.size()), false));
+    ASSERT_EQ(1, droppedOf(*e));
+    std::vector<int16_t> pcm(kQuantum);
+    int live = 1;
+    for (int i = 0; i < pl::kStallIdleTicks + 2 && live != 0; i++) live = liveThisTick(*e, pcm);
+    ASSERT_EQ(0, live) << "the speaker never retired";
+    EXPECT_EQ(1, droppedOf(*e)) << "retirement lost the tally, or counted it twice";
+}
+
+TEST(PlayoutEngine, CountsAPartialQuantumAsConcealment) {
+    // A terminator opens the prebuffer gate immediately, which is what lets one packet play at
+    // all here. Sub-quantum on purpose: 240 samples is a legal 5 ms Opus frame that decodes to
+    // half the 480-sample tick, so the rest is drain's zero padding — speech spliced with silence.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = dumble::testtone::encodeTone(240);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(2, p.data(), int(p.size()), true));
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_EQ(1, producingThisTick(*e, pcm));
+    EXPECT_EQ(1, concealedOf(*e));
+}
+
+TEST(PlayoutEngine, CountsAMidSpurtStallAsConcealment) {
+    // The gap a partial quantum cannot express: a speaker mid-sentence whose packets stop
+    // arriving. Every tick of it produces nothing, so a count that only fires on a short tick
+    // reports zero for the loudest dropout there is.
+    auto e = newEngine();
+    arm(*e, 1);
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_EQ(6, drainSpurt(*e)) << "six whole quanta, nothing concealed yet";
+    // drainSpurt's last tick is the one that found nothing and no terminator ever came.
+    EXPECT_EQ(1, concealedOf(*e));
+    // Charged on the leading edge only — past the re-arm a stalled speaker and a silent one are
+    // the same state, so the following ticks must not keep billing.
+    for (int i = 0; i < 5; i++) producingThisTick(*e, pcm);
+    EXPECT_EQ(1, concealedOf(*e)) << "a stall must be counted once, not per tick";
+}
+
+TEST(PlayoutEngine, DoesNotCountASpurtItsSenderClosed) {
+    // The other half of the stall rule, and why it needs the terminator at all: speech ending
+    // normally must not read as a dropout, or the metric fires once per utterance.
+    auto e = newEngine();
+    arm(*e, 1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, true));
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < 12; i++) producingThisTick(*e, pcm);
+    EXPECT_EQ(0, concealedOf(*e));
+}
+
+TEST(PlayoutEngine, DoesNotCountASpeakerStillPrebuffering) {
+    // Quiet by design, not by accident: the gate is closed for the spurt's first
+    // kPrebufferSamples and the loop ticks throughout. Charging those would swamp every real gap.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), false));
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < 4; i++) ASSERT_EQ(0, producingThisTick(*e, pcm));
+    EXPECT_EQ(0, concealedOf(*e));
+}
+
+TEST(PlayoutEngine, ConcealedTicksAreMonotonic) {
+    // Kotlin subtracts a spurt-start baseline, exactly as it does for the platform's underrun
+    // counter, so this must never reset on its own — not even as speakers come and go.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = dumble::testtone::encodeTone(240);
+    std::vector<int16_t> pcm(kQuantum);
+    int64_t previous = 0;
+    for (int32_t session = 20; session < 23; session++) {
+        ASSERT_EQ(pl::kOfferAccepted, e->offer(session, p.data(), int(p.size()), true));
+        producingThisTick(*e, pcm);
+        const int64_t now = concealedOf(*e);
+        EXPECT_GE(now, previous);
+        previous = now;
+    }
+    EXPECT_EQ(3, previous);
 }
 
 TEST(PlayoutEngine, AnOversizedFinalPacketStillEndsItsSpurt) {
@@ -234,35 +375,6 @@ TEST(PlayoutEngine, FillsALargerQuantumFromMultiplePacketsInOneTick) {
     int32_t live = 0;
     ASSERT_EQ(1, e->fillQuantum(pcm.data(), kLargeQuantum, speaking.data(), &live));
 }
-
-// The tick, its prebuffer re-arm and its two retirement windows are the engine's.
-namespace {
-
-int producingThisTick(PlayoutEngine& e, std::vector<int16_t>& pcm) {
-    std::vector<int32_t> speaking(pl::kMaxSpeakers);
-    int32_t live = 0;
-    return e.fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
-}
-
-int liveThisTick(PlayoutEngine& e, std::vector<int16_t>& pcm) {
-    std::vector<int32_t> speaking(pl::kMaxSpeakers);
-    int32_t live = 0;
-    e.fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
-    return live;
-}
-
-// Ticks until the engine stops producing, returning how many ticks carried audio.
-int drainSpurt(PlayoutEngine& e, int maxTicks = 500) {
-    std::vector<int16_t> pcm(kQuantum);
-    int ticks = 0;
-    for (int i = 0; i < maxTicks; i++) {
-        if (producingThisTick(e, pcm) == 0) break;
-        ticks++;
-    }
-    return ticks;
-}
-
-}  // namespace
 
 TEST(PlayoutEngine, TenMillisecondSenderDrainsOneQuantumPerTick) {
     auto e = newEngine();
@@ -361,4 +473,94 @@ TEST(PlayoutEngine, AReclaimedSlotDecodesLikeAFreshOne) {
     ASSERT_EQ(1, clean->fillQuantum(fresh.data(), kQuantum, speaking.data(), &live));
 
     EXPECT_EQ(fresh, reused);
+}
+
+// Run under ThreadSanitizer: this is the only test that exercises the reader/playback split.
+TEST(PlayoutEngine, SurvivesConcurrentOfferAndFill) {
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    std::atomic<bool> stop{false};
+    // More sessions than kMaxSpeakers, so claim, refusal at the cap and retirement all churn
+    // against the fill loop rather than the slot set settling and staying put.
+    constexpr int kSessions = 3 * pl::kMaxSpeakers;
+    std::thread reader([&] {
+        for (int i = 0; !stop.load(std::memory_order_relaxed); i++)
+            e->offer(int32_t(i % kSessions), p.data(), int(p.size()), i % 32 == 31);
+    });
+    std::vector<int16_t> pcm(kQuantum);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    int64_t previousConcealed = 0;
+    for (int i = 0; i < 5000; i++) {
+        const int producing = e->fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
+        // The invariants that must hold however the two threads interleave. A torn read of the
+        // slot set shows up here as a producing count above the live count, or above the cap.
+        ASSERT_GE(producing, 0);
+        ASSERT_LE(producing, pl::kMaxSpeakers);
+        ASSERT_GE(live, 0);
+        ASSERT_LE(live, pl::kMaxSpeakers);
+        for (int n = 0; n < producing; n++) {
+            ASSERT_GE(speaking[n], 0);
+            ASSERT_LT(speaking[n], kSessions) << "session outside the range the reader offers";
+        }
+        if (i % 100 == 0) {
+            const PlayoutEngine::Stats stats = e->stats();
+            ASSERT_GE(stats.speakers, 0);
+            ASSERT_LE(stats.speakers, pl::kMaxSpeakers);
+            for (int n = 0; n < stats.speakers; n++) ASSERT_GE(stats.depths[n], 0);
+            ASSERT_GE(stats.concealedTicks, previousConcealed);
+            previousConcealed = stats.concealedTicks;
+        }
+    }
+    stop.store(true, std::memory_order_relaxed);
+    reader.join();
+}
+
+// offer() is fed straight off the network, so its bytes are whatever a peer chose to send. Seeded
+// rather than random so a failure reproduces: this is a regression guard, not a fuzzer.
+TEST(PlayoutEngine, SurvivesArbitraryGarbageOnTheWire) {
+    auto e = newEngine();
+    std::mt19937 rng(0xD00Du);
+    std::vector<uint8_t> buf(pl::kMaxPacketBytes + 64);
+    std::vector<int16_t> out(kQuantum);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    int64_t lastDropped = 0, lastConcealed = 0;
+
+    for (int i = 0; i < 8000; i++) {
+        const int len = int(rng() % (pl::kMaxPacketBytes + 64));
+        for (int b = 0; b < len; b++) buf[b] = uint8_t(rng());
+        // Sessions past kMaxSpeakers so the cap refusal is on the hot path too.
+        e->offer(int32_t(rng() % 80), buf.data(), len, (rng() & 7) == 0);
+        if ((i & 15) == 0) {
+            ASSERT_GE(e->fillQuantum(out.data(), kQuantum, speaking.data(), &live), 0);
+            ASSERT_GE(live, 0);
+            ASSERT_LE(live, pl::kMaxSpeakers);
+        }
+        if ((i & 255) == 0) {
+            const PlayoutEngine::Stats stats = e->stats();
+            ASSERT_GE(stats.speakers, 0);
+            ASSERT_LE(stats.speakers, pl::kMaxSpeakers);
+            for (int s = 0; s < stats.speakers; s++)
+                ASSERT_GE(stats.depths[s], 0) << "negative depth at " << s;
+            ASSERT_GE(stats.droppedPackets, lastDropped);
+            ASSERT_GE(stats.concealedTicks, lastConcealed);
+            lastDropped = stats.droppedPackets;
+            lastConcealed = stats.concealedTicks;
+        }
+    }
+}
+
+// The shape a lossy or hostile transport actually produces, which random bytes rarely reach: a
+// real Opus header with the payload cut short, including the zero-length tag-only frame.
+TEST(PlayoutEngine, SurvivesEveryTruncationOfARealPacket) {
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(2);
+    std::vector<int16_t> out(kQuantum);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    for (int cut = 0; cut <= int(p.size()); cut++) {
+        e->offer(7, p.data(), cut, false);
+        ASSERT_GE(e->fillQuantum(out.data(), kQuantum, speaking.data(), &live), 0) << "cut=" << cut;
+    }
 }

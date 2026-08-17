@@ -37,6 +37,11 @@ static_assert(kMaxSpeakers <= Bitmap::kCapacity,
  * fillQuantum is deliberately shaped as an audio data callback: non-blocking, allocation-free, and
  * taking its sample count per call. Today a Kotlin playback thread drives it between AudioTrack
  * writes; an Oboe callback will call the same function unchanged.
+ *
+ * A tick is one fillQuantum call, and the engine's only clock — nothing in here advances between
+ * calls. Every count of ticks is therefore a count of calls and not a span of time: the caller
+ * picks `samples`, and the playback loop runs faster than real time whenever nobody is producing,
+ * since an arriving packet wakes it. A tick is at most one quantum of audio, and often less.
  */
 class PlayoutEngine {
 public:
@@ -68,6 +73,35 @@ public:
      */
     int fillQuantum(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers);
 
+    /** A whole reading of the engine: plain data, holding no reference to anything the playback
+     *  thread owns. */
+    struct Stats {
+        // Speakers holding a slot, and how many entries of the two arrays are filled. A speaker
+        // still below its prebuffer gate is counted: it holds a slot and has depth, but produces
+        // no audio yet, so this is not fillQuantum's producing count.
+        int speakers;
+        int32_t sessions[kMaxSpeakers];
+        // Samples queued and not yet decoded, per speaker. Entries past `speakers` are unspecified.
+        int32_t depths[kMaxSpeakers];
+
+        // The two totals below are monotonic since the engine was built: the caller subtracts a
+        // talk-spurt baseline, the way it already does for the platform's underrun counter.
+
+        // Gaps, not their length: a tick that produced less than a full quantum, or the leading
+        // tick of a mid-spurt stall.
+        int64_t concealedTicks;
+        // Packets the jitter queues threw away for backlog — past kMaxQueuedPackets or
+        // kHighWaterSamples — plus packets refused because kMaxSpeakers was already met, which
+        // have no queue to charge them to. A payload offer() refused is deliberately excluded: it
+        // is dropped before the mutex is taken and already carries kOfferPacketTooLarge or
+        // kOfferMalformedPacket, so counting it would put lock traffic on the garbage path. What
+        // is left is exactly the loss no status code reports.
+        int64_t droppedPackets;
+    };
+
+    /** Any thread; takes mutex_. */
+    Stats stats();
+
 private:
     PlayoutEngine(int sampleRate, int maxQuantumSamples);
 
@@ -83,6 +117,10 @@ private:
     int32_t sessions_[kMaxSpeakers] = {};
     // Consecutive ticks a claimed slot has produced nothing. Zeroed on claim.
     int idleTicks_[kMaxSpeakers] = {};
+    // Whole-engine totals, monotonic since construction. A retiring queue's own tally is
+    // harvested into droppedPackets_ before reset() clears it.
+    int64_t concealedTicks_ = 0;
+    int64_t droppedPackets_ = 0;
     // Built by create() and never rebuilt, which is what lets the playback thread hold references
     // into them across an unlocked decode.
     PacketQueue queues_[kMaxSpeakers];
