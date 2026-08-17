@@ -93,6 +93,14 @@ android {
         unitTests.isReturnDefaultValues = true
         // Robolectric reads the merged manifest and theme to host a Compose test activity.
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // The suite costs wall clock rather than CPU: most of it is threads waiting on each
+            // other, in the latches and timing windows the concurrency tests exist to lose on
+            // purpose. Forks are per class, which is the isolation these tests already assume —
+            // nothing binds a fixed port (TestTlsServer takes an ephemeral one) and only
+            // LiveServerIntegrationTest touches the shared server, from one class.
+            it.maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+        }
     }
     externalNativeBuild {
         cmake {

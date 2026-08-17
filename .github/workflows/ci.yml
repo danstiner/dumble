@@ -33,10 +33,31 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
+
+      # Robolectric downloads a 191 MB android-all jar the first time a test needs it, into ~/.m2
+      # rather than the Gradle home setup-gradle caches — so every run paid for it again.
+      - name: Cache the Robolectric runtime jar
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      # Gradle writes a configuration cache entry every run and can never reuse one, because it
+      # lives in the project directory and not the Gradle home. github.sha keeps it fresh: the
+      # exact key always misses, so the entry is rewritten, and restore-keys takes the most recent
+      # prefix match. A stale entry is not a hazard — Gradle validates its own inputs and falls
+      # back to configuring from scratch.
+      - name: Cache the Gradle configuration cache
+        uses: actions/cache@v4
+        with:
+          path: .gradle/configuration-cache
+          key: configcache-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}-${{ github.sha }}
+          restore-keys: configcache-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}-
+
       - name: Build and test
         env:
           MUMBLE_TEST_SERVER: localhost
-        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest --stacktrace
+        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest --build-cache --stacktrace
       - name: Build and run host C++ core tests
         # cpp/core has no Android dependency by construction, so it is tested on the runner
         # directly. This is also the only place libopus is reachable from a test at all —
@@ -46,4 +67,4 @@ jobs:
           cmake --build build/host -j
           ctest --test-dir build/host --output-on-failure
       - name: Verify attribution
-        run: ./gradlew verifyShippedGroups --stacktrace
+        run: ./gradlew verifyShippedGroups --build-cache --stacktrace
