@@ -33,6 +33,25 @@ void SpeakerDecoder::decode(const uint8_t* data, int len) {
     if (n > 0) fifo_.write(decodeScratch_.data(), uint32_t(n));
 }
 
+int SpeakerDecoder::conceal(int samples) {
+    // libopus only conceals in 2.5 ms units, so round the request up; the overshoot waits in the
+    // fifo and plays next tick.
+    const int rounded =
+        (samples + kConcealGridSamples - 1) / kConcealGridSamples * kConcealGridSamples;
+    // A decode with no packet is libopus's concealment call: it invents plausible audio from the
+    // decoder's history, for exactly the duration asked. The engine calls this once per starved
+    // tick with that tick's whole shortfall, so in practice every request is 10 ms and a hold is a
+    // run of consecutive 10 ms requests, which libopus answers with a fade lasting ~60 ms.
+    // Covering a tick with 2.5 ms grid-sized requests instead collapses to silence after the
+    // first one, so the request is never subdivided — measured, and pinned by
+    // ConcealsTheWholeGapInOneRequest.
+    const int n = decoder_->decode(nullptr, 0, decodeScratch_.data(), rounded);
+    // A negative is an error code, not a length — the same guard as decode().
+    if (n <= 0) return 0;
+    fifo_.write(decodeScratch_.data(), uint32_t(n));
+    return n;
+}
+
 int SpeakerDecoder::available() const {
     return int(fifo_.available());
 }

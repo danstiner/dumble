@@ -67,11 +67,18 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // snapshot just waits a tick, well inside its prebuffer gate. The queues and decoders need
     // no snapshot of their own — create() built them and nothing replaces them.
     int live[kMaxSpeakers];
+    bool speaking[kMaxSpeakers];
     int liveCount = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
-        for (int i = 0; i < kMaxSpeakers; i++)
-            if (slots_.test(i)) live[liveCount++] = i;
+        for (int i = 0; i < kMaxSpeakers; i++) {
+            if (!slots_.test(i)) continue;
+            // Snapshotted with the slot rather than read in the decode phase, which runs with the
+            // mutex released. A terminator landing during the decodes therefore costs one concealed
+            // tick — one tick of fade at the end of speech.
+            speaking[liveCount] = queues_[i].speaking();
+            live[liveCount++] = i;
+        }
     }
 
     // Pop under the lock, decode and mix outside it. The packet is copied through packetScratch_
@@ -79,6 +86,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // Samples each speaker produced, not merely whether it did: the concealment rule below needs
     // to tell a full quantum from a short one zero-padded around a gap.
     int produced[kMaxSpeakers];
+    bool concealed[kMaxSpeakers];
     for (int n = 0; n < liveCount; n++) {
         PacketQueue& queue = queues_[live[n]];
         SpeakerDecoder& decoder = *decoders_[live[n]];
@@ -91,6 +99,14 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);
         }
+        // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed tick then
+        // counts as production, which is what holds the prebuffer gate open and the retire clock at
+        // zero: packets the stall delayed play on the tick they arrive instead of waiting out a
+        // second prebuffer. Bounded by kConcealTicks — past that the speaker re-anchors.
+        const int shortfall = samples - decoder.available();
+        concealed[n] = false;
+        if (shortfall > 0 && speaking[n] && stallTicks_[live[n]] < kConcealTicks)
+            concealed[n] = decoder.conceal(shortfall) > 0;
         produced[n] = decoder.drain(speakerOut_.data(), samples);
         if (produced[n] > 0) mixAccumulate(accumulator_.data(), speakerOut_.data(), samples);
     }
@@ -106,13 +122,19 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             const bool audible = produced[n] > 0;
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
             if (audible) sessions[producing++] = sessions_[i];
-            // Judged before endTick, which closes the gate speaking() reads. A stall is charged
-            // once per gap, not per tick, which falls out of the re-arm: the tick that produced
-            // nothing emptied the queue, so endTick closes the gate and the next tick is no
-            // longer speaking. speaking() is read here rather than snapshotted with `produced`,
-            // so a terminator that landed during the decodes is honoured — the end of speech is
-            // not a dropout.
-            if (audible ? produced[n] < samples : queue.speaking()) concealedTicks_++;
+            // Judged before endTick, which closes the gate speaking() reads. One gap, one charge,
+            // however many ticks its hold spans — and stallTicks_ keeps counting past
+            // kConcealTicks, so the tick that gives up on a stall is not a second gap. speaking()
+            // is read here rather than taken from the snapshot, so a terminator that landed during
+            // the decodes is honoured: the end of speech is not a dropout.
+            if (concealed[n] || (produced[n] < samples && queue.speaking())) {
+                if (stallTicks_[i]++ == 0) concealedTicks_++;
+            } else {
+                stallTicks_[i] = 0;
+                // Speech spliced with silence with the queue already closed: the tail of a spurt,
+                // which no hold could have covered.
+                if (produced[n] > 0 && produced[n] < samples) concealedTicks_++;
+            }
             queue.endTick(audible);
             idleTicks_[i] = audible ? 0 : idleTicks_[i] + 1;
             // Two windows, because "produced nothing this tick" means two different things. Once
@@ -184,6 +206,7 @@ int PlayoutEngine::slotFor(int32_t session) {
     slots_.set(free);
     sessions_[free] = session;
     idleTicks_[free] = 0;
+    stallTicks_[free] = 0;
     return free;
 }
 

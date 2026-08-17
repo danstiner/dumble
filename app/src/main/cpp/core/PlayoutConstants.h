@@ -24,6 +24,10 @@ constexpr int kMaxSpeakers = 8;
 // and 40 ms and up are multi-frame packets.
 constexpr int kMaxPacketSamples = 5760;
 
+// libopus's concealment granularity, 2.5 ms at 48 kHz: opus_decode answers OPUS_BAD_ARG for a
+// frame_size off this grid when it is concealing rather than decoding.
+constexpr int kConcealGridSamples = 120;
+
 // 60 ms. Playout margin armed at the start of each talk spurt. TCP removes reordering and loss but
 // not head-of-line burstiness, and a pipeline fed at exactly 1x real time carries no margin of its
 // own — without this, the first retransmit stall glitches.
@@ -36,19 +40,26 @@ constexpr int kHighWaterSamples = 28800;
 
 // Idle ticks after a speaker's queue has drained before its decoder and pool are released,
 // matching the desktop client — AudioOutputSpeech retires on `iMissCount > 10`, roughly 100 ms.
-// Ticks, not milliseconds: the playback loop is paced by AudioTrack at ~100 Hz while anyone is
-// producing but runs faster when nobody is, since every arriving packet wakes it.
 constexpr int kRetireIdleTicks = 10;
+
+// Ticks of concealment a speaker gets when its queue starves mid-spurt, before we give up on the
+// spurt and let it re-anchor. A concealed tick counts as production, so unlike idle ticks these
+// are paced by AudioTrack.write — a real ~100 ms, matching kRetireIdleTicks and the desktop
+// client's AudioOutputSpeech miss count.
+//
+// libopus fades its concealment to near-silence over ~60 ms (see SpeakerDecoder::conceal),
+// so the number is really how long the speaker's playout anchor is held open: past ~100 ms the
+// break has been heard as one, and re-anchoring with a fresh prebuffer beats splicing across it.
+constexpr int kConcealTicks = 10;
 
 // Backstop for a spurt that stalled below kPrebufferSamples and never got a terminator — a sender
 // that died mid-spurt. It produces nothing and never drains, so the short window can never apply
 // to it and the slot would be held for the life of the connection.
 //
-// ~1 s, and a ceiling rather than a period: the playback loop parks 10 ms at a time while any
-// speaker is live, and every arriving packet wakes it early. Sized from what the fragment is worth,
-// not from how long a link can stall — the most this window can protect is the sub-60 ms of audio
-// sitting below the prebuffer gate, and audio spliced in a second after it was spoken is heard as
-// a click, not as speech.
+// ~1 s, and a ceiling rather than a period, since idle ticks outpace real time. Sized from what
+// the fragment is worth, not from how long a link can stall — the most this window can protect is
+// the sub-60 ms of audio sitting below the prebuffer gate, and audio spliced in a second after it
+// was spoken is heard as a click, not as speech.
 constexpr int kStallIdleTicks = 100;
 
 // Packets a speaker's queue can hold at once. 32 is 320 ms from a 10 ms sender and 1.9 s from a

@@ -13,8 +13,10 @@ namespace dumble::playout {
  *
  * Decoded audio exists as PCM for at most one packet's worth of ticks — the caller decodes only
  * while below a quantum, so the fifo never holds more than a quantum plus the one packet that
- * crossed it. Two different units, and deliberately so: the quantum is the output tick the device
- * asks for, the packet is the input granularity the sender chose. Everything waiting on the network stays compressed, in PacketQueue.
+ * crossed it; concealment fits the same bound, overshooting by less than kConcealGridSamples.
+ * Two different units, and deliberately so: the quantum is the output tick the device asks for,
+ * the packet is the input granularity the sender chose. Everything waiting on the network stays
+ * compressed, in PacketQueue.
  *
  * Playback-thread-only. PlayoutEngine pops a packet under its mutex and then calls decode() with
  * the mutex released, so a slow decode never stalls the reader thread; nothing here may be touched
@@ -37,6 +39,12 @@ public:
      *  error here: PlayoutEngine measures every packet before it is queued, so the only way one
      *  reaches this point is a payload that parsed as a header and then failed to decode. */
     void decode(const uint8_t* data, int len);
+
+    /** Synthesizes `samples` of libopus concealment into the fifo, rounded up to
+     *  kConcealGridSamples, and returns how many samples it wrote. Extrapolated from decoder state,
+     *  so it is only meaningful once real audio has decoded through this decoder; with no history
+     *  libopus has nothing to extrapolate and answers with silence. */
+    int conceal(int samples);
 
     /** Returns the stage to its just-constructed state, for a slot about to serve a different
      *  sender: libopus keeps prediction state between packets, and it must not carry one

@@ -40,8 +40,9 @@ static_assert(kMaxSpeakers <= Bitmap::kCapacity,
  *
  * A tick is one fillQuantum call, and the engine's only clock — nothing in here advances between
  * calls. Every count of ticks is therefore a count of calls and not a span of time: the caller
- * picks `samples`, and the playback loop runs faster than real time whenever nobody is producing,
- * since an arriving packet wakes it. A tick is at most one quantum of audio, and often less.
+ * picks `samples` (today's playback loop asks for 10 ms quanta), and the loop runs faster than
+ * real time whenever nobody is producing, since an arriving packet wakes it. A tick is at most
+ * one quantum of audio, and often less.
  */
 class PlayoutEngine {
 public:
@@ -117,6 +118,11 @@ private:
     int32_t sessions_[kMaxSpeakers] = {};
     // Consecutive ticks a claimed slot has produced nothing. Zeroed on claim.
     int idleTicks_[kMaxSpeakers] = {};
+    // Consecutive ticks a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only
+    // by real audio, never by a tick that merely did not conceal: an expired hold would otherwise
+    // clear its own counter and start concealing again on the next tick, forever. Keeps counting
+    // past kConcealTicks for the same reason. Zeroed on claim, like idleTicks_.
+    int stallTicks_[kMaxSpeakers] = {};
     // Whole-engine totals, monotonic since construction. A retiring queue's own tally is
     // harvested into droppedPackets_ before reset() clears it.
     int64_t concealedTicks_ = 0;

@@ -15,8 +15,8 @@ import java.util.Locale
  * between spurts as glitches. [underruns] is null when the spurt's baseline could not be read.
  *
  * [concealedTicks] is the more trustworthy of the two platform-adjacent numbers, because we
- * generate it: it counts gaps in a speaker's audio, whether the tick carried real audio short of a
- * full quantum — the rest zero-padded, speech spliced with silence — or nothing at all from a
+ * generate it: it counts gaps in a speaker's audio, whether the 10 ms tick carried real audio
+ * short of a full quantum — the rest zero-padded, speech spliced with silence — or nothing from a
  * sender still mid-spurt, which is the same gap at full width. Counted once per gap, not per tick.
  * A platform underrun counter cannot distinguish either from our own idling.
  *
