@@ -1,7 +1,6 @@
 package me.danielstiner.dumble.di
 
 import android.content.Context
-import android.os.SystemClock
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
@@ -15,8 +14,6 @@ import me.danielstiner.dumble.data.PinDataStore
 import me.danielstiner.dumble.data.ServerConfigDataStore
 import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.PinStore
-import me.danielstiner.dumble.mumble.voice.LibOpusCodec
-import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.time.BootTimeSource
 import kotlin.time.TimeSource
 import javax.inject.Singleton
@@ -36,10 +33,6 @@ object MumbleModule {
     @Provides
     @Singleton
     fun providePinStore(dataStore: DataStore<Preferences>): PinStore = PinDataStore(dataStore)
-
-    @Provides
-    @Singleton
-    fun provideOpusCodec(): OpusCodec = LibOpusCodec()
 
     @Provides
     fun provideTimeSource(): TimeSource.WithComparableMarks = BootTimeSource

@@ -2,7 +2,6 @@ package me.danielstiner.dumble.mumble.voice
 
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.voice.FakeOpusCodec.Companion.packet
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,10 +29,10 @@ class VoiceReceiverTest {
      *  fails loudly rather than silently opening an output nothing should have opened. */
     private val unusedOut: () -> AudioOut = { error("playback thread must not start") }
 
-    private fun audioPayload(session: Int, tenMsFrames: Int, terminator: Boolean = false): ByteArray {
+    private fun audioPayload(session: Int, terminator: Boolean = false): ByteArray {
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(session)
-            .setOpusData(ByteString.copyFrom(packet(tenMsFrames)))
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
             .setIsTerminator(terminator)
             .build()
         return byteArrayOf(0) + audio.toByteArray()
@@ -92,8 +91,8 @@ class VoiceReceiverTest {
         val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
-            rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6, terminator = true))
+            rx.onTunneledAudio(audioPayload(session = 1))
+            rx.onTunneledAudio(audioPayload(session = 2, terminator = true))
 
             assertEquals("every packet must reach the engine", 2, fake.offered.size)
             assertEquals(1, fake.offered[0].session)
@@ -148,7 +147,7 @@ class VoiceReceiverTest {
         val rx = VoiceReceiver({ fake }) { out }
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+            rx.onTunneledAudio(audioPayload(session = 1))
             assertTrue("no audio written", latch.await(5, TimeUnit.SECONDS))
         } finally {
             rx.stop()
@@ -159,7 +158,7 @@ class VoiceReceiverTest {
         // stop() latches. Retirement is native now, so the only thing left to prove here is that
         // the reader itself is gated — a late packet must never reach an engine that is about to
         // be destroyed.
-        rx.onTunneledAudio(audioPayload(session = 2, tenMsFrames = 6))
+        rx.onTunneledAudio(audioPayload(session = 2))
 
         assertEquals("a packet arriving after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
         assertTrue("the engine must still be destroyed", fake.destroyed)
@@ -237,11 +236,11 @@ class VoiceReceiverTest {
         val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
         rx.start()
         try {
-            repeat(8) { rx.onTunneledAudio(audioPayload(session = 3, tenMsFrames = 6)) }
+            repeat(8) { rx.onTunneledAudio(audioPayload(session = 3)) }
             assertEquals("a malformed payload must not stop the reader", 8, fake.offered.size)
 
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
-            rx.onTunneledAudio(audioPayload(session = 3, tenMsFrames = 6))
+            rx.onTunneledAudio(audioPayload(session = 3))
             assertEquals("the session must still work after garbage", 9, fake.offered.size)
         } finally {
             rx.stop()
@@ -261,11 +260,11 @@ class VoiceReceiverTest {
         val rx = VoiceReceiver({ fake }) { FakeAudioOut() }
         rx.start()
         try {
-            repeat(8) { rx.onTunneledAudio(audioPayload(session = it, tenMsFrames = 6)) }
+            repeat(8) { rx.onTunneledAudio(audioPayload(session = it)) }
             assertEquals("every packet must still reach the engine even while capped", 8, fake.offered.size)
 
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
-            rx.onTunneledAudio(audioPayload(session = 0, tenMsFrames = 6))
+            rx.onTunneledAudio(audioPayload(session = 0))
             assertEquals("the reader must keep working after the cap trips", 9, fake.offered.size)
         } finally {
             rx.stop()
@@ -282,7 +281,7 @@ class VoiceReceiverTest {
             // The body must be a *valid* Audio message, differing from an accepted packet only in
             // the type byte. With a garbage body the malformed-protobuf path would reject it
             // anyway, and the test would pass just as well with the type check deleted.
-            val wrongType = audioPayload(session = 1, tenMsFrames = 6).also { it[0] = 99 }
+            val wrongType = audioPayload(session = 1).also { it[0] = 99 }
             rx.onTunneledAudio(wrongType)
             rx.onTunneledAudio(ByteArray(0))
 
@@ -846,7 +845,7 @@ class VoiceReceiverTest {
     fun anUnavailableEngineDisablesReceiveWithoutTouchingAudioOut() {
         val rx = VoiceReceiver({ null }, unusedOut)
         rx.start()
-        rx.onTunneledAudio(audioPayload(session = 1, tenMsFrames = 6))
+        rx.onTunneledAudio(audioPayload(session = 1))
         assertEquals(emptySet<Int>(), rx.speakingSessions.value)
         // Refused exactly like a start() after a real stop() — see startAfterStopIsRefused.
         rx.start()

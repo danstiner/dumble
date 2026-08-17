@@ -22,7 +22,6 @@ import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
-import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
 import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceCall
@@ -41,7 +40,7 @@ class MumbleConnectionTest {
         srv.start()
         try {
             val pins = InMemoryPinStore()
-            val conn = MumbleConnection(pins, FakeOpusCodec(), { FakeAudioOut() }) { pin ->
+            val conn = MumbleConnection(pins, { FakeAudioOut() }) { pin ->
                 MumbleTcpTransport(
                     expectedPin = pin,
                     // First contact must be rejected by the authority path so MumbleTrustManager
@@ -71,7 +70,7 @@ class MumbleConnectionTest {
     }
 
     @Test fun connectTimeoutMapsToTimeoutError() = runBlocking {
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -81,7 +80,7 @@ class MumbleConnectionTest {
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
         val gate = CompletableDeferred<Unit>()
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> gate.await() }     // blocks mid-"handshake"
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -95,7 +94,7 @@ class MumbleConnectionTest {
 
     @Test fun channelTreeSurfacesReducedFrames() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> }.also { fake = it }   // connects, stays open
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -113,7 +112,7 @@ class MumbleConnectionTest {
 
     @Test fun disconnectResetsChannelTree() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -138,7 +137,7 @@ class MumbleConnectionTest {
      */
     @Test fun connectingOverALiveConnectionClearsThePriorSessionsState() = runBlocking {
         val fakes = mutableListOf<FakeControlTransport>()
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> }.also { fakes += it }
         }
         conn.connect(MumbleEndpoint.parse("first"), "user", null)
@@ -167,7 +166,7 @@ class MumbleConnectionTest {
 
     @Test fun aSupersededAttemptLeavesChannelTreeEmpty() = runBlocking {
         val gate = CompletableDeferred<Unit>()
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) {
             FakeControlTransport { _, _ -> gate.await() }   // blocks mid-handshake
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -180,7 +179,7 @@ class MumbleConnectionTest {
 
     @Test fun messagesSurfaceFromTheSession() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
@@ -194,7 +193,7 @@ class MumbleConnectionTest {
 
     @Test fun disconnectClearsMessages() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
@@ -208,7 +207,7 @@ class MumbleConnectionTest {
 
     @Test fun sendTextRoutesToTheLiveSessionAndEchoes() = runBlocking {
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> }.also { fake = it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.ServerSync.id,
@@ -227,7 +226,7 @@ class MumbleConnectionTest {
     }
 
     @Test fun sendTextWithNoConnectionReturnsFalse() = runBlocking {
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> } }
+        val conn = MumbleConnection(InMemoryPinStore(), { FakeAudioOut() }) { FakeControlTransport { _, _ -> } }
         assertFalse(conn.sendText("hi"))
     }
 
@@ -239,7 +238,7 @@ class MumbleConnectionTest {
         // disconnect() below would then wait out its 1 s join.
         playout.blockWhenEmpty = false
         val out = FakeAudioOut()
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { out }, newPlayout = { playout }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { out }, newPlayout = { playout }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -251,7 +250,7 @@ class MumbleConnectionTest {
         playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
-            .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
             .build()
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
 
@@ -286,7 +285,7 @@ class MumbleConnectionTest {
         val playout = FakePlayoutEngine()
         playout.blockWhenEmpty = false
         val out = FakeAudioOut()
-        val conn = MumbleConnection(InMemoryPinStore(), FakeOpusCodec(), { out }, newPlayout = { playout }) {
+        val conn = MumbleConnection(InMemoryPinStore(), { out }, newPlayout = { playout }) {
             FakeControlTransport { _, _ -> }.also { fake = it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -296,7 +295,7 @@ class MumbleConnectionTest {
         playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
-            .setOpusData(ByteString.copyFrom(FakeOpusCodec.packet(6)))
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
             .build()
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
         withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
@@ -336,7 +335,7 @@ class MumbleConnectionTest {
         val outs = CopyOnWriteArrayList<FakeAudioOut>()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(
-            pins, FakeOpusCodec(), { FakeAudioOut().also { outs += it } },
+            pins, { FakeAudioOut().also { outs += it } },
             newPlayout = { FakePlayoutEngine().also { it.blockWhenEmpty = false } },
         ) {
             FakeControlTransport { _, _ -> }.also { transports += it }
@@ -364,7 +363,7 @@ class MumbleConnectionTest {
         val handle = FakeCaptureHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } }
@@ -399,7 +398,7 @@ class MumbleConnectionTest {
     @Test fun callStartsWithTheConnectionNotTheMicrophone() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { null },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -423,7 +422,7 @@ class MumbleConnectionTest {
     @Test fun aFailedConnectEndsTheCallAsFailureNotHangUp() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() }, call = call,
+            InMemoryPinStore(), { FakeAudioOut() }, call = call,
         ) { FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") } }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -440,7 +439,7 @@ class MumbleConnectionTest {
     @Test fun aSystemEndedCallDisconnectsTheSession() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { null },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -464,7 +463,7 @@ class MumbleConnectionTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } }
@@ -495,7 +494,7 @@ class MumbleConnectionTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -520,7 +519,7 @@ class MumbleConnectionTest {
     @Test fun connectingOverALiveConnectionEndsThePriorCall() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { null },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -542,7 +541,7 @@ class MumbleConnectionTest {
     @Test fun captureThatCannotOpenLeavesTheCallRunning() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { null },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -566,7 +565,7 @@ class MumbleConnectionTest {
     @Test fun routesFromTheLiveCallReachTheUi() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -586,7 +585,7 @@ class MumbleConnectionTest {
     @Test fun routesFromASupersededCallAreDropped() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -607,7 +606,7 @@ class MumbleConnectionTest {
     @Test fun disconnectClearsTheRoutes() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -625,7 +624,7 @@ class MumbleConnectionTest {
     @Test fun selectingARouteAddressesTheLiveCall() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -640,7 +639,7 @@ class MumbleConnectionTest {
     @Test fun selectingARouteWithNothingConnectedIsANoOp() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }

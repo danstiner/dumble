@@ -29,7 +29,6 @@ find_package(oboe REQUIRED CONFIG)
 # to trigger a reconfigure.
 file(GLOB CORE_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
 add_library(dumble SHARED
-    opus_jni.c
     ${CORE_SRC}
     android/OboeCapture.cpp
     android/capture_jni.cpp

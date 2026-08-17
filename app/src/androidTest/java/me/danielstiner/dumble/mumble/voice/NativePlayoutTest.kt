@@ -55,7 +55,7 @@ class NativePlayoutTest {
         // a caller that sizes its quantum wrong, but it is the only failure create() reports and
         // nothing else proves the 0 travels back as a Kotlin Long.
         assertEquals(0L, NativePlayout.create(SAMPLE_RATE, 0))
-        assertEquals(0L, NativePlayout.create(SAMPLE_RATE, MAX_FRAME_SAMPLES + 1))
+        assertEquals(0L, NativePlayout.create(SAMPLE_RATE, MAX_PACKET_SAMPLES + 1))
     }
 
     @Test
@@ -120,7 +120,7 @@ class NativePlayoutTest {
         )
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.fillQuantum(handle, ShortArray(MAX_FRAME_SAMPLES + 1), status()),
+            NativePlayout.fillQuantum(handle, ShortArray(MAX_PACKET_SAMPLES + 1), status()),
         )
         val sessions = IntArray(MAX_SPEAKERS)
         val depths = IntArray(MAX_SPEAKERS)
@@ -244,6 +244,9 @@ class NativePlayoutTest {
 
         /** Mirrors `PlayoutConstants.h`'s kMaxPacketBytes, which is what the seam refuses above. */
         const val MAX_PACKET_BYTES = 1276
+
+        /** Its sibling kMaxPacketSamples, the seam's other refusal bound. */
+        const val MAX_PACKET_SAMPLES = 5760
 
         /**
          * One 10 ms packet of the 440 Hz tone the host C++ tests use, from the same encoder at the

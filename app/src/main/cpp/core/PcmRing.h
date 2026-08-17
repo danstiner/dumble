@@ -6,8 +6,8 @@
 namespace dumble {
 
 /**
- * Single-producer single-consumer ring buffer specialized for int16 PCM samples. The producer is
- * a SCHED_FIFO audio callback, so write() allocates nothing, takes no lock, and never blocks.
+ * Single-producer single-consumer ring buffer specialized for int16 PCM samples. Producers are
+ * on an audio deadline, so write() allocates nothing, takes no lock, and never blocks.
  *
  * Indices are ever-increasing 64-bit counters masked to the buffer, not wrapped pointers, so
  * `write - read` is the fill level without an ambiguous full/empty state and reset() cannot move
@@ -23,8 +23,7 @@ class PcmRing {
 public:
     /** Capacity rounds up to the next power of two — the wrap must be a mask. Debug builds
      *  additionally assert the request already was one, so a caller asking for one size and
-     *  silently getting another is caught; release builds round up and carry on, the same
-     *  policy ShortArrayFifo applies on the playback side. */
+     *  silently getting another is caught; release builds round up and carry on. */
     explicit PcmRing(uint32_t minCapacitySamples);
 
     /** Producer. All-or-nothing: a write that does not fit is dropped whole and counted. */
