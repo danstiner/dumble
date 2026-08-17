@@ -57,7 +57,7 @@ jobs:
       - name: Build and test
         env:
           MUMBLE_TEST_SERVER: localhost
-        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest --build-cache --stacktrace
+        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest --stacktrace
       - name: Build and run host C++ core tests
         # cpp/core has no Android dependency by construction, so it is tested on the runner
         # directly. This is also the only place libopus is reachable from a test at all —
@@ -67,4 +67,4 @@ jobs:
           cmake --build build/host -j
           ctest --test-dir build/host --output-on-failure
       - name: Verify attribution
-        run: ./gradlew verifyShippedGroups --build-cache --stacktrace
+        run: ./gradlew verifyShippedGroups --stacktrace
