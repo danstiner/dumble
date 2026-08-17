@@ -8,7 +8,6 @@ import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
-import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -140,7 +139,7 @@ class CaptureLifecycleChaosTest {
         val created = AtomicInteger()
         val endpoint = MumbleEndpoint.parse("chaos")
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = {
                 ChaosCaptureHandle(
                     c.streamLive, c.streamPeak, c.engineLive, c.enginePeak, c.violations,

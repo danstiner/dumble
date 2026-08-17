@@ -4,7 +4,7 @@
 namespace dumble {
 
 // Mumble voice is 48 kHz mono; these pin the capture/encode side to the protocol. The playback
-// side pins itself independently (AudioConstants.kt SAMPLE_RATE/CHANNELS) — deliberate twins,
+// side pins itself independently (AudioConstants.kt SAMPLE_RATE) — deliberate twins,
 // not a shared definition: nothing crosses the JNI boundary at runtime to keep them aligned,
 // each side answers to the protocol, and single-sourcing two ints across languages would cost
 // codegen or runtime lookups. int because libopus, their main consumer here, takes int.

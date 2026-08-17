@@ -10,7 +10,6 @@ import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
-import me.danielstiner.dumble.mumble.voice.FakeOpusCodec
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.VoiceCall
@@ -72,7 +71,7 @@ class CaptureLifecycleTest {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
             stuckPumpMillis = 100L,
@@ -110,7 +109,7 @@ class CaptureLifecycleTest {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
             stuckPumpMillis = 100L,
@@ -169,7 +168,7 @@ class CaptureLifecycleTest {
         val peak = AtomicInteger()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { CountingHandle(live, peak) },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -218,7 +217,7 @@ class CaptureLifecycleTest {
         val handle = DestroyCountingHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -268,7 +267,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<RecordingHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -345,7 +344,7 @@ class CaptureLifecycleTest {
             var first = true
             val call = FakeVoiceCall()
             val conn = MumbleConnection(
-                InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+                InMemoryPinStore(), { FakeAudioOut() },
                 newCapture = {
                     if (first) {
                         first = false
@@ -392,7 +391,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -426,7 +425,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -480,7 +479,7 @@ class CaptureLifecycleTest {
         val handle = ThrowingStopHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -510,7 +509,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -547,7 +546,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -578,7 +577,7 @@ class CaptureLifecycleTest {
         var first = true
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = {
                 if (first) { first = false; handle }
                 else FakeCaptureHandle().also { rebuilt += it }
@@ -619,7 +618,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -649,7 +648,7 @@ class CaptureLifecycleTest {
     @Test fun aTalkPressWhileActiveDoesNotRequestResume() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { FakeCaptureHandle() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -672,7 +671,7 @@ class CaptureLifecycleTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = {
                 FakeCaptureHandle().also {
                     it.script(FakeCaptureHandle.Step.Unavailable)
@@ -707,7 +706,7 @@ class CaptureLifecycleTest {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle },
             call = call,
             stuckPumpMillis = 100L,
@@ -761,7 +760,7 @@ class CaptureLifecycleTest {
             val handle = GateAfterDestroyHandle()
             val call = FakeVoiceCall()
             val conn = MumbleConnection(
-                InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+                InMemoryPinStore(), { FakeAudioOut() },
                 newCapture = { handle },
                 call = call,
             ) { FakeControlTransport { _, _ -> } }
@@ -809,7 +808,7 @@ class CaptureLifecycleTest {
         lateinit var handle: GatedHandle
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = { handle.awaitGate(); handle },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
@@ -837,7 +836,7 @@ class CaptureLifecycleTest {
         val opened = AtomicInteger()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             newCapture = {
                 // First open throws from inside the consumer; later ones behave.
                 if (opened.getAndIncrement() == 0) throw IllegalStateException("boom")
@@ -865,7 +864,7 @@ class CaptureLifecycleTest {
     @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = runBlocking {
         val call = FakeVoiceCall(autoGrant = false)
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             call = call,
         ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
 
@@ -897,7 +896,7 @@ class CaptureLifecycleTest {
     @Test fun aPlatformHangupOfASupersededCallDoesNotRetireTheSuccessor() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
 
@@ -925,7 +924,7 @@ class CaptureLifecycleTest {
     @Test fun aHangupWhileAwaitingTrustDoesNotDismissThePrompt() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             call = call,
         ) { FakeControlTransport { _, _ -> throw UntrustedCertificateException("aa:bb") } }
 
@@ -949,7 +948,7 @@ class CaptureLifecycleTest {
     @Test fun aHangupAfterASessionFailureDoesNotEraseTheReason() = runBlocking {
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
-            InMemoryPinStore(), FakeOpusCodec(), { FakeAudioOut() },
+            InMemoryPinStore(), { FakeAudioOut() },
             call = call,
         ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
 

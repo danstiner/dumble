@@ -56,3 +56,52 @@ Invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest`, and `
 - A terminal engine failure does not auto-reopen; the retry is the next Talk press.
 - Hold/resume callbacks are keyed by connection generation, so a superseded call's late callback
   cannot latch onto its successor.
+
+## Audio playout
+
+Playout is the inverse pipeline: Mumble UDP-tunnel packets in, mixed PCM to `AudioTrack` out,
+split across the same three layers as capture.
+
+**Native engine** (`core/PlayoutEngine.{h,cpp}`), platform-free. Its only clock is the tick — one
+`fillQuantum` call — so every `*IdleTicks` bound is a count of calls, not a span of time. It owns
+one `PacketQueue` and one `SpeakerDecoder` per sender, built up front by `create()`: a queue is
+touched only under the mutex, a decoder only from the playback thread with the mutex released.
+`offer()`, on the reader thread, judges the payload before the mutex and answers a status code; no
+refusal is terminal — each is a condition a misbehaving server can produce at will, so the caller
+latches a log rather than disabling receive. `fillQuantum` is shaped as an audio data callback —
+non-blocking, allocation-free, taking its sample count per call — so an Oboe output stream could
+drive it; today a Kotlin thread does, between `AudioTrack` writes. Encoded packets wait compressed
+in `PacketQueue` behind a prebuffer gate, so a network stall cannot glitch the opening syllable;
+`SpeakerDecoder`'s `PcmRing` decouples packet duration from the quantum; the mix finalizes through
+`Mixer`'s soft-knee limiter. Retirement is the engine's alone — neither half can tell a speaker
+that stopped talking from one still filling its prebuffer — and it is the only place a slot is
+released, inside `fillQuantum`, never in `offer`. The tuning constants and their reasoning live in
+`PlayoutConstants.h`.
+
+**JNI seam** (`android/playout_jni.cpp`), one `jlong` handle. Payloads and quanta cross on stack
+scratch rather than pinned arrays, so nothing holds a GC-visible pin across the engine's mutex or
+the mix. It validates every array it writes into and answers `kErrorBufferTooSmall`, keeping `0`
+to mean "the engine ran and nobody produced audio" — a caller that sized its arrays wrong must not
+be indistinguishable from silence. The calls that answer with more than one number flatten their
+outputs into primitive arrays; those layouts belong to the seam, named by `NativePlayout`'s
+`STATUS_*` and `COUNTER_*` constants.
+
+**Playback loop** (`VoiceReceiver`). One daemon thread calling `fillQuantum`, paced by the
+blocking `AudioOut.write` while any speaker is draining — `AudioTrack` consumes one quantum per
+quantum-duration off the audio clock, so no timer exists or should — and parked on `idleLock`
+otherwise. `onTunneledAudio`, on the reader coroutine, offers under that same monitor, so a
+`stopped` check and an `offer` are atomic against teardown. Kotlin owns the `speakingSessions` and
+`playoutStats` flows, publishing the engine's monotonic counters against per-spurt baselines. The
+engine exists if and only if the loop is running: `start()` builds both, only the playback thread
+destroys the engine, and both destroy sites hold `idleLock`, so the reader can never call into a
+freed handle. `stop()` never frees it; a loop wedged in a blocked `AudioTrack.write` destroys the
+engine on its own way out rather than have `stop()` race it.
+
+Invariants, pinned by `PlayoutEngineTest.cpp`, `PacketQueueTest.cpp`, `VoiceReceiverTest.kt`,
+`NativePlayoutTest.kt` and `PlayoutLoopDeviceTest.kt`:
+
+- The engine is freed only by the playback thread, under the monitor the reader offers under.
+- A speaker's slot is released only by retirement inside `fillQuantum`.
+- `offer` never throws, and no refusal is terminal for the session.
+- The seam's flat layouts match what Kotlin reads — pinned on a device, since `FakePlayoutEngine`
+  fills the same arrays from the same constants and cannot catch a drift.

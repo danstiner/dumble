@@ -52,7 +52,7 @@ class AndroidAudioOut(context: Context) : AudioOut {
         // was stopped or paused mid-call. Neither blocks, and write() is the loop's only pacing, so
         // both must stop it rather than let it spin at THREAD_PRIORITY_URGENT_AUDIO.
         if (written < n) return false
-        // Shorts, not frames — identical only because CHANNELS is 1. Stereo would double this.
+        // Shorts, not frames — identical only because voice is mono.
         framesWritten += written
         return true
     }

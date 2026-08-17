@@ -65,9 +65,9 @@ android {
             )
             signingConfig = signingConfigs.findByName("release")
             ndk {
-                // From this branch on the AAB carries our own native code (libopus + opus_jni).
-                // Without uploaded symbols, Play shows native crashes as raw addresses. FULL
-                // uploads DWARF too, so crash reports get file:line instead of just function names.
+                // The AAB carries our own native code, so without uploaded symbols Play shows
+                // native crashes as raw addresses. FULL uploads DWARF too, so crash reports get
+                // file:line instead of just function names.
                 debugSymbolLevel = "FULL"
                 // Play has required 64-bit since 2019 and 32-bit-only x86 Android devices never
                 // really existed outside emulators, so that ABI is pure build time. armeabi-v7a
