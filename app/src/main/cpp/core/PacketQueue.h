@@ -72,6 +72,15 @@ public:
      *  has stopped talking from one still waiting out its prebuffer. */
     bool empty() const { return count_ == 0; }
 
+    /** Gate open and no terminator: the sender is mid-spurt. Distinguishes a dropout from the two
+     *  expected silences — prebuffering and speech that ended normally. Read before endTick,
+     *  which clears both flags. */
+    bool speaking() const { return gateOpen_ && !terminated_; }
+
+    /** Packets thrown away for backlog: past kMaxQueuedPackets or kHighWaterSamples. Cleared by
+     *  reset(), so a retiring slot must be harvested first. */
+    int droppedPackets() const { return droppedPackets_; }
+
 private:
     /** Four bytes, so the whole ring is two cache lines. Both fields are bounded by constants
      *  small enough to narrow; PacketQueue.cpp static_asserts that they still are. */
@@ -95,6 +104,10 @@ private:
     // Whether the queue was empty the last time pop() came up short — endTick's re-arm verdict,
     // recorded at pop time and cleared by a terminator offer(). See endTick().
     bool emptyAtPop_ = false;
+    // Whether this spurt was closed by its sender rather than merely stopping. Only speaking()
+    // reads it: without it every normal end of speech would look like a dropout.
+    bool terminated_ = false;
+    int droppedPackets_ = 0;
     Entry entries_[kMaxQueuedPackets];
 };
 

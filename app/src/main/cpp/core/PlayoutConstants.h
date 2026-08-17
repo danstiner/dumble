@@ -80,10 +80,4 @@ constexpr int kOfferMalformedPacket = 3;
 // kPollNoSession / kPollBufferTooSmall.
 constexpr int kErrorBufferTooSmall = -1;
 
-// Layout of the single int array the JNI seam flattens fillQuantum's two outputs into: live speaker
-// count at index 0, producing sessions from index 1 up. One array is one region copy per tick.
-// Direct C++ callers take the two as separate parameters and never see this.
-constexpr int kStatusActiveSpeakers = 0;
-
-
 }  // namespace dumble::playout
