@@ -32,7 +32,8 @@ add_library(dumble SHARED
     opus_jni.c
     ${CORE_SRC}
     android/OboeCapture.cpp
-    android/capture_jni.cpp)
+    android/capture_jni.cpp
+    android/playout_jni.cpp)
 target_include_directories(dumble PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dumble opus oboe::oboe log)
 set(DUMBLE_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/dumble.map)
