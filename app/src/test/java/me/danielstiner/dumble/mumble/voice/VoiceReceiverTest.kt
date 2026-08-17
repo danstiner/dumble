@@ -2,7 +2,6 @@ package me.danielstiner.dumble.mumble.voice
 
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.voice.FakeOpusCodec.Companion.packet
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -31,9 +30,10 @@ class VoiceReceiverTest {
     private val unusedOut: () -> AudioOut = { error("playback thread must not start") }
 
     private fun audioPayload(session: Int, tenMsFrames: Int, terminator: Boolean = false): ByteArray {
+        // Opaque payload: FakePlayoutEngine.offer() records it but never decodes it.
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(session)
-            .setOpusData(ByteString.copyFrom(packet(tenMsFrames)))
+            .setOpusData(ByteString.copyFrom(byteArrayOf(tenMsFrames.toByte(), 0, 0, 0)))
             .setIsTerminator(terminator)
             .build()
         return byteArrayOf(0) + audio.toByteArray()

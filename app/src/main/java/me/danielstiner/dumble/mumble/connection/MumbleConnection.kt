@@ -32,7 +32,6 @@ import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
 import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
-import me.danielstiner.dumble.mumble.voice.OpusCodec
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -58,7 +57,6 @@ import javax.inject.Singleton
 @Singleton
 class MumbleConnection internal constructor(
     private val pinStore: PinStore,
-    private val opusCodec: OpusCodec,
     private val newAudioOut: () -> AudioOut,
     // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
@@ -74,9 +72,8 @@ class MumbleConnection internal constructor(
     @Inject constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,
-        opusCodec: OpusCodec,
     ) : this(
-        pinStore, opusCodec, { AndroidAudioOut(context) }, { openNativeCapture() },
+        pinStore, { AndroidAudioOut(context) }, { openNativeCapture() },
         { openNativePlayout() },
         TelecomCall(context),
         newTransport = { MumbleTcpTransport(it) },
@@ -522,6 +519,15 @@ class MumbleConnection internal constructor(
             // retire() clears `current` without bumping `attempt`. Every earlier return in this
             // function skips this line, so an attempt that never gets here never calls newPlayout()
             // — see the comment where `receiver` is built.
+            //
+            // start() runs newPlayout() inside this lock, and the first one reaches NativePlayout's
+            // class initializer — so at most one dlopen of libdumble is paid under this lock per
+            // process (NativeCapture loads the same .so, so it is usually already resident), while
+            // disconnect() — main thread, via ConnectViewModel.onDisconnect() — can be waiting on
+            // it. Accepted rather than hoisted: once per process, against a main thread that is
+            // already tearing the connection down. The deleted SpeakerPlayout.offer() kept its
+            // dlopen off its lock for a reason that does not apply here — that one sat on the
+            // ~100 Hz reader path, where the wait would have stalled live audio.
             synchronized(lock) { if (gen == attempt && current === att) receiver.start() }
         }
     }

@@ -65,7 +65,8 @@ android {
             )
             signingConfig = signingConfigs.findByName("release")
             ndk {
-                // From this branch on the AAB carries our own native code (libopus + opus_jni).
+                // From this branch on the AAB carries our own native code (libopus plus our own
+                // capture and playout engines and their JNI).
                 // Without uploaded symbols, Play shows native crashes as raw addresses. FULL
                 // uploads DWARF too, so crash reports get file:line instead of just function names.
                 debugSymbolLevel = "FULL"
