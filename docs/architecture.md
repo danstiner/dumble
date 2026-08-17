@@ -63,7 +63,8 @@ Playout is the inverse pipeline: Mumble UDP-tunnel packets in, mixed PCM to `Aud
 split across the same three layers as capture.
 
 **Native engine** (`core/PlayoutEngine.{h,cpp}`), platform-free. Its only clock is the tick — one
-`fillQuantum` call — so every `*IdleTicks` bound is a count of calls, not a span of time. It owns
+`fillQuantum` call, which is 10 ms of audio as today's playback loop drives it — so every
+`*IdleTicks` bound is a count of calls, not a span of time. It owns
 one `PacketQueue` and one `SpeakerDecoder` per sender, built up front by `create()`: a queue is
 touched only under the mutex, a decoder only from the playback thread with the mutex released.
 `offer()`, on the reader thread, judges the payload before the mutex and answers a status code; no

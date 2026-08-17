@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 #include "TestTone.h"
@@ -134,4 +136,59 @@ TEST(SpeakerDecoder, ResetDropsTheDecodersHistory) {
     ASSERT_EQ(kQuantum, reused->drain(got.data(), kQuantum));
 
     EXPECT_EQ(expected, got);
+}
+
+TEST(SpeakerDecoder, ConcealRoundsUpToTheConcealmentGrid) {
+    // The fifo carries the overshoot to the next tick, which is why conceal reports what it wrote
+    // rather than what was asked for.
+    auto d = newDecoder();
+    decode(*d, encode(1));
+    std::vector<int16_t> out(kQuantum);
+    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    EXPECT_EQ(3 * pl::kConcealGridSamples, d->conceal(2 * pl::kConcealGridSamples + 1));
+    EXPECT_EQ(3 * pl::kConcealGridSamples, d->available());
+}
+
+TEST(SpeakerDecoder, ConcealFillsAnExactRequestExactly) {
+    auto d = newDecoder();
+    decode(*d, encode(1));
+    std::vector<int16_t> out(kQuantum);
+    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    EXPECT_EQ(kQuantum, d->conceal(kQuantum));
+}
+
+TEST(SpeakerDecoder, ConcealsTheWholeGapInOneRequest) {
+    // Pins conceal's single decode call against a future grid loop: four 2.5 ms requests fade
+    // below peak 100 inside the first quantum, one 10 ms request holds ~2500 across it, and the
+    // threshold sits between the two.
+    auto d = newDecoder();
+    decode(*d, encode(1));
+    std::vector<int16_t> real(kQuantum);
+    ASSERT_EQ(kQuantum, d->drain(real.data(), kQuantum));
+    ASSERT_EQ(kQuantum, d->conceal(kQuantum));
+    std::vector<int16_t> concealed(kQuantum);
+    ASSERT_EQ(kQuantum, d->drain(concealed.data(), kQuantum));
+    int tailPeak = 0;
+    for (int i = kQuantum / 2; i < kQuantum; i++)
+        tailPeak = std::max(tailPeak, std::abs(int(concealed[i])));
+    EXPECT_GT(tailPeak, 500) << "the second half of the concealed quantum had collapsed";
+}
+
+TEST(SpeakerDecoder, ConcealWithNoDecoderHistoryIsSilence) {
+    // Unreachable through PlayoutEngine, but conceal is public, and libopus answering a
+    // history-less request with silence rather than an error is what makes writing straight into
+    // the fifo safe. Measured, not assumed.
+    auto d = newDecoder();
+    EXPECT_EQ(kQuantum, d->conceal(kQuantum));
+    std::vector<int16_t> out(kQuantum, 321);
+    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    for (int i = 0; i < kQuantum; i++) ASSERT_EQ(0, out[i]) << "not silence at " << i;
+}
+
+TEST(SpeakerDecoder, ResetDropsConcealedAudioToo) {
+    auto d = newDecoder();
+    decode(*d, encode(1));
+    ASSERT_GT(d->conceal(kQuantum), 0);
+    d->reset();
+    EXPECT_EQ(0, d->available());
 }

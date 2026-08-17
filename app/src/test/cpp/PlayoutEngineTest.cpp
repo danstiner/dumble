@@ -59,6 +59,14 @@ int drainSpurt(PlayoutEngine& e, int maxTicks = 500) {
     return ticks;
 }
 
+// Arms one six-packet spurt for `session` and plays it out: the concealment tests below all start
+// from a speaker that just went from producing to starved.
+void playSpurt(PlayoutEngine& e, int32_t session, std::vector<int16_t>& pcm) {
+    arm(e, session);
+    for (int i = 0; i < 6; i++)
+        ASSERT_EQ(1, producingThisTick(e, pcm)) << "real audio, tick " << i;
+}
+
 int64_t droppedOf(PlayoutEngine& e) { return e.stats().droppedPackets; }
 int64_t concealedOf(PlayoutEngine& e) { return e.stats().concealedTicks; }
 
@@ -142,7 +150,7 @@ TEST(PlayoutEngine, RetiresASilentSpeakerAndFreesItsSlot) {
     std::vector<int16_t> pcm(kQuantum);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
-    for (int i = 0; i < 6 + pl::kRetireIdleTicks + 1; i++)
+    for (int i = 0; i < 6 + pl::kConcealTicks + pl::kRetireIdleTicks + 1; i++)
         e->fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
     EXPECT_EQ(0, live);
 }
@@ -153,7 +161,7 @@ TEST(PlayoutEngine, ASessionReclaimsASlotAfterRetirement) {
     std::vector<int16_t> pcm(kQuantum);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
-    for (int i = 0; i < 6 + pl::kRetireIdleTicks + 1; i++)
+    for (int i = 0; i < 6 + pl::kConcealTicks + pl::kRetireIdleTicks + 1; i++)
         e->fillQuantum(pcm.data(), kQuantum, speaking.data(), &live);
     ASSERT_EQ(0, live);
     arm(*e, 5);
@@ -295,8 +303,9 @@ TEST(PlayoutEngine, CountsAMidSpurtStallAsConcealment) {
     auto e = newEngine();
     arm(*e, 1);
     std::vector<int16_t> pcm(kQuantum);
-    ASSERT_EQ(6, drainSpurt(*e)) << "six whole quanta, nothing concealed yet";
-    // drainSpurt's last tick is the one that found nothing and no terminator ever came.
+    ASSERT_EQ(6 + pl::kConcealTicks, drainSpurt(*e)) << "six real quanta, then the hold";
+    // The charge landed on the first concealed tick — the leading edge of the gap — and the ticks
+    // after it are the same gap being held, not new ones.
     EXPECT_EQ(1, concealedOf(*e));
     // Charged on the leading edge only — past the re-arm a stalled speaker and a silent one are
     // the same state, so the following ticks must not keep billing.
@@ -343,6 +352,105 @@ TEST(PlayoutEngine, ConcealedTicksAreMonotonic) {
     EXPECT_EQ(3, previous);
 }
 
+TEST(PlayoutEngine, ConcealsAMidSpurtStallForABoundedNumberOfTicks) {
+    // A speaker mid-sentence whose packets stop arriving: concealment keeps the tick producing,
+    // bounded by kConcealTicks (the why lives on the constant).
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
+    for (int i = 0; i < pl::kConcealTicks; i++)
+        EXPECT_EQ(1, producingThisTick(*e, pcm)) << "the hold ended early, at tick " << i;
+    EXPECT_EQ(0, producingThisTick(*e, pcm)) << "the hold outlived kConcealTicks";
+}
+
+TEST(PlayoutEngine, ConcealedAudioIsNotSilence) {
+    // Concealment counting as production is only honest if there is something in the buffer. A
+    // zero-filled tick would satisfy every other test in this file.
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
+    std::fill(pcm.begin(), pcm.end(), 0);
+    ASSERT_EQ(1, producingThisTick(*e, pcm));
+    bool nonZero = false;
+    for (int16_t s : pcm) nonZero = nonZero || s != 0;
+    EXPECT_TRUE(nonZero) << "the first concealed tick was silence";
+}
+
+TEST(PlayoutEngine, APacketDelayedByAStallPlaysWithoutRebuffering) {
+    // The point of the change: a delayed packet plays on the tick it arrives, not after a second
+    // prebuffer. Depth is the assertion, not the producing count — while the hold runs, producing
+    // is 1 either way, and only an emptied queue proves the packet played.
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
+    for (int i = 0; i < 2; i++) ASSERT_EQ(1, producingThisTick(*e, pcm)) << "the hold ended early";
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), false));
+    ASSERT_EQ(1, producingThisTick(*e, pcm));
+    EXPECT_EQ(0, e->stats().depths[0]) << "the delayed packet waited out a second prebuffer";
+}
+
+TEST(PlayoutEngine, RealAudioReArmsTheHold) {
+    // A spurt that survives a stall gets a full hold for the next one — the stallTicks_ invariant.
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kQuantum);
+    ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
+    for (int i = 0; i < pl::kConcealTicks - 1; i++) ASSERT_EQ(1, producingThisTick(*e, pcm));
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), false));
+    ASSERT_EQ(1, producingThisTick(*e, pcm)) << "the resumed packet did not play";
+    for (int i = 0; i < pl::kConcealTicks; i++)
+        EXPECT_EQ(1, producingThisTick(*e, pcm)) << "the second hold was short at tick " << i;
+    EXPECT_EQ(0, producingThisTick(*e, pcm));
+}
+
+TEST(PlayoutEngine, DoesNotConcealForASpeakerStillPrebuffering) {
+    // A spurt is silent for its first kPrebufferSamples by design. Concealing there would invent
+    // audio before any arrived and hold a gate that was never open.
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), false));
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < pl::kConcealTicks + 2; i++)
+        EXPECT_EQ(0, producingThisTick(*e, pcm)) << "concealed while prebuffering, tick " << i;
+}
+
+TEST(PlayoutEngine, DoesNotConcealPastASpurtItsSenderClosed) {
+    // Speech that ended normally is not a dropout. Concealing here would add a fade to the end of
+    // every utterance.
+    auto e = newEngine();
+    arm(*e, 1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, true));
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < 6; i++) ASSERT_EQ(1, producingThisTick(*e, pcm));
+    EXPECT_EQ(0, producingThisTick(*e, pcm)) << "concealed past the terminator";
+}
+
+TEST(PlayoutEngine, AnExpiredHoldChargesItsGapOnce) {
+    // stallTicks_ keeps counting past kConcealTicks, so the tick that gives up is not a fresh gap.
+    auto e = newEngine();
+    arm(*e, 1);
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < 6 + pl::kConcealTicks; i++) ASSERT_EQ(1, producingThisTick(*e, pcm));
+    ASSERT_EQ(1, concealedOf(*e));
+    for (int i = 0; i < 6; i++) producingThisTick(*e, pcm);
+    EXPECT_EQ(1, concealedOf(*e)) << "the expired hold charged a second gap";
+}
+
+TEST(PlayoutEngine, RetiresAStalledSpeakerAfterItsHold) {
+    // The retire clock is held at zero while concealment plays, so a sender that died mid-spurt
+    // costs its slot the hold plus the short window, and no more.
+    auto e = newEngine();
+    arm(*e, 1);
+    std::vector<int16_t> pcm(kQuantum);
+    for (int i = 0; i < 6 + pl::kConcealTicks; i++) ASSERT_EQ(1, liveThisTick(*e, pcm));
+    // Exact, not slack: the loop above ends on the last concealed tick, so the idle window starts
+    // on the next one and retirement lands on its kRetireIdleTicks'th.
+    for (int i = 0; i < pl::kRetireIdleTicks - 1; i++)
+        ASSERT_EQ(1, liveThisTick(*e, pcm)) << "retired during its hold, tick " << i;
+    EXPECT_EQ(0, liveThisTick(*e, pcm));
+}
+
 TEST(PlayoutEngine, AnOversizedFinalPacketStillEndsItsSpurt) {
     // Same reasoning as the malformed case above: the payload cannot be queued, but the
     // terminator is a protobuf field, not part of it, and must still release the tail.
@@ -379,25 +487,30 @@ TEST(PlayoutEngine, FillsALargerQuantumFromMultiplePacketsInOneTick) {
 TEST(PlayoutEngine, TenMillisecondSenderDrainsOneQuantumPerTick) {
     auto e = newEngine();
     // Six 10 ms packets is exactly kPrebufferSamples, and the quantum is 10 ms, so the spurt must
-    // come back out as six full ticks — no packet stranded, none played twice.
+    // come back out as six full ticks — no packet stranded, none played twice. Terminated so the
+    // count stays exactly six: an unterminated spurt earns kConcealTicks of concealment after its
+    // last packet, and a stranded seventh packet would hide inside that.
     arm(*e, 7, 6);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(7, nullptr, 0, true));
     EXPECT_EQ(6, drainSpurt(*e));
 }
 
 TEST(PlayoutEngine, SixtyMillisecondSenderDrainsOneQuantumPerTick) {
     auto e = newEngine();
     // The same 60 ms as one packet: a tick must take a fraction of a packet and keep the rest.
+    // Terminated for the same reason as the 10 ms case above.
     const std::vector<uint8_t> p = encode(6);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), false));
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(7, nullptr, 0, true));
     EXPECT_EQ(6, drainSpurt(*e));
 }
 
 TEST(PlayoutEngine, GoingIdleReArmsThePrebufferForTheNextSpurt) {
     auto e = newEngine();
     arm(*e, 7, 6);
-    ASSERT_EQ(6, drainSpurt(*e));
-    // drainSpurt's last tick found the queue drained and produced nothing, which is what re-arms
-    // the gate — well inside kRetireIdleTicks, so the slot is still this speaker's.
+    ASSERT_EQ(6 + pl::kConcealTicks, drainSpurt(*e));
+    // The gate re-arms on the tick after the hold expires: that is the first one to produce
+    // nothing. Still well inside kRetireIdleTicks, so the slot is this speaker's.
     std::vector<int16_t> pcm(kQuantum);
     const std::vector<uint8_t> p = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), false));
@@ -438,8 +551,9 @@ TEST(PlayoutEngine, AReclaimedSlotDoesNotInheritStrandedPackets) {
     ASSERT_EQ(0, live) << "the stalled speaker never released its slot";
 
     // Exactly kPrebufferSamples from a new sender, which must come back as exactly six ticks. A
-    // seventh would be session 7's stranded packet.
+    // seventh would be session 7's stranded packet. Terminated so the hold cannot hide it.
     arm(*e, 8, 6);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(8, nullptr, 0, true));
     EXPECT_EQ(6, drainSpurt(*e));
 }
 
@@ -462,7 +576,7 @@ TEST(PlayoutEngine, AReclaimedSlotDecodesLikeAFreshOne) {
 
     auto e = newEngine();
     armWith(*e, 7);
-    ASSERT_EQ(6, drainSpurt(*e));
+    ASSERT_EQ(6 + pl::kConcealTicks, drainSpurt(*e));
     for (int i = 0; i < pl::kRetireIdleTicks + 1; i++) liveThisTick(*e, pcm);
     ASSERT_EQ(0, liveThisTick(*e, pcm)) << "session 7 never released its slot";
     armWith(*e, 8);
