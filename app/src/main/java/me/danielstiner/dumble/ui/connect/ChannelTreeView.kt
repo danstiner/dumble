@@ -1,5 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.Badge
@@ -23,10 +24,16 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -79,9 +86,6 @@ private fun UserRow(u: ChannelTreeRow.UserRow) {
         // depth * 12dp mirrors the header's per-level step so a user sits under its own channel.
         modifier = Modifier.padding(start = (u.depth * 12).dp),
         leadingContent = { Avatar(u) },
-        trailingContent = if (u.isSpeaking) {
-            { Icon(Icons.Filled.GraphicEq, "speaking", tint = MaterialTheme.colorScheme.primary) }
-        } else null,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -99,38 +103,88 @@ private fun UserRow(u: ChannelTreeRow.UserRow) {
     }
 }
 
+private val AvatarSize = 40.dp
+private val HaloBoxSize = 48.dp
+
+// Extent is taste. Alpha is not: the halo is the only visual speaking cue, and 0.60 measured
+// 2.68:1 on baseline light, under WCAG 1.4.11's 3:1. 0.70 is 3.26:1 — do not lower it unmeasured.
+private const val GlowAlpha = 0.70f
+private const val GlowExtent = 1.30f
+
 /**
- * Flat `primaryContainer` for now. PR 4 replaces the fill with a per-user colour and adds the
- * speaking halo; the 40 dp box and the badge anchoring are already shaped for it.
+ * A 40 dp circle in the user's own color, inside a 48 dp box carrying the speaking halo.
+ *
+ * The halo is `primary`, not the user's color — one consistent color reads as "someone is talking"
+ * more easily than sixteen. Only alpha animates, so the roster never reflows.
  */
 @Composable
 private fun Avatar(u: ChannelTreeRow.UserRow) {
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier.matchParentSize().clip(CircleShape).background(cs.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                u.name.take(1).uppercase(),
-                color = cs.onPrimaryContainer,
-                style = MaterialTheme.typography.titleMedium,
+    val halo = cs.primary
+    val haloAlpha by animateFloatAsState(
+        targetValue = if (u.isSpeaking) 1f else 0f,
+        animationSpec = tween(durationMillis = 150),
+        label = "halo",
+    )
+    Box(
+        Modifier
+            .size(HaloBoxSize)
+            .then(
+                if (u.isSpeaking) Modifier.semantics { contentDescription = "speaking" }
+                else Modifier
             )
-        }
-        userBadge(u)?.let { badge ->
+            .drawBehind {
+                if (haloAlpha <= 0f) return@drawBehind
+                // Full alpha out to the avatar's edge, then fall off. Starting the falloff any
+                // earlier only buys a dead band, which reads as a gap between circle and halo.
+                val radius = size.minDimension / 2f * GlowExtent
+                val edge = AvatarSize.toPx() / 2f / radius
+                val color = halo.copy(alpha = GlowAlpha * haloAlpha)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(0f to color, edge to color, 1f to Color.Transparent),
+                        radius = radius,
+                    ),
+                    radius = radius,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(AvatarSize), contentAlignment = Alignment.Center) {
             Box(
-                Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
-                    .background(if (badge.server) cs.error else cs.surfaceVariant),
+                Modifier.matchParentSize().clip(CircleShape).background(avatarColor(u.name)),
                 contentAlignment = Alignment.Center,
             ) {
-                val deaf = badge.kind == UserBadge.Kind.DEAF
-                Icon(
-                    if (deaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
-                    if (deaf) "deafened" else "muted",
-                    modifier = Modifier.size(11.dp),
-                    tint = if (badge.server) cs.onError else cs.onSurfaceVariant,
+                Text(
+                    u.name.firstCodePoint().uppercase(),
+                    color = AvatarInitialColor,
+                    style = MaterialTheme.typography.titleMedium,
                 )
+            }
+            userBadge(u)?.let { badge ->
+                Box(
+                    Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
+                        .background(if (badge.server) cs.error else cs.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val deaf = badge.kind == UserBadge.Kind.DEAF
+                    Icon(
+                        if (deaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
+                        if (deaf) "deafened" else "muted",
+                        modifier = Modifier.size(11.dp),
+                        tint = if (badge.server) cs.onError else cs.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
 }
+
+/**
+ * The name's first code point — [String.take] splits a surrogate pair and renders half an emoji.
+ *
+ * Code points, not grapheme clusters: a name opening with a combining mark loses the mark.
+ * `internal` only so [ChannelTreeViewInitialTest] can reach it without a composable.
+ */
+internal fun String.firstCodePoint(): String =
+    if (isEmpty()) "" else String(Character.toChars(codePointAt(0)))
