@@ -154,7 +154,7 @@ oboe::DataCallbackResult OboeCapture::Callbacks::onAudioReady(oboe::AudioStream*
 
 void OboeCapture::Callbacks::onErrorBeforeClose(oboe::AudioStream*, oboe::Result r) {
     // Runs on its own thread. Marking the stream down is what wakes a pump thread parked in
-    // pollFrame — nothing on the Kotlin side can reach it, since Thread.interrupt does not
+    // pollPacket — nothing on the Kotlin side can reach it, since Thread.interrupt does not
     // unblock a condition variable.
     LOGW("stream error: %s", oboe::convertToText(r));
     engine->setStreamDown(true);
@@ -216,7 +216,7 @@ void OboeCapture::retryReopen() {
     if (!reopened && !stopping_.load(std::memory_order_acquire)) {
         LOGW("giving up reopening after %d attempts; transmit is unavailable", kMaxReopenFailures);
         // Terminal: distinct from setStreamDown(true) (already set by the onErrorBeforeClose that
-        // started this sequence) so pollFrame() can report "never coming back" rather than
+        // started this sequence) so pollPacket() can report "never coming back" rather than
         // "still retrying" — see core/CaptureConstants.h's kPollUnavailable.
         engine_->setStreamUnavailable();
     }

@@ -9,7 +9,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 /**
  * Pulls encoded packets off the native engine and puts them on the wire.
  *
- * The pump thread spends nearly all of its time blocked inside [CaptureHandle.pollFrame]'s real
+ * The pump thread spends nearly all of its time blocked inside [CaptureHandle.pollPacket]'s real
  * counterpart, in native code. That is deliberate: it costs no CPU, and a thread parked in JNI
  * does not stall a stop-the-world GC. It also cannot be interrupted, which is why [stop] works
  * through the engine rather than through [Thread.interrupt].
@@ -26,7 +26,7 @@ class VoiceSender(
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
-        fun pollFrame(out: ByteArray, meta: LongArray): Int
+        fun pollPacket(out: ByteArray, meta: LongArray): Int
         fun setGateOpen(open: Boolean)
         fun stop()
 
@@ -38,7 +38,7 @@ class VoiceSender(
     }
 
     /**
-     * Why the pump last exited. Set only by [pump] itself, from what `pollFrame` actually
+     * Why the pump last exited. Set only by [pump] itself, from what `pollPacket` actually
      * returned — never by [stop] — so it still reads [UNAVAILABLE] even if a caller's generic
      * teardown calls [stop] afterward.
      */
@@ -71,7 +71,7 @@ class VoiceSender(
      * Requests shutdown and returns. Deliberately does not wait: the pump can park in native code
      * that [CaptureHandle.stop] cannot always wake, and the old join returned normally on timeout —
      * so a caller could not tell a clean exit from a wedged one and destroyed the engine either way,
-     * with a pollFrame still running on it. [onExit] is now the only signal that the pump is gone.
+     * with a pollPacket still running on it. [onExit] is now the only signal that the pump is gone.
      */
     fun stop() {
         stopped = true
@@ -85,7 +85,7 @@ class VoiceSender(
         // and applies them to the calling thread, which is why this is here and not in start().
         // AUDIO rather than URGENT_AUDIO — urgent is documented as being for time-critical audio
         // processing that can bound its CPU per time slice, and this thread ends in a socket
-        // write, so it can promise nothing of the sort. It still needs the bump: pollFrame drops
+        // write, so it can promise nothing of the sort. It still needs the bump: pollPacket drops
         // samples once the ring passes kHighWaterSamples, so a pump descheduled for ~100 ms loses
         // audio. Best-effort, like the playback thread's — a refusal costs cadence, not the call.
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
@@ -97,7 +97,7 @@ class VoiceSender(
         val meta = LongArray(2)
         var nextStatsAt = System.nanoTime() + STATS_INTERVAL_NANOS
         while (true) {
-            val n = handle.pollFrame(frame, meta)
+            val n = handle.pollPacket(frame, meta)
             // Debug, not info: six lines a minute for a whole session is noise in a log read for
             // anything else. Not verbose — that level is conventionally stripped from release
             // builds, and being readable off a shipped build is the point of collecting this.
@@ -118,7 +118,7 @@ class VoiceSender(
                 continue
             }
             when (n) {
-                // The wait inside pollFrame elapsed with nothing to send. It already blocked, so
+                // The wait inside pollPacket elapsed with nothing to send. It already blocked, so
                 // going straight round again is not a spin.
                 0 -> {}
                 // The stream is down and native code is reopening it. Keep polling: exiting here
@@ -146,7 +146,7 @@ class VoiceSender(
                 // because the user-visible outcome is the same — transmit is gone for the session
                 // — and the log line is what tells the two apart.
                 NativeCapture.POLL_NO_SESSION, NativeCapture.POLL_BUFFER_TOO_SMALL -> {
-                    Log.e(TAG, "pollFrame rejected the call ($n); transmit stopped for this session")
+                    Log.e(TAG, "pollPacket rejected the call ($n); transmit stopped for this session")
                     stopReason = StopReason.UNAVAILABLE
                     return
                 }
@@ -154,7 +154,7 @@ class VoiceSender(
                 // updated with it. Whether it blocks first is unknowable from here, so polling on
                 // risks a full-speed spin — stop, and say so loudly enough to find in a log.
                 else -> {
-                    Log.e(TAG, "unknown pollFrame result $n; transmit stopped for this session")
+                    Log.e(TAG, "unknown pollPacket result $n; transmit stopped for this session")
                     stopReason = StopReason.UNAVAILABLE
                     return
                 }
@@ -194,7 +194,7 @@ class VoiceSender(
 
 /** Production seam: binds a native engine handle to the pump. */
 class NativeCaptureHandle(private val handle: Long) : VoiceSender.CaptureHandle {
-    override fun pollFrame(out: ByteArray, meta: LongArray) = NativeCapture.pollFrame(handle, out, meta)
+    override fun pollPacket(out: ByteArray, meta: LongArray) = NativeCapture.pollPacket(handle, out, meta)
     override fun setGateOpen(open: Boolean) = NativeCapture.setGateOpen(handle, open)
     override fun stop() = NativeCapture.stop(handle)
     override fun destroy() = NativeCapture.destroy(handle)

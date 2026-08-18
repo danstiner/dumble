@@ -133,7 +133,7 @@ class SessionStateMachineTest {
 
     /**
      * Advance the scheduler and the real clock together, which is what an awake device does. The
-     * source moves first: the tick fires inside advanceTimeBy and reads the clock as it goes, so
+     * source moves first: the call fires inside advanceTimeBy and reads the clock as it goes, so
      * advancing the scheduler first would have it observe the pre-advance time.
      */
     private fun TestScope.advanceBoth(bootClock: TestTimeSource, millis: Long) {
@@ -204,7 +204,7 @@ class SessionStateMachineTest {
     }
 
     // A round trip of several intervals is a slow link, not a dead one. Every reply on it lands
-    // after the next tick has re-stamped, so matching only the newest stamp would register no reply
+    // after the next call has re-stamped, so matching only the newest stamp would register no reply
     // at all and the link would read permanently silent while answering every ping. A duration does
     // not care which ping a reply names, so this needs no rule about outstanding pings.
     @Test
@@ -254,10 +254,10 @@ class SessionStateMachineTest {
     }
 
     // The blind spot a count of unanswered pings could not see. delay() schedules on
-    // CLOCK_MONOTONIC, so a suspended CPU fires no ticks at all and a counter of unanswered pings
+    // CLOCK_MONOTONIC, so a suspended CPU fires no calls at all and a counter of unanswered pings
     // reads zero straight through the outage -- while the server, whose reap runs on its own wall
-    // clock, has already dropped us. Publishing the instant rather than a per-tick duration is what
-    // makes this visible without a tick having to fire at all: real time moves, so the derived
+    // clock, has already dropped us. Publishing the instant rather than a per-call duration is what
+    // makes this visible without a call having to fire at all: real time moves, so the derived
     // silence moves with it.
     @Test
     fun timeAsleepCountsTowardTheAge() = runTest {
@@ -268,7 +268,7 @@ class SessionStateMachineTest {
         sm.onFrame(replyToLastPing(ch))
         assertEquals(Duration.ZERO, pingAge(sm))
 
-        // Real time moves and the scheduler does not: no tick can fire, exactly as in a doze.
+        // Real time moves and the scheduler does not: no call can fire, exactly as in a doze.
         bootClock += 45.seconds
 
         assertTrue(

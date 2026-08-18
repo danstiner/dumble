@@ -42,7 +42,7 @@ class PingGapLogTest {
     private fun gapWarnings() =
         ShadowLog.getLogs().filter { it.msg?.contains("no ping sent for") == true }
 
-    /** Two ticks, with the real clock moved by [realAdvance] before the second. */
+    /** Two calls, with the real clock moved by [realAdvance] before the second. */
     private fun tickTwice(realAdvance: kotlin.time.Duration) = runTest {
         val bootClock = TestTimeSource()
         val sm = SessionStateMachine(

@@ -79,7 +79,7 @@ class RouteWiringTest {
     /**
      * Two Bluetooth devices below API 34, without BLUETOOTH_CONNECT, share the platform's literal
      * "Bluetooth Device" name and therefore the same uuid (see `AudioRoute`'s KDoc). Undeduped, the
-     * menu would render an unreachable second row ticked as current alongside the first.
+     * menu would render an unreachable second row called as current alongside the first.
      */
     @Test fun publishDedupesByIdKeepingTheFirst() {
         val published = mutableListOf<AudioRoutes>()

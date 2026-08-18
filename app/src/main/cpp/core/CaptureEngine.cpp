@@ -83,12 +83,12 @@ namespace {
 // space), given the spurt's ring-to-clock translation. See clockOffset_ for why ring position
 // alone cannot carry wall time.
 uint64_t offsetFrameNumber(uint64_t ringReadPos, uint64_t clockOffset) {
-    return (ringReadPos + clockOffset) / uint64_t(kFrameNumberUnitSamples);
+    return (ringReadPos + clockOffset) / uint64_t(kFrameSamples);
 }
 
 }  // namespace
 
-int CaptureEngine::pollFrame(uint8_t* out, int outCap, uint64_t* frameNumber, uint32_t* flags) {
+int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, uint32_t* flags) {
     *flags = 0;
     if (shutdown_.load(std::memory_order_acquire)) return kPollShutdown;
     // Checked before streamDown_: OboeCapture sets both when it gives up reopening, and the

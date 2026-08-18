@@ -2,7 +2,7 @@ package me.danielstiner.dumble.mumble.voice
 
 import java.util.concurrent.LinkedBlockingQueue
 
-/** Scripted stand-in for the native engine: each entry is one pollFrame outcome. */
+/** Scripted stand-in for the native engine: each entry is one pollPacket outcome. */
 class FakeCaptureHandle : VoiceSender.CaptureHandle {
     sealed interface Step {
         data class Frame(val bytes: ByteArray, val frameNumber: Long, val terminator: Boolean) : Step
@@ -29,7 +29,7 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     var stats: CaptureStats? = null
     override fun stats() = stats
 
-    override fun pollFrame(out: ByteArray, meta: LongArray): Int = when (val s = steps.take()) {
+    override fun pollPacket(out: ByteArray, meta: LongArray): Int = when (val s = steps.take()) {
         is Step.Frame -> {
             s.bytes.copyInto(out)
             meta[0] = s.frameNumber

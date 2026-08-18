@@ -122,7 +122,7 @@ class VoiceSenderTest {
     }
 
     /**
-     * onExit must fire from a finally, not only pump()'s normal return path. pollFrame is a
+     * onExit must fire from a finally, not only pump()'s normal return path. pollPacket is a
      * seam into native code and a contract violation there is not implausible; if a throw escaped
      * without running onExit, the owner would never learn the pump died and the engine would leak
      * forever with nothing to release it.
@@ -130,7 +130,7 @@ class VoiceSenderTest {
     @Test
     fun onExitFiresEvenWhenPollFrameThrows() {
         val fake = object : VoiceSender.CaptureHandle {
-            override fun pollFrame(out: ByteArray, meta: LongArray): Int = throw RuntimeException("boom")
+            override fun pollPacket(out: ByteArray, meta: LongArray): Int = throw RuntimeException("boom")
             override fun setGateOpen(open: Boolean) = Unit
             override fun stop() = Unit
             override fun destroy() = Unit

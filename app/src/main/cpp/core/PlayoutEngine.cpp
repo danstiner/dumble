@@ -53,7 +53,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
                                int32_t* liveSpeakers) {
     if (samples <= 0 || samples > maxQuantumSamples_) {
         // Diagnostic, not silence: maxQuantumSamples is this engine's alone, so no caller above
-        // can catch the mismatch, and a 0 would leave one that sized its quantum wrong permanently
+        // can catch the mismatch, and a 0 would leave one that sized its frame wrong permanently
         // mute with nothing to look at. `out` is left alone — writing `samples` of anything would
         // mean trusting the number this branch exists to reject.
         *liveSpeakers = 0;
@@ -64,7 +64,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // Snapshot which slots are claimed, so the decode phase runs with the mutex released. The
     // snapshot cannot go stale underneath us: offer() only sets bits, and the sole code that
     // clears one is this function's commit phase — on this thread. A slot claimed after the
-    // snapshot just waits a tick, well inside its prebuffer gate. The queues and decoders need
+    // snapshot just waits a fill, well inside its prebuffer gate. The queues and decoders need
     // no snapshot of their own — create() built them and nothing replaces them.
     int live[kMaxSpeakers];
     bool speaking[kMaxSpeakers];
@@ -75,7 +75,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             if (!slots_.test(i)) continue;
             // Snapshotted with the slot rather than read in the decode phase, which runs with the
             // mutex released. A terminator landing during the decodes therefore costs one concealed
-            // tick — one tick of fade at the end of speech.
+            // frame — one frame of fade at the end of speech.
             speaking[liveCount] = queues_[i].speaking();
             live[liveCount++] = i;
         }
@@ -84,7 +84,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // Pop under the lock, decode and mix outside it. The packet is copied through packetScratch_
     // rather than decoded in place because offer() may overwrite that pool entry during decode.
     // Samples each speaker produced, not merely whether it did: the concealment rule below needs
-    // to tell a full quantum from a short one zero-padded around a gap.
+    // to tell a full frame from a short one zero-padded around a gap.
     int produced[kMaxSpeakers];
     bool concealed[kMaxSpeakers];
     for (int n = 0; n < liveCount; n++) {
@@ -99,20 +99,20 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);
         }
-        // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed tick then
+        // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed frame then
         // counts as production, which is what holds the prebuffer gate open and the retire clock at
-        // zero: packets the stall delayed play on the tick they arrive instead of waiting out a
-        // second prebuffer. Bounded by kConcealTicks — past that the speaker re-anchors.
+        // zero: packets the stall delayed play on the frame they arrive instead of waiting out a
+        // second prebuffer. Bounded by kConcealQuanta — past that the speaker re-anchors.
         const int shortfall = samples - decoder.available();
         concealed[n] = false;
-        if (shortfall > 0 && speaking[n] && stallTicks_[live[n]] < kConcealTicks)
+        if (shortfall > 0 && speaking[n] && stallQuanta_[live[n]] < kConcealQuanta)
             concealed[n] = decoder.conceal(shortfall) > 0;
         produced[n] = decoder.drain(speakerOut_.data(), samples);
         if (produced[n] > 0) mixAccumulate(accumulator_.data(), speakerOut_.data(), samples);
     }
     mixFinalize(accumulator_.data(), out, samples);
 
-    // Commit: sessions, tick bookkeeping and retirement, in one acquisition.
+    // Commit: sessions, per-fill bookkeeping and retirement, in one acquisition.
     int producing = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -122,30 +122,30 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             const bool audible = produced[n] > 0;
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
             if (audible) sessions[producing++] = sessions_[i];
-            // Judged before endTick, which closes the gate speaking() reads. One gap, one charge,
-            // however many ticks its hold spans — and stallTicks_ keeps counting past
-            // kConcealTicks, so the tick that gives up on a stall is not a second gap. speaking()
+            // Judged before endFill, which closes the gate speaking() reads. One gap, one charge,
+            // however many frames its hold spans — and stallQuanta_ keeps counting past
+            // kConcealQuanta, so the frame that gives up on a stall is not a second gap. speaking()
             // is read here rather than taken from the snapshot, so a terminator that landed during
             // the decodes is honoured: the end of speech is not a dropout.
             if (concealed[n] || (produced[n] < samples && queue.speaking())) {
-                if (stallTicks_[i]++ == 0) concealedTicks_++;
+                if (stallQuanta_[i]++ == 0) concealedGaps_++;
             } else {
-                stallTicks_[i] = 0;
+                stallQuanta_[i] = 0;
                 // Speech spliced with silence with the queue already closed: the tail of a spurt,
                 // which no hold could have covered.
-                if (produced[n] > 0 && produced[n] < samples) concealedTicks_++;
+                if (produced[n] > 0 && produced[n] < samples) concealedGaps_++;
             }
-            queue.endTick(audible);
-            idleTicks_[i] = audible ? 0 : idleTicks_[i] + 1;
-            // Two windows, because "produced nothing this tick" means two different things. Once
+            queue.endFill(audible);
+            idlePolls_[i] = audible ? 0 : idlePolls_[i] + 1;
+            // Two windows, because "produced nothing this fill" means two different things. Once
             // the queue is drained it means the speaker stopped talking, the short window. While
             // packets remain it means the prebuffer gate has not opened yet — a spurt is silent
-            // for its first kPrebufferSamples, and the loop ticks faster than 100 Hz while doing
+            // for its first kPrebufferSamples, and the loop fills faster than 100 Hz while doing
             // so because each arriving packet wakes it, so charging those as idle would retire a
-            // speaker before it plays. Read fresh here, unlike the pop-time record endTick's
+            // speaker before it plays. Read fresh here, unlike the pop-time record endFill's
             // re-arm judges by: retiring resets the queue, and a packet that arrived during the
             // decodes must widen the window rather than be destroyed with the slot.
-            if (idleTicks_[i] >= (queue.empty() ? kRetireIdleTicks : kStallIdleTicks)) {
+            if (idlePolls_[i] >= (queue.empty() ? kRetireIdlePolls : kStallIdlePolls)) {
                 // Cleaned here rather than on the next claim: this thread is PcmRing's consumer,
                 // the only side allowed to move its read index, and the only one that can see the
                 // slot idle. The stall window retires with packets still queued, so this is not
@@ -180,7 +180,7 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
         n++;
     }
     out.speakers = n;
-    out.concealedTicks = concealedTicks_;
+    out.concealedGaps = concealedGaps_;
     out.droppedPackets = dropped;
     return out;
 }
@@ -205,8 +205,8 @@ int PlayoutEngine::slotFor(int32_t session) {
     // No allocation and no reset — a free slot was cleaned by whoever retired it.
     slots_.set(free);
     sessions_[free] = session;
-    idleTicks_[free] = 0;
-    stallTicks_[free] = 0;
+    idlePolls_[free] = 0;
+    stallQuanta_[free] = 0;
     return free;
 }
 

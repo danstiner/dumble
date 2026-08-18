@@ -17,7 +17,7 @@ constexpr int kStatusActiveSpeakers = 0;
 constexpr int kStatusSessions = 1;
 constexpr int kStatusLength = kStatusSessions + pl::kMaxSpeakers;
 
-constexpr int kCounterConcealedTicks = 0;
+constexpr int kCounterConcealedGaps = 0;
 constexpr int kCounterDroppedPackets = 1;
 constexpr int kCounterCount = 2;
 
@@ -71,13 +71,13 @@ FN(fillQuantum)(JNIEnv* env, jobject, jlong h, jshortArray pcm, jintArray status
     // a smashed stack rather than a wrong answer, which is why it is a branch and not a comment.
     if (samples <= 0 || samples > pl::kMaxPacketSamples) return pl::kErrorBufferTooSmall;
 
-    // Stack scratch, then one copy of exactly the quantum produced. Pinning the caller's arrays
+    // Stack scratch, then one copy of exactly the frame produced. Pinning the caller's arrays
     // across the mix would couple ART's moving collector to the playback path.
     int16_t out[pl::kMaxPacketSamples];
     int32_t statusOut[kStatusLength] = {};
     const int producing = self(h)->fillQuantum(out, int(samples), statusOut + kStatusSessions,
                                                statusOut + kStatusActiveSpeakers);
-    // A refused quantum leaves `out` untouched, so publishing it would hand the caller whatever
+    // A refused frame leaves `out` untouched, so publishing it would hand the caller whatever
     // this frame's stack held. Nothing is copied and the code travels out unchanged.
     if (producing < 0) return producing;
     env->SetShortArrayRegion(pcm, 0, samples, out);
@@ -94,7 +94,7 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
         return pl::kErrorBufferTooSmall;
     }
     const pl::PlayoutEngine::Stats stats = self(h)->stats();
-    const jlong countersOut[kCounterCount] = {jlong(stats.concealedTicks),
+    const jlong countersOut[kCounterCount] = {jlong(stats.concealedGaps),
                                               jlong(stats.droppedPackets)};
     if (stats.speakers > 0) {
         env->SetIntArrayRegion(sessions, 0, stats.speakers, stats.sessions);

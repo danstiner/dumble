@@ -43,10 +43,10 @@ class CaptureLifecycleTest {
         @Volatile var pollsInFlightAtDestroy = -1; private set
         @Volatile var stopCalled = false; private set
 
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             pollsInFlight.incrementAndGet()
             try {
-                // Blocks like the real pollFrame does, and stop() deliberately does not release it.
+                // Blocks like the real pollPacket does, and stop() deliberately does not release it.
                 unblock.await()
                 return NativeCapture.POLL_SHUTDOWN
             } finally {
@@ -80,7 +80,7 @@ class CaptureLifecycleTest {
             conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
             withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
             conn.requestCapture()
-            awaitTrue("the pump must be parked in pollFrame") { handle.pollsInFlight.get() == 1 }
+            awaitTrue("the pump must be parked in pollPacket") { handle.pollsInFlight.get() == 1 }
 
             conn.disconnect()
             awaitTrue("teardown must request a stop") { handle.stopCalled }
@@ -118,7 +118,7 @@ class CaptureLifecycleTest {
             conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
             withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
             conn.requestCapture()
-            awaitTrue("the pump must be parked in pollFrame") { handle.pollsInFlight.get() == 1 }
+            awaitTrue("the pump must be parked in pollPacket") { handle.pollsInFlight.get() == 1 }
 
             call.hold()
             awaitTrue("a hold must request a stop") { handle.stopCalled }
@@ -149,7 +149,7 @@ class CaptureLifecycleTest {
         }
 
         private val unblock = CountDownLatch(1)
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
@@ -198,7 +198,7 @@ class CaptureLifecycleTest {
         private val unblock = CountDownLatch(1)
         val destroys = AtomicInteger()
         val stops = AtomicInteger()
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
@@ -240,7 +240,7 @@ class CaptureLifecycleTest {
         private val unblock = CountDownLatch(1)
         val destroys = AtomicInteger()
         init { log += "$name:create" }
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
@@ -300,7 +300,7 @@ class CaptureLifecycleTest {
     /** A handle whose stop() takes a while, like a slow HAL close. */
     private class SlowStopHandle(private val stopMillis: Long) : VoiceSender.CaptureHandle {
         private val pollGate = CountDownLatch(1)
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             pollGate.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
@@ -458,7 +458,7 @@ class CaptureLifecycleTest {
     /** A native stop() that throws — the JNI call into OboeCapture::close() is not exception-free. */
     private class ThrowingStopHandle : VoiceSender.CaptureHandle {
         private val unblock = CountDownLatch(1)
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
@@ -735,7 +735,7 @@ class CaptureLifecycleTest {
         private val unblock = CountDownLatch(1)
         @Volatile private var destroyed = false
         @Volatile var gateAfterDestroy = false; private set
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) { if (destroyed) gateAfterDestroy = true }
@@ -786,7 +786,7 @@ class CaptureLifecycleTest {
         @Volatile var destroyed = false; private set
         @Volatile var pollFrameCalled = false; private set
         fun awaitGate() { enteredNewCapture = true; gate.await() }
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             pollFrameCalled = true
             return NativeCapture.POLL_SHUTDOWN
         }

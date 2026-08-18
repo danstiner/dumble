@@ -8,11 +8,11 @@
 
 namespace {
 struct Session {
-    // kSampleRate/kTxFrameSamples rather than parameters: OboeCapture opens the stream from these
+    // kSampleRate/kTxPacketSamples rather than parameters: OboeCapture opens the stream from these
     // same constants, so taking them from Kotlin would let the encoder and the stream disagree.
     static Session* create(int bitrate) {
         std::shared_ptr<dumble::CaptureEngine> engine =
-            dumble::CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, bitrate);
+            dumble::CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, bitrate);
         // A session without an engine has nothing to capture into, so the failure travels out to
         // Kotlin as a null handle rather than being absorbed here.
         if (!engine) return nullptr;
@@ -79,19 +79,19 @@ JNIEXPORT void JNICALL FN(setGateOpen)(JNIEnv*, jobject, jlong h, jboolean open)
 }
 
 JNIEXPORT jint JNICALL
-FN(pollFrame)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
+FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     if (!h) return dumble::kPollNoSession;
     // Refuse a short array rather than quietly encoding into whatever room it has. outCap is the
     // ceiling handed to opus_encode, so shrinking it changes what gets transmitted, not just what
     // fits — and it would do so only on the loudest frames, which is the worst way to find out.
     if (env->GetArrayLength(out) < dumble::kMaxPacketBytes) return dumble::kPollBufferTooSmall;
     // Stack scratch, then one copy of only the bytes produced. Pinning `out` across the blocking
-    // wait inside pollFrame would hold a GC-visible pin for milliseconds at a time, and the
+    // wait inside pollPacket would hold a GC-visible pin for milliseconds at a time, and the
     // critical-section variant that avoids the copy outright forbids blocking while it is held.
     uint8_t buf[dumble::kMaxPacketBytes];
     uint64_t frameNumber = 0;
     uint32_t flags = 0;
-    const int n = self(h)->engine->pollFrame(buf, int(sizeof(buf)), &frameNumber, &flags);
+    const int n = self(h)->engine->pollPacket(buf, int(sizeof(buf)), &frameNumber, &flags);
     if (n > 0) {
         env->SetByteArrayRegion(out, 0, n, reinterpret_cast<const jbyte*>(buf));
         jlong m[2] = {jlong(frameNumber), jlong(flags)};
@@ -117,7 +117,7 @@ JNIEXPORT jlong JNICALL FN(encodedPackets)(JNIEnv*, jobject, jlong h) {
 }
 
 // Absent from the old long[3] entirely, which is its own argument against the array: without it a
-// persistent libopus failure and an idle gate both look like pollFrame returning 0.
+// persistent libopus failure and an idle gate both look like pollPacket returning 0.
 JNIEXPORT jlong JNICALL FN(encodeErrors)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->encodeErrors()) : 0;
 }

@@ -39,7 +39,7 @@ object LatencyMath {
         val presentedNow = tsFramePosition + ((ageNanos * rate) / 1e9).roundToLong()
         val diff32 = (framesWritten - presentedNow) and 0xFFFFFFFFL
         val inFlight = if (diff32 >= 0x80000000L) diff32 - 0x100000000L else diff32
-        if (inFlight < -QUANTUM_SAMPLES) return null
+        if (inFlight < -FRAME_SAMPLES) return null
         return maxOf(inFlight, 0L).toDouble() / rate * 1000.0
     }
 }

@@ -28,9 +28,9 @@ class AndroidAudioOut(context: Context) : AudioOut {
         val minBytes = AudioTrack.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
         )
-        // Two quanta is below every device's minimum; take whichever is larger so the
+        // Two frames is below every device's minimum; take whichever is larger so the
         // buffer is legal without over-deepening it and adding latency.
-        val requestedBytes = maxOf(minBytes, QUANTUM_SAMPLES * 2 * 2)
+        val requestedBytes = maxOf(minBytes, FRAME_SAMPLES * 2 * 2)
         track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -74,7 +74,7 @@ class AndroidAudioOut(context: Context) : AudioOut {
     /**
      * What AudioFlinger granted, which is not what we asked for. The device burst is logged
      * alongside because the low-latency guidance is stated in terms of it: our fixed
-     * [QUANTUM_SAMPLES] is misaligned wherever the burst does not divide it, and this line is what
+     * [FRAME_SAMPLES] is misaligned wherever the burst does not divide it, and this line is what
      * says whether that is so on this device. Not logged: getPerformanceMode(), which reads back
      * granted flags but would report NONE everywhere, since AUDIO_OUTPUT_FLAG_FAST is never
      * granted unsolicited and we never request it.
@@ -92,7 +92,7 @@ class AndroidAudioOut(context: Context) : AudioOut {
                 " rate=${track.sampleRate}" +
                 " | device: burst=${am?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)}f" +
                 " rate=${am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)}" +
-                " | quantum=${QUANTUM_SAMPLES}f",
+                " | frame=${FRAME_SAMPLES}f",
         )
     }
 

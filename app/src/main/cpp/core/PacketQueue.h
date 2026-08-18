@@ -44,7 +44,7 @@ public:
      *  may overwrite this entry while the caller decodes with the mutex released. */
     int pop(uint8_t* out, int outCap);
 
-    /** Closes the tick, re-arming the prebuffer gate once the spurt has fully played out — the
+    /** Closes the fill, re-arming the prebuffer gate once the spurt has fully played out — the
      *  last pop() came up empty and the decoder emitted nothing. On idle rather than on the
      *  terminator packet, so the tail of a spurt plays out first and a spurt whose terminator
      *  never arrives still re-arms. It takes the decoder's answer because an empty queue alone
@@ -56,9 +56,9 @@ public:
      *  gate the finished spurt left open; a terminator's latch clears the record in offer() and
      *  so survives, else a complete short spurt would be silenced and eventually reset away.
      *
-     *  A tick whose decoder was already full never pops at all, leaving an older record in place.
-     *  Harmless because that tick necessarily produced: `decoderProduced` decides first. */
-    void endTick(bool decoderProduced);
+     *  A fill whose decoder was already full never pops at all, leaving an older record in place.
+     *  Harmless because that fill necessarily produced: `decoderProduced` decides first. */
+    void endFill(bool decoderProduced);
 
     /** Returns the queue to its just-constructed state, for a slot about to serve a different
      *  sender. The pool itself is left alone: entries past `count_` are never read. */
@@ -73,7 +73,7 @@ public:
     bool empty() const { return count_ == 0; }
 
     /** Gate open and no terminator: the sender is mid-spurt. Distinguishes a dropout from the two
-     *  expected silences — prebuffering and speech that ended normally. Read before endTick,
+     *  expected silences — prebuffering and speech that ended normally. Read before endFill,
      *  which clears both flags. */
     bool speaking() const { return gateOpen_ && !terminated_; }
 
@@ -101,8 +101,8 @@ private:
     int count_ = 0;
     int samples_ = 0;
     bool gateOpen_ = false;
-    // Whether the queue was empty the last time pop() came up short — endTick's re-arm verdict,
-    // recorded at pop time and cleared by a terminator offer(). See endTick().
+    // Whether the queue was empty the last time pop() came up short — endFill's re-arm verdict,
+    // recorded at pop time and cleared by a terminator offer(). See endFill().
     bool emptyAtPop_ = false;
     // Whether this spurt was closed by its sender rather than merely stopping. Only speaking()
     // reads it: without it every normal end of speech would look like a dropout.

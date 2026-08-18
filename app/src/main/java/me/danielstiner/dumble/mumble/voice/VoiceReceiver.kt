@@ -13,10 +13,10 @@ private const val UDP_TYPE_AUDIO = 0
 
 /**
  * Owns inbound voice: hands packets to the native playout engine, runs the playback thread that
- * pulls mixed quanta from it, and republishes the speaking-session set the UI observes.
+ * pulls mixed frames from it, and republishes the speaking-session set the UI observes.
  *
  * Pacing: while any speaker is draining, the loop is clocked by the blocking [AudioOut.write] —
- * AudioTrack consumes exactly one quantum per quantum-duration off the audio clock, so no timer
+ * AudioTrack consumes exactly one frame per frame-duration off the audio clock, so no timer
  * is used and none should be added. When nobody is draining there is nothing to block on, so the
  * loop parks on [idleLock]: unbounded when no speaker exists at all, and 10 ms at a time while one
  * does.
@@ -30,7 +30,7 @@ class VoiceReceiver(
         /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. */
         fun offer(session: Int, opusData: ByteArray, terminator: Boolean): Int
 
-        /** Playback thread. Fills [pcm] with one mixed quantum, returns how many speakers
+        /** Playback thread. Fills [pcm] with one mixed frame, returns how many speakers
          *  produced, writes their sessions into `status[1..n]` and the live speaker count into
          *  `status[STATUS_ACTIVE_SPEAKERS]`. */
         fun fillQuantum(pcm: ShortArray, status: IntArray): Int
@@ -213,8 +213,8 @@ class VoiceReceiver(
     }
 
     private fun loop(engine: PlayoutEngine) {
-        val mix = ShortArray(QUANTUM_SAMPLES)
-        // Allocated once: the playback thread must not allocate per tick. Sized by the constants
+        val mix = ShortArray(FRAME_SAMPLES)
+        // Allocated once: the playback thread must not allocate per fill. Sized by the constants
         // the seam validates against — undersize one and every call answers ERROR_BUFFER_TOO_SMALL.
         val status = IntArray(NativePlayout.STATUS_LENGTH)
         val statSessions = IntArray(MAX_SPEAKERS)
@@ -258,14 +258,14 @@ class VoiceReceiver(
                         if (published) {
                             // Rearmed from the reading publishStats just took rather than a
                             // second readStats — a drop landing between two reads would be
-                            // published in neither spurt. Once, here, rather than on every idle
-                            // tick: the engine charges a gap once and then re-arms the speaker's
-                            // prebuffer gate, so the charge a produced-nothing tick books is
-                            // already inside this reading and later idle ticks cannot add to it.
-                            // And not at the next spurt's open, whose opening tick has already
-                            // run by the time that branch checks — a partial-fill opening tick
-                            // would vanish into its own baseline.
-                            concealedBaseline = counters[NativePlayout.COUNTER_CONCEALED_TICKS]
+                            // published in neither spurt. Once, here, rather than on every
+                            // poll: the engine charges a gap once and then re-arms the speaker's
+                            // prebuffer gate, so the charge a poll books is already inside this
+                            // reading and later polls cannot add to it. And not at the next
+                            // spurt's open, whose opening frame has already run by the time that
+                            // branch checks — a partial-fill opening frame would vanish into its
+                            // own baseline.
+                            concealedBaseline = counters[NativePlayout.COUNTER_CONCEALED_GAPS]
                             // Unlike concealment, drops can move while idle — the reader fills
                             // queues the loop is not draining yet. Those land in the next spurt's
                             // window, which is where they belong: a backlog thrown away while a
@@ -306,7 +306,7 @@ class VoiceReceiver(
                 for (i in 0 until producing) speaking += status[NativePlayout.STATUS_SESSIONS + i]
                 if (_speakingSessions.value != speaking) _speakingSessions.value = speaking
 
-                if (!out.write(mix, QUANTUM_SAMPLES)) {
+                if (!out.write(mix, FRAME_SAMPLES)) {
                     Log.e(TAG, "audio output write failed, stopping playback")
                     stopped = true
                 } else if (++writesThisSpurt >= WRITES_PER_SAMPLE) {
@@ -364,8 +364,8 @@ class VoiceReceiver(
             val stats = PlayoutStats(
                 latencyMs = reading?.latencyMs,
                 underruns = reading?.let { r -> underrunBaseline?.let { r.underrunsTotal - it } },
-                concealedTicks =
-                    (counters[NativePlayout.COUNTER_CONCEALED_TICKS] - concealedBaseline).toInt(),
+                concealedGaps =
+                    (counters[NativePlayout.COUNTER_CONCEALED_GAPS] - concealedBaseline).toInt(),
                 droppedPackets =
                     (counters[NativePlayout.COUNTER_DROPPED_PACKETS] - droppedBaseline).toInt(),
                 bufferedSamples = buffered,
@@ -381,7 +381,7 @@ class VoiceReceiver(
     private companion object {
         const val TAG = "VoiceReceiver"
 
-        /** One second of audio at [QUANTUM_SAMPLES] per write. */
+        /** One second of audio at [FRAME_SAMPLES] per write. */
         const val WRITES_PER_SAMPLE = 100
     }
 }

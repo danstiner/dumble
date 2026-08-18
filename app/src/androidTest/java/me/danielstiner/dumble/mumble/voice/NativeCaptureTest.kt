@@ -19,14 +19,14 @@ class NativeCaptureTest {
             val t = thread {
                 // No stream started, so the gate produces nothing and this parks in the timed wait.
                 while (true) {
-                    val n = NativeCapture.pollFrame(h, out, meta)
+                    val n = NativeCapture.pollPacket(h, out, meta)
                     if (n == NativeCapture.POLL_SHUTDOWN) { last.set(n); break }
                 }
             }
             Thread.sleep(50)
             NativeCapture.stop(h)
             t.join(1_000)
-            assertTrue("pollFrame did not unblock", !t.isAlive)
+            assertTrue("pollPacket did not unblock", !t.isAlive)
             assertEquals(NativeCapture.POLL_SHUTDOWN, last.get())
         } finally {
             NativeCapture.destroy(h)

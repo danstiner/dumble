@@ -19,7 +19,7 @@ class LatencyMathTest {
 
     @Test
     fun inFlightFramesBecomeMillis() {
-        // A fresh timestamp needs no extrapolation: 480 frames unplayed is exactly one quantum.
+        // A fresh timestamp needs no extrapolation: 480 frames unplayed is exactly one frame.
         assertEquals(10.0, latency(framesWritten = 48_000, tsFramePosition = 47_520)!!, 1e-9)
     }
 
@@ -46,7 +46,7 @@ class LatencyMathTest {
         // Extrapolating past a position that has since stalled puts "presented" ahead of "written".
         // Unclamped this is a large positive latency, because the negative difference is what the
         // wrap reinterpretation turns into a near-2^32 value. 5 ms of overshoot is rounding drift,
-        // under the quantum the rejection below keys on, so it still clamps.
+        // under the frame the rejection below keys on, so it still clamps.
         assertEquals(0.0, latency(framesWritten = 48_000, tsFramePosition = 48_000, ageMs = 5)!!, 1e-9)
     }
 

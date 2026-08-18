@@ -9,12 +9,12 @@
 namespace dumble::playout {
 
 /**
- * One speaker's decode stage: encoded packets in, quantum-sized PCM out.
+ * One speaker's decode stage: encoded packets in, frame-sized PCM out.
  *
- * Decoded audio exists as PCM for at most one packet's worth of ticks — the caller decodes only
- * while below a quantum, so the fifo never holds more than a quantum plus the one packet that
+ * Decoded audio exists as PCM for at most one packet's worth of fills — the caller decodes only
+ * while below a frame, so the fifo never holds more than a frame plus the one packet that
  * crossed it; concealment fits the same bound, overshooting by less than kConcealGridSamples.
- * Two different units, and deliberately so: the quantum is the output tick the device asks for,
+ * Two different units, and deliberately so: the frame is the output unit the device asks for,
  * the packet is the input granularity the sender chose. Everything waiting on the network stays
  * compressed, in PacketQueue.
  *

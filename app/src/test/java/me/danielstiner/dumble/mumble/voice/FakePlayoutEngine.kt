@@ -5,22 +5,22 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Scripted stand-in for the native engine: each entry is one fillQuantum outcome. The playback
- * loop blocks on [ticks] the way the real loop blocks on AudioTrack, so a test controls the
+ * loop blocks on [fills] the way the real loop blocks on AudioTrack, so a test controls the
  * cadence exactly.
  */
 class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
-    /** One tick: which sessions produced, how many speakers are live, whether the tick was
-     *  short of a full quantum (which the real engine counts as concealment), and how many packets
-     *  the jitter queues threw away. Drops are charged to a tick only because ticks are the test's
+    /** One call: which sessions produced, how many speakers are live, whether the call was
+     *  short of a full frame (which the real engine counts as concealment), and how many packets
+     *  the jitter queues threw away. Drops are charged to a call only because fills are the test's
      *  clock — natively they accrue on the reader thread, on offer(). */
-    data class Tick(
+    data class Fill(
         val producing: List<Int> = emptyList(),
         val activeSpeakers: Int = producing.size,
         val concealed: Boolean = false,
         val dropped: Int = 0,
     )
 
-    private val ticks = LinkedBlockingQueue<Tick>()
+    private val fills = LinkedBlockingQueue<Fill>()
 
     data class Offer(val session: Int, val opusData: ByteArray, val terminator: Boolean)
 
@@ -44,7 +44,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     /** Depth reported per session by [readStats]. */
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
 
-    @Volatile private var concealedTicks = 0L
+    @Volatile private var concealedGaps = 0L
     @Volatile private var droppedPackets = 0L
 
     /** True (the default) suits VoiceReceiverTest: the test drives the cadence, so an exhausted
@@ -52,13 +52,13 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
      *  receiver instead runs unscripted for most of a session — a blocking take() there would
      *  wedge the playback thread on the first fillQuantum() with nothing queued, and every
      *  disconnect()/stop() would then wait out its 1 s join. Set false there: an empty queue
-     *  reports one idle tick immediately instead of blocking. */
+     *  reports one idle call immediately instead of blocking. */
     @Volatile var blockWhenEmpty = true
 
-    fun script(vararg t: Tick) = t.forEach { ticks.put(it) }
+    fun script(vararg t: Fill) = t.forEach { fills.put(it) }
 
-    /** A tick that never arrives parks the loop, the way silence does in production. */
-    fun scriptSilence(count: Int) = repeat(count) { ticks.put(Tick()) }
+    /** A call that never arrives parks the loop, the way silence does in production. */
+    fun scriptSilence(count: Int) = repeat(count) { fills.put(Fill()) }
 
     @Synchronized
     override fun offer(session: Int, opusData: ByteArray, terminator: Boolean): Int {
@@ -67,22 +67,22 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     }
 
     override fun fillQuantum(pcm: ShortArray, status: IntArray): Int {
-        val tick = if (blockWhenEmpty) ticks.take() else ticks.poll() ?: Tick()
+        val fill = if (blockWhenEmpty) fills.take() else fills.poll() ?: Fill()
         if (refuseBuffers) return NativePlayout.ERROR_BUFFER_TOO_SMALL
-        if (tick.concealed) concealedTicks++
-        droppedPackets += tick.dropped
-        status[NativePlayout.STATUS_ACTIVE_SPEAKERS] = tick.activeSpeakers
-        tick.producing.forEachIndexed { i, session ->
+        if (fill.concealed) concealedGaps++
+        droppedPackets += fill.dropped
+        status[NativePlayout.STATUS_ACTIVE_SPEAKERS] = fill.activeSpeakers
+        fill.producing.forEachIndexed { i, session ->
             status[NativePlayout.STATUS_SESSIONS + i] = session
         }
-        // Non-silent audio so a test can tell a written quantum from an unwritten one.
-        if (tick.producing.isNotEmpty()) pcm.fill(1000)
-        return tick.producing.size
+        // Non-silent audio so a test can tell a written frame from an unwritten one.
+        if (fill.producing.isNotEmpty()) pcm.fill(1000)
+        return fill.producing.size
     }
 
     override fun readStats(sessions: IntArray, depths: IntArray, counters: LongArray): Int {
         if (refuseBuffers) return NativePlayout.ERROR_BUFFER_TOO_SMALL
-        counters[NativePlayout.COUNTER_CONCEALED_TICKS] = concealedTicks
+        counters[NativePlayout.COUNTER_CONCEALED_GAPS] = concealedGaps
         counters[NativePlayout.COUNTER_DROPPED_PACKETS] = droppedPackets
         depthsBySession.entries.forEachIndexed { i, (session, depth) ->
             sessions[i] = session

@@ -15,7 +15,7 @@ static_assert(kMaxSpeakers <= Bitmap::kCapacity,
 
 /**
  * Owns inbound voice below the platform: one PacketQueue and one SpeakerDecoder per sender, mixed
- * into one quantum per fillQuantum call. Platform-free — no JNI, no output device.
+ * into one frame per fillQuantum call. Platform-free — no JNI, no output device.
  *
  * The two halves are separate types because they answer to different threads. A packet queue is
  * touched only under mutex_; a decoder only from the playback thread, with mutex_ released. The
@@ -38,11 +38,15 @@ static_assert(kMaxSpeakers <= Bitmap::kCapacity,
  * taking its sample count per call. Today a Kotlin playback thread drives it between AudioTrack
  * writes; an Oboe callback will call the same function unchanged.
  *
- * A tick is one fillQuantum call, and the engine's only clock — nothing in here advances between
- * calls. Every count of ticks is therefore a count of calls and not a span of time: the caller
- * picks `samples` (today's playback loop asks for 10 ms quanta), and the loop runs faster than
- * real time whenever nobody is producing, since an arriving packet wakes it. A tick is at most
- * one quantum of audio, and often less.
+ * One fillQuantum call — a fill — is the engine's only clock; nothing in here advances between
+ * fills. What a fill produces is a **quantum**: `samples` of audio, picked by the caller, which
+ * today's playback loop sets to one frame. A fill produces at most that, and often less.
+ *
+ * Fills come in two kinds, and that is what decides whether counting them measures time. A fill
+ * that produced is written to the output, so the device paces it and kConcealQuanta really is
+ * about 100 ms at today's quantum. A fill that produced nothing is a **poll** — the loop parks and
+ * an arriving packet wakes it — so polls outrun real time and kRetireIdlePolls and kStallIdlePolls
+ * are ceilings on fills, not durations. Concealment counts as production.
  */
 class PlayoutEngine {
 public:
@@ -70,7 +74,7 @@ public:
      * `liveSpeakers` receives the claimed-slot count — how the caller tells "nobody is here" from
      * "somebody is prebuffering" — and is always written, refusals included. A `samples` outside
      * (0, the maxQuantumSamples given to create()] answers kErrorBufferTooSmall rather than a
-     * silent quantum, and leaves `out` untouched: the caller must not play a refused tick.
+     * silent frame, and leaves `out` untouched: the caller must not play a refused fill.
      */
     int fillQuantum(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers);
 
@@ -88,9 +92,9 @@ public:
         // The two totals below are monotonic since the engine was built: the caller subtracts a
         // talk-spurt baseline, the way it already does for the platform's underrun counter.
 
-        // Gaps, not their length: a tick that produced less than a full quantum, or the leading
-        // tick of a mid-spurt stall.
-        int64_t concealedTicks;
+        // Gaps, not their length: a fill that produced less than its quantum, or the leading fill
+        // of a mid-spurt stall.
+        int64_t concealedGaps;
         // Packets the jitter queues threw away for backlog — past kMaxQueuedPackets or
         // kHighWaterSamples — plus packets refused because kMaxSpeakers was already met, which
         // have no queue to charge them to. A payload offer() refused is deliberately excluded: it
@@ -116,23 +120,23 @@ private:
     std::mutex mutex_;
     Bitmap slots_;
     int32_t sessions_[kMaxSpeakers] = {};
-    // Consecutive ticks a claimed slot has produced nothing. Zeroed on claim.
-    int idleTicks_[kMaxSpeakers] = {};
-    // Consecutive ticks a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only
-    // by real audio, never by a tick that merely did not conceal: an expired hold would otherwise
-    // clear its own counter and start concealing again on the next tick, forever. Keeps counting
-    // past kConcealTicks for the same reason. Zeroed on claim, like idleTicks_.
-    int stallTicks_[kMaxSpeakers] = {};
+    // Consecutive polls a claimed slot has answered with nothing. Zeroed on claim.
+    int idlePolls_[kMaxSpeakers] = {};
+    // Consecutive frames a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only
+    // by real audio, never by a frame that merely did not conceal: an expired hold would otherwise
+    // clear its own counter and start concealing again on the next frame, forever. Keeps counting
+    // past kConcealQuanta for the same reason. Zeroed on claim, like idlePolls_.
+    int stallQuanta_[kMaxSpeakers] = {};
     // Whole-engine totals, monotonic since construction. A retiring queue's own tally is
     // harvested into droppedPackets_ before reset() clears it.
-    int64_t concealedTicks_ = 0;
+    int64_t concealedGaps_ = 0;
     int64_t droppedPackets_ = 0;
     // Built by create() and never rebuilt, which is what lets the playback thread hold references
     // into them across an unlocked decode.
     PacketQueue queues_[kMaxSpeakers];
     std::unique_ptr<SpeakerDecoder> decoders_[kMaxSpeakers];
 
-    // Playback-thread-only scratch, sized once so no tick allocates.
+    // Playback-thread-only scratch, sized once so no fill allocates.
     std::vector<int32_t> accumulator_;
     std::vector<int16_t> speakerOut_;
     uint8_t packetScratch_[kMaxPacketBytes] = {};

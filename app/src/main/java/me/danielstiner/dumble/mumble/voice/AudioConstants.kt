@@ -6,10 +6,10 @@ package me.danielstiner.dumble.mumble.voice
  *  PlayoutEngine::create, so it has nothing of its own to drift. */
 const val SAMPLE_RATE = 48000
 
-/** Playback quantum. 10 ms is Mumble's minimum audio-per-packet, so our granularity never
+/** Playback frame. 10 ms is Mumble's minimum audio-per-packet, so our granularity never
  *  coarsens what a sender chose. Correctness does not depend on it — the native mixer's PCM ring
- *  decouples quantum from packet duration — so this is tunable. */
-const val QUANTUM_SAMPLES = 480
+ *  decouples the frame from packet duration — so this is tunable. */
+const val FRAME_SAMPLES = 480
 
 /** Twin of the native engine's kMaxSpeakers (PlayoutConstants.h), where the reasoning for the
  *  number lives: the intelligibility bound, past which nothing is intelligible anyway. Concurrent
