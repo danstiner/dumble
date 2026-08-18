@@ -43,18 +43,31 @@ object NativePlayout {
      *  platform's underrun count. */
     const val COUNTER_CONCEALED_GAPS = 0
     const val COUNTER_DROPPED_PACKETS = 1
-    const val COUNTER_COUNT = 2
+
+    /** Packets the engine discarded on purpose to shed standing delay. `PlayoutEngine::Stats`
+     *  states why these are split from each other and from [COUNTER_DROPPED_PACKETS]. */
+    const val COUNTER_SHRUNK_PACKETS = 2
+    const val COUNTER_CATCH_UP_PACKETS = 3
+    const val COUNTER_COUNT = 4
 
     /** Returns 0 if native could not build an engine — libopus being unreachable is the only way
      *  that happens, and there is no degraded mode. */
     external fun create(sampleRate: Int, maxQuantumSamples: Int): Long
 
-    external fun offer(handle: Long, session: Int, opusData: ByteArray, terminator: Boolean): Int
+    external fun offer(
+        handle: Long,
+        session: Int,
+        opusData: ByteArray,
+        frameNumber: Long,
+        terminator: Boolean,
+    ): Int
+
     external fun fillQuantum(handle: Long, pcm: ShortArray, status: IntArray): Int
     external fun readStats(
         handle: Long,
         sessions: IntArray,
         depths: IntArray,
+        targets: IntArray,
         counters: LongArray,
     ): Int
     external fun destroy(handle: Long)
@@ -62,14 +75,18 @@ object NativePlayout {
 
 /** The real [VoiceReceiver.PlayoutEngine], one native engine per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
-    override fun offer(session: Int, opusData: ByteArray, terminator: Boolean) =
-        NativePlayout.offer(handle, session, opusData, terminator)
+    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean) =
+        NativePlayout.offer(handle, session, opusData, frameNumber, terminator)
 
     override fun fillQuantum(pcm: ShortArray, status: IntArray) =
         NativePlayout.fillQuantum(handle, pcm, status)
 
-    override fun readStats(sessions: IntArray, depths: IntArray, counters: LongArray) =
-        NativePlayout.readStats(handle, sessions, depths, counters)
+    override fun readStats(
+        sessions: IntArray,
+        depths: IntArray,
+        targets: IntArray,
+        counters: LongArray,
+    ) = NativePlayout.readStats(handle, sessions, depths, targets, counters)
 
     override fun destroy() = NativePlayout.destroy(handle)
 }

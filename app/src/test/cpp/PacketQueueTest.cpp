@@ -9,9 +9,12 @@ namespace {
 using dumble::playout::PacketQueue;
 namespace pl = dumble::playout;
 
-// 20 ms at 48 kHz: two frames, which is one packet from a default sender and the span
-// these tests count in.
+// 20 ms at 48 kHz — the span the tests count in.
 constexpr int kPacket = 960;
+
+// 60 ms — the fixed margin the adaptive target replaced. Kept here, and only here, so the gate
+// tests measure against something that does not move.
+constexpr int kGateTarget = 2880;
 
 // Payload bytes are arbitrary here: nothing in PacketQueue reads them, so a fill byte doubles as
 // an identity tag and the whole suite runs without libopus.
@@ -28,17 +31,20 @@ void offer(PacketQueue& q, const Packet& p, bool terminator = false) {
     q.offer(p.bytes.data(), int(p.bytes.size()), p.samples, terminator);
 }
 
-// Pops one packet, returning its tag, or -1 when the gate is closed and the pool empty.
-int popTag(PacketQueue& q) {
+// The gate is a function of a target the engine supplies, so every pop states one.
+int popTagAt(PacketQueue& q, int target, bool catchUpAllowed = false) {
     uint8_t out[pl::kMaxPacketBytes];
-    const int n = q.pop(out, int(sizeof out));
+    const int n = q.pop(out, int(sizeof out), target, catchUpAllowed);
     if (n <= 0) return -1;
     return out[0];
 }
 
-// Enough packets to clear kPrebufferSamples, tagged from `first`.
+// Most gate tests want a fixed reference rather than an estimate, and ask for it by name.
+int popTag(PacketQueue& q) { return popTagAt(q, kGateTarget); }
+
+// Enough packets to clear kGateTarget, tagged from `first`.
 void arm(PacketQueue& q, uint8_t first = 0) {
-    const int needed = (pl::kPrebufferSamples + kPacket - 1) / kPacket;
+    const int needed = (kGateTarget + kPacket - 1) / kPacket;
     for (int i = 0; i < needed; i++) offer(q, packet(uint8_t(first + i)));
 }
 
@@ -59,13 +65,13 @@ TEST(PacketQueue, StartsEmpty) {
 TEST(PacketQueue, PopIsClosedUntilThePrebufferIsMet) {
     PacketQueue q;
     int queued = 0;
-    for (uint8_t i = 0; queued + kPacket < pl::kPrebufferSamples; i++) {
+    for (uint8_t i = 0; queued + kPacket < kGateTarget; i++) {
         offer(q, packet(i));
         queued += kPacket;
         EXPECT_EQ(-1, popTag(q)) << "gate opened at " << q.depthSamples() << " samples";
     }
     offer(q, packet(99));
-    ASSERT_GE(q.depthSamples(), pl::kPrebufferSamples);
+    ASSERT_GE(q.depthSamples(), kGateTarget);
     EXPECT_GE(popTag(q), 0);
 }
 
@@ -79,14 +85,14 @@ TEST(PacketQueue, PopReportsTheStoredLength) {
     PacketQueue q;
     for (int i = 0; i < 8; i++) offer(q, packet(uint8_t(i), kPacket, 7 + i));
     uint8_t out[pl::kMaxPacketBytes];
-    EXPECT_EQ(7, q.pop(out, int(sizeof out)));
-    EXPECT_EQ(8, q.pop(out, int(sizeof out)));
+    EXPECT_EQ(7, q.pop(out, int(sizeof out), kGateTarget, false));
+    EXPECT_EQ(8, q.pop(out, int(sizeof out), kGateTarget, false));
 }
 
 TEST(PacketQueue, ATerminatorOpensTheGateBelowThePrebuffer) {
     PacketQueue q;
     offer(q, packet(3), /*terminator=*/true);
-    ASSERT_LT(q.depthSamples(), pl::kPrebufferSamples);
+    ASSERT_LT(q.depthSamples(), kGateTarget);
     EXPECT_EQ(3, popTag(q));
 }
 
@@ -140,11 +146,11 @@ TEST(PacketQueue, ALateTerminatorLatchSurvivesTheReArm) {
     EXPECT_EQ(42, popTag(q)) << "endFill closed the gate over the terminator latch";
 }
 
-TEST(PacketQueue, EndFillDoesNotReArmWhilePacketsRemain) {
+TEST(PacketQueue, EndTickDoesNotReArmWhilePacketsRemain) {
     PacketQueue q;
     arm(q, 20);
     ASSERT_EQ(20, popTag(q));
-    // Produced nothing this call, but the pool is not drained — this is a spurt waiting on the
+    // Produced nothing this tick, but the pool is not drained — this is a spurt waiting on the
     // network, not one that ended.
     q.endFill(/*decoderProduced=*/false);
     EXPECT_EQ(21, popTag(q));
@@ -234,7 +240,7 @@ TEST(PacketQueue, PopRefusesAnOutputSmallerThanThePacket) {
     PacketQueue q;
     arm(q);
     uint8_t tiny[1];
-    EXPECT_LT(q.pop(tiny, 1), 0);
+    EXPECT_LT(q.pop(tiny, 1, kGateTarget, false), 0);
 }
 
 TEST(PacketQueue, QueuedSamplesTracksOffersAndPops) {
@@ -253,7 +259,7 @@ TEST(PacketQueue, ResetDropsEverythingQueuedAndRearmsTheGate) {
     // live: packets are queued and the gate is open.
     PacketQueue q;
     arm(q);
-    ASSERT_GE(q.depthSamples(), pl::kPrebufferSamples);
+    ASSERT_GE(q.depthSamples(), kGateTarget);
     ASSERT_GE(popTag(q), 0) << "the gate should be open before reset";
 
     q.reset();
@@ -288,12 +294,12 @@ TEST(PacketQueue, ResetClearsTheSendersTerminator) {
 }
 
 TEST(PacketQueue, SpeakingIsFalseUntilTheGateOpens) {
-    // A spurt still building its prebuffer is quiet by design. Counting those calls as dropouts
+    // A spurt still building its prebuffer is quiet by design. Counting those ticks as dropouts
     // would swamp the metric with the one silence that is always expected.
     PacketQueue q;
     EXPECT_FALSE(q.speaking());
     offer(q, packet(1));
-    EXPECT_FALSE(q.speaking()) << "one packet is below kPrebufferSamples";
+    EXPECT_FALSE(q.speaking()) << "one packet is below kGateTarget";
     arm(q, 2);
     ASSERT_GE(popTag(q), 0) << "the gate should have opened";
     EXPECT_TRUE(q.speaking());
@@ -316,9 +322,109 @@ TEST(PacketQueue, GoingIdleClearsTheTerminatorForTheNextSpurt) {
     PacketQueue q;
     arm(q);
     q.offer(nullptr, 0, 0, /*terminator=*/true);
-    ASSERT_EQ(pl::kPrebufferSamples / kPacket, drainCount(q));
+    ASSERT_EQ(kGateTarget / kPacket, drainCount(q));
     q.endFill(/*decoderProduced=*/false);
     arm(q);
     ASSERT_GE(popTag(q), 0);
     EXPECT_TRUE(q.speaking());
+}
+
+TEST(PacketQueue, TheGateOpensAtTheTargetItIsGiven) {
+    PacketQueue q;
+    // One 20 ms packet, against a 20 ms target: enough.
+    offer(q, packet(7));
+    EXPECT_EQ(popTagAt(q, kPacket), 7);
+
+    PacketQueue tighter;
+    offer(tighter, packet(9));
+    // The same packet against a 100 ms target is not enough, and the gate stays shut.
+    EXPECT_EQ(popTagAt(tighter, 5 * kPacket), -1);
+}
+
+TEST(PacketQueue, CanShrinkRefusesWhenTheRemainderWouldFallShort) {
+    PacketQueue q;
+    for (uint8_t i = 0; i < 4; i++) offer(q, packet(i));  // 80 ms
+    // Dropping the 20 ms head leaves 60, which clears a 60 ms floor exactly.
+    EXPECT_TRUE(q.canShrink(3 * kPacket));
+    // It does not clear 61 ms, so no drop is permitted at that floor.
+    EXPECT_FALSE(q.canShrink(3 * kPacket + 1));
+}
+
+TEST(PacketQueue, CanShrinkNeverUndershootsForALongSender) {
+    PacketQueue q;
+    // A 60 ms sender: three packets is 180 ms, and dropping one costs 60 at a stroke.
+    for (uint8_t i = 0; i < 3; i++) offer(q, packet(i, 3 * kPacket));
+    EXPECT_TRUE(q.canShrink(2 * 3 * kPacket));
+    // A floor a fixed 40 ms deadband would have cleared, but this sender's packet cannot.
+    EXPECT_FALSE(q.canShrink(2 * 3 * kPacket + 1));
+}
+
+TEST(PacketQueue, ShrinkIsNotCountedAsLoss) {
+    PacketQueue q;
+    for (uint8_t i = 0; i < 4; i++) offer(q, packet(i));
+    ASSERT_TRUE(q.canShrink(3 * kPacket));
+    q.shrink();
+    EXPECT_EQ(q.shrunkPackets(), 1);
+    EXPECT_EQ(q.droppedPackets(), 0);
+    // The oldest went, not the newest.
+    EXPECT_EQ(popTagAt(q, kPacket), 1);
+}
+
+TEST(PacketQueue, AnOrdinaryGateOpenTrimsNothing) {
+    PacketQueue q;
+    // Target plus one packet — the normal state at a gate-open.
+    for (uint8_t i = 0; i < 4; i++) offer(q, packet(i));
+    EXPECT_EQ(popTagAt(q, 3 * kPacket, true), 0);
+    EXPECT_EQ(q.catchUpPackets(), 0);
+}
+
+TEST(PacketQueue, AnOverThresholdGateOpenTrimsToTheTarget) {
+    PacketQueue q;
+    // 320 ms queued against a 40 ms target: a stall's backlog.
+    for (uint8_t i = 0; i < 16; i++) offer(q, packet(i));
+    const int target = 2 * kPacket;
+    EXPECT_EQ(popTagAt(q, target, true), 14);
+    // Everything but the newest two packets was discarded, and none of it counted as loss.
+    EXPECT_EQ(q.catchUpPackets(), 14);
+    EXPECT_EQ(q.droppedPackets(), 0);
+    EXPECT_EQ(q.shrunkPackets(), 0);
+}
+
+TEST(PacketQueue, AFreshSpurtBurstKeepsItsOpening) {
+    PacketQueue q;
+    for (uint8_t i = 0; i < 16; i++) offer(q, packet(i));
+    // catchUpAllowed false: the engine saw the sender's frame numbers jump, so this burst is a
+    // spurt opening and its oldest packet is the first syllable.
+    EXPECT_EQ(popTagAt(q, 2 * kPacket, false), 0);
+    EXPECT_EQ(q.catchUpPackets(), 0);
+}
+
+TEST(PacketQueue, TheTrimNeverUndershootsTheTarget) {
+    PacketQueue q;
+    // A 60 ms sender again, six packets, against a 40 ms target with a 100 ms threshold.
+    for (uint8_t i = 0; i < 6; i++) offer(q, packet(i, 3 * kPacket));
+    const int target = 2 * kPacket;
+    ASSERT_EQ(popTagAt(q, target, true), 5);
+    // Only the last packet is left: dropping it would have left nothing to clear the target.
+    EXPECT_EQ(popTagAt(q, target, true), -1);
+}
+
+TEST(PacketQueue, ResetClearsTheNewCounters) {
+    PacketQueue q;
+    for (uint8_t i = 0; i < 4; i++) offer(q, packet(i));
+    q.shrink();
+    q.reset();
+    EXPECT_EQ(q.shrunkPackets(), 0);
+    EXPECT_EQ(q.catchUpPackets(), 0);
+}
+
+TEST(PacketQueue, AFullRingOpensTheGateEvenBelowTheTarget) {
+    PacketQueue q;
+    // A 10 ms sender against a target its ring cannot reach: 32 packets is 320 ms, the target is
+    // 450. Without the full-ring check the gate never opens and every further packet is dropped as
+    // overflow, which is silence for as long as the target stays high.
+    const int tenMs = 480;
+    for (int i = 0; i < pl::kMaxQueuedPackets; i++) offer(q, packet(uint8_t(i), tenMs));
+    ASSERT_LT(q.depthSamples(), pl::kMaxTargetMillis * pl::kSamplesPerMilli);
+    EXPECT_EQ(popTagAt(q, pl::kMaxTargetMillis * pl::kSamplesPerMilli), 0);
 }

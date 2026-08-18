@@ -192,3 +192,68 @@ TEST(SpeakerDecoder, ResetDropsConcealedAudioToo) {
     d->reset();
     EXPECT_EQ(0, d->available());
 }
+
+TEST(SpeakerDecoder, IsNotQuietBeforeAnyAudio) {
+    auto decoder = newDecoder();
+    // No envelope yet, so nothing may be judged against it. Shrink reads this, and a fresh
+    // decoder answering "quiet" would let a speaker's opening packet be discarded.
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, IsNotQuietDuringTheTone) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto packet = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, IsQuietInTheSilenceAfterSpeech) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto packet = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto packet = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    EXPECT_TRUE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, TheAttackEndsQuietImmediately) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto loud = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(loud.data(), int(loud.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto hush = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(hush.data(), int(hush.size()));
+    }
+    ASSERT_TRUE(decoder->quiet());
+    const auto attack = stream.encode(dumble::testtone::tone(kFrame));
+    decoder->decode(attack.data(), int(attack.size()));
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, ResetClearsTheEnvelope) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto loud = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(loud.data(), int(loud.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto hush = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(hush.data(), int(hush.size()));
+    }
+    ASSERT_TRUE(decoder->quiet());
+    // A slot about to serve a different sender must not carry the previous one's dynamic range.
+    decoder->reset();
+    EXPECT_FALSE(decoder->quiet());
+}

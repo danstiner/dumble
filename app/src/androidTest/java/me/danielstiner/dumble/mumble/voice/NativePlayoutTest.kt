@@ -29,9 +29,15 @@ class NativePlayoutTest {
     private fun status() = IntArray(NativePlayout.STATUS_LENGTH)
     private fun pcm() = ShortArray(FRAME_SAMPLES)
 
+    // The seam tests assert return codes and buffer refusals, not estimator output, so one shared
+    // cursor is enough — a jump between sessions only rebases an estimate nothing here reads.
+    private var frame = 5000L
+    private fun nextFrame() = frame++
+
     private class Stats {
         val sessions = IntArray(MAX_SPEAKERS)
         val depths = IntArray(MAX_SPEAKERS)
+        val targets = IntArray(MAX_SPEAKERS)
         val counters = LongArray(NativePlayout.COUNTER_COUNT)
         var speakers = 0
         val concealedGaps get() = counters[NativePlayout.COUNTER_CONCEALED_GAPS]
@@ -44,7 +50,7 @@ class NativePlayoutTest {
 
     private fun stats(): Stats {
         val s = Stats()
-        s.speakers = NativePlayout.readStats(handle, s.sessions, s.depths, s.counters)
+        s.speakers = NativePlayout.readStats(handle, s.sessions, s.depths, s.targets, s.counters)
         assertTrue("readStats refused its arrays", s.speakers >= 0)
         return s
     }
@@ -63,10 +69,10 @@ class NativePlayoutTest {
         // The whole seam in one assertion: a Kotlin ByteArray copied in, decoded by the real
         // libopus for this ABI, mixed, and copied back into a Kotlin ShortArray. The terminator
         // is what opens the prebuffer gate on a single packet — without it 10 ms sits below
-        // kPrebufferSamples and plays nothing, which is the engine working, not a failure.
+        // the cold-start target and plays nothing, which is the engine working, not a failure.
         assertEquals(
             NativePlayout.OFFER_ACCEPTED,
-            NativePlayout.offer(handle, SESSION, TONE_10MS, true),
+            NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), true),
         )
         val pcm = pcm()
         val status = status()
@@ -85,7 +91,7 @@ class NativePlayoutTest {
         for (session in speakers) {
             assertEquals(
                 NativePlayout.OFFER_ACCEPTED,
-                NativePlayout.offer(handle, session, TONE_10MS, true),
+                NativePlayout.offer(handle, session, TONE_10MS, nextFrame(), true),
             )
         }
         val pcm = pcm()
@@ -124,18 +130,23 @@ class NativePlayoutTest {
         )
         val sessions = IntArray(MAX_SPEAKERS)
         val depths = IntArray(MAX_SPEAKERS)
+        val targets = IntArray(MAX_SPEAKERS)
         val counters = LongArray(NativePlayout.COUNTER_COUNT)
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.readStats(handle, IntArray(MAX_SPEAKERS - 1), depths, counters),
+            NativePlayout.readStats(handle, IntArray(MAX_SPEAKERS - 1), depths, targets, counters),
         )
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.readStats(handle, sessions, IntArray(MAX_SPEAKERS - 1), counters),
+            NativePlayout.readStats(handle, sessions, IntArray(MAX_SPEAKERS - 1), targets, counters),
         )
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.readStats(handle, sessions, depths, LongArray(1)),
+            NativePlayout.readStats(handle, sessions, depths, IntArray(MAX_SPEAKERS - 1), counters),
+        )
+        assertEquals(
+            NativePlayout.ERROR_BUFFER_TOO_SMALL,
+            NativePlayout.readStats(handle, sessions, depths, targets, LongArray(1)),
         )
     }
 
@@ -171,7 +182,7 @@ class NativePlayoutTest {
         val huge = ByteArray(MAX_PACKET_BYTES + 1)
         assertEquals(
             NativePlayout.OFFER_PACKET_TOO_LARGE,
-            NativePlayout.offer(handle, SESSION, huge, true),
+            NativePlayout.offer(handle, SESSION, huge, nextFrame(), true),
         )
         assertEquals("the terminator never reached the engine", 1, stats().speakers)
         assertEquals("an oversized payload must queue no samples", 0, stats().depthOf(SESSION))
@@ -184,7 +195,7 @@ class NativePlayoutTest {
         // peer violating the size bound.
         assertEquals(
             NativePlayout.OFFER_MALFORMED_PACKET,
-            NativePlayout.offer(handle, SESSION, byteArrayOf(3, 0), false),
+            NativePlayout.offer(handle, SESSION, byteArrayOf(3, 0), nextFrame(), false),
         )
     }
 
@@ -195,15 +206,15 @@ class NativePlayoutTest {
         // never dereferences it.
         assertEquals(
             NativePlayout.OFFER_ACCEPTED,
-            NativePlayout.offer(handle, SESSION, ByteArray(0), true),
+            NativePlayout.offer(handle, SESSION, ByteArray(0), nextFrame(), true),
         )
     }
 
     @Test
     fun depthsAndSessionsComeBackAsParallelArrays() {
-        NativePlayout.offer(handle, 4, TONE_10MS, false)
-        NativePlayout.offer(handle, 4, TONE_10MS, false)
-        NativePlayout.offer(handle, 8, TONE_10MS, false)
+        NativePlayout.offer(handle, 4, TONE_10MS, nextFrame(), false)
+        NativePlayout.offer(handle, 4, TONE_10MS, nextFrame(), false)
+        NativePlayout.offer(handle, 8, TONE_10MS, nextFrame(), false)
         val stats = stats()
         assertEquals(2, stats.speakers)
         // 10 ms apiece at the sample rate the engine was created with. Wrong-index bugs in the
@@ -224,12 +235,12 @@ class NativePlayoutTest {
             assertEquals(
                 "session $session was refused below the cap",
                 NativePlayout.OFFER_ACCEPTED,
-                NativePlayout.offer(handle, session, TONE_10MS, false),
+                NativePlayout.offer(handle, session, TONE_10MS, nextFrame(), false),
             )
         }
         assertEquals(
             NativePlayout.OFFER_SPEAKER_CAP,
-            NativePlayout.offer(handle, MAX_SPEAKERS + 1, TONE_10MS, false),
+            NativePlayout.offer(handle, MAX_SPEAKERS + 1, TONE_10MS, nextFrame(), false),
         )
         val stats = stats()
         assertEquals(MAX_SPEAKERS, stats.speakers)

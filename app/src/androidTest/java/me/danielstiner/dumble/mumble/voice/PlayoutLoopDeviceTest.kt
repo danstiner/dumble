@@ -17,8 +17,9 @@ import java.io.DataInputStream
  * against a fake engine and a non-blocking output, so the loop runs as fast as the test drives it;
  * [NativePlayoutTest] proves the engine decodes but calls fillQuantum in a tight loop. Neither can
  * see what only real time produces: the loop is paced by a blocking AudioTrack.write, the
- * prebuffer gate is 60 ms of *wall clock*, and the retire and stall windows are counted in polls,
- * which only arrive at ~100 Hz when audio is actually playing.
+ * prebuffer gate is an adaptive target — ~30 ms on an idle link, 80 ms cold — measured in *wall
+ * clock*, and the retire and stall windows are counted in polls, which only arrive at ~100 Hz when
+ * audio is actually playing.
  *
  * The transport is deliberately absent. It is unchanged by the native playout work, and a
  * loopback server delivers packets with no jitter at all — so the arrival pattern is scripted
@@ -129,7 +130,7 @@ class PlayoutLoopDeviceTest {
             }
             assertTrue("the speaker never lit up", samples.isNotEmpty())
 
-            // Past kPrebufferSamples and past kRetireIdlePolls: the queue drains, the gate
+            // Past the cold-start target and past kRetireIdlePolls: the queue drains, the gate
             // re-arms, and the slot retires. The resume below has to prebuffer again.
             repeat(30) { Thread.sleep(10); sample() }
 

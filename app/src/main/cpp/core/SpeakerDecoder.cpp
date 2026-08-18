@@ -4,6 +4,16 @@
 
 namespace dumble::playout {
 
+namespace {
+
+float meanPower(const int16_t* pcm, int n) {
+    double energy = 0;
+    for (int i = 0; i < n; i++) energy += double(pcm[i]) * pcm[i];
+    return float(energy / n);
+}
+
+}  // namespace
+
 std::unique_ptr<SpeakerDecoder> SpeakerDecoder::create(int sampleRate, int maxQuantumSamples) {
     // The fifo is sized from bit_ceil(maxQuantumSamples + kMaxPacketSamples), which is signed
     // overflow near INT_MAX and not representable in uint32_t above 2^31 — both undefined — and
@@ -30,7 +40,18 @@ void SpeakerDecoder::decode(const uint8_t* data, int len) {
     // The dropped-write case is unreachable: the fifo is sized for a frame plus a packet and the
     // caller decodes only while below a frame, so one decode always fits. PcmRing counts a drop
     // if that ever stops being true, which is the only reason ignoring the result is safe.
-    if (n > 0) fifo_.write(decodeScratch_.data(), uint32_t(n));
+    if (n > 0) {
+        fifo_.write(decodeScratch_.data(), uint32_t(n));
+        power_ = meanPower(decodeScratch_.data(), n);
+        if (power_ >= powerMax_) {
+            powerMax_ = power_;
+        } else if (power_ <= powerMin_) {
+            powerMin_ = power_;
+        } else {
+            powerMax_ = 0.99f * powerMax_;
+            powerMin_ += 0.0001f * power_;
+        }
+    }
 }
 
 int SpeakerDecoder::conceal(int samples) {
@@ -59,6 +80,16 @@ int SpeakerDecoder::available() const {
 void SpeakerDecoder::reset() {
     decoder_->reset();
     fifo_.reset();
+    power_ = 0;
+    powerMin_ = 0;
+    powerMax_ = 0;
+}
+
+bool SpeakerDecoder::quiet() const {
+    // Strictly less than, so an all-silence stream — where the range collapses to zero — reads as
+    // not quiet. That is the safe answer: it withholds shrink rather than granting it on no
+    // evidence.
+    return power_ < powerMin_ + 0.01f * (powerMax_ - powerMin_);
 }
 
 int SpeakerDecoder::drain(int16_t* out, int samples) {

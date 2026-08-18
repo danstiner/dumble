@@ -19,7 +19,9 @@ constexpr int kStatusLength = kStatusSessions + pl::kMaxSpeakers;
 
 constexpr int kCounterConcealedGaps = 0;
 constexpr int kCounterDroppedPackets = 1;
-constexpr int kCounterCount = 2;
+constexpr int kCounterShrunkPackets = 2;
+constexpr int kCounterCatchUpPackets = 3;
+constexpr int kCounterCount = 4;
 
 // No handle is checked for null below. NativePlayoutEngine is only ever constructed around a
 // non-zero create() result — a zero becomes a Kotlin null and no engine object at all — so a null
@@ -40,21 +42,24 @@ FN(create)(JNIEnv*, jobject, jint sampleRate, jint maxQuantumSamples) {
 }
 
 JNIEXPORT jint JNICALL
-FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jboolean terminator) {
+FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
+          jboolean terminator) {
     const jsize len = env->GetArrayLength(opusData);
     if (len > pl::kMaxPacketBytes) {
         // Refused here rather than by the engine, because the copy below is what we cannot afford
         // — but is_terminator is a protobuf field beside the payload and stays true when the
         // payload is garbage, so the end of the spurt is handed over on its own. Same answer the
         // engine gives an oversized payload, reached one step earlier.
-        if (terminator == JNI_TRUE) self(h)->offer(session, nullptr, 0, true);
+        if (terminator == JNI_TRUE)
+            self(h)->offer(session, nullptr, 0, uint64_t(frameNumber), true);
         return pl::kOfferPacketTooLarge;
     }
     // Region copy onto the stack rather than a pin: the payload is at most kMaxPacketBytes, and a
     // pin here would be held across a mutex acquisition on the reader thread.
     uint8_t packet[pl::kMaxPacketBytes];
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
-    return self(h)->offer(session, len > 0 ? packet : nullptr, int(len), terminator == JNI_TRUE);
+    return self(h)->offer(session, len > 0 ? packet : nullptr, int(len), uint64_t(frameNumber),
+                          terminator == JNI_TRUE);
 }
 
 JNIEXPORT jint JNICALL
@@ -71,13 +76,13 @@ FN(fillQuantum)(JNIEnv* env, jobject, jlong h, jshortArray pcm, jintArray status
     // a smashed stack rather than a wrong answer, which is why it is a branch and not a comment.
     if (samples <= 0 || samples > pl::kMaxPacketSamples) return pl::kErrorBufferTooSmall;
 
-    // Stack scratch, then one copy of exactly the frame produced. Pinning the caller's arrays
+    // Stack scratch, then one copy of exactly the quantum produced. Pinning the caller's arrays
     // across the mix would couple ART's moving collector to the playback path.
     int16_t out[pl::kMaxPacketSamples];
     int32_t statusOut[kStatusLength] = {};
     const int producing = self(h)->fillQuantum(out, int(samples), statusOut + kStatusSessions,
                                                statusOut + kStatusActiveSpeakers);
-    // A refused frame leaves `out` untouched, so publishing it would hand the caller whatever
+    // A refused quantum leaves `out` untouched, so publishing it would hand the caller whatever
     // this frame's stack held. Nothing is copied and the code travels out unchanged.
     if (producing < 0) return producing;
     env->SetShortArrayRegion(pcm, 0, samples, out);
@@ -87,18 +92,22 @@ FN(fillQuantum)(JNIEnv* env, jobject, jlong h, jshortArray pcm, jintArray status
 
 JNIEXPORT jint JNICALL
 FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depths,
-              jlongArray counters) {
+              jintArray targets, jlongArray counters) {
     if (env->GetArrayLength(sessions) < pl::kMaxSpeakers ||
         env->GetArrayLength(depths) < pl::kMaxSpeakers ||
+        env->GetArrayLength(targets) < pl::kMaxSpeakers ||
         env->GetArrayLength(counters) < kCounterCount) {
         return pl::kErrorBufferTooSmall;
     }
     const pl::PlayoutEngine::Stats stats = self(h)->stats();
     const jlong countersOut[kCounterCount] = {jlong(stats.concealedGaps),
-                                              jlong(stats.droppedPackets)};
+                                              jlong(stats.droppedPackets),
+                                              jlong(stats.shrunkPackets),
+                                              jlong(stats.catchUpPackets)};
     if (stats.speakers > 0) {
         env->SetIntArrayRegion(sessions, 0, stats.speakers, stats.sessions);
         env->SetIntArrayRegion(depths, 0, stats.speakers, stats.depths);
+        env->SetIntArrayRegion(targets, 0, stats.speakers, stats.targets);
     }
     env->SetLongArrayRegion(counters, 0, kCounterCount, countersOut);
     return stats.speakers;

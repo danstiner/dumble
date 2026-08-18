@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "core/AudioEncoder.h"
 #include "core/CaptureConstants.h"
@@ -51,5 +52,33 @@ inline double meanEnergy(const int16_t* pcm, int n) {
     for (int i = 0; i < n; i++) energy += double(pcm[i]) * pcm[i];
     return energy / n;
 }
+
+inline std::vector<int16_t> silence(int samples) {
+    return std::vector<int16_t>(size_t(samples), 0);
+}
+
+// One encoder held across calls, so a test can build a run whose prediction state is continuous.
+// The existing helpers cannot express an onset: encodeTone shares a hidden static across every
+// test in the binary, and encodeToneAlone starts cold every time. An attack — silence, then tone,
+// through one encoder — is the signal the energy gate's blind spot is made of, so it needs a
+// fixture that can produce one.
+class Stream {
+public:
+    explicit Stream(int bitrate = 40000)
+        : enc_(dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, bitrate)) {
+        EXPECT_TRUE(enc_);
+    }
+
+    std::vector<uint8_t> encode(const std::vector<int16_t>& pcm) {
+        std::vector<uint8_t> packet(dumble::playout::kMaxPacketBytes);
+        const int n = enc_->encode(pcm.data(), int(pcm.size()), packet.data(), int(packet.size()));
+        EXPECT_GT(n, 0);
+        packet.resize(n > 0 ? n : 0);
+        return packet;
+    }
+
+private:
+    std::unique_ptr<dumble::AudioEncoder> enc_;
+};
 
 }  // namespace dumble::testtone
