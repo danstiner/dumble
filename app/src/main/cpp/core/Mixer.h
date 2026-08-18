@@ -8,7 +8,7 @@ namespace dumble::playout {
  * clipping occurs, then soft-limit only above the threshold — normal levels stay at unity gain,
  * and double-talk compresses instead of collapsing toward the louder speaker.
  *
- * Call pattern, once per playback quantum: zero `acc`, mixAccumulate each active speaker's PCM
+ * Call pattern, once per playback frame: zero `acc`, mixAccumulate each active speaker's PCM
  * into it, then mixFinalize once into the buffer handed to the output. The accumulator cannot
  * overflow: worst case is kMaxSpeakers full-scale streams, kMaxSpeakers * 2^15, which Mixer.cpp
  * static_asserts against int32 so the bound follows the constant.

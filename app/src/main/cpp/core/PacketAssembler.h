@@ -7,12 +7,12 @@ namespace dumble {
  * Turns whatever the device hands us into fixed frames. Device bursts (a few milliseconds) are
  * written into the PcmRing buffer, then extracted here into a packet sized frame for encoding.
  */
-class FrameAssembler {
+class PacketAssembler {
 public:
     /** Aborts on zero — a zero-sample frame can only produce nonsense downstream. Unsigned
      *  because every producer of the value is: the frame size never crosses the JNI boundary,
      *  so no signed jint ever feeds this. */
-    explicit FrameAssembler(uint32_t frameSamples);
+    explicit PacketAssembler(uint32_t frameSamples);
 
     /** Takes one whole frame if the ring holds enough. Returns false otherwise, leaving the ring
      *  untouched so the partial frame stays buffered for the next call. */

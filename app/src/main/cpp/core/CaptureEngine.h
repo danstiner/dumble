@@ -6,7 +6,7 @@
 #include <mutex>
 #include <vector>
 #include "core/CaptureConstants.h"
-#include "core/FrameAssembler.h"
+#include "core/PacketAssembler.h"
 #include "core/AudioEncoder.h"
 #include "core/PcmRing.h"
 
@@ -14,7 +14,7 @@ namespace dumble {
 
 /**
  * Owns everything between "PCM arrived" and "an Opus packet is ready". Platform-free: no JNI, no
- * Oboe, no sockets. onPcm() is called from the audio callback; pollFrame() from a pump thread that
+ * Oboe, no sockets. onPcm() is called from the audio callback; pollPacket() from a pump thread that
  * is allowed to block.
  */
 class CaptureEngine {
@@ -37,7 +37,7 @@ public:
      * stream is down, or kPollShutdown once shutdown is requested. A return of 0 means the wait
      * elapsed with nothing to send — the caller loops.
      */
-    int pollFrame(uint8_t* out, int outCap, uint64_t* frameNumber, uint32_t* flags);
+    int pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, uint32_t* flags);
 
     /** Wakes a parked pump thread. Nothing else can: Thread.interrupt cannot reach a condvar. */
     void requestShutdown();
@@ -46,7 +46,7 @@ public:
     void setStreamDown(bool down);
 
     /** Called once the platform adapter exhausts its reopen attempts. Unlike setStreamDown(),
-     *  this is terminal for the life of the engine — there is no path back — so pollFrame()
+     *  this is terminal for the life of the engine — there is no path back — so pollPacket()
      *  reports it as a distinct code instead of folding it into "still retrying". */
     void setStreamUnavailable();
 
@@ -55,7 +55,7 @@ public:
     uint64_t overrunBursts() const { return ring_.droppedWrites(); }
     uint64_t skippedSamples() const { return ring_.skippedSamples(); }
     uint64_t encodedPackets() const { return encodedPackets_.load(std::memory_order_relaxed); }
-    // Distinguishes a persistent libopus failure from an idle gate: pollFrame() returns 0 for
+    // Distinguishes a persistent libopus failure from an idle gate: pollPacket() returns 0 for
     // both, so without this a broken encoder is silent and undiagnosable from the outside.
     uint64_t encodeErrors() const { return encodeErrors_.load(std::memory_order_relaxed); }
 
@@ -76,7 +76,7 @@ private:
     void wakeup();
 
     PcmRing ring_{kRingCapacitySamples};
-    FrameAssembler assembler_;
+    PacketAssembler assembler_;
     // Non-null for the object's whole life: create() is the only way in and it refuses without one.
     const std::unique_ptr<AudioEncoder> encoder_;
     std::vector<int16_t> scratch_;
@@ -106,12 +106,12 @@ private:
     std::atomic<uint64_t> sampleClock_{0};
 
     // Guards the fields below. setGateOpen() runs on whatever thread owns the push-to-talk
-    // control; pollFrame() claims the owed terminator on the pump thread. A gate cycle is a rare,
+    // control; pollPacket() claims the owed terminator on the pump thread. A gate cycle is a rare,
     // human-triggered event, not onPcm()'s hot audio-callback path, so a mutex here costs nothing
     // that matters, and it keeps the gate state and the clock offset consistent with each other.
     std::mutex spurtMutex_;
     // The commanded gate state — the guard's own record, only ever touched under spurtMutex_;
-    // gateOpen_ is its lock-free mirror for onPcm() and pollFrame(). An enum rather than a pair
+    // gateOpen_ is its lock-free mirror for onPcm() and pollPacket(). An enum rather than a pair
     // of bools so that open-while-owed is unrepresentable, a repeated press or release is visibly
     // a state mapping to itself, and the clock offset below is meaningful exactly when the state
     // is not Closed. Closed means closed *and settled*; TerminatorOwed is the other closed state,
@@ -136,7 +136,7 @@ private:
     uint64_t clockOffset_ = 0;
 
     // Pump thread only. The floor for the next packet's frame number, not a running count: see
-    // pollFrame() for why a candidate below this floor is clamped up rather than used as-is.
+    // pollPacket() for why a candidate below this floor is clamped up rather than used as-is.
     uint64_t frameNumber_ = 0;
     const uint64_t frameNumberStep_;
     int waitMillis_ = kPollWaitMillis;

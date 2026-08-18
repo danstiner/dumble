@@ -13,12 +13,12 @@ import java.io.DataInputStream
  * The receive path end to end on a device: real Opus, the real native engine, and a real
  * AudioTrack, driven at wall-clock cadence.
  *
- * Everything else that covers this path stops at a seam. The JVM tests script tick outcomes
+ * Everything else that covers this path stops at a seam. The JVM tests script fill outcomes
  * against a fake engine and a non-blocking output, so the loop runs as fast as the test drives it;
  * [NativePlayoutTest] proves the engine decodes but calls fillQuantum in a tight loop. Neither can
  * see what only real time produces: the loop is paced by a blocking AudioTrack.write, the
- * prebuffer gate is 60 ms of *wall clock*, and the retire and stall windows are counted in ticks
- * that only arrive at ~100 Hz when audio is actually playing.
+ * prebuffer gate is 60 ms of *wall clock*, and the retire and stall windows are counted in polls,
+ * which only arrive at ~100 Hz when audio is actually playing.
  *
  * The transport is deliberately absent. It is unchanged by the native playout work, and a
  * loopback server delivers packets with no jitter at all — so the arrival pattern is scripted
@@ -88,10 +88,10 @@ class PlayoutLoopDeviceTest {
             // AudioTrack never answered a timestamp, which on a real device means it never played.
             assertNotNull("AudioTrack reported no latency, so nothing played", mid!!.latencyMs)
             assertEquals("a paced spurt must not overflow the jitter queue", 0, mid.droppedPackets)
-            // One quantum of slack: the opening tick can land mid-packet, which is a real splice
+            // One frame of slack: the opening fill can land mid-packet, which is a real splice
             // and is counted as one. Anything beyond that is the loop failing to keep up.
-            assertTrue("concealment during a clean spurt: ${mid.concealedTicks}",
-                       mid.concealedTicks <= 1)
+            assertTrue("concealment during a clean spurt: ${mid.concealedGaps}",
+                       mid.concealedGaps <= 1)
 
             rx.onTunneledAudio(payload(SESSION, packets[50], terminator = true))
             awaitTrue("the spurt never closed") { rx.speakingSessions.value.isEmpty() }
@@ -108,7 +108,7 @@ class PlayoutLoopDeviceTest {
      * mid-sentence for 300 ms and then resumes.
      *
      * Every sample is collected rather than only the last, because the loop treats the hole as the
-     * end of a talk spurt — it is longer than kRetireIdleTicks, so the speaker retires and the
+     * end of a talk spurt — it is longer than kRetireIdlePolls, so the speaker retires and the
      * resume is a fresh spurt with fresh baselines. That is the right accounting (the gap is
      * charged to the spurt it interrupted) but it means the closing sample of the *second* spurt
      * correctly reports nothing, and a test reading only that one would call this a silent
@@ -129,7 +129,7 @@ class PlayoutLoopDeviceTest {
             }
             assertTrue("the speaker never lit up", samples.isNotEmpty())
 
-            // Past kPrebufferSamples and past kRetireIdleTicks: the queue drains, the gate
+            // Past kPrebufferSamples and past kRetireIdlePolls: the queue drains, the gate
             // re-arms, and the slot retires. The resume below has to prebuffer again.
             repeat(30) { Thread.sleep(10); sample() }
 
@@ -144,11 +144,11 @@ class PlayoutLoopDeviceTest {
             }
 
             assertTrue("a 300 ms hole went unreported across ${samples.size} samples",
-                       samples.any { it.concealedTicks >= 1 })
-            // Charged once for the hole rather than once per silent tick — 30 idle ticks pass
-            // during the stall, and a per-tick charge would show up here as tens.
-            assertTrue("a single gap was charged per tick: ${samples.map { it.concealedTicks }}",
-                       samples.all { it.concealedTicks <= 4 })
+                       samples.any { it.concealedGaps >= 1 })
+            // Charged once for the hole rather than once per poll — 30 polls pass during the
+            // stall, and a per-poll charge would show up here as tens.
+            assertTrue("a single gap was charged per fill: ${samples.map { it.concealedGaps }}",
+                       samples.all { it.concealedGaps <= 4 })
             assertTrue("a stall is not a queue overflow: ${samples.map { it.droppedPackets }}",
                        samples.all { it.droppedPackets == 0 })
         } finally {

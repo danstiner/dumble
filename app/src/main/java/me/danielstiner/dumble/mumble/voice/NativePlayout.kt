@@ -41,7 +41,7 @@ object NativePlayout {
      *  `PlayoutEngine::Stats` is a struct, and JNI carries primitive arrays. Monotonic since the
      *  engine was created — the caller subtracts a talk-spurt baseline, as it already does for the
      *  platform's underrun count. */
-    const val COUNTER_CONCEALED_TICKS = 0
+    const val COUNTER_CONCEALED_GAPS = 0
     const val COUNTER_DROPPED_PACKETS = 1
     const val COUNTER_COUNT = 2
 
@@ -84,7 +84,7 @@ class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngin
  */
 fun openNativePlayout(): VoiceReceiver.PlayoutEngine? {
     val handle = runCatching {
-        NativePlayout.create(SAMPLE_RATE, QUANTUM_SAMPLES)
+        NativePlayout.create(SAMPLE_RATE, FRAME_SAMPLES)
     }.getOrElse {
         Log.e("VoiceReceiver", "playout engine unavailable, voice receive disabled", it)
         0L

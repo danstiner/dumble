@@ -9,8 +9,9 @@ namespace {
 using dumble::playout::PacketQueue;
 namespace pl = dumble::playout;
 
-// 20 ms at 48 kHz — the span the tests count in.
-constexpr int kFrame = 960;
+// 20 ms at 48 kHz: two frames, which is one packet from a default sender and the span
+// these tests count in.
+constexpr int kPacket = 960;
 
 // Payload bytes are arbitrary here: nothing in PacketQueue reads them, so a fill byte doubles as
 // an identity tag and the whole suite runs without libopus.
@@ -19,7 +20,7 @@ struct Packet {
     int samples = 0;
 };
 
-Packet packet(uint8_t tag, int samples = kFrame, int len = 40) {
+Packet packet(uint8_t tag, int samples = kPacket, int len = 40) {
     return Packet{std::vector<uint8_t>(size_t(len), tag), samples};
 }
 
@@ -37,7 +38,7 @@ int popTag(PacketQueue& q) {
 
 // Enough packets to clear kPrebufferSamples, tagged from `first`.
 void arm(PacketQueue& q, uint8_t first = 0) {
-    const int needed = (pl::kPrebufferSamples + kFrame - 1) / kFrame;
+    const int needed = (pl::kPrebufferSamples + kPacket - 1) / kPacket;
     for (int i = 0; i < needed; i++) offer(q, packet(uint8_t(first + i)));
 }
 
@@ -58,9 +59,9 @@ TEST(PacketQueue, StartsEmpty) {
 TEST(PacketQueue, PopIsClosedUntilThePrebufferIsMet) {
     PacketQueue q;
     int queued = 0;
-    for (uint8_t i = 0; queued + kFrame < pl::kPrebufferSamples; i++) {
+    for (uint8_t i = 0; queued + kPacket < pl::kPrebufferSamples; i++) {
         offer(q, packet(i));
-        queued += kFrame;
+        queued += kPacket;
         EXPECT_EQ(-1, popTag(q)) << "gate opened at " << q.depthSamples() << " samples";
     }
     offer(q, packet(99));
@@ -76,7 +77,7 @@ TEST(PacketQueue, PopReturnsPacketsInArrivalOrder) {
 
 TEST(PacketQueue, PopReportsTheStoredLength) {
     PacketQueue q;
-    for (int i = 0; i < 8; i++) offer(q, packet(uint8_t(i), kFrame, 7 + i));
+    for (int i = 0; i < 8; i++) offer(q, packet(uint8_t(i), kPacket, 7 + i));
     uint8_t out[pl::kMaxPacketBytes];
     EXPECT_EQ(7, q.pop(out, int(sizeof out)));
     EXPECT_EQ(8, q.pop(out, int(sizeof out)));
@@ -100,8 +101,8 @@ TEST(PacketQueue, TheGateStaysOpenAcrossAnEmptyPoolWhileTheSpurtRuns) {
     arm(q);
     EXPECT_GT(drainCount(q), 0);
     ASSERT_TRUE(q.empty());
-    // Still mid-spurt: the decoder is producing, so endTick must not re-arm the gate.
-    q.endTick(/*decoderProduced=*/true);
+    // Still mid-spurt: the decoder is producing, so endFill must not re-arm the gate.
+    q.endFill(/*decoderProduced=*/true);
     offer(q, packet(42));
     EXPECT_EQ(42, popTag(q));
 }
@@ -110,7 +111,7 @@ TEST(PacketQueue, GoingIdleReArmsThePrebuffer) {
     PacketQueue q;
     arm(q);
     EXPECT_GT(drainCount(q), 0);
-    q.endTick(/*decoderProduced=*/false);
+    q.endFill(/*decoderProduced=*/false);
     offer(q, packet(42));
     EXPECT_EQ(-1, popTag(q)) << "gate stayed open into the next spurt";
 }
@@ -119,11 +120,11 @@ TEST(PacketQueue, ReArmTrustsTheEmptinessSeenAtPopOverThePresent) {
     PacketQueue q;
     arm(q);
     EXPECT_GT(drainCount(q), 0);
-    // The next spurt's first packet lands between the caller's last pop and its endTick — the
+    // The next spurt's first packet lands between the caller's last pop and its endFill — the
     // engine decodes other speakers in between. The gate must still re-arm: that packet is a new
     // spurt, not licence to keep playing.
     offer(q, packet(42));
-    q.endTick(/*decoderProduced=*/false);
+    q.endFill(/*decoderProduced=*/false);
     EXPECT_EQ(-1, popTag(q)) << "the late arrival rode the old spurt's gate past the prebuffer";
 }
 
@@ -135,17 +136,17 @@ TEST(PacketQueue, ALateTerminatorLatchSurvivesTheReArm) {
     // packet, the terminator is an explicit verdict that the spurt is whole: the latch must beat
     // the re-arm, or the spurt sits below the prebuffer forever and is reset away at retirement.
     offer(q, packet(42), /*terminator=*/true);
-    q.endTick(/*decoderProduced=*/false);
-    EXPECT_EQ(42, popTag(q)) << "endTick closed the gate over the terminator latch";
+    q.endFill(/*decoderProduced=*/false);
+    EXPECT_EQ(42, popTag(q)) << "endFill closed the gate over the terminator latch";
 }
 
-TEST(PacketQueue, EndTickDoesNotReArmWhilePacketsRemain) {
+TEST(PacketQueue, EndFillDoesNotReArmWhilePacketsRemain) {
     PacketQueue q;
     arm(q, 20);
     ASSERT_EQ(20, popTag(q));
-    // Produced nothing this tick, but the pool is not drained — this is a spurt waiting on the
+    // Produced nothing this call, but the pool is not drained — this is a spurt waiting on the
     // network, not one that ended.
-    q.endTick(/*decoderProduced=*/false);
+    q.endFill(/*decoderProduced=*/false);
     EXPECT_EQ(21, popTag(q));
 }
 
@@ -154,7 +155,7 @@ TEST(PacketQueue, TerminatorDoesNotReArmTheGateMidSpurt) {
     arm(q, 30);
     ASSERT_EQ(30, popTag(q));
     offer(q, packet(90), /*terminator=*/true);
-    q.endTick(/*decoderProduced=*/true);
+    q.endFill(/*decoderProduced=*/true);
     EXPECT_EQ(31, popTag(q));
 }
 
@@ -209,7 +210,7 @@ TEST(PacketQueueDeathTest, DebugBuildsRejectAPacketBreakingTheContract) {
 TEST(PacketQueueDeathTest, AnOversizedPacketCrashesRatherThanOverrunningThePool) {
     PacketQueue q;
     const std::vector<uint8_t> big(pl::kMaxPacketBytes + 1, 7);
-    EXPECT_DEATH(q.offer(big.data(), int(big.size()), kFrame, false), "");
+    EXPECT_DEATH(q.offer(big.data(), int(big.size()), kPacket, false), "");
 }
 
 TEST(PacketQueue, TheLargestLegalSpanFits) {
@@ -242,7 +243,7 @@ TEST(PacketQueue, QueuedSamplesTracksOffersAndPops) {
     const int armed = q.depthSamples();
     EXPECT_EQ(armed, q.depthSamples());
     ASSERT_GE(popTag(q), 0);
-    EXPECT_EQ(armed - kFrame, q.depthSamples());
+    EXPECT_EQ(armed - kPacket, q.depthSamples());
     EXPECT_EQ(0, drainCount(q) >= 0 ? q.depthSamples() : -1);
     EXPECT_TRUE(q.empty());
 }
@@ -287,7 +288,7 @@ TEST(PacketQueue, ResetClearsTheSendersTerminator) {
 }
 
 TEST(PacketQueue, SpeakingIsFalseUntilTheGateOpens) {
-    // A spurt still building its prebuffer is quiet by design. Counting those ticks as dropouts
+    // A spurt still building its prebuffer is quiet by design. Counting those calls as dropouts
     // would swamp the metric with the one silence that is always expected.
     PacketQueue q;
     EXPECT_FALSE(q.speaking());
@@ -315,8 +316,8 @@ TEST(PacketQueue, GoingIdleClearsTheTerminatorForTheNextSpurt) {
     PacketQueue q;
     arm(q);
     q.offer(nullptr, 0, 0, /*terminator=*/true);
-    ASSERT_EQ(pl::kPrebufferSamples / kFrame, drainCount(q));
-    q.endTick(/*decoderProduced=*/false);
+    ASSERT_EQ(pl::kPrebufferSamples / kPacket, drainCount(q));
+    q.endFill(/*decoderProduced=*/false);
     arm(q);
     ASSERT_GE(popTag(q), 0);
     EXPECT_TRUE(q.speaking());

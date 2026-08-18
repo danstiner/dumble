@@ -18,7 +18,7 @@ class NativePlayoutTest {
     private var handle = 0L
 
     @Before fun open() {
-        handle = NativePlayout.create(SAMPLE_RATE, QUANTUM_SAMPLES)
+        handle = NativePlayout.create(SAMPLE_RATE, FRAME_SAMPLES)
         assertNotEquals("no engine", 0L, handle)
     }
 
@@ -27,14 +27,14 @@ class NativePlayoutTest {
     }
 
     private fun status() = IntArray(NativePlayout.STATUS_LENGTH)
-    private fun pcm() = ShortArray(QUANTUM_SAMPLES)
+    private fun pcm() = ShortArray(FRAME_SAMPLES)
 
     private class Stats {
         val sessions = IntArray(MAX_SPEAKERS)
         val depths = IntArray(MAX_SPEAKERS)
         val counters = LongArray(NativePlayout.COUNTER_COUNT)
         var speakers = 0
-        val concealedTicks get() = counters[NativePlayout.COUNTER_CONCEALED_TICKS]
+        val concealedGaps get() = counters[NativePlayout.COUNTER_CONCEALED_GAPS]
         val droppedPackets get() = counters[NativePlayout.COUNTER_DROPPED_PACKETS]
         fun depthOf(session: Int): Int {
             for (i in 0 until speakers) if (sessions[i] == session) return depths[i]
@@ -50,9 +50,9 @@ class NativePlayoutTest {
     }
 
     @Test
-    fun anEngineRefusesAQuantumItCannotHold() {
+    fun anEngineRefusesAFrameItCannotHold() {
         // The null handle openNativePlayout turns into "voice unavailable". Reachable only through
-        // a caller that sizes its quantum wrong, but it is the only failure create() reports and
+        // a caller that sizes its frame wrong, but it is the only failure create() reports and
         // nothing else proves the 0 travels back as a Kotlin Long.
         assertEquals(0L, NativePlayout.create(SAMPLE_RATE, 0))
         assertEquals(0L, NativePlayout.create(SAMPLE_RATE, MAX_PACKET_SAMPLES + 1))
@@ -73,7 +73,7 @@ class NativePlayoutTest {
         assertEquals("one speaker producing", 1, NativePlayout.fillQuantum(handle, pcm, status))
         assertEquals(1, status[NativePlayout.STATUS_ACTIVE_SPEAKERS])
         assertEquals(SESSION, status[NativePlayout.STATUS_SESSIONS])
-        assertTrue("the quantum came back silent", pcm.any { it.toInt() != 0 })
+        assertTrue("the frame came back silent", pcm.any { it.toInt() != 0 })
     }
 
     @Test
@@ -99,11 +99,11 @@ class NativePlayoutTest {
 
     @Test
     fun anIdleEngineFillsSilenceAndReportsNobody() {
-        val pcm = ShortArray(QUANTUM_SAMPLES) { 999 }
+        val pcm = ShortArray(FRAME_SAMPLES) { 999 }
         val status = status()
         assertEquals(0, NativePlayout.fillQuantum(handle, pcm, status))
         assertEquals(0, status[NativePlayout.STATUS_ACTIVE_SPEAKERS])
-        assertTrue("an idle quantum must be written, not left alone", pcm.all { it.toInt() == 0 })
+        assertTrue("an idle frame must be written, not left alone", pcm.all { it.toInt() == 0 })
     }
 
     @Test
@@ -140,26 +140,26 @@ class NativePlayoutTest {
     }
 
     @Test
-    fun aRefusedQuantumLeavesTheCallersBufferAlone() {
-        // The caller must not play a refused tick, so nothing is copied into its buffer — it holds
+    fun aRefusedFrameLeavesTheCallersBufferAlone() {
+        // The caller must not play a refused call, so nothing is copied into its buffer — it holds
         // what this side put there rather than a frame of native stack.
-        val refusedBySeam = ShortArray(QUANTUM_SAMPLES) { 999 }
+        val refusedBySeam = ShortArray(FRAME_SAMPLES) { 999 }
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
             NativePlayout.fillQuantum(handle, refusedBySeam, IntArray(1)),
         )
-        assertTrue("a refused quantum was published", refusedBySeam.all { it.toInt() == 999 })
+        assertTrue("a refused frame was published", refusedBySeam.all { it.toInt() == 999 })
 
-        // The other origin, and the only one that reaches fillQuantum at all: a quantum inside the
+        // The other origin, and the only one that reaches fillQuantum at all: a frame inside the
         // seam's scratch bound but wider than the engine was created for. The engine leaves its
         // output untouched and answers the same code, which has to travel back out without the
         // scratch behind it being copied anywhere.
-        val refusedByEngine = ShortArray(2 * QUANTUM_SAMPLES) { 999 }
+        val refusedByEngine = ShortArray(2 * FRAME_SAMPLES) { 999 }
         assertEquals(
             NativePlayout.ERROR_BUFFER_TOO_SMALL,
             NativePlayout.fillQuantum(handle, refusedByEngine, status()),
         )
-        assertTrue("a refused quantum was published", refusedByEngine.all { it.toInt() == 999 })
+        assertTrue("a refused frame was published", refusedByEngine.all { it.toInt() == 999 })
     }
 
     @Test
@@ -208,8 +208,8 @@ class NativePlayoutTest {
         assertEquals(2, stats.speakers)
         // 10 ms apiece at the sample rate the engine was created with. Wrong-index bugs in the
         // seam show up here as the depths landing on the wrong sessions.
-        assertEquals(2 * QUANTUM_SAMPLES, stats.depthOf(4))
-        assertEquals(QUANTUM_SAMPLES, stats.depthOf(8))
+        assertEquals(2 * FRAME_SAMPLES, stats.depthOf(4))
+        assertEquals(FRAME_SAMPLES, stats.depthOf(8))
     }
 
     /**
@@ -236,7 +236,7 @@ class NativePlayoutTest {
         assertEquals("a capped packet is lost audio and must be counted", 1, stats.droppedPackets)
         // The other half of the same check: nothing has been mixed yet, so a concealment count
         // above zero means the two indices are crossed.
-        assertEquals(0, stats.concealedTicks)
+        assertEquals(0, stats.concealedGaps)
     }
 
     private companion object {

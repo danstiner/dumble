@@ -29,7 +29,7 @@ TEST(AudioDecoder, CreateRejectsAnImpossibleRate) {
 }
 
 // Every packet duration a Mumble sender may choose. The 10 ms case alone would not catch a decode
-// whose output capacity was mistakenly set to one quantum.
+// whose output capacity was mistakenly set to one frame.
 TEST(AudioDecoder, RoundTripsEveryPacketDuration) {
     for (const int frameSamples : {480, 960, 1920, 2880}) {
         const std::vector<uint8_t> packet = encodePacket(frameSamples);
@@ -67,7 +67,7 @@ TEST(AudioDecoder, PacketSamplesRejectsAnEmptyPacket) {
 
 TEST(AudioDecoder, DecodeRefusesAnOutputTooSmallForThePacket) {
     // libopus does no bounds checking of its own; outCap is the only thing standing between a
-    // 60 ms packet and a write past a one-quantum buffer.
+    // 60 ms packet and a write past a one-frame buffer.
     const std::vector<uint8_t> packet = encodePacket(2880);
     auto dec = AudioDecoder::create(dumble::kSampleRate, dumble::kChannels);
     ASSERT_TRUE(dec);

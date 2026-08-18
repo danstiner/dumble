@@ -13,7 +13,7 @@ namespace {
 using dumble::playout::SpeakerDecoder;
 namespace pl = dumble::playout;
 
-constexpr int kQuantum = 480;
+constexpr int kFrame = 480;
 
 // A real Opus packet spanning `tenMsUnits` * 10 ms — this side of the seam needs payloads libopus
 // will actually accept, unlike PacketQueue, which never looks at the bytes.
@@ -22,7 +22,7 @@ std::vector<uint8_t> encode(int tenMsUnits) {
 }
 
 std::unique_ptr<SpeakerDecoder> newDecoder() {
-    auto d = SpeakerDecoder::create(dumble::kSampleRate, kQuantum);
+    auto d = SpeakerDecoder::create(dumble::kSampleRate, kFrame);
     EXPECT_TRUE(d);
     return d;
 }
@@ -34,10 +34,10 @@ void decode(SpeakerDecoder& d, const std::vector<uint8_t>& p) {
 }  // namespace
 
 TEST(SpeakerDecoder, CreateBuildsADecoderUpFront) {
-    EXPECT_TRUE(SpeakerDecoder::create(dumble::kSampleRate, kQuantum));
+    EXPECT_TRUE(SpeakerDecoder::create(dumble::kSampleRate, kFrame));
 }
 
-TEST(SpeakerDecoder, CreateRefusesAQuantumTheFifoCannotBeSizedFrom) {
+TEST(SpeakerDecoder, CreateRefusesAFrameTheFifoCannotBeSizedFrom) {
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, 0));
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, -1));
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, pl::kMaxPacketSamples + 1));
@@ -47,8 +47,8 @@ TEST(SpeakerDecoder, CreateRefusesAQuantumTheFifoCannotBeSizedFrom) {
 TEST(SpeakerDecoder, StartsWithNothingBuffered) {
     auto d = newDecoder();
     EXPECT_EQ(0, d->available());
-    std::vector<int16_t> out(kQuantum, 123);
-    EXPECT_EQ(0, d->drain(out.data(), kQuantum));
+    std::vector<int16_t> out(kFrame, 123);
+    EXPECT_EQ(0, d->drain(out.data(), kFrame));
     EXPECT_EQ(0, out[0]) << "drain left the caller's buffer untouched";
 }
 
@@ -63,8 +63,8 @@ TEST(SpeakerDecoder, AvailableTracksDecodedSamples) {
 TEST(SpeakerDecoder, DecodedAudioIsNotSilence) {
     auto d = newDecoder();
     decode(*d, encode(1));
-    std::vector<int16_t> out(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    std::vector<int16_t> out(kFrame);
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
     bool nonZero = false;
     for (int16_t s : out) nonZero = nonZero || s != 0;
     EXPECT_TRUE(nonZero);
@@ -73,18 +73,18 @@ TEST(SpeakerDecoder, DecodedAudioIsNotSilence) {
 TEST(SpeakerDecoder, AShortDrainZeroPadsAndReportsTheRealCount) {
     auto d = newDecoder();
     decode(*d, encode(1));
-    std::vector<int16_t> out(2 * kQuantum, 321);
-    EXPECT_EQ(480, d->drain(out.data(), 2 * kQuantum));
-    for (int i = 480; i < 2 * kQuantum; i++) EXPECT_EQ(0, out[i]) << "not zero-padded at " << i;
+    std::vector<int16_t> out(2 * kFrame, 321);
+    EXPECT_EQ(480, d->drain(out.data(), 2 * kFrame));
+    for (int i = 480; i < 2 * kFrame; i++) EXPECT_EQ(0, out[i]) << "not zero-padded at " << i;
 }
 
 TEST(SpeakerDecoder, DrainConsumesWhatItReturns) {
     auto d = newDecoder();
     decode(*d, encode(2));
-    std::vector<int16_t> out(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    std::vector<int16_t> out(kFrame);
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
     EXPECT_EQ(480, d->available());
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
     EXPECT_EQ(0, d->available());
 }
 
@@ -123,28 +123,28 @@ TEST(SpeakerDecoder, ResetDropsTheDecodersHistory) {
 
     auto fresh = newDecoder();
     decode(*fresh, first);
-    std::vector<int16_t> expected(kQuantum);
-    ASSERT_EQ(kQuantum, fresh->drain(expected.data(), kQuantum));
+    std::vector<int16_t> expected(kFrame);
+    ASSERT_EQ(kFrame, fresh->drain(expected.data(), kFrame));
 
     auto reused = newDecoder();
     decode(*reused, other);
-    std::vector<int16_t> discard(kQuantum);
-    reused->drain(discard.data(), kQuantum);
+    std::vector<int16_t> discard(kFrame);
+    reused->drain(discard.data(), kFrame);
     reused->reset();
     decode(*reused, first);
-    std::vector<int16_t> got(kQuantum);
-    ASSERT_EQ(kQuantum, reused->drain(got.data(), kQuantum));
+    std::vector<int16_t> got(kFrame);
+    ASSERT_EQ(kFrame, reused->drain(got.data(), kFrame));
 
     EXPECT_EQ(expected, got);
 }
 
 TEST(SpeakerDecoder, ConcealRoundsUpToTheConcealmentGrid) {
-    // The fifo carries the overshoot to the next tick, which is why conceal reports what it wrote
+    // The fifo carries the overshoot to the next call, which is why conceal reports what it wrote
     // rather than what was asked for.
     auto d = newDecoder();
     decode(*d, encode(1));
-    std::vector<int16_t> out(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
+    std::vector<int16_t> out(kFrame);
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
     EXPECT_EQ(3 * pl::kConcealGridSamples, d->conceal(2 * pl::kConcealGridSamples + 1));
     EXPECT_EQ(3 * pl::kConcealGridSamples, d->available());
 }
@@ -152,26 +152,26 @@ TEST(SpeakerDecoder, ConcealRoundsUpToTheConcealmentGrid) {
 TEST(SpeakerDecoder, ConcealFillsAnExactRequestExactly) {
     auto d = newDecoder();
     decode(*d, encode(1));
-    std::vector<int16_t> out(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
-    EXPECT_EQ(kQuantum, d->conceal(kQuantum));
+    std::vector<int16_t> out(kFrame);
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
+    EXPECT_EQ(kFrame, d->conceal(kFrame));
 }
 
 TEST(SpeakerDecoder, ConcealsTheWholeGapInOneRequest) {
     // Pins conceal's single decode call against a future grid loop: four 2.5 ms requests fade
-    // below peak 100 inside the first quantum, one 10 ms request holds ~2500 across it, and the
+    // below peak 100 inside the first frame, one 10 ms request holds ~2500 across it, and the
     // threshold sits between the two.
     auto d = newDecoder();
     decode(*d, encode(1));
-    std::vector<int16_t> real(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(real.data(), kQuantum));
-    ASSERT_EQ(kQuantum, d->conceal(kQuantum));
-    std::vector<int16_t> concealed(kQuantum);
-    ASSERT_EQ(kQuantum, d->drain(concealed.data(), kQuantum));
+    std::vector<int16_t> real(kFrame);
+    ASSERT_EQ(kFrame, d->drain(real.data(), kFrame));
+    ASSERT_EQ(kFrame, d->conceal(kFrame));
+    std::vector<int16_t> concealed(kFrame);
+    ASSERT_EQ(kFrame, d->drain(concealed.data(), kFrame));
     int tailPeak = 0;
-    for (int i = kQuantum / 2; i < kQuantum; i++)
+    for (int i = kFrame / 2; i < kFrame; i++)
         tailPeak = std::max(tailPeak, std::abs(int(concealed[i])));
-    EXPECT_GT(tailPeak, 500) << "the second half of the concealed quantum had collapsed";
+    EXPECT_GT(tailPeak, 500) << "the second half of the concealed frame had collapsed";
 }
 
 TEST(SpeakerDecoder, ConcealWithNoDecoderHistoryIsSilence) {
@@ -179,16 +179,16 @@ TEST(SpeakerDecoder, ConcealWithNoDecoderHistoryIsSilence) {
     // history-less request with silence rather than an error is what makes writing straight into
     // the fifo safe. Measured, not assumed.
     auto d = newDecoder();
-    EXPECT_EQ(kQuantum, d->conceal(kQuantum));
-    std::vector<int16_t> out(kQuantum, 321);
-    ASSERT_EQ(kQuantum, d->drain(out.data(), kQuantum));
-    for (int i = 0; i < kQuantum; i++) ASSERT_EQ(0, out[i]) << "not silence at " << i;
+    EXPECT_EQ(kFrame, d->conceal(kFrame));
+    std::vector<int16_t> out(kFrame, 321);
+    ASSERT_EQ(kFrame, d->drain(out.data(), kFrame));
+    for (int i = 0; i < kFrame; i++) ASSERT_EQ(0, out[i]) << "not silence at " << i;
 }
 
 TEST(SpeakerDecoder, ResetDropsConcealedAudioToo) {
     auto d = newDecoder();
     decode(*d, encode(1));
-    ASSERT_GT(d->conceal(kQuantum), 0);
+    ASSERT_GT(d->conceal(kFrame), 0);
     d->reset();
     EXPECT_EQ(0, d->available());
 }

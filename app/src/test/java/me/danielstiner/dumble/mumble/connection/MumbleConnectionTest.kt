@@ -233,7 +233,7 @@ class MumbleConnectionTest {
     @Test fun speakingSessionsPopulateThenClearOnDisconnect() = runBlocking {
         lateinit var fake: FakeControlTransport
         val playout = FakePlayoutEngine()
-        // Unlike VoiceReceiverTest, nothing here drives the tick cadence by hand: a blocking
+        // Unlike VoiceReceiverTest, nothing here drives the call cadence by hand: a blocking
         // take() would wedge the playback thread on the very first fillQuantum() and every
         // disconnect() below would then wait out its 1 s join.
         playout.blockWhenEmpty = false
@@ -245,9 +245,9 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         // Scripted before the packet arrives: onTunneledAudio's admission notifies idleLock, which
-        // is what wakes a parked playback thread to pick this tick back up. Scripting it after
+        // is what wakes a parked playback thread to pick this call back up. Scripting it after
         // would race that wakeup and could leave it sitting unconsumed.
-        playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
+        playout.script(FakePlayoutEngine.Fill(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
@@ -292,7 +292,7 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         // Reach the receiver first, so there is a live playout and an open output to release.
-        playout.script(FakePlayoutEngine.Tick(producing = listOf(9)))
+        playout.script(FakePlayoutEngine.Fill(producing = listOf(9)))
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))

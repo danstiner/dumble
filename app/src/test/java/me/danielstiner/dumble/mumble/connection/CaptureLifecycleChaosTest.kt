@@ -75,7 +75,7 @@ class CaptureLifecycleChaosTest {
             enginePeak.updateAndGet { maxOf(it, engineLive.incrementAndGet()) }
         }
 
-        override fun pollFrame(out: ByteArray, meta: LongArray): Int {
+        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             pollsInFlight.incrementAndGet()
             try {
                 // Bounded like the real engine's kPollWaitMillis wait, not indefinite: a chaos storm
@@ -106,9 +106,9 @@ class CaptureLifecycleChaosTest {
                 violations += "handle $id: destroy called twice"
                 return
             }
-            // The original use-after-free: teardown freeing the engine while pollFrame was still
+            // The original use-after-free: teardown freeing the engine while pollPacket was still
             // executing on it. Checked at the exact moment of the call that would have raced it.
-            if (pollsInFlight.get() > 0) violations += "handle $id: destroyed while pollFrame was in flight"
+            if (pollsInFlight.get() > 0) violations += "handle $id: destroyed while pollPacket was in flight"
             engineLive.decrementAndGet()
         }
 

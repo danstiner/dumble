@@ -10,19 +10,19 @@ import java.util.Locale
  * since it is the only place that also sees ping. Nothing consumes this yet — it exists because the
  * planned stats pages are a stated destination and the shape is cheap to get right now.
  *
- * [underruns], [concealedTicks] and [droppedPackets] are counts within the current talk spurt,
+ * [underruns], [concealedGaps] and [droppedPackets] are counts within the current talk spurt,
  * not cumulative: a cumulative underrun count would report the silence we deliberately leave
  * between spurts as glitches. [underruns] is null when the spurt's baseline could not be read.
  *
- * [concealedTicks] is the more trustworthy of the two platform-adjacent numbers, because we
- * generate it: it counts gaps in a speaker's audio, whether the 10 ms tick carried real audio
- * short of a full quantum — the rest zero-padded, speech spliced with silence — or nothing from a
- * sender still mid-spurt, which is the same gap at full width. Counted once per gap, not per tick.
- * A platform underrun counter cannot distinguish either from our own idling.
+ * [concealedGaps] is the more trustworthy of the two platform-adjacent numbers, because we
+ * generate it: it counts gaps in a speaker's audio, whether the fill carried real audio short of
+ * its quantum — the rest zero-padded, speech spliced with silence — or nothing from a sender still
+ * mid-spurt, which is the same gap at full width. Counted once per gap, not per fill. A platform
+ * underrun counter cannot distinguish either from our own idling.
  *
- * [droppedPackets] is the other end of the pipeline. Where [concealedTicks] counts audio that
- * arrived too late to fill its tick, this counts audio the jitter queue threw away before it could
- * be decoded at all — past `kMaxQueuedPackets` or `kHighWaterSamples` — plus packets refused
+ * [droppedPackets] is the other end of the pipeline. Where [concealedGaps] counts audio that
+ * arrived too late to fill its quantum, this counts audio the jitter queue threw away before it
+ * could be decoded at all — past `kMaxQueuedPackets` or `kHighWaterSamples` — plus packets refused
  * because every speaker slot was taken, which have no queue to charge them to. It is the only
  * instrument that shows the 32-slot pool capping a 10 ms sender's backlog at 320 ms, so a nonzero
  * reading means the network delivered a burst faster than the queue's bounds allow. A payload the
@@ -33,7 +33,7 @@ import java.util.Locale
 data class PlayoutStats(
     val latencyMs: Double?,
     val underruns: Int?,
-    val concealedTicks: Int,
+    val concealedGaps: Int,
     val droppedPackets: Int,
     val bufferedSamples: Map<Int, Int>,
 ) {
@@ -50,6 +50,6 @@ data class PlayoutStats(
      */
     fun summary(): String =
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +
-            "underruns=${underruns ?: "n/a"} concealed=$concealedTicks dropped=$droppedPackets " +
+            "underruns=${underruns ?: "n/a"} concealed=$concealedGaps dropped=$droppedPackets " +
             "depths=$bufferedSamples"
 }

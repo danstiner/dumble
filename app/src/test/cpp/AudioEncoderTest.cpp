@@ -15,11 +15,11 @@ double roundTripToneEnergy(int bitrate, int* bytesOut) {
     EXPECT_TRUE(enc);
     if (!enc) return 0;
 
-    const std::vector<int16_t> pcm = dumble::testtone::tone(dumble::kTxFrameSamples);
+    const std::vector<int16_t> pcm = dumble::testtone::tone(dumble::kTxPacketSamples);
 
     std::vector<uint8_t> packet(4000);
     const int bytes =
-        enc->encode(pcm.data(), dumble::kTxFrameSamples, packet.data(), int(packet.size()));
+        enc->encode(pcm.data(), dumble::kTxPacketSamples, packet.data(), int(packet.size()));
     *bytesOut = bytes;
     EXPECT_GT(bytes, 0);
     if (bytes <= 0) return 0;
@@ -27,13 +27,13 @@ double roundTripToneEnergy(int bitrate, int* bytesOut) {
     int err = OPUS_OK;
     OpusDecoder* dec = opus_decoder_create(dumble::kSampleRate, dumble::kChannels, &err);
     EXPECT_EQ(OPUS_OK, err);
-    std::vector<int16_t> back(dumble::kTxFrameSamples);
+    std::vector<int16_t> back(dumble::kTxPacketSamples);
     const int samples =
-        opus_decode(dec, packet.data(), bytes, back.data(), dumble::kTxFrameSamples, 0);
+        opus_decode(dec, packet.data(), bytes, back.data(), dumble::kTxPacketSamples, 0);
     opus_decoder_destroy(dec);
-    EXPECT_EQ(dumble::kTxFrameSamples, samples);
+    EXPECT_EQ(dumble::kTxPacketSamples, samples);
 
-    return dumble::testtone::meanEnergy(back.data(), dumble::kTxFrameSamples);
+    return dumble::testtone::meanEnergy(back.data(), dumble::kTxPacketSamples);
 }
 
 }  // namespace

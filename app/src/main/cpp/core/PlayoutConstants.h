@@ -8,7 +8,7 @@ namespace dumble::playout {
 
 // Concurrent speakers we mix — the intelligibility bound itself: past about eight overlapping
 // voices nothing is intelligible anyway. A slot is also held by a speaker draining its last
-// packets (kRetireIdleTicks) and by one stalled below the prebuffer gate (kStallIdleTicks, ~1 s),
+// packets (kRetireIdlePolls) and by one stalled below the prebuffer gate (kStallIdlePolls, ~1 s),
 // so a channel with rapid turn-taking can hold more slots than it has talkers and briefly park a
 // real speaker at kOfferSpeakerCap — accepted: the held slots retire on their own inside a
 // second, and a mix that crowded is already unintelligible.
@@ -20,7 +20,7 @@ constexpr int kMaxSpeakers = 8;
 
 // 120 ms at 48 kHz, the largest legal Opus packet, so a malformed or unusually long packet cannot
 // overrun the decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and
-// one in bytes. Packet and not frame — the largest single Opus frame is the 20 ms kTxFrameSamples,
+// one in bytes. Packet and not frame — the largest single Opus frame is the 20 ms kTxPacketSamples,
 // and 40 ms and up are multi-frame packets.
 constexpr int kMaxPacketSamples = 5760;
 
@@ -38,29 +38,31 @@ constexpr int kPrebufferSamples = 2880;
 // 60 ms one.
 constexpr int kHighWaterSamples = 28800;
 
-// Idle ticks after a speaker's queue has drained before its decoder and pool are released,
-// matching the desktop client — AudioOutputSpeech retires on `iMissCount > 10`, roughly 100 ms.
-constexpr int kRetireIdleTicks = 10;
+// Polls after a speaker's queue has drained before its decoder and pool are released. A poll is a
+// fillQuantum call that produced nothing, so the loop parks rather than writing and these outrun real
+// time — this is a ceiling on fills, not a duration. Matches the desktop client, which retires on
+// AudioOutputSpeech's `iMissCount > 10`.
+constexpr int kRetireIdlePolls = 10;
 
-// Ticks of concealment a speaker gets when its queue starves mid-spurt, before we give up on the
-// spurt and let it re-anchor. A concealed tick counts as production, so unlike idle ticks these
-// are paced by AudioTrack.write — a real ~100 ms, matching kRetireIdleTicks and the desktop
-// client's AudioOutputSpeech miss count.
+// Quanta of concealment a speaker gets when its queue starves mid-spurt, before we give up on the
+// spurt and let it re-anchor. Concealment counts as production, so each of these is written to the
+// output and paced by it — quanta, not polls, and therefore a real ~100 ms at today's quantum
+// rather than a count of fills. Matches the desktop client's AudioOutputSpeech miss count.
 //
 // libopus fades its concealment to near-silence over ~60 ms (see SpeakerDecoder::conceal),
 // so the number is really how long the speaker's playout anchor is held open: past ~100 ms the
 // break has been heard as one, and re-anchoring with a fresh prebuffer beats splicing across it.
-constexpr int kConcealTicks = 10;
+constexpr int kConcealQuanta = 10;
 
 // Backstop for a spurt that stalled below kPrebufferSamples and never got a terminator — a sender
 // that died mid-spurt. It produces nothing and never drains, so the short window can never apply
 // to it and the slot would be held for the life of the connection.
 //
-// ~1 s, and a ceiling rather than a period, since idle ticks outpace real time. Sized from what
-// the fragment is worth, not from how long a link can stall — the most this window can protect is
-// the sub-60 ms of audio sitting below the prebuffer gate, and audio spliced in a second after it
-// was spoken is heard as a click, not as speech.
-constexpr int kStallIdleTicks = 100;
+// ~1 s at best, and a ceiling rather than a period: these are polls, which outrun real time. Sized
+// from what the fragment is worth, not from how long a link can stall — the most this window can
+// protect is the sub-60 ms of audio sitting below the prebuffer gate, and audio spliced in a second
+// after it was spoken is heard as a click, not as speech.
+constexpr int kStallIdlePolls = 100;
 
 // Packets a speaker's queue can hold at once. 32 is 320 ms from a 10 ms sender and 1.9 s from a
 // 60 ms one, so kHighWaterSamples binds first at every packet duration of 20 ms and above.

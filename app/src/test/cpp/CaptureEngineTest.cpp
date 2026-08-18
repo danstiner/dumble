@@ -15,15 +15,15 @@ std::vector<int16_t> tone(int n) {
 }  // namespace
 
 TEST(CaptureEngine, FrameNumberAdvancesByTwoPerTwentyMillisecondPacket) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     e->setGateOpen(true);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
     for (int packet = 0; packet < 3; packet++) {
         e->onPcm(pcm.data(), pcm.size());
-        ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+        ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
         EXPECT_EQ(uint64_t(packet * 2), fn);
     }
 }
@@ -31,48 +31,48 @@ TEST(CaptureEngine, FrameNumberAdvancesByTwoPerTwentyMillisecondPacket) {
 TEST(CaptureEngine, FrameNumberSurvivesAGateCycle) {
     // The Mumble client never resets iFrameCounter on key-up or key-down; resetting would hand
     // a receiving client's Speex jitter buffer a backward timestamp jump on every re-press.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
 
     e->setGateOpen(true);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(0u, fn);
     e->setGateOpen(false);
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);  // terminator
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);  // terminator
     EXPECT_EQ(2u, fn);
 
     e->setGateOpen(true);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(4u, fn) << "frame_number restarted across a PTT cycle";
 }
 
 TEST(CaptureEngine, ClosingTheGateEmitsExactlyOneTerminator) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
     e->setGateOpen(true);
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(0u, flags & dumble::kFlagTerminator);
 
     e->setGateOpen(false);
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(dumble::kFlagTerminator, flags & dumble::kFlagTerminator);
 
     // The gate is closed and the terminator is spent: nothing more is produced.
     e->setWaitMillisForTest(1);
-    EXPECT_EQ(0, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(0, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 }
 
 TEST(CaptureEngine, ASpurtShorterThanOneFrameStillTerminates) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -80,35 +80,35 @@ TEST(CaptureEngine, ASpurtShorterThanOneFrameStillTerminates) {
     auto pcm = tone(100);
     e->onPcm(pcm.data(), pcm.size());
     e->setGateOpen(false);
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(dumble::kFlagTerminator, flags & dumble::kFlagTerminator);
 }
 
 TEST(CaptureEngine, AudioDeliveredBeforeThePressIsNeverSentAsPreRoll) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples * 3);
+    auto pcm = tone(dumble::kTxPacketSamples * 3);
     e->onPcm(pcm.data(), pcm.size());          // delivered while the gate was closed
     e->setGateOpen(true);
     e->setWaitMillisForTest(1);
-    EXPECT_EQ(0, e->pollFrame(out.data(), int(out.size()), &fn, &flags))
+    EXPECT_EQ(0, e->pollPacket(out.data(), int(out.size()), &fn, &flags))
         << "pre-press audio was transmitted";
 }
 
 TEST(CaptureEngine, ShutdownAndStreamDownAreDistinguishable) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
     e->setWaitMillisForTest(1);
 
     e->setStreamDown(true);
-    EXPECT_EQ(dumble::kPollRetry, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollRetry, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 
     e->requestShutdown();
-    EXPECT_EQ(dumble::kPollShutdown, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollShutdown, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 }
 
 TEST(CaptureEngine, StreamUnavailableIsDistinctFromRetryAndOutranksIt) {
@@ -116,26 +116,26 @@ TEST(CaptureEngine, StreamUnavailableIsDistinctFromRetryAndOutranksIt) {
     // former was already true from the disconnect that started the retry sequence). A caller
     // must see kPollUnavailable, not kPollRetry, or it would poll forever for a stream that is
     // never coming back.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
     e->setWaitMillisForTest(1);
 
     e->setStreamDown(true);
-    EXPECT_EQ(dumble::kPollRetry, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollRetry, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 
     e->setStreamUnavailable();
-    EXPECT_EQ(dumble::kPollUnavailable, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollUnavailable, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
     // Not a one-shot: every subsequent poll must keep reporting it, since there is no path back.
-    EXPECT_EQ(dumble::kPollUnavailable, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollUnavailable, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 }
 
 TEST(CaptureEngine, ShutdownOutranksStreamUnavailable) {
     // requestShutdown() (an explicit stop()) must win even if the stream had already been
     // declared unrecoverable — kPollShutdown, not kPollUnavailable, is what tells the pump loop
     // to exit rather than surface a "transmit unavailable" state after the user hung up anyway.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -143,7 +143,7 @@ TEST(CaptureEngine, ShutdownOutranksStreamUnavailable) {
 
     e->setStreamUnavailable();
     e->requestShutdown();
-    EXPECT_EQ(dumble::kPollShutdown, e->pollFrame(out.data(), int(out.size()), &fn, &flags));
+    EXPECT_EQ(dumble::kPollShutdown, e->pollPacket(out.data(), int(out.size()), &fn, &flags));
 }
 
 TEST(CaptureEngine, ACloseThenReopenWithinOnePollIntervalMergesTheSpurts) {
@@ -153,27 +153,27 @@ TEST(CaptureEngine, ACloseThenReopenWithinOnePollIntervalMergesTheSpurts) {
     // release-and-press inside one frame -- continuous audio, no stream restart -- and a
     // terminator boundary here would need the close-position bookkeeping this design deleted.
     // The terminator arrives once, at the true end.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
 
     e->setGateOpen(true);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);  // press 1's audio
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);  // press 1's audio
     EXPECT_EQ(0u, flags & dumble::kFlagTerminator);
 
     e->setGateOpen(false);
     e->setGateOpen(true);              // reopened before the pump ever polled the close
     e->onPcm(pcm.data(), pcm.size());  // press 2's audio joins the same transmission
 
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(0u, flags & dumble::kFlagTerminator)
         << "the merged transmission was interrupted by a terminator";
 
     e->setGateOpen(false);
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     EXPECT_EQ(dumble::kFlagTerminator, flags & dumble::kFlagTerminator)
         << "the merged transmission never terminated";
 }
@@ -187,7 +187,7 @@ TEST(CaptureEngine, DoubleCloseWithNoInterveningPollNeverEncodesGateClosedAudio)
     // reach the wire, unconditionally, regardless of gate-cycle count or poll timing -- a
     // privacy violation, not a glitch. The gate in onPcm() enforces it at the source: gate-closed
     // audio is never captured at all.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
@@ -210,14 +210,14 @@ TEST(CaptureEngine, DoubleCloseWithNoInterveningPollNeverEncodesGateClosedAudio)
     OpusDecoder* dec = opus_decoder_create(dumble::kSampleRate, dumble::kChannels, &err);
     ASSERT_EQ(OPUS_OK, err);
 
-    std::vector<int16_t> pcm(dumble::kTxFrameSamples);
+    std::vector<int16_t> pcm(dumble::kTxPacketSamples);
     int packets = 0;
     for (int i = 0; i < 4; i++) {
-        const int bytes = e->pollFrame(out.data(), int(out.size()), &fn, &flags);
+        const int bytes = e->pollPacket(out.data(), int(out.size()), &fn, &flags);
         if (bytes <= 0) break;
         packets++;
         const int samples =
-            opus_decode(dec, out.data(), bytes, pcm.data(), dumble::kTxFrameSamples, 0);
+            opus_decode(dec, out.data(), bytes, pcm.data(), dumble::kTxPacketSamples, 0);
         ASSERT_GT(samples, 0);
         for (int16_t s : pcm) {
             ASSERT_TRUE(s > -10000 && s < 10000)
@@ -234,17 +234,17 @@ TEST(CaptureEngine, FrameNumberReflectsElapsedTimeAcrossAClosedGateGap) {
     // is closed hands a resumed talkspurt a frame_number implying no time passed, which schedules
     // it in the past of a still-alive receive-side jitter buffer (retires after ~100ms) and gets
     // it dropped as late: the opening audio of a quick re-press silently disappears at the far end.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
 
     e->setGateOpen(true);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     e->setGateOpen(false);
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);  // terminator
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);  // terminator
     const uint64_t terminatorFn = fn;
 
     // A full second elapses while the gate is closed -- the way a live mic keeps delivering
@@ -255,7 +255,7 @@ TEST(CaptureEngine, FrameNumberReflectsElapsedTimeAcrossAClosedGateGap) {
 
     e->setGateOpen(true);
     e->onPcm(pcm.data(), pcm.size());
-    ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+    ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
 
     // One second is 100 units of the 10ms frame_number clock. A counter that only advances on
     // emitted packets shows a gap of exactly frameNumberStep_ (2) here instead.
@@ -264,16 +264,16 @@ TEST(CaptureEngine, FrameNumberReflectsElapsedTimeAcrossAClosedGateGap) {
 }
 
 TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
     auto shortPcm = tone(100);
 
     std::vector<uint64_t> seen;
     auto poll = [&]() {
-        ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+        ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
         seen.push_back(fn);
     };
 
@@ -306,7 +306,7 @@ TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
     // sequence: a counter that only advances on emitted packets satisfies strict monotonicity
     // trivially (every step is exactly frameNumberStep_) while masking exactly the bug this round
     // fixes.
-    const uint64_t step = dumble::kTxFrameSamples / dumble::kFrameNumberUnitSamples;
+    const uint64_t step = dumble::kTxPacketSamples / dumble::kFrameSamples;
     bool sawWallClockJump = false;
     for (size_t i = 1; i < seen.size(); i++) {
         if (seen[i] - seen[i - 1] > step) sawWallClockJump = true;
@@ -321,13 +321,13 @@ TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
 // buffered — but unguarded it would owe a second, empty terminator after the real one was spent.
 // Same privacy assertion as the double-close test, one gate cycle short, kept as regression proof.
 TEST(CaptureEngine, ARedundantCloseNeverFlushesGateClosedAudio) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
 
-    auto spurtTone = tone(dumble::kTxFrameSamples);
+    auto spurtTone = tone(dumble::kTxPacketSamples);
     // The same waveform far louder, so a leak is unmistakable in the decode.
     std::vector<int16_t> closedGateAudio(500);
     for (int i = 0; i < 500; i++) closedGateAudio[i] = int16_t(20000 * ((i / 20) % 2 ? 1 : -1));
@@ -341,12 +341,12 @@ TEST(CaptureEngine, ARedundantCloseNeverFlushesGateClosedAudio) {
     int err = OPUS_OK;
     OpusDecoder* dec = opus_decoder_create(dumble::kSampleRate, dumble::kChannels, &err);
     ASSERT_EQ(OPUS_OK, err);
-    std::vector<int16_t> pcm(dumble::kTxFrameSamples);
+    std::vector<int16_t> pcm(dumble::kTxPacketSamples);
     for (int i = 0; i < 4; i++) {
-        const int bytes = e->pollFrame(out.data(), int(out.size()), &fn, &flags);
+        const int bytes = e->pollPacket(out.data(), int(out.size()), &fn, &flags);
         if (bytes <= 0) break;
         const int samples =
-            opus_decode(dec, out.data(), bytes, pcm.data(), dumble::kTxFrameSamples, 0);
+            opus_decode(dec, out.data(), bytes, pcm.data(), dumble::kTxPacketSamples, 0);
         ASSERT_GT(samples, 0);
         for (int16_t s : pcm) {
             ASSERT_TRUE(s > -10000 && s < 10000)
@@ -361,18 +361,18 @@ TEST(CaptureEngine, ARedundantCloseNeverFlushesGateClosedAudio) {
 // openIdx) wraps enormous, stamping the next packet with a garbage frame number. Milder than a
 // privacy breach and fixed by the same guard.
 TEST(CaptureEngine, ARedundantOpenDoesNotDisturbTheSpurtAlreadyInFlight) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
 
     e->setGateOpen(true);
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
     e->onPcm(pcm.data(), pcm.size());   // a full frame, captured and owed to the wire
     e->setGateOpen(true);               // redundant press before the pump ever polled
 
-    EXPECT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0)
+    EXPECT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0)
         << "a redundant open discarded audio already captured for this spurt";
     EXPECT_EQ(0u, fn) << "a redundant open re-anchored the spurt and corrupted its frame number";
 }
@@ -380,19 +380,19 @@ TEST(CaptureEngine, ARedundantOpenDoesNotDisturbTheSpurtAlreadyInFlight) {
 // The engine has no meaningful state without an encoder, so a failed encoder must fail the whole
 // construction — not leave a live engine whose every poll silently drops the frame it just built.
 TEST(CaptureEngine, CreateFailsWhenTheEncoderCannotBeBuilt) {
-    EXPECT_EQ(nullptr, CaptureEngine::create(44100, dumble::kTxFrameSamples, 40000));
+    EXPECT_EQ(nullptr, CaptureEngine::create(44100, dumble::kTxPacketSamples, 40000));
 }
 
 TEST(CaptureEngine, RecordsEncodeTiming) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     e->setGateOpen(true);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
-    auto pcm = tone(dumble::kTxFrameSamples);
+    auto pcm = tone(dumble::kTxPacketSamples);
     for (int i = 0; i < 10; i++) {
         e->onPcm(pcm.data(), pcm.size());
-        ASSERT_GT(e->pollFrame(out.data(), int(out.size()), &fn, &flags), 0);
+        ASSERT_GT(e->pollPacket(out.data(), int(out.size()), &fn, &flags), 0);
     }
     // Mean over max is the pair that matters: a mean well under the 20 ms packet budget with a
     // max near it is the signature of an encoder that mostly keeps up and occasionally does not.
@@ -401,7 +401,7 @@ TEST(CaptureEngine, RecordsEncodeTiming) {
 }
 
 TEST(CaptureEngine, EncodeTimingStaysZeroUntilSomethingIsEncoded) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxFrameSamples, 40000);
+    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000);
     ASSERT_TRUE(e);
     // Division by the count is the trap here — a mean read before the first encode must not
     // divide by zero.

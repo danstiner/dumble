@@ -55,9 +55,9 @@ void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminat
         while (samples_ > kHighWaterSamples) dropOldest();
     }
     // Open the playout gate immediately when a spurt terminates so whatever we have queued plays.
-    // endTick will close the gate again once the queue drains. Clearing emptyAtPop_ is what lets
-    // the latch survive an endTick already in flight: the engine may have seen this queue empty at
-    // its last pop, and a terminator landing before its endTick says the spurt is complete — the
+    // endFill will close the gate again once the queue drains. Clearing emptyAtPop_ is what lets
+    // the latch survive an endFill already in flight: the engine may have seen this queue empty at
+    // its last pop, and a terminator landing before its endFill says the spurt is complete — the
     // re-arm must not close the gate over it, or a short spurt below the prebuffer never plays.
     if (terminator) {
         gateOpen_ = true;
@@ -99,7 +99,7 @@ void PacketQueue::reset() {
     droppedPackets_ = 0;
 }
 
-void PacketQueue::endTick(bool decoderProduced) {
+void PacketQueue::endFill(bool decoderProduced) {
     if (!decoderProduced && emptyAtPop_) {
         gateOpen_ = false;
         terminated_ = false;

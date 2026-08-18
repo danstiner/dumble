@@ -22,13 +22,13 @@ object NativeCapture {
     const val POLL_BUFFER_TOO_SMALL = -5
     const val FLAG_TERMINATOR = 1L
 
-    /** Positions in [pollFrame]'s `meta`. Kotlin has no out-parameter for a primitive, so the two
+    /** Positions in [pollPacket]'s `meta`. Kotlin has no out-parameter for a primitive, so the two
      *  values a packet carries besides its bytes come back through an array — named here rather
      *  than left as bare subscripts at the call site. */
     const val META_FRAME_NUMBER = 0
     const val META_FLAGS = 1
 
-    /** Smallest [pollFrame] `out` array native will accept: libopus's own ceiling for a
+    /** Smallest [pollPacket] `out` array native will accept: libopus's own ceiling for a
      *  single-frame packet. A 32 kb/s packet is nearer 80 bytes; this is the worst case, not the
      *  expected one. */
     const val MAX_PACKET_BYTES = 1276
@@ -57,7 +57,7 @@ object NativeCapture {
      * [POLL_BUFFER_TOO_SMALL] rather than encoding into less room than Opus may ask for.
      * `meta[0]` is `frame_number`, `meta[1]` is flags.
      */
-    external fun pollFrame(handle: Long, out: ByteArray, meta: LongArray): Int
+    external fun pollPacket(handle: Long, out: ByteArray, meta: LongArray): Int
 
     // Instrumentation counters, each an independent relaxed atomic — reading them together was
     // never a consistent snapshot, so they are read one at a time rather than packed into a
@@ -68,7 +68,7 @@ object NativeCapture {
     external fun skippedSamples(handle: Long): Long
     external fun encodedPackets(handle: Long): Long
     /** Non-zero means libopus is failing; without it a broken encoder and an idle gate both
-     *  look like [pollFrame] returning 0. */
+     *  look like [pollPacket] returning 0. */
     external fun encodeErrors(handle: Long): Long
 
     /** Microseconds per encode, against a 20 ms packet budget. Both are 0 before the first one. */

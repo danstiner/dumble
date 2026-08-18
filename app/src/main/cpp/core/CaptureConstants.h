@@ -11,13 +11,18 @@ namespace dumble {
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 1;
 
-// 20 ms. Upstream Mumble's own default (iFramesPerPacket = 2), and the largest single Opus frame
-// — 40 and 60 ms are multi-frame packets. Below 20 ms SILK loses coding efficiency and per-packet
-// overhead doubles.
-constexpr int kTxFrameSamples = 960;
+// 10 ms. The one unit of audio in this codebase, and upstream Mumble's: AudioInput's
+// `iFrameSize = SAMPLE_RATE / 100`, which is also the unit MumbleUDP.Audio.frame_number counts in.
+// Durations are expressed as counts of these rather than as their own named spans.
+constexpr int kFrameSamples = kSampleRate / 100;   // 480
 
-// 10 ms, the unit MumbleUDP.Audio.frame_number is counted in.
-constexpr int kFrameNumberUnitSamples = kSampleRate / 100;   // 480
+// Mumble's iAudioFrames — "number of 10ms audio frames per packet". 2 is upstream's default and
+// ours: below 20 ms SILK loses coding efficiency and per-packet overhead doubles, and 40 and 60 ms
+// packets are the same two-frame arithmetic with a larger count.
+constexpr int kFramesPerPacket = 2;
+
+// 20 ms, and the largest single Opus frame libopus will encode in one call.
+constexpr int kTxPacketSamples = kFrameSamples * kFramesPerPacket;   // 960
 
 // 341 ms. Power of two so index wrapping is a mask.
 constexpr uint32_t kRingCapacitySamples = 16384;
@@ -29,7 +34,7 @@ constexpr uint32_t kHighWaterSamples = 4800;                 // 100 ms
 // callback stays free of anything that could block — so this interval alone decides how late a
 // finished frame is noticed. A quarter of a packet keeps that under 5 ms against the 20 ms the
 // packet spends filling, at 200 mostly-empty wakes a second while transmitting.
-constexpr int kPollWaitMillis = kTxFrameSamples / (kSampleRate / 1000) / 4;   // 5 ms
+constexpr int kPollWaitMillis = kTxPacketSamples / (kSampleRate / 1000) / 4;   // 5 ms
 
 // The largest packet opus_encode can return for one frame: libopus caps its own output there
 // (`max_data_bytes = IMIN(orig_max_data_bytes, 1276)`, opus_encoder.c), and opus.h documents 1276
@@ -37,7 +42,7 @@ constexpr int kPollWaitMillis = kTxFrameSamples / (kSampleRate / 1000) / 4;   //
 // ceiling and not an estimate — a 32 kb/s packet is nearer 80 bytes.
 constexpr int kMaxPacketBytes = 1276;
 
-// pollFrame return codes. Non-negative values are byte counts.
+// pollPacket return codes. Non-negative values are byte counts.
 constexpr int kPollRetry = -1;        // stream is down, native side is reopening — keep polling
 constexpr int kPollShutdown = -2;     // stop() was called — exit the loop
 // The platform adapter exhausted its reopen attempts. Distinct from kPollRetry — a caller that

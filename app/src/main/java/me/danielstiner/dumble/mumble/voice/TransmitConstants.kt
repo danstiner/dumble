@@ -9,7 +9,7 @@ package me.danielstiner.dumble.mumble.voice
  *  floor of the desktop client's own AUDIO-preset band. Network-aware tiers are future work. */
 const val TRANSMIT_BITRATE = 32_000
 
-/** 20 ms packets. Pinned natively by CaptureConstants.h `kTxFrameSamples`; mirrored here only for
+/** 20 ms packets. Pinned natively by CaptureConstants.h `kTxPacketSamples`; mirrored here only for
  *  the accounting below, which is why it is private and never reaches the encoder. */
 private const val PACKETS_PER_SECOND = 50
 
