@@ -63,8 +63,11 @@ Playout is the inverse pipeline: Mumble UDP-tunnel packets in, mixed PCM to `Aud
 split across the same three layers as capture.
 
 **Native engine** (`core/PlayoutEngine.{h,cpp}`), platform-free. Its only clock is the tick — one
-`fillQuantum` call, which is 10 ms of audio as today's playback loop drives it — so every
-`*IdleTicks` bound is a count of calls, not a span of time. It owns
+`fillQuantum` call, which today's playback loop drives at 10 ms quanta. Whether a count of ticks is
+also a span of time depends on what those ticks did, and the constants divide along that line: a
+tick that produced audio was paced by the output write, so `kConcealTicks` really is about 100 ms,
+while ticks that produced nothing outrun real time — an arriving packet wakes the loop — which is
+why the `*IdleTicks` bounds are ceilings on calls rather than periods. It owns
 one `PacketQueue` and one `SpeakerDecoder` per sender, built up front by `create()`: a queue is
 touched only under the mutex, a decoder only from the playback thread with the mutex released.
 `offer()`, on the reader thread, judges the payload before the mutex and answers a status code; no
