@@ -162,6 +162,7 @@ protobuf {
 tasks.register("verifyShippedGroups") {
     // Without this the task finds no files and passes vacuously.
     dependsOn("stripReleaseDebugSymbols")
+    dependsOn("mergeReleaseAssets")
     val groups = configurations.named("releaseRuntimeClasspath").flatMap { conf ->
         conf.incoming.artifacts.resolvedArtifacts.map { artifacts ->
             artifacts.mapNotNull {
@@ -184,6 +185,12 @@ tasks.register("verifyShippedGroups") {
     val testOnlySubmodules = layout.projectDirectory.file("src/test/resources/test-only-submodules.txt").asFile
     val nativeLibsDir = layout.buildDirectory.dir("intermediates/stripped_native_libs/release")
     val nativeManifest = layout.projectDirectory.file("src/test/resources/shipped-native-libs.txt").asFile
+    // The Silero weight blob ships from src/main/assets, invisible to both the group diff and the
+    // submodule diff — it is neither a Maven artifact nor vendored source. Diff the merged assets
+    // output for the same reason the native-lib set is diffed rather than trusting the source tree:
+    // a future AAR could contribute an asset nobody reviewed.
+    val assetsDir = layout.buildDirectory.dir("intermediates/assets/release/mergeReleaseAssets")
+    val assetsManifest = layout.projectDirectory.file("src/test/resources/shipped-assets.txt").asFile
 
     inputs.property("groups", groups)
     inputs.file(rootLicense)
@@ -229,6 +236,20 @@ tasks.register("verifyShippedGroups") {
             nativeManifest.writeText(expectedSos)
             error("shipped-native-libs.txt was stale and has been rewritten — review the diff, " +
                 "attribute any new native library in Attribution.kt, and commit.")
+        }
+        // Recorded by path, not basename: unlike the .so set above (where ABI directories legitimately
+        // repeat names), an AAR contributing an asset whose basename collides with an existing one
+        // must still show up in the diff.
+        val assetsRoot = assetsDir.get().asFile
+        val assets = assetsRoot.walkTopDown()
+            .filter { it.isFile }
+            .map { it.relativeTo(assetsRoot).path }
+            .toSortedSet()
+        val expectedAssets = assets.joinToString("\n") + "\n"
+        if (!assetsManifest.exists() || assetsManifest.readText() != expectedAssets) {
+            assetsManifest.writeText(expectedAssets)
+            error("shipped-assets.txt was stale and has been rewritten — review the diff, " +
+                "attribute any new asset in Attribution.kt, and commit.")
         }
     }
 }
