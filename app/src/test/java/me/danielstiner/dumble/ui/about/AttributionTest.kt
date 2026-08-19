@@ -106,6 +106,24 @@ class AttributionTest {
     }
 
     @Test
+    fun everyShippedAssetIsAttributed() {
+        val manifest = checkNotNull(
+            javaClass.classLoader!!.getResourceAsStream("shipped-assets.txt"),
+        ) { "shipped-assets.txt missing — run ./gradlew verifyShippedGroups" }
+        val assets = manifest.bufferedReader().readLines().filter { it.isNotBlank() }
+        // An emptied manifest would otherwise skip the loop and pass green while every asset ships
+        // unattributed — same failure mode the native-lib manifest guards against.
+        assertTrue("shipped-assets.txt is empty", assets.isNotEmpty())
+        val described = ALL_ATTRIBUTIONS.map { it.description }
+        for (asset in assets) {
+            assertTrue(
+                "$asset is packaged but nothing in Attribution.kt mentions it",
+                described.any { it.contains(asset, ignoreCase = true) },
+            )
+        }
+    }
+
+    @Test
     fun everyShippedSubmoduleIsAttributed() {
         val manifest = checkNotNull(
             javaClass.classLoader!!.getResourceAsStream("shipped-submodules.txt"),

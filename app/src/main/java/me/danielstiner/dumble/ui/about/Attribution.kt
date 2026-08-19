@@ -82,6 +82,18 @@ val LIBCXX = Attribution(
     license = License.APACHE_2_0_LLVM,
 )
 
+/**
+ * Silero VAD ships as a weight blob (assets/silero_vad_weights.bin) rather than a library, so it
+ * has no Maven coordinate and no submodule — neither the group diff nor the submodule diff can
+ * see it. The shipped-assets manifest is what does. The blob is the model's parameters with the
+ * ONNX container stripped, which is the same MIT-licensed work in a different container.
+ */
+val SILERO_VAD = Attribution(
+    groupPrefix = "",
+    description = "Silero VAD — voice activity detection model weights (silero_vad_weights.bin, from https://github.com/snakers4/silero-vad )",
+    license = License.MIT,
+)
+
 /** The attribution covering [group], preferring the most specific prefix, or null if unattributed. */
 fun attributionFor(group: String): Attribution? =
     ATTRIBUTIONS
@@ -92,7 +104,7 @@ fun attributionFor(group: String): Attribution? =
  * Maven-discovered and vendored alike. One list so a new vendored component is added in one place
  * rather than in the display path and each manifest test separately.
  */
-val ALL_ATTRIBUTIONS: List<Attribution> = ATTRIBUTIONS + MUMBLE_SCHEMA + LIBOPUS + LIBCXX
+val ALL_ATTRIBUTIONS: List<Attribution> = ATTRIBUTIONS + MUMBLE_SCHEMA + LIBOPUS + LIBCXX + SILERO_VAD
 
 /** Components covered by [license], for display grouped by license. */
 fun attributionsFor(license: License): List<Attribution> =

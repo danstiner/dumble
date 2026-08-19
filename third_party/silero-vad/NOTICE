@@ -1,0 +1,17 @@
+Silero VAD
+==========
+
+File:    silero_vad_16k_op15.onnx  (1,289,603 bytes)
+Source:  https://github.com/snakers4/silero-vad
+Path:    src/silero_vad/data/silero_vad_16k_op15.onnx
+Commit:  bfdc0193023f121ea5b3cc7b176dbed570a68a59  ("add v6.2 model", 2025-11-06)
+sha256:  7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49
+License: MIT
+
+Vendored rather than fetched at build time so the host tests and the APK build need no
+network, and so the derived weight blob shipped in app/src/main/assets is reproducible from
+a file in this repository.
+
+The .onnx itself is NOT shipped in the APK. What ships is silero_vad_weights.bin, produced
+from this file by tools/silero/extract_weights.py — the same 309,633 parameters with the
+ONNX container removed. Both are the same MIT-licensed work.

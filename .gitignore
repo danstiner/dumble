@@ -23,5 +23,8 @@ local.properties
 # Signed release artifacts from Android Studio's bundle wizard
 /app/release/
 
+__pycache__/
+*.pyc
+
 # Superpowers skill state; a bit too detailed to bother tracking in source control
 /docs/superpowers/

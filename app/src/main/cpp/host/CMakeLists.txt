@@ -35,6 +35,13 @@ target_link_libraries(dumble_core PUBLIC opus)
 enable_testing()
 file(GLOB CORE_TESTS CONFIGURE_DEPENDS ${REPO_ROOT}/app/src/test/cpp/*.cpp)
 add_executable(dumble_core_tests ${CORE_TESTS})
+# The detector's weights and its reference traces are files, not synthetic fixtures, and ctest
+# runs from the build tree — so the tests are told where the repo is rather than guessing from
+# a relative path.
+target_compile_definitions(dumble_core_tests PRIVATE
+    DUMBLE_ASSETS_DIR="${REPO_ROOT}/app/src/main/assets"
+    DUMBLE_TEST_DATA_DIR="${REPO_ROOT}/app/src/test/resources"
+    DUMBLE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 target_link_libraries(dumble_core_tests dumble_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(dumble_core_tests)
