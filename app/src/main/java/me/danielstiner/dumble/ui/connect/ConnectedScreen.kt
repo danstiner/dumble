@@ -54,7 +54,10 @@ fun ConnectedScreen(
     audioRoutes: AudioRoutes,
     selectedSession: Int?,
     selectedPlayoutTargetMillis: Int?,
+    selectedTcpPingMillis: Float?,
+    selectedUdpPingMillis: Float?,
     onUserClick: (Int) -> Unit,
+    onRefreshUserStats: (Int) -> Unit,
     onDismissUserDetail: () -> Unit,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
@@ -170,9 +173,12 @@ fun ConnectedScreen(
     }
     selectedSession?.let { channelTree.users[it] }?.let { u ->
         UserDetailSheet(
+            session = u.session,
             name = u.name,
             playoutTargetMillis = selectedPlayoutTargetMillis,
-            isSelf = u.session == sessionId,
+            tcpPingMillis = selectedTcpPingMillis,
+            udpPingMillis = selectedUdpPingMillis,
+            onRefresh = onRefreshUserStats,
             onDismiss = onDismissUserDetail,
         )
     }

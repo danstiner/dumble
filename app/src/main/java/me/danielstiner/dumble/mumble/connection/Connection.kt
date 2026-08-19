@@ -7,6 +7,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
+import me.danielstiner.dumble.mumble.protocol.UserPing
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 
@@ -30,6 +31,13 @@ interface Connection {
 
     /** The receive path's last second of measurement; null before the first one lands. */
     val playoutStats: StateFlow<PlayoutStats?>
+
+    /**
+     * The last per-user ping the server answered with, or null before any. One slot rather than a
+     * map: only one user's stats are ever asked for at a time, and the record names its own
+     * session so a late reply cannot be read under the wrong name.
+     */
+    val userPing: StateFlow<UserPing?>
 
     /**
      * What the platform offers for call audio and what it is using. Cleared to empty by connect()
@@ -77,4 +85,10 @@ interface Connection {
      * the control never shows a route the platform has not confirmed.
      */
     fun requestAudioRoute(routeId: String)
+
+    /**
+     * Ask the server for one user's ping; the answer arrives on [userPing]. Fire-and-forget, a
+     * no-op with nothing connected, and safe to repeat — the UI repeats it while a sheet is open.
+     */
+    fun requestUserStats(session: Int)
 }

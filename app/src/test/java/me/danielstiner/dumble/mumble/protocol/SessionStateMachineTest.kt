@@ -1084,4 +1084,72 @@ class SessionStateMachineTest {
     private fun v2Major(v: Long) = ((v ushr 48) and 0xFFFF).toInt()
     private fun v2Minor(v: Long) = ((v ushr 32) and 0xFFFF).toInt()
     private fun v2Patch(v: Long) = ((v ushr 16) and 0xFFFF).toInt()
+
+    @Test
+    fun requestUserStatsAsksForOneSessionAndOnlyItsMutableNumbers() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        assertTrue(sm.requestUserStats(9))
+
+        val ask = ch.sent.last { it.first == TcpMessageType.UserStats }.second as MumbleProtos.UserStats
+        assertEquals(9, ask.session)
+        // Without this the server also sends certificates and the client's IP, which murmur gates
+        // on admin rights and nothing here wants.
+        assertTrue("stats_only keeps the reply to ping and packet counts", ask.statsOnly)
+    }
+
+    @Test
+    fun requestUserStatsBeforeSynchronizedIsANoOp() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        assertFalse(sm.requestUserStats(9))
+        assertTrue(ch.sent.none { it.first == TcpMessageType.UserStats })
+    }
+
+    @Test
+    fun aUserStatsReplyPublishesBothOfThatUsersLegs() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder()
+                .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(18.2f).build()))
+
+        assertEquals(UserPing(9, 23.5f, 18.2f), sm.userPing.value)
+    }
+
+    /**
+     * Every peer tunnels today, and the server reports the absent leg as a zero average rather
+     * than by omitting it. Publishing that zero would claim a round trip of no time at all.
+     */
+    @Test
+    fun aTunnellingPeerHasNoUdpLegRatherThanAZeroOne() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder()
+                .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(0f).build()))
+
+        assertEquals(UserPing(9, 23.5f, null), sm.userPing.value)
+    }
+
+    /**
+     * A server that has not pinged a freshly connected user yet answers with no average. Zero is
+     * not a round trip, and publishing it would read as a perfect link rather than as no reading.
+     */
+    @Test
+    fun aReplyWithNoAverageLeavesTheLastReadingAlone() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(9).setTcpPingAvg(23.5f).build()))
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(11).build()))
+
+        assertEquals(UserPing(9, 23.5f, null), sm.userPing.value)
+    }
 }

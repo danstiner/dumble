@@ -69,6 +69,9 @@ class SessionStateMachine(
         _messages.update { (it + msg).takeLast(MAX_MESSAGES) }
     }
 
+    private val _userPing = MutableStateFlow<UserPing?>(null)
+    val userPing: StateFlow<UserPing?> = _userPing.asStateFlow()
+
     /** CryptSetup key material, stored for the voice task. Unused here. */
     @Volatile var cryptKey: ByteArray? = null
         private set
@@ -247,6 +250,19 @@ class SessionStateMachine(
             // Raw UDP packet bytes: Mumble.proto's UDPTunnel message is dead code, never sent.
             TcpMessageType.UDPTunnel -> audioListener?.onTunneledAudio(frame.payload, clockNanos())
 
+            TcpMessageType.UserStats -> {
+                val stats = MumbleProtos.UserStats.parseFrom(frame.payload)
+                // Zero is how the server reports "no average", not a round trip of no time: a peer
+                // not using UDP, or one it has not pinged yet. A reply with neither leg leaves the
+                // last reading alone rather than replacing it with a pair of nothings — a server
+                // that refuses answers with PermissionDenied instead, which is not this.
+                val tcp = stats.tcpPingAvg.takeIf { stats.hasTcpPingAvg() && it > 0f }
+                val udp = stats.udpPingAvg.takeIf { stats.hasUdpPingAvg() && it > 0f }
+                if (stats.hasSession() && (tcp != null || udp != null)) {
+                    _userPing.value = UserPing(stats.session, tcp, udp)
+                }
+            }
+
             // Deliberately ignored — see the design's non-goals.
             TcpMessageType.CodecVersion,
             TcpMessageType.ServerConfig,
@@ -274,6 +290,22 @@ class SessionStateMachine(
         val senderName = _channelTree.value.users[session]?.name
         if (ok) appendMessage(ChatMessage.Remote(session, senderName, body, clock()))
         return ok
+    }
+
+    /**
+     * Ask the server for [session]'s ping. The answer arrives on [userPing], asynchronously and
+     * possibly not at all — a server may refuse. Returns whether the ask was enqueued.
+     *
+     * `stats_only` keeps the reply to the mutable numbers. Without it the server also sends the
+     * user's certificate chain and IP address, which murmur gates on admin rights and which
+     * nothing here wants.
+     */
+    fun requestUserStats(session: Int): Boolean {
+        if (_state.value !is ConnectionState.Synchronized) return false
+        return channel.send(
+            TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(session).setStatsOnly(true).build(),
+        )
     }
 
     /**
