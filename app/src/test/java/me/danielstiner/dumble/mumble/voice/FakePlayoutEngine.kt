@@ -9,9 +9,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * cadence exactly.
  */
 class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
-    /** One call: which sessions produced, how many speakers are live, whether the call was
-     *  short of a full frame (which the real engine counts as concealment), and how many packets
-     *  the jitter queues threw away. Drops are charged to a call only because fills are the test's
+    /** One fill: which sessions produced, how many speakers are live, whether the fill was
+     *  short of a full quantum (which the real engine counts as concealment), and how many packets
+     *  the jitter queues threw away. Drops are charged to a fill only because fills are the test's
      *  clock — natively they accrue on the reader thread, on offer(). */
     data class Fill(
         val producing: List<Int> = emptyList(),
@@ -22,7 +22,12 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
 
     private val fills = LinkedBlockingQueue<Fill>()
 
-    data class Offer(val session: Int, val opusData: ByteArray, val terminator: Boolean)
+    data class Offer(
+        val session: Int,
+        val opusData: ByteArray,
+        val frameNumber: Long,
+        val terminator: Boolean,
+    )
 
     /** Every offer the reader made, in order. */
     val offered = mutableListOf<Offer>()
@@ -44,6 +49,9 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     /** Depth reported per session by [readStats]. */
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
 
+    /** Target reported per session by [readStats]. */
+    @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
+
     @Volatile private var concealedGaps = 0L
     @Volatile private var droppedPackets = 0L
 
@@ -52,17 +60,22 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
      *  receiver instead runs unscripted for most of a session — a blocking take() there would
      *  wedge the playback thread on the first fillQuantum() with nothing queued, and every
      *  disconnect()/stop() would then wait out its 1 s join. Set false there: an empty queue
-     *  reports one idle call immediately instead of blocking. */
+     *  reports one idle fill immediately instead of blocking. */
     @Volatile var blockWhenEmpty = true
 
     fun script(vararg t: Fill) = t.forEach { fills.put(it) }
 
-    /** A call that never arrives parks the loop, the way silence does in production. */
+    /** A fill that never arrives parks the loop, the way silence does in production. */
     fun scriptSilence(count: Int) = repeat(count) { fills.put(Fill()) }
 
     @Synchronized
-    override fun offer(session: Int, opusData: ByteArray, terminator: Boolean): Int {
-        offered += Offer(session, opusData, terminator)
+    override fun offer(
+        session: Int,
+        opusData: ByteArray,
+        frameNumber: Long,
+        terminator: Boolean,
+    ): Int {
+        offered += Offer(session, opusData, frameNumber, terminator)
         return offerResult
     }
 
@@ -75,18 +88,26 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         fill.producing.forEachIndexed { i, session ->
             status[NativePlayout.STATUS_SESSIONS + i] = session
         }
-        // Non-silent audio so a test can tell a written frame from an unwritten one.
+        // Non-silent audio so a test can tell a written quantum from an unwritten one.
         if (fill.producing.isNotEmpty()) pcm.fill(1000)
         return fill.producing.size
     }
 
-    override fun readStats(sessions: IntArray, depths: IntArray, counters: LongArray): Int {
+    override fun readStats(
+        sessions: IntArray,
+        depths: IntArray,
+        targets: IntArray,
+        counters: LongArray,
+    ): Int {
         if (refuseBuffers) return NativePlayout.ERROR_BUFFER_TOO_SMALL
         counters[NativePlayout.COUNTER_CONCEALED_GAPS] = concealedGaps
         counters[NativePlayout.COUNTER_DROPPED_PACKETS] = droppedPackets
+        counters[NativePlayout.COUNTER_SHRUNK_PACKETS] = 0
+        counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] = 0
         depthsBySession.entries.forEachIndexed { i, (session, depth) ->
             sessions[i] = session
             depths[i] = depth
+            targets[i] = targetsBySession[session] ?: 0
         }
         return depthsBySession.size
     }

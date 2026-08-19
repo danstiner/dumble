@@ -9,7 +9,7 @@
 namespace dumble::playout {
 
 /**
- * One speaker's decode stage: encoded packets in, frame-sized PCM out.
+ * One speaker's decode stage: encoded packets in, quantum-sized PCM out.
  *
  * Decoded audio exists as PCM for at most one packet's worth of fills — the caller decodes only
  * while below a frame, so the fifo never holds more than a frame plus the one packet that
@@ -60,12 +60,30 @@ public:
      *  comes back and not just the audio: the padding is indistinguishable once written. */
     int drain(int16_t* out, int samples);
 
+    /** Whether the last decoded frame sat in the bottom of this speaker's observed dynamic range —
+     *  Mumble's `pow < fPowerMin + 0.01f * (fPowerMax - fPowerMin)`, over the same asymmetric
+     *  envelope in the same RMS-amplitude domain the constants are tuned for. False before any
+     *  audio has decoded, which is what stops a fresh slot's opening packet from being judged
+     *  against an envelope that does not exist yet.
+     *
+     *  Describes the frame just decoded, not the packet a caller is about to discard — which plays
+     *  a target's worth of samples later, so an attack inside that window can be dropped on the
+     *  strength of the silence before it. Mumble has the identical blind spot; the bound is the
+     *  target plus the shrink deadband. */
+    bool quiet() const;
+
 private:
     SpeakerDecoder(std::unique_ptr<AudioDecoder> decoder, int maxQuantumSamples);
 
     const std::unique_ptr<AudioDecoder> decoder_;
     PcmRing fifo_;
     std::vector<int16_t> decodeScratch_;
+
+    // Asymmetric envelope over decoded frame power: the maximum decays slowly and the minimum
+    // creeps up, so the range tracks a speaker rather than the loudest thing they ever said.
+    float power_ = 0;
+    float powerMin_ = 0;
+    float powerMax_ = 0;
 };
 
 }  // namespace dumble::playout

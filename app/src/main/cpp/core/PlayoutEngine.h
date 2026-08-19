@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "core/JitterEstimator.h"
 #include "core/PacketQueue.h"
 #include "core/PlayoutConstants.h"
 #include "core/Bitmap.h"
@@ -12,6 +13,8 @@ namespace dumble::playout {
 
 static_assert(kMaxSpeakers <= Bitmap::kCapacity,
               "occupancy is one uint64_t, so kMaxSpeakers cannot exceed its width");
+static_assert(kEstimatorSlots <= Bitmap::kCapacity,
+              "estimator occupancy is one uint64_t, so the table cannot outgrow its width");
 
 /**
  * Owns inbound voice below the platform: one PacketQueue and one SpeakerDecoder per sender, mixed
@@ -60,8 +63,10 @@ public:
      *  be made to wait out a decode, which is what fillQuantum's pop-then-decode split buys.
      *
      *  Returns one of the kOffer* codes. `data` may be null when `len` is 0; a payload-free
-     *  terminator is accepted, since it carries no samples by definition. */
-    int offer(int32_t session, const uint8_t* data, int len, bool terminator);
+     *  terminator is accepted, since it carries no samples by definition. `frameNumber` is the
+     *  sender's own wall-clock frame counter, peer-controlled and sanity-checked by the estimator
+     *  rather than here. */
+    int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement
@@ -88,6 +93,10 @@ public:
         int32_t sessions[kMaxSpeakers];
         // Samples queued and not yet decoded, per speaker. Entries past `speakers` are unspecified.
         int32_t depths[kMaxSpeakers];
+        // The target each speaker's gate is measuring against. Beside depths deliberately: target
+        // against depth is the only reading that shows whether the buffer is converging, and
+        // without it there is no way to tell a healthy 200 ms from a ratcheted one.
+        int32_t targets[kMaxSpeakers];
 
         // The two totals below are monotonic since the engine was built: the caller subtracts a
         // talk-spurt baseline, the way it already does for the platform's underrun counter.
@@ -102,6 +111,13 @@ public:
         // kOfferMalformedPacket, so counting it would put lock traffic on the garbage path. What
         // is left is exactly the loss no status code reports.
         int64_t droppedPackets;
+        // Packets discarded on purpose to shed standing delay, split by mechanism because they
+        // answer different questions: shrink rising means the link drifts, catch-up rising means
+        // it stalls. Neither is loss, which is why neither is in droppedPackets — that one means
+        // the network cost us audio. This is the invariant the seam and the stats sample carry
+        // outward; if it moves, it moves here first.
+        int64_t shrunkPackets;
+        int64_t catchUpPackets;
     };
 
     /** Any thread; takes mutex_. */
@@ -114,6 +130,35 @@ private:
      *  needed; -1 at the cap. */
     int slotFor(int32_t session);
 
+    /** Any thread; caller already holds mutex_. Index of this session's estimator, claiming or
+     *  evicting one if needed. Never negative. */
+    int estimatorFor(int32_t session, int64_t arrivalMillis);
+
+    /** Any thread; caller already holds mutex_. This slot's estimator, or null when the table
+     *  evicted it out from under a slot that is still live. */
+    JitterEstimator* estimatorForSlot(int slot);
+
+    // Tracked senders' estimates, keyed by session and not by slot: a slot retires about 100 ms
+    // after its queue drains and reset()s with it, so estimator state living there would die within
+    // 100 ms of silence — the bug this table exists to fix.
+    //
+    // Split rather than an array of {session, estimator} structs because the only hot operation is
+    // the key scan. One estimator is 200 bytes, so scanning an array of them strides 13.8 KB to
+    // read 64 session ids; the keys alone are 256 bytes, and the occupancy is one word. The bodies
+    // are touched only on a hit.
+    Bitmap estimatorUsed_;
+    int32_t estimatorSessions_[kEstimatorSlots] = {};
+    int64_t estimatorLastArrival_[kEstimatorSlots] = {};
+    JitterEstimator estimators_[kEstimatorSlots];
+    // Each live slot's index into that table, so the playback thread indexes instead of scanning.
+    // A hint, not a handle: the table can evict an entry while its slot is still live, so every use
+    // re-checks the session it lands on.
+    int estimatorIndex_[kMaxSpeakers] = {};
+    // Shares only the histogram, fed the relative delays the per-sender entries compute. Never fed
+    // a raw arrival: frame_number origins are per-sender, so pooling raw offsets would let
+    // whichever sender has the largest one own the shared minimum.
+    JitterEstimator downlink_;
+
     const int sampleRate_;
     const int maxQuantumSamples_;
 
@@ -122,15 +167,21 @@ private:
     int32_t sessions_[kMaxSpeakers] = {};
     // Consecutive polls a claimed slot has answered with nothing. Zeroed on claim.
     int idlePolls_[kMaxSpeakers] = {};
-    // Consecutive frames a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only
-    // by real audio, never by a frame that merely did not conceal: an expired hold would otherwise
-    // clear its own counter and start concealing again on the next frame, forever. Keeps counting
-    // past kConcealQuanta for the same reason. Zeroed on claim, like idlePolls_.
+    // Consecutive quanta a claimed slot has starved mid-spurt, and so the hold's clock. Cleared
+    // only by real audio, never by a fill that merely did not conceal: an expired hold would
+    // otherwise clear its own counter and start concealing again on the next fill, forever. Keeps
+    // counting past kConcealQuanta for the same reason. Zeroed on claim, like idlePolls_.
     int stallQuanta_[kMaxSpeakers] = {};
+    // Quanta produced since this slot last shrank. Counted only on fills that produced, which is
+    // what makes kShrinkCooldownQuanta a real two seconds: each is paced by the output write,
+    // while polls run faster than real time.
+    int shrinkQuanta_[kMaxSpeakers] = {};
     // Whole-engine totals, monotonic since construction. A retiring queue's own tally is
     // harvested into droppedPackets_ before reset() clears it.
     int64_t concealedGaps_ = 0;
     int64_t droppedPackets_ = 0;
+    int64_t shrunkPackets_ = 0;
+    int64_t catchUpPackets_ = 0;
     // Built by create() and never rebuilt, which is what lets the playback thread hold references
     // into them across an unlocked decode.
     PacketQueue queues_[kMaxSpeakers];

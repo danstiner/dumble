@@ -28,7 +28,15 @@ void PacketQueue::dropOldest() {
     samples_ -= entries_[head_].samples;
     head_ = (head_ + 1) & kEntryMask;
     count_--;
-    droppedPackets_++;
+}
+
+bool PacketQueue::canShrink(int floor) const {
+    return count_ > 0 && samples_ - entries_[head_].samples >= floor;
+}
+
+void PacketQueue::shrink() {
+    dropOldest();
+    shrunkPackets_++;
 }
 
 void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminator) {
@@ -46,19 +54,36 @@ void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminat
     if (samples > 0) {
         // Drop before insert, not after: the pool is fixed, so there is no transient state in
         // which an extra packet exists.
-        if (count_ == kMaxQueuedPackets) dropOldest();
+        if (count_ == kMaxQueuedPackets) {
+            dropOldest();
+            droppedPackets_++;
+        }
         const int tail = (head_ + count_) & kEntryMask;
         std::memcpy(pool_.data() + size_t(tail) * kMaxPacketBytes, data, size_t(len));
         entries_[tail] = Entry{uint16_t(len), uint16_t(samples)};
         count_++;
         samples_ += samples;
-        while (samples_ > kHighWaterSamples) dropOldest();
+        while (samples_ > kHighWaterSamples) {
+            dropOldest();
+            droppedPackets_++;
+        }
     }
     // Open the playout gate immediately when a spurt terminates so whatever we have queued plays.
     // endFill will close the gate again once the queue drains. Clearing emptyAtPop_ is what lets
     // the latch survive an endFill already in flight: the engine may have seen this queue empty at
     // its last pop, and a terminator landing before its endFill says the spurt is complete — the
     // re-arm must not close the gate over it, or a short spurt below the prebuffer never plays.
+    //
+    // This is a second gate-open, and deliberately not a trim point. A stall that ends with the
+    // sender falling silent flushes its whole backlog and this terminator together, so up to
+    // kHighWaterSamples plays out untrimmed — six times the bound of the conceal-hold case.
+    // Trimming here would be the wrong trade: pop()'s trim discards stale continuation before a
+    // spurt resumes, whereas everything queued behind a terminator is the tail of a finished
+    // sentence. Dropping it costs the listener the end of the words, to reclaim delay that drains
+    // on its own and that no later audio inherits — the gate re-arms once the tail plays out and
+    // the next spurt prebuffers fresh. The exception is a spurt that resumes inside that drain
+    // window: it appends behind the stale tail, so the gate never re-arms and the inherited delay
+    // unwinds only through shrink.
     if (terminator) {
         gateOpen_ = true;
         emptyAtPop_ = false;
@@ -66,12 +91,28 @@ void PacketQueue::offer(const uint8_t* data, int len, int samples, bool terminat
     }
 }
 
-int PacketQueue::pop(uint8_t* out, int outCap) {
+int PacketQueue::pop(uint8_t* out, int outCap, int target, bool catchUpAllowed) {
     // Do not start playout until we have sufficient pre-roll buffer.
     if (!gateOpen_) {
-        if (samples_ < kPrebufferSamples) {
+        // A full ring is as ready as this queue can get. kMaxQueuedPackets binds before
+        // kHighWaterSamples for any sender below 20 ms, so a target above what the ring can hold
+        // would otherwise keep the gate shut forever and drop every arriving packet as overflow.
+        if (samples_ < target && count_ < kMaxQueuedPackets) {
             emptyAtPop_ = count_ == 0;
             return 0;
+        }
+        // The one place audio can be discarded without a splice: nothing is playing, so what goes
+        // is never cut out of a stream, it is simply never started. Only when the caller says this
+        // gate-open follows a stall rather than opening a spurt — the oldest packet of a spurt is
+        // its first syllable, which is what the prebuffer exists to protect.
+        // The threshold decides *whether* to trim; the target decides *how far*. Folding both into
+        // one loop condition would stop at the threshold and leave a backlog the gate just proved
+        // was too large — the overshoot is what triggers a re-anchor, not what survives it.
+        if (catchUpAllowed && samples_ > target + kCatchUpThresholdSamples) {
+            while (canShrink(target)) {
+                dropOldest();
+                catchUpPackets_++;
+            }
         }
         gateOpen_ = true;
     }
@@ -97,6 +138,8 @@ void PacketQueue::reset() {
     emptyAtPop_ = false;
     terminated_ = false;
     droppedPackets_ = 0;
+    shrunkPackets_ = 0;
+    catchUpPackets_ = 0;
 }
 
 void PacketQueue::endFill(bool decoderProduced) {

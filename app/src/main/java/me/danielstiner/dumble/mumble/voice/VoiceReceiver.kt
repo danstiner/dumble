@@ -27,8 +27,9 @@ class VoiceReceiver(
 ) {
     /** Seam so JVM tests can drive the loop without loading native code. */
     interface PlayoutEngine {
-        /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. */
-        fun offer(session: Int, opusData: ByteArray, terminator: Boolean): Int
+        /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
+         *  own frame counter, which the engine measures arrival jitter against. */
+        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Int
 
         /** Playback thread. Fills [pcm] with one mixed frame, returns how many speakers
          *  produced, writes their sessions into `status[1..n]` and the live speaker count into
@@ -36,7 +37,12 @@ class VoiceReceiver(
         fun fillQuantum(pcm: ShortArray, status: IntArray): Int
 
         /** Playback thread. Returns the live speaker count. */
-        fun readStats(sessions: IntArray, depths: IntArray, counters: LongArray): Int
+        fun readStats(
+            sessions: IntArray,
+            depths: IntArray,
+            targets: IntArray,
+            counters: LongArray,
+        ): Int
 
         /** Playback thread, from the loop's finally — never from another thread. */
         fun destroy()
@@ -200,7 +206,8 @@ class VoiceReceiver(
             // A refusal is a latched log and nothing more: the engine has no failure a packet can
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
-            val code = live.offer(session, audio.opusData.toByteArray(), audio.isTerminator)
+            val code = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
+                                  audio.isTerminator)
             val refusal = when (code) {
                 NativePlayout.OFFER_SPEAKER_CAP -> "speaker cap reached; ignoring further sessions"
                 NativePlayout.OFFER_PACKET_TOO_LARGE -> "dropping oversized opus payload"
@@ -219,6 +226,7 @@ class VoiceReceiver(
         val status = IntArray(NativePlayout.STATUS_LENGTH)
         val statSessions = IntArray(MAX_SPEAKERS)
         val statDepths = IntArray(MAX_SPEAKERS)
+        val statTargets = IntArray(MAX_SPEAKERS)
         val counters = LongArray(NativePlayout.COUNTER_COUNT)
 
         var inSpurt = false
@@ -226,6 +234,8 @@ class VoiceReceiver(
         var underrunBaseline: Int? = null
         var concealedBaseline = 0L
         var droppedBaseline = 0L
+        var shrunkBaseline = 0L
+        var catchUpBaseline = 0L
 
         val out = try {
             outFactory()
@@ -253,7 +263,9 @@ class VoiceReceiver(
                     if (inSpurt) {
                         val published = publishStats(engine, out, underrunBaseline,
                                                      concealedBaseline, droppedBaseline,
-                                                     statSessions, statDepths, counters)
+                                                     shrunkBaseline, catchUpBaseline,
+                                                     statSessions, statDepths, statTargets,
+                                                     counters)
                         inSpurt = false
                         if (published) {
                             // Rearmed from the reading publishStats just took rather than a
@@ -271,6 +283,8 @@ class VoiceReceiver(
                             // window, which is where they belong: a backlog thrown away while a
                             // speaker prebuffers is that spurt's burst, not the previous one's.
                             droppedBaseline = counters[NativePlayout.COUNTER_DROPPED_PACKETS]
+                            shrunkBaseline = counters[NativePlayout.COUNTER_SHRUNK_PACKETS]
+                            catchUpBaseline = counters[NativePlayout.COUNTER_CATCH_UP_PACKETS]
                         } else if (!statsRefusedReported) {
                             // Our arrays, our bug — see fillQuantum's refusal above. Left
                             // unresolved, every future spurt would silently stop publishing:
@@ -312,7 +326,8 @@ class VoiceReceiver(
                 } else if (++writesThisSpurt >= WRITES_PER_SAMPLE) {
                     writesThisSpurt = 0
                     publishStats(engine, out, underrunBaseline, concealedBaseline,
-                                 droppedBaseline, statSessions, statDepths, counters)
+                                 droppedBaseline, shrunkBaseline, catchUpBaseline,
+                                 statSessions, statDepths, statTargets, counters)
                 }
             }
         } catch (t: Throwable) {
@@ -344,13 +359,17 @@ class VoiceReceiver(
         underrunBaseline: Int?,
         concealedBaseline: Long,
         droppedBaseline: Long,
+        shrunkBaseline: Long,
+        catchUpBaseline: Long,
         sessions: IntArray,
         depths: IntArray,
+        targets: IntArray,
         counters: LongArray,
     ): Boolean {
         // Refused, or thrown: publishing off untouched scratch would report a spurt's worth of
         // zeros as if they were measurements.
-        val speakers = runCatching { engine.readStats(sessions, depths, counters) }.getOrDefault(-1)
+        val speakers =
+            runCatching { engine.readStats(sessions, depths, targets, counters) }.getOrDefault(-1)
         if (speakers < 0) return false
         // Everything below is presentation. Wrapped so it cannot reach the loop's fatal catch, and
         // outside the decision above so that it cannot withhold the rearm either: the counters are
@@ -360,7 +379,11 @@ class VoiceReceiver(
             // fields derived from it, not the sample.
             val reading = runCatching { out.outputStats() }.getOrNull()
             val buffered = HashMap<Int, Int>(speakers)
-            for (i in 0 until speakers) buffered[sessions[i]] = depths[i]
+            val targeted = HashMap<Int, Int>(speakers)
+            for (i in 0 until speakers) {
+                buffered[sessions[i]] = depths[i]
+                targeted[sessions[i]] = targets[i]
+            }
             val stats = PlayoutStats(
                 latencyMs = reading?.latencyMs,
                 underruns = reading?.let { r -> underrunBaseline?.let { r.underrunsTotal - it } },
@@ -368,7 +391,12 @@ class VoiceReceiver(
                     (counters[NativePlayout.COUNTER_CONCEALED_GAPS] - concealedBaseline).toInt(),
                 droppedPackets =
                     (counters[NativePlayout.COUNTER_DROPPED_PACKETS] - droppedBaseline).toInt(),
+                shrunkPackets =
+                    (counters[NativePlayout.COUNTER_SHRUNK_PACKETS] - shrunkBaseline).toInt(),
+                catchUpPackets =
+                    (counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] - catchUpBaseline).toInt(),
                 bufferedSamples = buffered,
+                targetSamples = targeted,
             )
             _playoutStats.value = stats
             // Debug rather than info, and ungated, for the reason VoiceSender's capture line is:
