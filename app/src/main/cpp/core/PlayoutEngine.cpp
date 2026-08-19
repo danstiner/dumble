@@ -14,9 +14,20 @@ namespace {
 // not, the first packet after resume would look impossibly early, become the window minimum, and
 // leave every packet after it reading as hugely late. BootTimeSource made the same choice on the
 // Kotlin side for the same reason.
+//
+// Darwin has no CLOCK_BOOTTIME, and the host test build is the only thing that compiles this file
+// off Android. Its CLOCK_MONOTONIC is the right stand-in rather than a compromise: unlike Linux's,
+// it keeps advancing while the system is asleep, which is the property this needs. CLOCK_UPTIME_RAW
+// is the one that stops there, and is what a port reaching for the closest-looking name would pick.
+#if defined(CLOCK_BOOTTIME)
+constexpr clockid_t kArrivalClock = CLOCK_BOOTTIME;
+#else
+constexpr clockid_t kArrivalClock = CLOCK_MONOTONIC;
+#endif
+
 int64_t bootMillis() {
     timespec ts{};
-    clock_gettime(CLOCK_BOOTTIME, &ts);
+    clock_gettime(kArrivalClock, &ts);
     return int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
 }
 
