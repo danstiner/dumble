@@ -15,6 +15,7 @@ import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.math.sqrt
 import kotlin.time.TimeSource
 import me.danielstiner.dumble.time.BootTimeSource
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -69,8 +70,8 @@ class SessionStateMachine(
         _messages.update { (it + msg).takeLast(MAX_MESSAGES) }
     }
 
-    private val _userPing = MutableStateFlow<UserPing?>(null)
-    val userPing: StateFlow<UserPing?> = _userPing.asStateFlow()
+    private val _userStats = MutableStateFlow<UserStats?>(null)
+    val userStats: StateFlow<UserStats?> = _userStats.asStateFlow()
 
     /** CryptSetup key material, stored for the voice task. Unused here. */
     @Volatile var cryptKey: ByteArray? = null
@@ -259,7 +260,14 @@ class SessionStateMachine(
                 val tcp = stats.tcpPingAvg.takeIf { stats.hasTcpPingAvg() && it > 0f }
                 val udp = stats.udpPingAvg.takeIf { stats.hasUdpPingAvg() && it > 0f }
                 if (stats.hasSession() && (tcp != null || udp != null)) {
-                    _userPing.value = UserPing(stats.session, tcp, udp)
+                    _userStats.value = UserStats(
+                        session = stats.session,
+                        tcpPingMillis = tcp,
+                        udpPingMillis = udp,
+                        tcpJitterMillis = stats.tcpPingVar.deviation(),
+                        udpJitterMillis = stats.udpPingVar.deviation(),
+                        bandwidthBitsPerSecond = stats.bandwidth.takeIf { stats.hasBandwidth() && it > 0 },
+                    )
                 }
             }
 
@@ -292,8 +300,11 @@ class SessionStateMachine(
         return ok
     }
 
+    /** The wire carries a variance; jitter is its deviation. Zero is "no reading", as with ping. */
+    private fun Float.deviation(): Float? = if (this > 0f) sqrt(this) else null
+
     /**
-     * Ask the server for [session]'s ping. The answer arrives on [userPing], asynchronously and
+     * Ask the server for [session]'s stats. The answer arrives on [userStats], asynchronously and
      * possibly not at all — a server may refuse. Returns whether the ask was enqueued.
      *
      * `stats_only` keeps the reply to the mutable numbers. Without it the server also sends the

@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,8 +55,7 @@ fun ConnectedScreen(
     audioRoutes: AudioRoutes,
     selectedSession: Int?,
     selectedPlayoutTargetMillis: Int?,
-    selectedTcpPingMillis: Float?,
-    selectedUdpPingMillis: Float?,
+    selectedStats: UserStats?,
     onUserClick: (Int) -> Unit,
     onRefreshUserStats: (Int) -> Unit,
     onDismissUserDetail: () -> Unit,
@@ -176,8 +176,7 @@ fun ConnectedScreen(
             session = u.session,
             name = u.name,
             playoutTargetMillis = selectedPlayoutTargetMillis,
-            tcpPingMillis = selectedTcpPingMillis,
-            udpPingMillis = selectedUdpPingMillis,
+            stats = selectedStats,
             onRefresh = onRefreshUserStats,
             onDismiss = onDismissUserDetail,
         )

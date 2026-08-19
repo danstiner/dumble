@@ -10,7 +10,7 @@ import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
-import me.danielstiner.dumble.mumble.protocol.UserPing
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 
@@ -23,7 +23,7 @@ class FakeConnection : Connection {
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val playoutStats = MutableStateFlow<PlayoutStats?>(null)
-    override val userPing = MutableStateFlow<UserPing?>(null)
+    override val userStats = MutableStateFlow<UserStats?>(null)
     override val audioRoutes = MutableStateFlow(AudioRoutes())
 
     var connectCalls = 0; private set

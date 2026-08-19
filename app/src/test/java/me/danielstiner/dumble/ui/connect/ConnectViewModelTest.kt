@@ -15,7 +15,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
-import me.danielstiner.dumble.mumble.protocol.UserPing
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import org.junit.After
@@ -706,10 +706,10 @@ class ConnectViewModelTest {
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9))
         vm.openUserDetail(9)
-        conn.userPing.value = UserPing(9, 23.5f, null)
+        conn.userStats.value = UserStats(9, 23.5f, null, null, null, null)
         runCurrent()
 
-        assertEquals(UserPing(9, 23.5f, null), vm.uiState.value.userPing)
+        assertEquals(UserStats(9, 23.5f, null, null, null, null), vm.uiState.value.userStats)
     }
 
     /**
@@ -722,9 +722,9 @@ class ConnectViewModelTest {
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9), user(11))
         vm.openUserDetail(11)
-        conn.userPing.value = UserPing(9, 23.5f, null)
+        conn.userStats.value = UserStats(9, 23.5f, null, null, null, null)
         runCurrent()
 
-        assertNull(vm.uiState.value.userPing)
+        assertNull(vm.uiState.value.userStats)
     }
 }

@@ -25,7 +25,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.protocol.UserPing
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import javax.inject.Inject
@@ -88,7 +88,7 @@ data class ConnectUiState(
     // The selected user's ping, or null when the server has not answered for them. Already
     // matched against [selectedSession]: the reply is asynchronous, so one for the user whose
     // sheet just closed must never be read under whoever is on screen now.
-    val userPing: UserPing? = null,
+    val userStats: UserStats? = null,
 )
 
 private data class ConnSnapshot(
@@ -103,7 +103,7 @@ private data class HealthSnapshot(
     val roundTripTime: Duration?,
     val lastServerReplyAt: ComparableTimeMark?,
     val playoutStats: PlayoutStats?,
-    val userPing: UserPing?,
+    val userStats: UserStats?,
 )
 
 @HiltViewModel
@@ -139,7 +139,7 @@ class ConnectViewModel internal constructor(
 
     private val healthSnapshot = combine(
         connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
-        connection.userPing,
+        connection.userStats,
     ) { rtt, replyAt, playout, ping -> HealthSnapshot(rtt, replyAt, playout, ping) }
 
     val uiState: StateFlow<ConnectUiState> =
@@ -167,7 +167,7 @@ class ConnectViewModel internal constructor(
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
                 selectedSession = selected,
-                userPing = health.userPing?.takeIf { it.session == selected },
+                userStats = health.userStats?.takeIf { it.session == selected },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 

@@ -1117,7 +1117,7 @@ class SessionStateMachineTest {
             MumbleProtos.UserStats.newBuilder()
                 .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(18.2f).build()))
 
-        assertEquals(UserPing(9, 23.5f, 18.2f), sm.userPing.value)
+        assertEquals(UserStats(9, 23.5f, 18.2f, null, null, null), sm.userStats.value)
     }
 
     /**
@@ -1133,7 +1133,38 @@ class SessionStateMachineTest {
             MumbleProtos.UserStats.newBuilder()
                 .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(0f).build()))
 
-        assertEquals(UserPing(9, 23.5f, null), sm.userPing.value)
+        assertEquals(UserStats(9, 23.5f, null, null, null, null), sm.userStats.value)
+    }
+
+    /**
+     * The wire carries a variance, so jitter is its square root — printing the variance would be a
+     * number in square milliseconds under a label that says milliseconds.
+     */
+    @Test
+    fun jitterIsTheDeviationOfTheVarianceOnTheWire() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder()
+                .setSession(9).setTcpPingAvg(23f).setTcpPingVar(4f).setBandwidth(8060).build()))
+
+        assertEquals(2f, sm.userStats.value?.tcpJitterMillis)
+        assertEquals(8060, sm.userStats.value?.bandwidthBitsPerSecond)
+    }
+
+    /** Jitter belongs to the leg carrying voice, which is UDP when the server has pinged it. */
+    @Test
+    fun jitterFollowsTheLegCarryingVoice() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder()
+                .setSession(9).setTcpPingAvg(23f).setTcpPingVar(81f)
+                .setUdpPingAvg(18f).setUdpPingVar(4f).build()))
+
+        assertEquals(2f, sm.userStats.value?.jitterMillis)
     }
 
     /**
@@ -1150,6 +1181,6 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.UserStats,
             MumbleProtos.UserStats.newBuilder().setSession(11).build()))
 
-        assertEquals(UserPing(9, 23.5f, null), sm.userPing.value)
+        assertEquals(UserStats(9, 23.5f, null, null, null, null), sm.userStats.value)
     }
 }
