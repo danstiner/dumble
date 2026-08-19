@@ -52,6 +52,10 @@ fun ConnectedScreen(
     talkBlock: TalkBlock?,
     deafened: Boolean,
     audioRoutes: AudioRoutes,
+    selectedSession: Int?,
+    selectedPlayoutTargetMillis: Int?,
+    onUserClick: (Int) -> Unit,
+    onDismissUserDetail: () -> Unit,
     onOpenChat: () -> Unit,
     onDisconnect: () -> Unit,
     onSettings: () -> Unit,
@@ -160,7 +164,16 @@ fun ConnectedScreen(
             channelTree,
             mySession = sessionId,
             speaking = speaking,
+            onUserClick = onUserClick,
             modifier = Modifier.fillMaxSize().padding(padding),
+        )
+    }
+    selectedSession?.let { channelTree.users[it] }?.let { u ->
+        UserDetailSheet(
+            name = u.name,
+            playoutTargetMillis = selectedPlayoutTargetMillis,
+            isSelf = u.session == sessionId,
+            onDismiss = onDismissUserDetail,
         )
     }
 }

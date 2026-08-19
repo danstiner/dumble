@@ -8,6 +8,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.PlayoutStats
 
 /** The coordinator surface the UI depends on — narrow so the ViewModel can be tested with a fake. */
 interface Connection {
@@ -26,6 +27,9 @@ interface Connection {
     val channelTree: StateFlow<ChannelTree>
     val messages: StateFlow<List<ChatMessage>>
     val speakingSessions: StateFlow<Set<Int>>
+
+    /** The receive path's last second of measurement; null before the first one lands. */
+    val playoutStats: StateFlow<PlayoutStats?>
 
     /**
      * What the platform offers for call audio and what it is using. Cleared to empty by connect()

@@ -79,6 +79,11 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     talkBlock = state.talkBlock,
                     deafened = state.deafened,
                     audioRoutes = state.audioRoutes,
+                    selectedSession = state.selectedSession,
+                    selectedPlayoutTargetMillis =
+                        state.selectedSession?.let { state.playoutStats?.targetMillis(it) },
+                    onUserClick = vm::openUserDetail,
+                    onDismissUserDetail = vm::closeUserDetail,
                     onOpenChat = vm::openChat,
                     onDisconnect = vm::onDisconnect,
                     onSettings = vm::openSettings,

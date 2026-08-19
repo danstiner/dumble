@@ -11,6 +11,7 @@ import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.PlayoutStats
 
 class FakeConnection : Connection {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
@@ -20,6 +21,7 @@ class FakeConnection : Connection {
     override val channelTree = MutableStateFlow(ChannelTree())
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
+    override val playoutStats = MutableStateFlow<PlayoutStats?>(null)
     override val audioRoutes = MutableStateFlow(AudioRoutes())
 
     var connectCalls = 0; private set
@@ -50,6 +52,15 @@ class FakeConnection : Connection {
 
     fun emitConnected(sessionId: Int) { status.value = ConnectionStatus.Connected(sessionId) }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
+
+    /** Only [PlayoutStats.targetSamples] is read today; the rest of the record stays at zero. */
+    fun emitTargets(targets: Map<Int, Int>) {
+        playoutStats.value = PlayoutStats(
+            latencyMs = null, underruns = null, concealedGaps = 0, droppedPackets = 0,
+            shrunkPackets = 0, catchUpPackets = 0, bufferedSamples = emptyMap(),
+            targetSamples = targets,
+        )
+    }
 }
 
 /** Advances only when a test says so, so anchors taken at different moments are always distinct. */

@@ -32,6 +32,7 @@ import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
 import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
+import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -95,6 +96,9 @@ class MumbleConnection internal constructor(
     override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
+
+    private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
+    override val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
     private val _audioRoutes = MutableStateFlow(AudioRoutes())
     override val audioRoutes: StateFlow<AudioRoutes> = _audioRoutes.asStateFlow()
 
@@ -230,6 +234,7 @@ class MumbleConnection internal constructor(
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
+    private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == attempt) _playoutStats.value = p }
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == attempt) _audioRoutes.value = r }
 
     /**
@@ -430,6 +435,7 @@ class MumbleConnection internal constructor(
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
+        _playoutStats.value = null
         _audioRoutes.value = AudioRoutes()
         return prior
     }
@@ -514,6 +520,7 @@ class MumbleConnection internal constructor(
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
+            childScope.launch { receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
             // Start the receiver if we are still on the current attempt. Guarded to avoid racing
             // with teardown(), which could leave a dangling playback thread. Both halves matter:
             // retire() clears `current` without bumping `attempt`. Every earlier return in this

@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.danielstiner.dumble.mumble.channeltree.Channel
@@ -42,6 +43,15 @@ class ChannelTreeViewTest {
 
     private fun roster(speaking: Set<Int>) = compose.setContent {
         ChannelTreeView(tree = tree, mySession = 8, speaking = speaking)
+    }
+
+    @Test fun tappingAUserRowReportsTheirSession() {
+        val clicked = mutableListOf<Int>()
+        compose.setContent {
+            ChannelTreeView(tree = tree, mySession = 8, speaking = emptySet(), onUserClick = { clicked += it })
+        }
+        compose.onNodeWithText("alice").performClick()
+        assertEquals(listOf(7), clicked)
     }
 
     /**

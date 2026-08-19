@@ -3,6 +3,7 @@ package me.danielstiner.dumble.ui.connect
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -39,7 +40,13 @@ import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 
 @Composable
-fun ChannelTreeView(tree: ChannelTree, mySession: Int, speaking: Set<Int>, modifier: Modifier = Modifier) {
+fun ChannelTreeView(
+    tree: ChannelTree,
+    mySession: Int,
+    speaking: Set<Int>,
+    onUserClick: (Int) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     // Flatten once per (tree, mySession, speaking); the list feeds a flat LazyColumn — no recursive composables.
     val rows = remember(tree, mySession, speaking) { channelTreeRows(tree, mySession, speaking) }
     LazyColumn(modifier, contentPadding = PaddingValues(vertical = 8.dp)) {
@@ -54,7 +61,7 @@ fun ChannelTreeView(tree: ChannelTree, mySession: Int, speaking: Set<Int>, modif
         ) { row ->
             when (row) {
                 is ChannelTreeRow.ChannelRow -> ChannelHeader(row)
-                is ChannelTreeRow.UserRow -> UserRow(row)
+                is ChannelTreeRow.UserRow -> UserRow(row, onUserClick)
             }
         }
     }
@@ -80,11 +87,12 @@ private fun ChannelHeader(ch: ChannelTreeRow.ChannelRow) {
 }
 
 @Composable
-private fun UserRow(u: ChannelTreeRow.UserRow) {
+private fun UserRow(u: ChannelTreeRow.UserRow, onClick: (Int) -> Unit) {
     ListItem(
         // ListItem's own 16dp start padding equals ChannelHeader's indent at depth 0; adding
         // depth * 12dp mirrors the header's per-level step so a user sits under its own channel.
-        modifier = Modifier.padding(start = (u.depth * 12).dp),
+        // clickable inside the padding so the ripple stays under the row, not the indent.
+        modifier = Modifier.padding(start = (u.depth * 12).dp).clickable { onClick(u.session) },
         leadingContent = { Avatar(u) },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -103,7 +111,6 @@ private fun UserRow(u: ChannelTreeRow.UserRow) {
     }
 }
 
-private val AvatarSize = 40.dp
 private val HaloBoxSize = 48.dp
 
 // Extent is taste. Alpha is not: the halo is the only visual speaking cue, and 0.60 measured
@@ -151,16 +158,7 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.size(AvatarSize), contentAlignment = Alignment.Center) {
-            Box(
-                Modifier.matchParentSize().clip(CircleShape).background(avatarColor(u.name)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    u.name.firstCodePoint().uppercase(),
-                    color = AvatarInitialColor,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
+            AvatarCircle(u.name, Modifier.matchParentSize())
             userBadge(u)?.let { badge ->
                 Box(
                     Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
@@ -179,12 +177,3 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
         }
     }
 }
-
-/**
- * The name's first code point — [String.take] splits a surrogate pair and renders half an emoji.
- *
- * Code points, not grapheme clusters: a name opening with a combining mark loses the mark.
- * `internal` only so [ChannelTreeViewInitialTest] can reach it without a composable.
- */
-internal fun String.firstCodePoint(): String =
-    if (isEmpty()) "" else String(Character.toChars(codePointAt(0)))
