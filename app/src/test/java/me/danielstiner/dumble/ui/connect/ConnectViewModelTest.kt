@@ -628,7 +628,63 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.roundTripTime.value = 12.5.milliseconds
         advanceUntilIdle()
-        // the boxed and primitive overloads there.
         assertEquals(12.5.milliseconds, vm.uiState.value.roundTripTime)
+    }
+
+    @Test fun theSelectedUsersTargetReachesUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9))
+        conn.emitTargets(mapOf(9 to 120 * 48))
+        vm.openUserDetail(9)
+        runCurrent()
+
+        assertEquals(9, vm.uiState.value.selectedSession)
+        assertEquals(120, vm.uiState.value.playoutStats?.targetMillis(9))
+    }
+
+    /** A speaker the engine has retired has no target, and the sheet must say so rather than 0. */
+    @Test fun aSilentUserHasNoTarget() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9))
+        conn.emitTargets(mapOf(7 to 80 * 48))
+        vm.openUserDetail(9)
+        runCurrent()
+
+        assertNull(vm.uiState.value.playoutStats?.targetMillis(9))
+    }
+
+    /**
+     * The selection is a session, and the sheet renders from the tree, so a subject who leaves —
+     * or a disconnect, which empties the tree — has to take the sheet with them.
+     */
+    @Test fun aSelectedUserWhoLeavesClosesTheSheet() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9))
+        vm.openUserDetail(9)
+        runCurrent()
+        assertEquals(9, vm.uiState.value.selectedSession)
+
+        conn.channelTree.value = treeWith(user(7))
+        runCurrent()
+        assertNull(vm.uiState.value.selectedSession)
+    }
+
+    @Test fun closingClearsTheSelection() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9))
+        vm.openUserDetail(9)
+        runCurrent()
+
+        vm.closeUserDetail()
+        runCurrent()
+        assertNull(vm.uiState.value.selectedSession)
     }
 }

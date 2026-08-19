@@ -7,8 +7,8 @@ import java.util.Locale
  *
  * Receive-side only, and named for it: capture latency will arrive as a sibling from the transmit
  * path, and composing the two is [me.danielstiner.dumble.mumble.connection.MumbleConnection]'s job,
- * since it is the only place that also sees ping. Nothing consumes this yet — it exists because the
- * planned stats pages are a stated destination and the shape is cheap to get right now.
+ * since it is the only place that also sees ping. The UI reads [targetMillis] off it for one
+ * speaker at a time; the rest is still logcat-only.
  *
  * [underruns], [concealedGaps] and [droppedPackets] are counts within the current talk spurt,
  * not cumulative: a cumulative underrun count would report the silence we deliberately leave
@@ -44,6 +44,12 @@ data class PlayoutStats(
     val bufferedSamples: Map<Int, Int>,
     val targetSamples: Map<Int, Int>,
 ) {
+    /**
+     * One speaker's target in milliseconds, or null if the engine holds no slot for them — it
+     * retires a speaker after `kRetireIdlePolls`, so absence means "has not sent recently".
+     */
+    fun targetMillis(session: Int): Int? = targetSamples[session]?.div(SAMPLE_RATE / 1000)
+
     /**
      * Sibling of [CaptureStats.summary]; the two are read side by side in one logcat, so they
      * share a shape. Latency is the floor on mouth-to-ear.

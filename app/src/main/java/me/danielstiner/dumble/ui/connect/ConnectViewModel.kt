@@ -26,6 +26,7 @@ import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -79,14 +80,24 @@ data class ConnectUiState(
     // reading so the elapsed duration can only be taken against the clock that produced it —
     // elapsedNow() — instead of against wall time, with which it shares no origin.
     val connectedSince: ComparableTimeMark? = null,
+    // Whose detail sheet is open. The session rather than the row, so a tree that reshapes under
+    // the sheet cannot leave it describing the wrong person.
+    val selectedSession: Int? = null,
+    val playoutStats: PlayoutStats? = null,
 )
 
 private data class ConnSnapshot(
     val status: ConnectionStatus,
-    val roundTripTime: Duration?,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
     val audioRoutes: AudioRoutes,
+)
+
+/** How the link is carrying the session, as opposed to what is on it. */
+private data class HealthSnapshot(
+    val roundTripTime: Duration?,
+    val lastServerReplyAt: ComparableTimeMark?,
+    val playoutStats: PlayoutStats?,
 )
 
 @HiltViewModel
@@ -114,18 +125,20 @@ class ConnectViewModel internal constructor(
     // decoded incoming audio and our own audio is never decoded locally.
     private val transmitting = MutableStateFlow(false)
 
-    // Kotlin's typed combine() maxes at 5 flows; nest the connection flows into one snapshot so the
-    // top-level stays inside it too. Both are at five now — the next flow either joins ConnSnapshot
-    // or needs a second one.
+    // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
+    // keep the top-level inside it too. Split by what they describe rather than by arity.
     private val connSnapshot = combine(
-        connection.status, connection.roundTripTime,
-        connection.channelTree, connection.messages, connection.audioRoutes,
-    ) { status, rtt, tree, msgs, routes -> ConnSnapshot(status, rtt, tree, msgs, routes) }
+        connection.status, connection.channelTree, connection.messages, connection.audioRoutes,
+    ) { status, tree, msgs, routes -> ConnSnapshot(status, tree, msgs, routes) }
+
+    private val healthSnapshot = combine(
+        connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
+    ) { rtt, replyAt, playout -> HealthSnapshot(rtt, replyAt, playout) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
-            form, connSnapshot, connection.speakingSessions, transmitting, connection.lastServerReplyAt,
-        ) { f, c, speaking, tx, pingReplyAt ->
+            form, connSnapshot, healthSnapshot, connection.speakingSessions, transmitting,
+        ) { f, c, health, speaking, tx ->
             val status = c.status
             val session = (status as? ConnectionStatus.Connected)?.sessionId
             val me = session?.let { c.channelTree.users[it] }
@@ -135,12 +148,16 @@ class ConnectViewModel internal constructor(
             // server discarding us — and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { tx && block == null }
             f.copy(
-                status = status, roundTripTime = c.roundTripTime, lastServerReplyAt = pingReplyAt,
+                status = status, roundTripTime = health.roundTripTime,
+                lastServerReplyAt = health.lastServerReplyAt, playoutStats = health.playoutStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 deafened = me?.selfDeaf == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
+                // The sheet renders from the tree, so a selection outliving its user — including
+                // at disconnect, which empties the tree — would have a name it cannot look up.
+                selectedSession = f.selectedSession?.takeIf { it in c.channelTree.users },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -205,6 +222,8 @@ class ConnectViewModel internal constructor(
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
     fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }
+    fun openUserDetail(session: Int) { form.value = form.value.copy(selectedSession = session) }
+    fun closeUserDetail() { form.value = form.value.copy(selectedSession = null) }
     fun openSettings() { form.value = form.value.copy(route = Route.Settings) }
     fun openAbout() { form.value = form.value.copy(route = Route.About) }
     /** About is nested under Settings, so backing out of it lands there, not on the form. */
