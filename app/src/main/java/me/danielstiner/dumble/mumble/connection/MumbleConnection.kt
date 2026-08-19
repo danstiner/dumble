@@ -26,7 +26,7 @@ import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
-import me.danielstiner.dumble.mumble.protocol.UserPing
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
@@ -101,8 +101,8 @@ class MumbleConnection internal constructor(
     private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
     override val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
 
-    private val _userPing = MutableStateFlow<UserPing?>(null)
-    override val userPing: StateFlow<UserPing?> = _userPing.asStateFlow()
+    private val _userStats = MutableStateFlow<UserStats?>(null)
+    override val userStats: StateFlow<UserStats?> = _userStats.asStateFlow()
     private val _audioRoutes = MutableStateFlow(AudioRoutes())
     override val audioRoutes: StateFlow<AudioRoutes> = _audioRoutes.asStateFlow()
 
@@ -239,7 +239,7 @@ class MumbleConnection internal constructor(
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == attempt) _playoutStats.value = p }
-    private fun publishUserPing(gen: Int, p: UserPing?) = synchronized(lock) { if (gen == attempt) _userPing.value = p }
+    private fun publishUserStats(gen: Int, p: UserStats?) = synchronized(lock) { if (gen == attempt) _userStats.value = p }
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == attempt) _audioRoutes.value = r }
 
     /**
@@ -441,7 +441,7 @@ class MumbleConnection internal constructor(
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
         _playoutStats.value = null
-        _userPing.value = null
+        _userStats.value = null
         _audioRoutes.value = AudioRoutes()
         return prior
     }
@@ -527,7 +527,7 @@ class MumbleConnection internal constructor(
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
             childScope.launch { receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
-            childScope.launch { sm.userPing.collect { publishUserPing(gen, it) } }
+            childScope.launch { sm.userStats.collect { publishUserStats(gen, it) } }
             // Start the receiver if we are still on the current attempt. Guarded to avoid racing
             // with teardown(), which could leave a dangling playback thread. Both halves matter:
             // retire() clears `current` without bumping `attempt`. Every earlier return in this

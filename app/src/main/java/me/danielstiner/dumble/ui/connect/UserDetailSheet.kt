@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import me.danielstiner.dumble.mumble.protocol.UserStats
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.seconds
@@ -29,13 +30,16 @@ import kotlinx.coroutines.delay
  * [playoutTargetMillis] is labelled for the buffer, not for delay: it is only the buffer's share
  * of the total, which runs 120-180 ms on a Pixel 7a where this reads 30.
  *
- * The ping rows are the other half of the path: the server's round trip to them, which it measures
- * and we cannot. Ours sits in the status line above the roster, so they read together.
+ * [stats] is the other half of the path: what the server measures about them, which we cannot.
+ * Our own round trip sits in the status line above the roster, so they read together.
  *
  * Voice path is derived rather than reported — murmur exchanges UDP pings only with a peer that
  * has a working UDP path, so an average there is the evidence. Cumulative since they connected, so
  * it says "has had UDP", not "is on UDP this second". Everyone reads TCP until dumble gains a UDP
  * path of its own.
+ *
+ * Jitter sits directly above the buffer it explains: their variation in arrival, then how much we
+ * hold to absorb it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,8 +47,7 @@ fun UserDetailSheet(
     session: Int,
     name: String,
     playoutTargetMillis: Int?,
-    tcpPingMillis: Float?,
-    udpPingMillis: Float?,
+    stats: UserStats?,
     onRefresh: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -69,9 +72,11 @@ fun UserDetailSheet(
                 )
             }
             Spacer(Modifier.height(24.dp))
-            StatRow("Voice path", if (udpPingMillis != null) "UDP" else "TCP")
-            StatRow("TCP ping", tcpPingMillis.millis())
-            StatRow("UDP ping", udpPingMillis.millis())
+            StatRow("Voice path", if (stats?.udpPingMillis != null) "UDP" else "TCP")
+            StatRow("TCP ping", stats?.tcpPingMillis.millis())
+            StatRow("UDP ping", stats?.udpPingMillis.millis())
+            StatRow("Jitter", stats?.jitterMillis.millis())
+            StatRow("Bandwidth", stats?.bandwidthBitsPerSecond.kilobits())
             StatRow("Jitter buffer", playoutTargetMillis?.let { "$it ms" } ?: NoReading)
         }
     }
@@ -96,6 +101,10 @@ private fun Float?.millis(): String = when {
     this < 10f -> "%.1f ms".format(Locale.ROOT, this)
     else -> "${roundToInt()} ms"
 }
+
+/** Kilobits, because a voice stream is tens of them and the bits are noise at this width. */
+private fun Int?.kilobits(): String =
+    this?.let { "%.1f kbit/s".format(Locale.ROOT, it / 1000f) } ?: NoReading
 
 @Composable
 private fun StatRow(label: String, value: String) {

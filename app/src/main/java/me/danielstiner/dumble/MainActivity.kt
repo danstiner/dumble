@@ -82,8 +82,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     selectedSession = state.selectedSession,
                     selectedPlayoutTargetMillis =
                         state.selectedSession?.let { state.playoutStats?.targetMillis(it) },
-                    selectedTcpPingMillis = state.userPing?.tcpMillis,
-                    selectedUdpPingMillis = state.userPing?.udpMillis,
+                    selectedStats = state.userStats,
                     onUserClick = vm::openUserDetail,
                     onRefreshUserStats = vm::refreshUserStats,
                     onDismissUserDetail = vm::closeUserDetail,
