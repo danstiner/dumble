@@ -9,7 +9,7 @@ namespace dumble::playout {
  * One speaker's queue of still-encoded packets — the jitter buffer.
  *
  * Audio waits here compressed for as long as the network requires, bounded by kHighWaterSamples
- * and kMaxQueuedPackets. A new talk spurt is held until kPrebufferSamples are queued, so the first
+ * and kMaxQueuedPackets. A new talk spurt is held until the target is queued, so the first
  * network stall does not glitch the first syllable.
  *
  * Knows nothing about Opus, and holds no audio of its own — only bytes, and the sample count the
@@ -34,15 +34,23 @@ public:
      *  oversized `len` aborts in release as well: past one entry lies the rest of the pool.
      *
      *  A terminator with no payload is the ordinary way a spurt ends: `data` may be null when
-     *  `len` is 0, and the latch is what releases a tail below kPrebufferSamples. */
+     *  `len` is 0, and the latch is what releases a tail below the target. */
     void offer(const uint8_t* data, int len, int samples, bool terminator);
 
     /** Copies the next playable packet into `out`, returning its length; 0 when the queue is empty
      *  or the prebuffer gate has not opened, negative when `outCap` is too small for the packet.
      *
+     *  `target` is the depth the gate waits for, supplied per call rather than held: it is the
+     *  engine's estimate, and a queue that stored it would be storing policy. The gate latches
+     *  open, so a target that moves mid-spurt cannot re-close it.
+     *
+     *  `catchUpAllowed` permits the catch-up trim at the moment the gate opens — see the trim in
+     *  the implementation for what it costs and why the caller, not this class, decides. Ignored
+     *  once the gate is already open.
+     *
      *  Copies rather than lending a pointer into the pool: offer() runs on the reader thread and
      *  may overwrite this entry while the caller decodes with the mutex released. */
-    int pop(uint8_t* out, int outCap);
+    int pop(uint8_t* out, int outCap, int target, bool catchUpAllowed);
 
     /** Closes the fill, re-arming the prebuffer gate once the spurt has fully played out — the
      *  last pop() came up empty and the decoder emitted nothing. On idle rather than on the
@@ -71,6 +79,24 @@ public:
     /** No packets queued. The engine pairs this with the decoder's output to tell a speaker that
      *  has stopped talking from one still waiting out its prebuffer. */
     bool empty() const { return count_ == 0; }
+
+    /** Whether dropping the oldest packet would leave at least `floor` samples queued. The
+     *  no-undershoot rule as arithmetic rather than as a constant chosen large enough to usually
+     *  work: it self-adapts to the sender's packet duration, which is the difference between
+     *  correct and merely lucky for a 60 ms sender. */
+    bool canShrink(int floor) const;
+
+    /** Discards the oldest packet to shed standing delay. The caller owns the energy gate and the
+     *  cooldown; this is only the mechanism. */
+    void shrink();
+
+    /** Whether playout has started for the current spurt. */
+    bool gateOpen() const { return gateOpen_; }
+
+    /** Packets deliberately discarded to shed delay, split by which mechanism did it. Separate
+     *  from droppedPackets(), which means the network cost us audio — neither of these did. */
+    int shrunkPackets() const { return shrunkPackets_; }
+    int catchUpPackets() const { return catchUpPackets_; }
 
     /** Gate open and no terminator: the sender is mid-spurt. Distinguishes a dropout from the two
      *  expected silences — prebuffering and speech that ended normally. Read before endFill,
@@ -108,6 +134,8 @@ private:
     // reads it: without it every normal end of speech would look like a dropout.
     bool terminated_ = false;
     int droppedPackets_ = 0;
+    int shrunkPackets_ = 0;
+    int catchUpPackets_ = 0;
     Entry entries_[kMaxQueuedPackets];
 };
 

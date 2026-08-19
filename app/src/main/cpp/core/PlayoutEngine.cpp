@@ -1,9 +1,26 @@
 #include "core/PlayoutEngine.h"
 #include <cstring>
+#include <ctime>
 #include "core/AudioDecoder.h"
 #include "core/Mixer.h"
 
 namespace dumble::playout {
+
+namespace {
+
+// CLOCK_BOOTTIME and not CLOCK_MONOTONIC — which is what std::chrono::steady_clock gives on
+// bionic, so it cannot be used here. frame_number is a sender-side wall-clock counter that keeps
+// advancing through suspend; if our arrival clock stopped during deep sleep and the sender's did
+// not, the first packet after resume would look impossibly early, become the window minimum, and
+// leave every packet after it reading as hugely late. BootTimeSource made the same choice on the
+// Kotlin side for the same reason.
+int64_t bootMillis() {
+    timespec ts{};
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+}  // namespace
 
 std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuantumSamples) {
     if (maxQuantumSamples <= 0 || maxQuantumSamples > kMaxPacketSamples) return nullptr;
@@ -16,7 +33,11 @@ std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuan
     return engine;
 }
 
-int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool terminator) {
+int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber,
+                         bool terminator) {
+    // Stamped before the payload is judged, so our own parse cost is not laundered into the jitter
+    // measurement.
+    const int64_t arrivalMillis = bootMillis();
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
@@ -25,7 +46,12 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool ter
         verdict = kOfferPacketTooLarge;
     } else if (len > 0) {
         samples = AudioDecoder::packetSamples(data, len, sampleRate_);
-        if (samples <= 0) verdict = kOfferMalformedPacket;
+        // Zeroed because the negative is libopus's error code, and everything below — observe(),
+        // queue.offer() — takes a duration.
+        if (samples <= 0) {
+            verdict = kOfferMalformedPacket;
+            samples = 0;
+        }
     }
     // A refused payload is dropped, unless it carries the terminator flag. is_terminator is a
     // protobuf field, so we should respect it even if the opus data is malformed.
@@ -33,6 +59,14 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool ter
 
     std::lock_guard<std::mutex> guard(mutex_);
     const int slot = slotFor(session);
+    // Before the cap's early return: a packet refused for want of a slot still arrived, and its
+    // sender is exactly the one whose estimate we want warm for when a slot frees.
+    const int estimator = estimatorFor(session, arrivalMillis);
+    // The slot's index into the table, so fillQuantum indexes rather than scanning. Set here
+    // because this is the one place both the slot and the entry are resolved together.
+    if (slot >= 0) estimatorIndex_[slot] = estimator;
+    const int relative = estimators_[estimator].observe(frameNumber, samples, arrivalMillis);
+    if (relative >= 0) downlink_.observeRelativeDelay(relative, arrivalMillis);
     // Charged to the engine because there is no queue to charge it to: a capped session's packets
     // are as lost as ones a live queue overflowed away.
     if (slot < 0) {
@@ -43,10 +77,40 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, bool ter
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator);
     } else {
-        // Terminator-only, the opus data was rejected.
         queue.offer(nullptr, 0, 0, true);
     }
     return verdict;
+}
+
+int PlayoutEngine::estimatorFor(int32_t session, int64_t arrivalMillis) {
+    int free = -1;
+    int oldest = -1;
+    for (int i = 0; i < kEstimatorSlots; i++) {
+        if (!estimatorUsed_.test(i)) {
+            if (free < 0) free = i;
+        } else if (estimatorSessions_[i] == session) {
+            estimatorLastArrival_[i] = arrivalMillis;
+            return i;
+        } else if (oldest < 0 || estimatorLastArrival_[i] < estimatorLastArrival_[oldest]) {
+            oldest = i;
+        }
+    }
+    const int claimed = free >= 0 ? free : oldest;
+    estimators_[claimed].reset();
+    estimatorUsed_.set(claimed);
+    estimatorSessions_[claimed] = session;
+    estimatorLastArrival_[claimed] = arrivalMillis;
+    // Start from what the link has already shown us rather than from the cold constant. Only the
+    // histogram travels; the baseline is per-sender and stays empty, so this sender's first packet
+    // is still a rebase.
+    if (downlink_.hasData()) estimators_[claimed].seedFrom(downlink_);
+    return claimed;
+}
+
+JitterEstimator* PlayoutEngine::estimatorForSlot(int slot) {
+    const int i = estimatorIndex_[slot];
+    if (estimatorUsed_.test(i) && estimatorSessions_[i] == sessions_[slot]) return &estimators_[i];
+    return nullptr;
 }
 
 int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
@@ -68,6 +132,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // no snapshot of their own — create() built them and nothing replaces them.
     int live[kMaxSpeakers];
     bool speaking[kMaxSpeakers];
+    int target[kMaxSpeakers];
     int liveCount = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -77,6 +142,18 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             // mutex released. A terminator landing during the decodes therefore costs one concealed
             // frame — one frame of fade at the end of speech.
             speaking[liveCount] = queues_[i].speaking();
+            // A live slot with no table entry is only reachable if the LRU evicted a speaker who
+            // is still talking, which 64 entries against 8 slots makes vanishingly unlikely. The
+            // cold constant is the right answer if it ever happens.
+            const JitterEstimator* est = estimatorForSlot(i);
+            target[liveCount] = est ? est->targetSamples() : kColdStartSamples;
+            // Unlike target, catchUpAllowed is not snapshotted here: the gate latches, so a target
+            // that moves between snapshot and pop cannot re-close it and staleness there is
+            // harmless. discontinuous() can flip false->true inside this same window if a fresh
+            // spurt's burst arrives while the decode phase runs unlocked, and a stale true here
+            // would open the gate on a first syllable as if it were a mid-spurt catch-up — the
+            // exact trim the contiguity test exists to refuse. So it is read fresh inside pop's own
+            // lock instead of carried from this snapshot.
             live[liveCount++] = i;
         }
     }
@@ -94,7 +171,9 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             int len;
             {
                 std::lock_guard<std::mutex> guard(mutex_);
-                len = queue.pop(packetScratch_, kMaxPacketBytes);
+                const JitterEstimator* est = estimatorForSlot(live[n]);
+                len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
+                                est && !est->discontinuous());
             }
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);
@@ -136,11 +215,30 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
                 if (produced[n] > 0 && produced[n] < samples) concealedGaps_++;
             }
             queue.endFill(audible);
+            // Once the spurt is playing the latch has done its job; a break arriving later sets it
+            // again for the next gate-open.
+            if (queue.gateOpen()) {
+                if (JitterEstimator* est = estimatorForSlot(i)) est->clearDiscontinuity();
+            }
+            // Shed one packet of standing delay, but only where it cannot be heard. quiet()
+            // describes the frame just decoded, so a fill that produced nothing has a stale
+            // answer; the deadband is hysteresis and canShrink is what stops an undershoot. A
+            // concealed fill can also reach here on a stale quiet(), which is harmless: it wants
+            // delay shed if the backlog allows it, the same as any other fill.
+            if (produced[n] > 0) {
+                if (shrinkQuanta_[i] >= kShrinkCooldownQuanta && decoders_[i]->quiet() &&
+                    queue.canShrink(target[n] + kShrinkDeadbandSamples)) {
+                    queue.shrink();
+                    shrinkQuanta_[i] = 0;
+                } else {
+                    shrinkQuanta_[i]++;
+                }
+            }
             idlePolls_[i] = audible ? 0 : idlePolls_[i] + 1;
             // Two windows, because "produced nothing this fill" means two different things. Once
             // the queue is drained it means the speaker stopped talking, the short window. While
             // packets remain it means the prebuffer gate has not opened yet — a spurt is silent
-            // for its first kPrebufferSamples, and the loop fills faster than 100 Hz while doing
+            // until it reaches the target, and the loop fills faster than 100 Hz while doing
             // so because each arriving packet wakes it, so charging those as idle would retire a
             // speaker before it plays. Read fresh here, unlike the pop-time record endFill's
             // re-arm judges by: retiring resets the queue, and a packet that arrived during the
@@ -154,6 +252,8 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
                 // clears it, and a channel that dropped audio all session must not report zero
                 // the moment its speaker goes quiet.
                 droppedPackets_ += queue.droppedPackets();
+                shrunkPackets_ += queue.shrunkPackets();
+                catchUpPackets_ += queue.catchUpPackets();
                 queue.reset();
                 decoders_[i]->reset();
                 slots_.clear(i);
@@ -172,16 +272,24 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
     // the sum of the two — and both under one lock, since retirement moves a tally from one to
     // the other and a read straddling it would count that speaker twice or not at all.
     int64_t dropped = droppedPackets_;
+    int64_t shrunk = shrunkPackets_;
+    int64_t caughtUp = catchUpPackets_;
     for (int i = 0; i < kMaxSpeakers; i++) {
         if (!slots_.test(i)) continue;
         out.sessions[n] = sessions_[i];
         out.depths[n] = queues_[i].depthSamples();
+        const JitterEstimator* est = estimatorForSlot(i);
+        out.targets[n] = est ? est->targetSamples() : kColdStartSamples;
         dropped += queues_[i].droppedPackets();
+        shrunk += queues_[i].shrunkPackets();
+        caughtUp += queues_[i].catchUpPackets();
         n++;
     }
     out.speakers = n;
     out.concealedGaps = concealedGaps_;
     out.droppedPackets = dropped;
+    out.shrunkPackets = shrunk;
+    out.catchUpPackets = caughtUp;
     return out;
 }
 
@@ -207,6 +315,7 @@ int PlayoutEngine::slotFor(int32_t session) {
     sessions_[free] = session;
     idlePolls_[free] = 0;
     stallQuanta_[free] = 0;
+    shrinkQuanta_[free] = 0;
     return free;
 }
 

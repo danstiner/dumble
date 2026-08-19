@@ -18,25 +18,25 @@ namespace dumble::playout {
 // reach it, and the server could mute us outright anyway.
 constexpr int kMaxSpeakers = 8;
 
-// 120 ms at 48 kHz, the largest legal Opus packet, so a malformed or unusually long packet cannot
-// overrun the decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and
-// one in bytes. Packet and not frame — the largest single Opus frame is the 20 ms kTxPacketSamples,
+// 48 kHz, the one rate the whole playout path assumes — Mumble is 48 kHz end to end. A constant
+// rather than the engine's runtime sampleRate_ so sample counts stay compile-time: durations are
+// the tuned quantities, and the sample counts derive from them.
+constexpr int kSamplesPerMilli = 48;
+
+// The largest legal Opus packet, so a malformed or unusually long packet cannot overrun the
+// decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and one in
+// bytes. Packet and not frame — the largest single Opus frame is the 20 ms kTxPacketSamples,
 // and 40 ms and up are multi-frame packets.
-constexpr int kMaxPacketSamples = 5760;
+constexpr int kMaxPacketSamples = 120 * kSamplesPerMilli;
 
 // libopus's concealment granularity, 2.5 ms at 48 kHz: opus_decode answers OPUS_BAD_ARG for a
 // frame_size off this grid when it is concealing rather than decoding.
 constexpr int kConcealGridSamples = 120;
 
-// 60 ms. Playout margin armed at the start of each talk spurt. TCP removes reordering and loss but
-// not head-of-line burstiness, and a pipeline fed at exactly 1x real time carries no margin of its
-// own — without this, the first retransmit stall glitches.
-constexpr int kPrebufferSamples = 2880;
-
-// 600 ms. Only reachable if playback has stalled outright. In samples because packet duration is
-// the sender's choice, so a packet count would mean 320 ms from a 10 ms sender and 1.9 s from a
+// Only reachable if playback has stalled outright. In samples because packet duration is the
+// sender's choice, so a packet count would mean 320 ms from a 10 ms sender and 1.9 s from a
 // 60 ms one.
-constexpr int kHighWaterSamples = 28800;
+constexpr int kHighWaterSamples = 600 * kSamplesPerMilli;
 
 // Polls after a speaker's queue has drained before its decoder and pool are released. A poll is a
 // fillQuantum call that produced nothing, so the loop parks rather than writing and these outrun real
@@ -54,14 +54,14 @@ constexpr int kRetireIdlePolls = 10;
 // break has been heard as one, and re-anchoring with a fresh prebuffer beats splicing across it.
 constexpr int kConcealQuanta = 10;
 
-// Backstop for a spurt that stalled below kPrebufferSamples and never got a terminator — a sender
+// Backstop for a spurt that stalled below the target and never got a terminator — a sender
 // that died mid-spurt. It produces nothing and never drains, so the short window can never apply
 // to it and the slot would be held for the life of the connection.
 //
 // ~1 s at best, and a ceiling rather than a period: these are polls, which outrun real time. Sized
 // from what the fragment is worth, not from how long a link can stall — the most this window can
-// protect is the sub-60 ms of audio sitting below the prebuffer gate, and audio spliced in a second
-// after it was spoken is heard as a click, not as speech.
+// protect is the sub-target audio sitting below the gate, at most kMaxTargetMillis of it, and
+// audio spliced in a second after it was spoken is heard as a click, not as speech.
 constexpr int kStallIdlePolls = 100;
 
 // Packets a speaker's queue can hold at once. 32 is 320 ms from a 10 ms sender and 1.9 s from a
@@ -78,6 +78,90 @@ constexpr int kMaxQueuedPackets = 32;
 // dumble::kMaxPacketBytes on the capture side. The Opus format itself permits larger packets;
 // nothing that could send one is a peer we serve.
 constexpr int kMaxPacketBytes = 1276;
+
+// The unit MumbleUDP.Audio.frame_number counts in. Sibling of CaptureConstants.h's
+// kFrameSamples, in milliseconds because the estimator's arithmetic is millisecond-wide:
+// nanoseconds times a sample rate overflows int64 at plausible boot times.
+constexpr int kFrameNumberMillis = 10;
+
+// Sliding-minimum bucket. Two are kept, so the baseline is the minimum over 1-2 s of arrivals —
+// NetEq's kPacketHistorySizeMs is 2000 over an exact deque, which at 64 tracked senders would be
+// 12800 entries to answer a running minimum. Two buckets answer it in O(1) state.
+constexpr int kBaselineBucketMillis = 1000;
+
+// Past this a frame number times kFrameNumberMillis stops being worth reasoning about, and it is
+// peer-controlled. ~317 years of 10 ms frames, so no honest sender reaches it.
+constexpr uint64_t kMaxFrameNumber = 1'000'000'000'000'000ULL;
+
+// One histogram update per 500 ms of arrivals, carrying that window's worst relative delay.
+// NetEq's resample_interval_ms. The pair (peak-hold interval, forget factor) is what sets the
+// estimate's time constant, so neither may be changed without the other: 0.983 per update at
+// 500 ms per update is roughly a 29 s memory.
+constexpr int kPeakHoldMillis = 500;
+
+// 32 buckets of 20 ms — 640 ms of range. NetEq uses 100 buckets to reach 2000 ms; kHighWaterSamples
+// caps us at 600, so the rest would never be addressed.
+constexpr int kTargetBucketMillis = 20;
+constexpr int kTargetBuckets = 32;
+
+// The 95th percentile of the histogram, as a fraction. Integer so the quantile search needs no
+// float.
+constexpr int kTargetQuantileNumerator = 95;
+constexpr int kTargetQuantileDenominator = 100;
+
+// 0.983 in Q15, NetEq's forget_factor. Buckets are scaled so they always sum to 1<<30.
+constexpr int kForgetFactorQ15 = 32211;
+
+// Ramps the effective forget factor in from zero over the first updates, so a cold estimator
+// follows its first arrivals instead of averaging them against an empty histogram.
+constexpr int kStartForgetWeight = 2;
+
+// Added to the quantile before clamping. Mumble's own margin (Settings.h iJitterBufferSize = 1,
+// times a 10 ms frame), and in the same additive role: speexdsp subtracts it from every timing
+// sample rather than treating it as a floor.
+constexpr int kSafetyMarginMillis = 10;
+
+// A safety rail, not the operating point. On a clean link the lowest bucket already answers 20 ms,
+// so with the margin the target settles near 30 and the floor never binds.
+constexpr int kMinTargetMillis = 10;
+
+// 75 % of kHighWaterSamples — NetEq's rule that a target must stay clear of the buffer's
+// capacity, and derived so it tracks that capacity if it moves. It is not the tighter bound:
+// kMaxQueuedPackets binds first for any sender below 20 ms (32 packets is 320 ms at 10 ms/packet,
+// under this 450 ms clamp), so such a sender's ring can never physically reach this target. That
+// is safe only because PacketQueue::pop treats a full ring as gate-open regardless of target —
+// without that check this clamp would leave the gate shut, and every further packet dropped as
+// overflow, for as long as the target stayed high.
+constexpr int kMaxTargetMillis = kHighWaterSamples / kSamplesPerMilli * 3 / 4;
+
+// NetEq's kStartDelayMs. 20 ms worse than the fixed 60 ms margin it replaces, for the first
+// spurt of the first speaker in a session and nothing after — the engine-wide histogram seeds
+// every later newcomer. Kept at NetEq's measured value rather than tuned to match the old
+// behaviour, because we have no measurement of our own yet.
+constexpr int kColdStartMillis = 80;
+constexpr int kColdStartSamples = kColdStartMillis * kSamplesPerMilli;
+
+// How far past the target a gate-open may sit before the backlog is trimmed rather than carried.
+// The same 100 ms span and the same reasoning as kConcealQuanta — prose, not arithmetic, because
+// that one counts quanta and quanta are not durations: past about that long the break has already
+// been heard as one, so splicing the pre-gap audio back in gains a listener little and costs
+// standing delay for the rest of the spurt. Generous on purpose — an ordinary gate-open sits at
+// the target plus at most one packet, so the trim is a no-op and only a real overshoot reaches it.
+constexpr int kCatchUpThresholdSamples = 100 * kSamplesPerMilli;
+
+// Hysteresis on the shrink test. Overshoot is prevented by canShrink's arithmetic, not by this;
+// all it does is stop the depth oscillating across the target between quiet windows.
+constexpr int kShrinkDeadbandSamples = 20 * kSamplesPerMilli;
+
+// 2 s between shrinks, counted only on fills that produced — each is one quantum, paced by the
+// output write, so the count is real time. Polls run faster than 100 Hz because an arriving
+// packet wakes the loop, which is why idlePolls_ cannot be reused here.
+constexpr int kShrinkCooldownQuanta = 200;
+
+// Senders whose estimate we keep. Not kMaxSpeakers: 8 is the simultaneous-mixing bound, but a
+// channel has many more members than that and turn-taking cycles through them, so the table wants
+// everyone who has spoken recently. 64 entries is about 11 KB, allocated once.
+constexpr int kEstimatorSlots = 64;
 
 // offer() status codes. Every one is a condition a misbehaving server can produce at will, so the
 // caller latches its logs rather than treating them as failures.

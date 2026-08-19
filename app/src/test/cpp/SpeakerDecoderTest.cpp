@@ -37,7 +37,7 @@ TEST(SpeakerDecoder, CreateBuildsADecoderUpFront) {
     EXPECT_TRUE(SpeakerDecoder::create(dumble::kSampleRate, kFrame));
 }
 
-TEST(SpeakerDecoder, CreateRefusesAFrameTheFifoCannotBeSizedFrom) {
+TEST(SpeakerDecoder, CreateRefusesAQuantumTheFifoCannotBeSizedFrom) {
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, 0));
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, -1));
     EXPECT_FALSE(SpeakerDecoder::create(dumble::kSampleRate, pl::kMaxPacketSamples + 1));
@@ -191,4 +191,87 @@ TEST(SpeakerDecoder, ResetDropsConcealedAudioToo) {
     ASSERT_GT(d->conceal(kFrame), 0);
     d->reset();
     EXPECT_EQ(0, d->available());
+}
+
+TEST(SpeakerDecoder, IsNotQuietBeforeAnyAudio) {
+    auto decoder = newDecoder();
+    // No envelope yet, so nothing may be judged against it. Shrink reads this, and a fresh
+    // decoder answering "quiet" would let a speaker's opening packet be discarded.
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, IsNotQuietDuringTheTone) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto packet = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, IsQuietInTheSilenceAfterSpeech) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto packet = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto packet = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(packet.data(), int(packet.size()));
+    }
+    EXPECT_TRUE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, TheAttackEndsQuietImmediately) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto loud = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(loud.data(), int(loud.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto hush = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(hush.data(), int(hush.size()));
+    }
+    ASSERT_TRUE(decoder->quiet());
+    const auto attack = stream.encode(dumble::testtone::tone(kFrame));
+    decoder->decode(attack.data(), int(attack.size()));
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, SoftSpeechIsNotQuiet) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto loud = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(loud.data(), int(loud.size()));
+    }
+    // ~25 dB below the peak: amplitude 448 against 8000, a ratio of 0.056. Mumble's gate is
+    // amplitude < 0.01 of peak, so this is speech and must not be shrinkable. Squaring the
+    // envelope would make the ratio 0.0032, inside a 1% gate, and shrink would splice here.
+    // Digital silence passes either definition, which is why the other tests cannot see this.
+    for (int i = 0; i < 5; i++) {
+        const auto soft = stream.encode(dumble::testtone::tone(kFrame, 448.0));
+        decoder->decode(soft.data(), int(soft.size()));
+    }
+    EXPECT_FALSE(decoder->quiet());
+}
+
+TEST(SpeakerDecoder, ResetClearsTheEnvelope) {
+    auto decoder = newDecoder();
+    dumble::testtone::Stream stream;
+    for (int i = 0; i < 10; i++) {
+        const auto loud = stream.encode(dumble::testtone::tone(kFrame));
+        decoder->decode(loud.data(), int(loud.size()));
+    }
+    for (int i = 0; i < 5; i++) {
+        const auto hush = stream.encode(dumble::testtone::silence(kFrame));
+        decoder->decode(hush.data(), int(hush.size()));
+    }
+    ASSERT_TRUE(decoder->quiet());
+    // A slot about to serve a different sender must not carry the previous one's dynamic range.
+    decoder->reset();
+    EXPECT_FALSE(decoder->quiet());
 }
