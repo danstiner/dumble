@@ -10,6 +10,7 @@ import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
+import me.danielstiner.dumble.mumble.protocol.UserPing
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 
@@ -22,6 +23,7 @@ class FakeConnection : Connection {
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val playoutStats = MutableStateFlow<PlayoutStats?>(null)
+    override val userPing = MutableStateFlow<UserPing?>(null)
     override val audioRoutes = MutableStateFlow(AudioRoutes())
 
     var connectCalls = 0; private set
@@ -35,6 +37,7 @@ class FakeConnection : Connection {
     val transmitting = mutableListOf<Boolean>()
     val selfDeaf = mutableListOf<Boolean>()
     val routeRequests = mutableListOf<String>()
+    val userStatsRequests = mutableListOf<Int>()
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         connectCalls++; lastEndpoint = endpoint
@@ -49,6 +52,8 @@ class FakeConnection : Connection {
     override fun setSelfDeaf(on: Boolean) { selfDeaf += on }
 
     override fun requestAudioRoute(routeId: String) { routeRequests += routeId }
+
+    override fun requestUserStats(session: Int) { userStatsRequests += session }
 
     fun emitConnected(sessionId: Int) { status.value = ConnectionStatus.Connected(sessionId) }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }

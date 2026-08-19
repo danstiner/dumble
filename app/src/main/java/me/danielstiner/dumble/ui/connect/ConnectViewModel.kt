@@ -25,6 +25,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.protocol.UserPing
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import javax.inject.Inject
@@ -84,6 +85,10 @@ data class ConnectUiState(
     // the sheet cannot leave it describing the wrong person.
     val selectedSession: Int? = null,
     val playoutStats: PlayoutStats? = null,
+    // The selected user's ping, or null when the server has not answered for them. Already
+    // matched against [selectedSession]: the reply is asynchronous, so one for the user whose
+    // sheet just closed must never be read under whoever is on screen now.
+    val userPing: UserPing? = null,
 )
 
 private data class ConnSnapshot(
@@ -98,6 +103,7 @@ private data class HealthSnapshot(
     val roundTripTime: Duration?,
     val lastServerReplyAt: ComparableTimeMark?,
     val playoutStats: PlayoutStats?,
+    val userPing: UserPing?,
 )
 
 @HiltViewModel
@@ -133,7 +139,8 @@ class ConnectViewModel internal constructor(
 
     private val healthSnapshot = combine(
         connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
-    ) { rtt, replyAt, playout -> HealthSnapshot(rtt, replyAt, playout) }
+        connection.userPing,
+    ) { rtt, replyAt, playout, ping -> HealthSnapshot(rtt, replyAt, playout, ping) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
@@ -147,6 +154,10 @@ class ConnectViewModel internal constructor(
             // nothing we send is carried — a denied permission, an engine that never opened, or a
             // server discarding us — and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { tx && block == null }
+            // Dropped when its subject leaves — including at disconnect, which empties the tree.
+            // The sheet renders from the tree, so a selection that outlived its user would leave
+            // it with a name it cannot look up.
+            val selected = f.selectedSession?.takeIf { it in c.channelTree.users }
             f.copy(
                 status = status, roundTripTime = health.roundTripTime,
                 lastServerReplyAt = health.lastServerReplyAt, playoutStats = health.playoutStats,
@@ -155,9 +166,8 @@ class ConnectViewModel internal constructor(
                 deafened = me?.selfDeaf == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
-                // The sheet renders from the tree, so a selection outliving its user — including
-                // at disconnect, which empties the tree — would have a name it cannot look up.
-                selectedSession = f.selectedSession?.takeIf { it in c.channelTree.users },
+                selectedSession = selected,
+                userPing = health.userPing?.takeIf { it.session == selected },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -294,4 +304,11 @@ class ConnectViewModel internal constructor(
      * arrives through [ConnectUiState.audioRoutes], so nothing here guesses where audio went.
      */
     fun onSelectRoute(routeId: String) = connection.requestAudioRoute(routeId)
+
+    /**
+     * Ask the server for one user's ping. Driven by the sheet's own composition rather than a loop
+     * here: polling lasts exactly as long as someone is looking, and a ViewModel that spins a
+     * timer forever is a ViewModel no test can let finish.
+     */
+    fun refreshUserStats(session: Int) = connection.requestUserStats(session)
 }

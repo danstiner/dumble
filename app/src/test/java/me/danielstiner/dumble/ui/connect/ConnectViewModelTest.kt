@@ -15,6 +15,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.mumble.protocol.UserPing
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import org.junit.After
@@ -686,5 +687,44 @@ class ConnectViewModelTest {
         vm.closeUserDetail()
         runCurrent()
         assertNull(vm.uiState.value.selectedSession)
+    }
+
+    @Test fun refreshingAsksTheConnectionAboutThatUser() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        runCurrent()
+
+        vm.refreshUserStats(9)
+
+        assertEquals(listOf(9), conn.userStatsRequests)
+    }
+
+    @Test fun theSelectedUsersPingReachesUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9))
+        vm.openUserDetail(9)
+        conn.userPing.value = UserPing(9, 23.5f, null)
+        runCurrent()
+
+        assertEquals(UserPing(9, 23.5f, null), vm.uiState.value.userPing)
+    }
+
+    /**
+     * The reply is asynchronous, so one asked for on a sheet that has since closed can land while
+     * another user's is open. Rendering it there would put one person's ping under another's name.
+     */
+    @Test fun aPingForSomeoneElseIsNotShown() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7), user(9), user(11))
+        vm.openUserDetail(11)
+        conn.userPing.value = UserPing(9, 23.5f, null)
+        runCurrent()
+
+        assertNull(vm.uiState.value.userPing)
     }
 }
