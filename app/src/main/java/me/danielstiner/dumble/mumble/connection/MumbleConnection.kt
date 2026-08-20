@@ -54,7 +54,7 @@ import javax.inject.Singleton
  * gated on the attempt token under [lock], and a superseded attempt's writes become no-ops.
  *
  * The audio-capture half of this class — the command channel, its single consumer, and the
- * level/reconcile model — is documented in `docs/architecture.md`.
+ * level/reconcile model — is documented in `docs/capture.md`.
  */
 @Singleton
 class MumbleConnection internal constructor(

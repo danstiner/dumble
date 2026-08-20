@@ -48,20 +48,15 @@ constexpr uint32_t kFlagTerminator = 1u;
 // Two thresholds so a level at the boundary cannot chatter the gate, and a hangover in frames so
 // the hold is a duration rather than a packet count (Mumble's iHoldFrames).
 //
-// Swept against the labelled corpus (2026-08-18): 60 candidates, all scoring zero false openings,
-// zero missed regions and zero dropout. The grid saturated, so the data ranked exactly one thing —
-// degradation starts spreading at open 0.70 — and could not separate open within {0.40, 0.50, 0.60},
-// any close gap, or any hangover. Clean read speech cannot measure false-activation risk. 0.60 is
-// the highest open the corpus does not penalise; re-ranking the rest needs noisy material.
+// The corpus sweep these came out of, and the blind spot that stopped it ranking most of the grid,
+// are in docs/capture.md.
 constexpr float kOpenLevel = 0.60f;
 constexpr float kCloseLevel = 0.45f;
 constexpr int kHangoverFrames = 20;   // 200 ms
 
-// Flushed as a burst at gate-open, covering the onset the detector cannot see until the first
-// inference whose window contains it — 40 ms worst case, the longest gap between inferences, so
-// 60 ms clears it with margin. Sized from the detector, never from a receive-side constant: an
-// earlier draft called three packets "exactly the receiver's prebuffer", which stopped being true
-// the moment an adaptive jitter buffer replaced the fixed one.
+// Flushed as a burst at gate-open, covering the detector's 40 ms blind spot — the longest gap
+// between inferences — so 60 ms clears it with margin. Sized from the detector, never from a
+// receive-side constant; docs/capture.md carries both arguments.
 constexpr int kPrerollPackets = 3;
 
 }  // namespace dumble

@@ -22,7 +22,7 @@ import kotlin.random.Random
  * Concurrent chaos test for the capture lifecycle. The rest of this suite pins one interleaving at
  * a time; this drives requestCapture/setTransmitting/hold/resume/connect/disconnect from several
  * real threads at once, varying the schedule every round, and checks the invariants the
- * serialised-reconcile design (docs/architecture.md, "Audio capture") claims must survive any
+ * serialised-reconcile design (docs/capture.md, "Lifecycle") claims must survive any
  * interleaving.
  *
  * Two thread roles, not one undifferentiated pool — see [storm] for why connect/disconnect are
