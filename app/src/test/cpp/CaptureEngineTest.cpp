@@ -514,8 +514,9 @@ TEST(CaptureEngine, AcceptsTheShippedBlob) {
 }
 
 TEST(CaptureEngine, AnUnusualPacketSizeCostsTheDetectorNotTheEngine) {
-    // judgePacket walks kFramesPerPacket frames of kFrameSamples; any other packetSamples would
-    // let that fixed walk overrun scratch_. Same rule as a malformed blob: the mismatch costs
+    // popPacket() always memsets kTxPacketSamples into scratch_, sized to packetSamples; any other
+    // packetSamples would overrun it. create() refuses voice activity on a mismatch instead, so
+    // popPacket() is unreachable — same rule as a malformed blob: the mismatch costs
     // voice-activity mode, never push-to-talk.
     const auto blob = dumble::fixture::weightBlob();
     auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples * 2, 40000,
@@ -583,6 +584,23 @@ TEST(CaptureEngine, VoiceActivityTransmitsSpeech) {
     EXPECT_GT(transmitted, 10) << "the detector never opened on real speech";
 }
 
+TEST(CaptureEngine, ThePrerollQueueHoldsFramesNotPackets) {
+    auto e = engineWithWeights();
+    ASSERT_TRUE(e);
+    e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    e->setGateOpen(true);
+
+    // Seven silent frames, fed and drained one at a time. Packet-native, seven 10 ms feeds filled
+    // at most three history slots; frame-native they fill all seven.
+    const std::vector<int16_t> quiet(dumble::kFrameSamples, 0);
+    for (int i = 0; i < 7; i++) {
+        e->onPcm(quiet.data(), dumble::kFrameSamples);
+        drain(*e);
+    }
+    EXPECT_EQ(dumble::kPrerollPackets * dumble::kFramesPerPacket + 1, e->heldFramesForTest())
+        << "the queue must hold one frame per 10 ms of preroll, not one per packet";
+}
+
 TEST(CaptureEngine, AnOpeningEdgeFlushesTheHeldPreroll) {
     auto e = engineWithWeights();
     ASSERT_TRUE(e);
@@ -618,21 +636,25 @@ TEST(CaptureEngine, AnOpeningEdgeFlushesTheHeldPreroll) {
         EXPECT_GT(frameNumbers[i], frameNumbers[i - 1]) << "frame numbers must strictly increase";
     // Monotonicity alone cannot see the burst or its order: the frameNumber_ floor clamps a
     // reversed or absent burst into an increasing sequence anyway. Anchor to the wall clock
-    // instead. The opening edge's own poll emits nothing (it holds the packet and arms the
-    // burst), so the first emitted packet arrives one fed packet later, and it must be the
-    // OLDEST held packet: kPrerollPackets packets before the opening one -- the full held
-    // preroll, not kPrerollPackets - 1 of it. The onset packet transits the history on its way
-    // out, and an array of only kPrerollPackets slots made that push evict the oldest held
-    // packet: 40 ms of back-fill against a 40 ms blind spot, where every sizing argument in the
-    // repo (docs/capture.md, the eval's modelled 6-frame back-fill, TODO.md's deferral rationale)
-    // claims 60 ms with 20 ms of margin.
+    // instead. Frame-native, the opening edge emits in the same poll that detected speech, and the
+    // burst starts at the OLDEST held frame: kPrerollPackets * kFramesPerPacket frames before the
+    // onset frame -- the full held preroll, not one frame short of it. A packet-fed test cannot see
+    // which of the fed packet's two frames opened, so the anchor pins the packet the onset frame
+    // must fall in; Task 3's eval measures the exact frame.
+    //
+    // This does NOT reliably catch a queue one slot short (kHistorySlots off by one, back-filling
+    // 5 frames instead of 6): the division below truncates, so a frameNumbers[0] shifted by the bug
+    // still divides to the same integer whenever the onset frame index is even -- fixture parity,
+    // not logic. ThePrerollQueueHoldsFramesNotPackets (:600) is what catches a wrong slot count
+    // deterministically: it asserts heldFramesForTest() == 7 outright, with no arithmetic to get
+    // lucky through.
     const uint64_t step = dumble::kFramesPerPacket;
-    const uint64_t openingFn = (fedWhenFirstPacket - 2) * step;
-    EXPECT_EQ(openingFn - dumble::kPrerollPackets * step, frameNumbers[0])
-        << "the burst does not start at the oldest held packet";
-    // Consecutive as well: the spurt is continuous speech, so from the burst's oldest entry on,
+    const uint64_t heldFrames = uint64_t(dumble::kPrerollPackets) * dumble::kFramesPerPacket;
+    EXPECT_EQ(fedWhenFirstPacket - 1, (frameNumbers[0] + heldFrames) / step)
+        << "the burst must back-fill the whole held preroll, not part of it";
+    // Consecutive as well: the spurt is continuous speech, so from the burst's oldest frame on,
     // every emitted packet is exactly one step apart. A burst that strands its newest entry --
-    // the opening packet -- leaves a double step right after the held ones, which strict
+    // the onset frame -- leaves a double step right after the held ones, which strict
     // increase and the anchor above both wave through.
     for (size_t i = 1; i < frameNumbers.size(); i++)
         EXPECT_EQ(frameNumbers[0] + i * step, frameNumbers[i])
@@ -691,7 +713,7 @@ TEST(CaptureEngine, AMuteCycleCannotReplayPreMuteAudioIntoTheNextBurst) {
     e->setGateOpen(true);    // unmute
 
     // Decode nothing — assert on the engine's own state, which is what the clear owns.
-    EXPECT_EQ(0, e->heldPacketsForTest()) << "pre-mute audio survived the arming transition";
+    EXPECT_EQ(0, e->heldFramesForTest()) << "pre-mute audio survived the arming transition";
 }
 
 TEST(CaptureEngine, AMuteDoesNotLeaveTheDetectorsHangoverToLeakIntoTheNextSpurt) {
@@ -721,9 +743,12 @@ TEST(CaptureEngine, AMuteDoesNotLeaveTheDetectorsHangoverToLeakIntoTheNextSpurt)
 
     const std::vector<int16_t> quiet(dumble::kTxPacketSamples, 0);
     e->onPcm(quiet.data(), dumble::kTxPacketSamples);
-    e->pollPacket(out, sizeof(out), &fn, &flags);  // the opening-edge poll, if any, emits nothing
+    // Frame-native, an opening edge emits in the poll that detects it — a leaked hangover shows
+    // up on the FIRST poll, so both must stay empty.
     EXPECT_EQ(0, e->pollPacket(out, sizeof(out), &fn, &flags))
         << "silence right after unmute opened a spurt on the pre-mute detector's leaked hangover";
+    EXPECT_EQ(0, e->pollPacket(out, sizeof(out), &fn, &flags))
+        << "a leaked-hangover spurt is still draining one poll after the unmute";
 }
 
 TEST(CaptureEngine, AModeChangeMidSpurtOwesATerminator) {
@@ -982,7 +1007,8 @@ TEST(CaptureEngine, AnIdleVoiceActivityMuteLeavesNothingBufferedForTheNextSpurt)
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
 
-    // Less than a whole packet, so it cannot be taken and judged — it just sits there.
+    // Fed but never polled while the gate is open, so it sits in the ring un-judged. Frame-native
+    // this IS a judgeable whole frame; only the missing poll keeps it there.
     const auto marker = tone(dumble::kTxPacketSamples / 2);
     e->onPcm(marker.data(), uint32_t(marker.size()));
     ASSERT_GT(e->bufferedSamples(), 0u) << "fixture failed to leave a partial packet buffered";
@@ -995,4 +1021,127 @@ TEST(CaptureEngine, AnIdleVoiceActivityMuteLeavesNothingBufferedForTheNextSpurt)
 
     EXPECT_EQ(0u, e->bufferedSamples())
         << "pre-mute audio survived the mute and will be spliced into the next spurt";
+}
+
+TEST(CaptureEngine, AnOddBurstShipsItsLeftoverFrameWithTheNextLiveOne) {
+    auto e = engineWithWeights();
+    ASSERT_TRUE(e);
+    e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    e->setGateOpen(true);
+    e->setWaitMillisForTest(1);
+    static_assert(dumble::kPrerollPackets * dumble::kFramesPerPacket + 1 == 7,
+                  "this test's arithmetic assumes a seven-slot queue");
+
+    // Fill the queue with silence, one frame at a time.
+    const std::vector<int16_t> quiet(dumble::kFrameSamples, 0);
+    for (int i = 0; i < 12; i++) { e->onPcm(quiet.data(), dumble::kFrameSamples); drain(*e); }
+    ASSERT_EQ(7, e->heldFramesForTest()) << "the queue should be full of silent preroll";
+
+    // Then speech, fed a frame at a time so the detector sees frame granularity.
+    const auto pcm = dumble::fixture::readWav(
+        dumble::fixture::referencePath("synthetic.wav"));
+    std::vector<uint64_t> frameNumbers;
+    // Contiguity below still catches a genuine drop (a forward skip past the floor), but the
+    // frame_number clamp is upward-only, so it is blind to a candidate that only LAGS the floor --
+    // a burst that trickles one frame at a time, or a pop that only ever takes one real frame,
+    // both just re-derive the same evenly-spaced sequence with less audio behind it. Packet count
+    // over the held preroll catches that instead: a real burst pops the 6 committed preroll frames
+    // two at a time (3 packets) in the SAME drain the onset frame triggers, with no further input
+    // needed; a pop that only ever takes one frame needs 6.
+    //
+    // Neither check decodes payload, so "right count, wrong frames" (e.g. zeroing a packet, or
+    // copying from historyOldest_+1) would still pass both. No test in this suite asserts positive
+    // payload fidelity: the only two that decode Opus at all,
+    // DoubleCloseWithNoInterveningPollNeverEncodesGateClosedAudio (:261) and
+    // ARedundantCloseNeverFlushesGateClosedAudio (:390), assert absence of loud audio, which an
+    // all-zero packet also satisfies. See TODO.md.
+    int maxPerFeed = 0;
+    uint8_t out[dumble::kMaxPacketBytes]; uint64_t fn; uint32_t flags;
+    for (size_t at = 0; at + dumble::kFrameSamples <= pcm.size() && frameNumbers.size() < 5;
+         at += dumble::kFrameSamples) {
+        e->onPcm(pcm.data() + at, dumble::kFrameSamples);
+        int thisFeed = 0;
+        while (e->pollPacket(out, sizeof(out), &fn, &flags) > 0) {
+            frameNumbers.push_back(fn);
+            thisFeed++;
+        }
+        if (thisFeed > maxPerFeed) maxPerFeed = thisFeed;
+    }
+    ASSERT_GE(frameNumbers.size(), size_t(4)) << "the burst never drained";
+    EXPECT_EQ(dumble::kPrerollPackets, maxPerFeed)
+        << "the held preroll did not pop as " << dumble::kPrerollPackets << " two-frame packets "
+        << "in one drain — either it trickled out with nothing committed at once (too few), or "
+        << "each pop only took one frame instead of a full packet's worth (too many)";
+
+    // Contiguity is the claim: consecutive packets are exactly kFramesPerPacket frames apart, with
+    // no gap where the burst's seventh frame would have been silently dropped.
+    for (size_t i = 1; i < frameNumbers.size(); i++) {
+        EXPECT_EQ(frameNumbers[i - 1] + dumble::kFramesPerPacket, frameNumbers[i])
+            << "packet " << i << " skipped a frame — the odd burst's leftover was dropped";
+    }
+}
+
+TEST(CaptureEngine, ASpurtEndingOnAnOddFrameStillShipsThatFrame) {
+    auto e = engineWithWeights();
+    ASSERT_TRUE(e);
+    e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    e->setGateOpen(true);
+    e->setWaitMillisForTest(1);
+
+    const auto pcm = dumble::fixture::readWav(
+        dumble::fixture::referencePath("synthetic.wav"));
+    uint8_t out[dumble::kMaxPacketBytes]; uint64_t fn; uint32_t flags;
+    bool sawTerminator = false;
+    // Latched only on the feed that produces the terminator: was readyFrames_ 0 entering it (the
+    // odd, single-leftover close this test is named for -- only "closing && readyFrames_ > 0"
+    // ships that) or 1 (an even close, which "readyFrames_ >= kFramesPerPacket" ships on its own
+    // and would still pass with that clause deleted)? Mid-spurt, heldFramesForTest() and
+    // readyFrames_ are the same number -- every queued frame is committed once transmitting -- so
+    // it doubles as that reading without a dedicated accessor. Without this, a one-frame drift in
+    // the fixture silently flips this into a test of the even path, and mutation 2 stops failing.
+    int heldBeforeClosingFeed = -1;
+    // Whether the terminator flag rode the FIRST packet this feed produced. A debtWaiting drain
+    // ships its short packet unflagged, with the real (flagged) flushTerminator trailing on the
+    // NEXT poll of the SAME drain -- sawTerminator alone cannot tell that apart from the
+    // detector's own closing packet, which carries the flag immediately.
+    bool terminatorOnFirstPacketOfClosingFeed = false;
+    auto drainFeed = [&](int heldBefore) {
+        bool first = true;
+        while (!sawTerminator) {
+            const int bytes = e->pollPacket(out, sizeof(out), &fn, &flags);
+            if (bytes <= 0) break;
+            if ((flags & dumble::kFlagTerminator) != 0) {
+                sawTerminator = true;
+                heldBeforeClosingFeed = heldBefore;
+                terminatorOnFirstPacketOfClosingFeed = first;
+            }
+            first = false;
+        }
+    };
+    // synthetic.wav's own trailing silence is past the hangover on its own -- the fixture's speech
+    // ends around frame 329 of 400, so the detector, not the arming gate, closes the spurt before
+    // the file even runs out. Flags must be checked on every feed, not only after the fixture is
+    // exhausted: a loop that discards them until then would just miss this close.
+    for (size_t at = 0; at + dumble::kFrameSamples <= pcm.size() && !sawTerminator;
+         at += dumble::kFrameSamples) {
+        const int heldBefore = e->heldFramesForTest();
+        e->onPcm(pcm.data() + at, dumble::kFrameSamples);
+        drainFeed(heldBefore);
+    }
+    // Belt and braces in case the fixture ever changes: keep feeding silence past the hangover.
+    const std::vector<int16_t> quiet(dumble::kFrameSamples, 0);
+    for (int i = 0; i < 200 && !sawTerminator; i++) {
+        const int heldBefore = e->heldFramesForTest();
+        e->onPcm(quiet.data(), dumble::kFrameSamples);
+        drainFeed(heldBefore);
+    }
+    EXPECT_TRUE(sawTerminator) << "the detector's close must ship a terminator whatever the parity";
+    EXPECT_EQ(0, e->heldFramesForTest())
+        << "a committed frame left queued at spurt end is audio the close silently ate";
+    EXPECT_EQ(0, heldBeforeClosingFeed)
+        << "the close landed on an even frame instead of the odd leftover this test is named for "
+        << "-- a fixture drift silently converted this into a test of nothing";
+    EXPECT_TRUE(terminatorOnFirstPacketOfClosingFeed)
+        << "the terminator trailed a later packet in the same drain instead of riding the first "
+        << "-- the wire got extra silence between the audio and its terminator";
 }
