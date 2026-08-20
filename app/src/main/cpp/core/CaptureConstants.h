@@ -3,13 +3,12 @@
 
 namespace dumble {
 
-// Deliberate twins of the playback side's AudioConstants.kt SAMPLE_RATE, not a shared definition:
-// nothing crosses JNI at runtime to keep them aligned, and each side answers to the protocol.
+// Deliberate twin of AudioConstants.kt SAMPLE_RATE: nothing crosses JNI at runtime to keep them
+// aligned, and each side answers to the protocol.
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 1;
 
-// 10 ms — the unit this codebase and upstream Mumble both count in (AudioInput's
-// `iFrameSize = SAMPLE_RATE / 100`, and MumbleUDP.Audio.frame_number). Durations are counts of these.
+// 10 ms — the unit Mumble counts in. Durations are counts of these.
 constexpr int kFrameSamples = kSampleRate / 100;   // 480
 
 // Mumble's iAudioFrames. Below 20 ms SILK loses coding efficiency and per-packet overhead doubles.
@@ -24,39 +23,27 @@ constexpr uint32_t kRingCapacitySamples = 16384;              // 341 ms
 // Consumer-side staleness bound: beyond this, drop forward to the newest frame.
 constexpr uint32_t kHighWaterSamples = 4800;                  // 100 ms
 
-// onPcm() deliberately does not signal the pump — the audio callback stays free of anything that
-// could block — so this interval alone decides how late a finished packet is noticed.
+// onPcm() does not signal the pump (audio callback must not block), so this bounds notice latency.
 constexpr int kPollWaitMillis = kTxPacketSamples / (kSampleRate / 1000) / 4;   // 5 ms
 
-// A ceiling, not an estimate: libopus caps its own output here
-// (`max_data_bytes = IMIN(orig_max_data_bytes, 1276)`, opus_encoder.c). A 32 kb/s packet is ~80.
+// libopus ceiling (opus_encoder.c). Typical 32 kb/s packet is ~80 bytes.
 constexpr int kMaxPacketBytes = 1276;
 
 // pollPacket return codes. Non-negative values are byte counts.
-constexpr int kPollRetry = -1;        // stream is down, native side is reopening — keep polling
-constexpr int kPollShutdown = -2;     // stop() was called — exit the loop
-// Terminal, unlike kPollRetry: a caller that cannot tell "still trying" from "never coming back"
-// would poll a dead stream for the rest of the session.
-constexpr int kPollUnavailable = -3;
-// Broken-caller codes, kept out of kPollShutdown so a bug on the Kotlin side cannot hide behind an
-// orderly-looking stop.
-constexpr int kPollNoSession = -4;      // null handle: create() failed, or destroy() already ran
-constexpr int kPollBufferTooSmall = -5; // `out` cannot hold a largest-case packet
+constexpr int kPollRetry = -1;          // stream down, native is reopening
+constexpr int kPollShutdown = -2;       // stop() was called
+constexpr int kPollUnavailable = -3;    // terminal: native gave up reopening
+constexpr int kPollNoSession = -4;      // null handle
+constexpr int kPollBufferTooSmall = -5; // out array too small
 
 constexpr uint32_t kFlagTerminator = 1u;
 
-// Two thresholds so a level at the boundary cannot chatter the gate, and a hangover in frames so
-// the hold is a duration rather than a packet count (Mumble's iHoldFrames).
-//
-// The corpus sweep these came out of, and the blind spot that stopped it ranking most of the grid,
-// are in docs/capture.md.
+// Hysteresis + hangover; sweep results in docs/capture.md.
 constexpr float kOpenLevel = 0.60f;
 constexpr float kCloseLevel = 0.45f;
 constexpr int kHangoverFrames = 20;   // 200 ms
 
-// Flushed as a burst at gate-open, covering the detector's 40 ms blind spot — the longest gap
-// between inferences — so 60 ms clears it with margin. Sized from the detector, never from a
-// receive-side constant; docs/capture.md carries both arguments.
+// 60 ms burst at gate-open, covering the detector's 40 ms blind spot with margin.
 constexpr int kPrerollPackets = 3;
 
 }  // namespace dumble

@@ -42,8 +42,8 @@ failure, generation-keyed hold callbacks — are pinned by `CaptureLifecycleTest
 
 Silero VAD v6.2 as a hand-written forward pass in the portable core (`core/VoiceActivity.{h,cpp}`,
 `core/SileroVad.{h,cpp}`, `core/Decimator.{h,cpp}`), so no inference runtime ships. The units are
-built and pinned against ONNX Runtime reference traces; the engine does not drive them yet — PR 2
-wires them into `CaptureEngine`.
+built and pinned against ONNX Runtime reference traces, and `CaptureEngine` drives them: the
+transmit mode selects the path, and no app surface sets that mode until PR 3.
 
 This section is detailed because the implementation deliberately diverges from how Silero is
 normally run — no ONNX Runtime, a different STFT, a 48 kHz front end the upstream model has never
@@ -51,7 +51,7 @@ seen — and a reader who assumes "it's just Silero" will draw wrong conclusions
 
 ### Two gates, deliberately not one
 
-Once PR 2 wires this in, capture has two gates. The **arming** gate in `onPcm` decides whether the
+Capture has two gates. The **arming** gate in `onPcm` decides whether the
 microphone reaches the ring at all; it is push-to-talk's gate today, and under voice activity it
 becomes an arming level that stays open for the session — a detector cannot judge audio the gate
 already discarded. The **speech** gate is `SpeechGate`, downstream, between packet assembly and
@@ -78,11 +78,18 @@ type its tests can drive with levels directly.
 
 ### Preroll
 
-A spurt's onset is invisible until the first inference whose window contains it. Enumerating every
-onset position against the cadence, the worst case is **40 ms** — the longest gap between
-inferences. `kPrerollPackets` = 3 flushes 60 ms at gate-open, clearing it with 20 ms of margin.
-Do not add the window's 32 ms fill on top: the frames of held probability elapse *inside* that
-fill, not after it, so counting both double-counts the same wait.
+Two different numbers describe a spurt's onset, and conflating them has produced a wrong preroll
+argument twice. **40 ms** is the structural bound: the longest gap between inferences, so the
+earliest any decision *could* reflect the onset, by enumeration over the cadence. **~62-70 ms** is what
+preroll actually has to cover, because a window containing a few samples of speech does not fire —
+the probability rises only as the window fills, so the gate opens roughly a gap plus a fill after
+onset — longer still if a nearly-full window fails to fire and the following gap is a long one.
+
+`kPrerollPackets` = 3 flushes 60 ms at gate-open, which is a little under that rather than over it.
+The residual is visible in the eval: the quiet talker measures 10 ms of onset clipping *with* the
+burst modelled, and would measure zero if 40 ms were the real requirement. That residual is
+inaudible and well inside the 20–80 ms upstream Mumble tolerates, so the constant stands — but it
+covers the blind spot with nothing to spare, not with margin.
 
 The burst is sized from the detector and only *checked* against the receiver — never derived from
 a receive-side constant. (An earlier draft justified 3 as "exactly the receiver's prebuffer",
