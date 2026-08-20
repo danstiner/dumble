@@ -27,8 +27,8 @@ private:
     // not depth. 33 taps — the prototype's Kotlin value — leaves 8-9 kHz inside the transition
     // band, measured at only 30.7 dB, so content there aliases straight into the speech band.
     // 75 taps puts the fold band past the transition: 43.9 dB worst case over 8.2-23 kHz. Costs
-    // 0.77 ms of group delay and 1.2 MMAC/s against a detector spending ≈11 MMAC/s. See docs/vad.md
-    // for the sweep, and for why the guarantee starts at 8.2 rather than 8.0 kHz.
+    // 0.77 ms of group delay and 1.2 MMAC/s against a detector spending ≈11 MMAC/s. See
+    // docs/capture.md for the sweep, and for why the guarantee starts at 8.2 rather than 8.0 kHz.
     static constexpr int kTaps = 75;
 
     // Taps stored reversed, and history kept linear rather than circular, so the inner product

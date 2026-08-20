@@ -9,7 +9,8 @@ namespace dumble {
  * Silero VAD v6, forward pass only: reflect-pad, STFT magnitude, four strided conv layers, one
  * LSTM step, sigmoid. One speech probability per 512-sample window at 16 kHz. The 64 samples of
  * carried context and the LSTM state live across calls, so windows must be fed in order.
- * Single-thread. docs/vad.md walks the pipeline and what it does differently from upstream.
+ * Single-thread. The voice activity section of docs/capture.md walks the pipeline and what it
+ * does differently from upstream.
  */
 class SileroVad {
 public:
