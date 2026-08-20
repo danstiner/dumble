@@ -5,18 +5,17 @@
 
 namespace dumble {
 
-PacketAssembler::PacketAssembler(uint32_t frameSamples) : frameSamples_(frameSamples) {
-    // Unconditional rather than assert, so the guard also holds in release builds.
-    if (frameSamples == 0) std::abort();
+PacketAssembler::PacketAssembler(uint32_t packetSamples) : packetSamples_(packetSamples) {
+    if (packetSamples == 0) std::abort();
 }
 
-bool PacketAssembler::takeFrame(PcmRing& ring, int16_t* out) {
-    return ring.readExact(out, frameSamples_) == frameSamples_;
+bool PacketAssembler::takePacket(PcmRing& ring, int16_t* out) {
+    return ring.readExact(out, packetSamples_) == packetSamples_;
 }
 
-void PacketAssembler::flushFrame(PcmRing& ring, int16_t* out, uint32_t budgetSamples) {
-    const uint32_t got = ring.readUpTo(out, std::min(budgetSamples, frameSamples_));
-    std::memset(out + got, 0, (frameSamples_ - got) * sizeof(int16_t));
+void PacketAssembler::flushPacket(PcmRing& ring, int16_t* out, uint32_t budgetSamples) {
+    const uint32_t got = ring.readUpTo(out, std::min(budgetSamples, packetSamples_));
+    std::memset(out + got, 0, (packetSamples_ - got) * sizeof(int16_t));
 }
 
 }  // namespace dumble

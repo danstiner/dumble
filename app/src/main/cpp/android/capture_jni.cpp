@@ -1,5 +1,7 @@
 #include <jni.h>
+#include <cstdint>
 #include <memory>
+#include <vector>
 #include "android/OboeCapture.h"
 #include "core/CaptureConstants.h"
 #include "core/CaptureEngine.h"
@@ -8,20 +10,16 @@
 
 namespace {
 struct Session {
-    // kSampleRate/kTxPacketSamples rather than parameters: OboeCapture opens the stream from these
-    // same constants, so taking them from Kotlin would let the encoder and the stream disagree.
-    static Session* create(int bitrate) {
-        std::shared_ptr<dumble::CaptureEngine> engine =
-            dumble::CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, bitrate);
-        // A session without an engine has nothing to capture into, so the failure travels out to
-        // Kotlin as a null handle rather than being absorbed here.
+    // Constants, not parameters: OboeCapture opens the stream from these same values, so accepting
+    // them from Kotlin would let the encoder and the stream disagree.
+    static Session* create(int bitrate, const void* weights, size_t weightBytes) {
+        std::shared_ptr<dumble::CaptureEngine> engine = dumble::CaptureEngine::create(
+            dumble::kSampleRate, dumble::kTxPacketSamples, bitrate, weights, weightBytes);
         if (!engine) return nullptr;
         return new Session(std::move(engine));
     }
 
-    // Shared rather than owned outright: Oboe can still be running a stream-error callback on a
-    // detached thread when destroy() lands, and that callback writes into the engine. Both objects
-    // outlive this Session by however long that takes.
+    // Shared: Oboe's error callback may still reference engine/capture after destroy().
     const std::shared_ptr<dumble::CaptureEngine> engine;
     const std::shared_ptr<dumble::OboeCapture> capture;
 
@@ -36,9 +34,15 @@ inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-FN(create)(JNIEnv*, jobject, jint bitrate) {
-    // 0 on failure; Kotlin treats it as "capture unavailable" rather than a usable handle.
-    return reinterpret_cast<jlong>(Session::create(bitrate));
+FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights) {
+    std::vector<uint8_t> blob;
+    if (weights) {
+        const jsize n = env->GetArrayLength(weights);
+        blob.resize(size_t(n));
+        env->GetByteArrayRegion(weights, 0, n, reinterpret_cast<jbyte*>(blob.data()));
+    }
+    return reinterpret_cast<jlong>(
+        Session::create(bitrate, blob.empty() ? nullptr : blob.data(), blob.size()));
 }
 
 JNIEXPORT jint JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
@@ -64,8 +68,7 @@ JNIEXPORT jlong JNICALL FN(framesPerBurst)(JNIEnv*, jobject, jlong h) {
 
 JNIEXPORT void JNICALL FN(stop)(JNIEnv*, jobject, jlong h) {
     if (!h) return;
-    // Order matters: wake the pump before tearing the stream down, so it observes kPollShutdown
-    // and returns rather than parking again against a closing stream.
+    // Shutdown before close: the pump must see kPollShutdown, not park against a closing stream.
     self(h)->engine->requestShutdown();
     self(h)->capture->close();
 }
@@ -81,13 +84,8 @@ JNIEXPORT void JNICALL FN(setGateOpen)(JNIEnv*, jobject, jlong h, jboolean open)
 JNIEXPORT jint JNICALL
 FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     if (!h) return dumble::kPollNoSession;
-    // Refuse a short array rather than quietly encoding into whatever room it has. outCap is the
-    // ceiling handed to opus_encode, so shrinking it changes what gets transmitted, not just what
-    // fits — and it would do so only on the loudest frames, which is the worst way to find out.
     if (env->GetArrayLength(out) < dumble::kMaxPacketBytes) return dumble::kPollBufferTooSmall;
-    // Stack scratch, then one copy of only the bytes produced. Pinning `out` across the blocking
-    // wait inside pollPacket would hold a GC-visible pin for milliseconds at a time, and the
-    // critical-section variant that avoids the copy outright forbids blocking while it is held.
+    // Stack scratch: pinning `out` across the blocking wait would hold a GC pin for milliseconds.
     uint8_t buf[dumble::kMaxPacketBytes];
     uint64_t frameNumber = 0;
     uint32_t flags = 0;
@@ -100,10 +98,6 @@ FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     return n;
 }
 
-// One counter per method rather than a packed long[]: each is an independent relaxed atomic, so a
-// single call was never a consistent snapshot of all of them, and the array bought nothing but an
-// index-to-meaning mapping that had to be kept in step by hand in two languages. Read at a few Hz
-// by a debug overlay, so the extra crossings cost nothing worth the ambiguity.
 JNIEXPORT jlong JNICALL FN(overrunBursts)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->overrunBursts()) : 0;
 }
@@ -116,8 +110,6 @@ JNIEXPORT jlong JNICALL FN(encodedPackets)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->encodedPackets()) : 0;
 }
 
-// Absent from the old long[3] entirely, which is its own argument against the array: without it a
-// persistent libopus failure and an idle gate both look like pollPacket returning 0.
 JNIEXPORT jlong JNICALL FN(encodeErrors)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->encodeErrors()) : 0;
 }

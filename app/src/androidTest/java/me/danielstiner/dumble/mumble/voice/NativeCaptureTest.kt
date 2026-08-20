@@ -11,7 +11,7 @@ class NativeCaptureTest {
     /** Exercises the real encoder on a real ABI — unreachable from any JVM test. */
     @Test
     fun stopUnblocksAParkedPollFrame() {
-        val h = NativeCapture.create(40_000)
+        val h = NativeCapture.create(40_000, ByteArray(0))
         try {
             val out = ByteArray(NativeCapture.MAX_PACKET_BYTES)
             val meta = LongArray(2)

@@ -75,7 +75,7 @@ class MumbleConnection internal constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,
     ) : this(
-        pinStore, { AndroidAudioOut(context) }, { openNativeCapture() },
+        pinStore, { AndroidAudioOut(context) }, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
         newTransport = { MumbleTcpTransport(it) },

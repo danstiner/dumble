@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "TestTone.h"
+#include <cmath>
+#include <cstring>
 #include <opus.h>
 #include <vector>
 #include "core/CaptureConstants.h"
@@ -68,4 +70,36 @@ TEST(AudioEncoder, TheApplicationPresetIsVoipUntilTheLowDelayTier) {
 TEST(AudioEncoder, ALowDelayTierEncoderStillRoundTrips) {
     int bytes = 0;
     EXPECT_GT(roundTripToneEnergy(64000, &bytes), 1000.0) << "decoded frame is silent";
+}
+
+TEST(AudioEncoder, ResetReturnsTheEncoderToAColdState) {
+    // Opus is a predictive codec: without a reset, packet N depends on packets before it. A
+    // receiver starts every spurt with a fresh decoder (PlayoutEngine resets on slot retire), so
+    // an unreset encoder predicts from audio the decoder never had.
+    auto warm = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 40000);
+    auto cold = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 40000);
+    ASSERT_TRUE(warm); ASSERT_TRUE(cold);
+
+    std::vector<int16_t> tone(dumble::kTxPacketSamples);
+    for (size_t i = 0; i < tone.size(); i++)
+        tone[i] = int16_t(std::sin(2.0 * M_PI * 440.0 * double(i) / dumble::kSampleRate) * 8000);
+
+    uint8_t a[dumble::kMaxPacketBytes], b[dumble::kMaxPacketBytes], c[dumble::kMaxPacketBytes];
+    // Warm the encoder up with several packets so its predictor state is genuinely non-cold.
+    for (int i = 0; i < 5; i++)
+        ASSERT_GT(warm->encode(tone.data(), dumble::kTxPacketSamples, a, sizeof(a)), 0);
+
+    const int continued = warm->encode(tone.data(), dumble::kTxPacketSamples, a, sizeof(a));
+    warm->reset();
+    const int afterReset = warm->encode(tone.data(), dumble::kTxPacketSamples, b, sizeof(b));
+    const int fromCold = cold->encode(tone.data(), dumble::kTxPacketSamples, c, sizeof(c));
+
+    ASSERT_GT(continued, 0); ASSERT_GT(afterReset, 0); ASSERT_GT(fromCold, 0);
+    // The reset encoder must agree with a cold one, byte for byte...
+    ASSERT_EQ(afterReset, fromCold);
+    EXPECT_EQ(0, std::memcmp(b, c, size_t(fromCold)));
+    // ...and must differ from the warm continuation, or reset() did nothing and this test would
+    // pass on an empty implementation.
+    EXPECT_FALSE(continued == afterReset && std::memcmp(a, b, size_t(afterReset)) == 0)
+        << "reset() had no observable effect";
 }

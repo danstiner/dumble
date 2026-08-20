@@ -5,6 +5,7 @@
 #include <vector>
 #include "EvalCorpus.h"
 #include "core/CaptureConstants.h"
+#include "core/CaptureEngine.h"
 #include "core/VoiceActivity.h"
 
 using dumble::VoiceActivity;
@@ -23,11 +24,11 @@ namespace {
  * openEdge marks the gate's own opening frames, separately from the preroll-expanded transmit
  * trace — see Trace's comment for why false-opening scoring needs the unexpanded edge.
  *
- * These pinned bars certify a MODELLED mechanism: kPrerollPackets exists as a constant but has no
- * production consumer yet, so the back-fill above is this test's simulation of PR 2's engine, not
- * a measurement of it. Before these numbers can be read as a product claim, PR 2 must either drive
- * this eval through the real capture path, or pin the engine's flush to exactly this back-fill
- * semantics.
+ * The back-fill is a model of the engine, so on its own it would certify a simulation rather than
+ * the product. TheEngineTransmitsEverythingTheModelPredicts below closes that: it drives the same
+ * clips through a real CaptureEngine and requires the engine's transmitted frames to cover the
+ * model's, which is what makes these bars a floor on shipped behaviour rather than a claim about
+ * test code.
  */
 Trace transmitTrace(const Clip& clip, VoiceActivity& va) {
     constexpr int kPrerollFrames = dumble::kPrerollPackets * dumble::kFramesPerPacket;   // 6
@@ -107,5 +108,69 @@ TEST(VoiceActivityEval, MeetsThePinnedBars) {
         EXPECT_LE(m.worstOnsetMs, bar.maxOnsetMs) << name;
         EXPECT_LE(m.worstDropoutMs, bar.maxDropoutMs) << name;
         EXPECT_LE(m.falseOpeningsPerExposed10s, bar.maxFalsePerExposed10s) << name;
+    }
+}
+
+namespace {
+
+/** Frames the real engine actually put on the wire, reconstructed from emitted frame numbers. */
+std::vector<bool> engineTransmitTrace(const Clip& clip) {
+    const auto blob = dumble::fixture::weightBlob();
+    auto engine = dumble::CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000,
+                                                blob.data(), blob.size());
+    EXPECT_TRUE(engine);
+    const int frames = int(clip.pcm.size()) / dumble::kFrameSamples;
+    std::vector<bool> sent(size_t(frames), false);
+    if (!engine) return sent;
+
+    engine->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    engine->setGateOpen(true);
+
+    uint8_t out[dumble::kMaxPacketBytes];
+    uint64_t fn = 0;
+    uint32_t flags = 0;
+    for (int f = 0; f < frames; f++) {
+        engine->onPcm(clip.pcm.data() + size_t(f) * dumble::kFrameSamples, dumble::kFrameSamples);
+        // Drain: an opening edge emits nothing itself and queues a burst, so one poll per frame
+        // would fall behind the audio and never catch up.
+        while (engine->pollPacket(out, sizeof(out), &fn, &flags) > 0) {
+            for (int k = 0; k < dumble::kFramesPerPacket; k++) {
+                const uint64_t covered = fn + uint64_t(k);
+                if (covered < uint64_t(frames)) sent[size_t(covered)] = true;
+            }
+        }
+    }
+    return sent;
+}
+
+}  // namespace
+
+TEST(VoiceActivityEval, TheEngineTransmitsEverythingTheModelPredicts) {
+    // The bars above score a modelled preroll back-fill. This is what entitles them to be read as a
+    // statement about the engine: every frame the model claims goes out must actually go out. The
+    // relation is coverage, not equality — the engine flushes whole packets and opens on a packet
+    // boundary, so it can only transmit MORE than the frame-granular model, never less. That is the
+    // direction the deferral rationale has always asserted; this measures it.
+    const auto blob = dumble::fixture::weightBlob();
+    for (const std::string& name : dumble::fixture::clipNames()) {
+        const Clip clip = dumble::eval::loadClip(name);
+        ASSERT_FALSE(clip.pcm.empty()) << name;
+
+        auto va = VoiceActivity::create(blob.data(), blob.size());
+        ASSERT_TRUE(va) << name;
+        const auto modelled = transmitTrace(clip, *va).transmit;
+        const auto actual = engineTransmitTrace(clip);
+        ASSERT_EQ(modelled.size(), actual.size()) << name;
+
+        int modelledFrames = 0, missing = 0, firstMissing = -1;
+        for (size_t f = 0; f < modelled.size(); f++) {
+            if (!modelled[f]) continue;
+            modelledFrames++;
+            if (!actual[f]) { missing++; if (firstMissing < 0) firstMissing = int(f); }
+        }
+        EXPECT_GT(modelledFrames, 0) << name << ": the model transmitted nothing, so this proves nothing";
+        EXPECT_EQ(0, missing) << name << ": the engine dropped " << missing << " of " << modelledFrames
+                              << " modelled frames, first at frame " << firstMissing
+                              << " — the bars above are not a floor on shipped behaviour";
     }
 }
