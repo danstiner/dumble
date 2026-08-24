@@ -43,7 +43,6 @@ constexpr float kOpenLevel = 0.60f;
 constexpr float kCloseLevel = 0.45f;
 constexpr int kHangoverFrames = 20;   // 200 ms
 
-// 60 ms burst at gate-open, covering the detector's 40 ms blind spot with margin.
-constexpr int kPrerollPackets = 3;
+constexpr int kPrerollFrames = 6;   // 60 ms burst at gate-open
 
 }  // namespace dumble

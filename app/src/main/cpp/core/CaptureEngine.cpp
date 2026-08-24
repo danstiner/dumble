@@ -9,8 +9,9 @@ std::unique_ptr<CaptureEngine> CaptureEngine::create(int sampleRate, int packetS
                                                      size_t weightBytes) {
     auto encoder = AudioEncoder::create(sampleRate, kChannels, bitrate);
     if (!encoder) return nullptr;
-    // Null VoiceActivity only costs voice-activity mode. The packetSamples check prevents
-    // judgePacket's fixed kFramesPerPacket walk from overrunning scratch_.
+    // Null VoiceActivity only costs voice-activity mode. popPacket() always memsets
+    // kTxPacketSamples into scratch_, sized to packetSamples, so any other packetSamples would
+    // overrun it; this check makes popPacket() unreachable instead.
     auto voiceActivity = (weights && packetSamples == kTxPacketSamples)
                              ? VoiceActivity::create(weights, weightBytes)
                              : nullptr;
@@ -38,8 +39,8 @@ void CaptureEngine::setTransmitMode(TransmitMode mode) {
 
 void CaptureEngine::onPcm(const int16_t* pcm, uint32_t n) {
     sampleClock_.fetch_add(n, std::memory_order_relaxed);
-    // Leak guarantee: gate stops ring writes, reset policy clears held packets on every arming
-    // transition. Relaxed is fine — a straddling burst is only a few milliseconds.
+    // Leak guarantee: gate stops ring writes; the new-spurt branch in setGateOpen(true) resets
+    // the ring so pre-close audio cannot survive into the next session's preroll.
     if (gateOpen_.load(std::memory_order_relaxed)) ring_.write(pcm, n);
 }
 
@@ -56,6 +57,7 @@ void CaptureEngine::setGateOpen(bool open) {
                 terminatorDebt_ = TerminatorDebt::None;
             } else {
                 if (terminatorDebt_ != TerminatorDebt::None) terminatorDebt_ = TerminatorDebt::Firm;
+                ring_.reset();
                 clockOffset_ =
                     sampleClock_.load(std::memory_order_acquire) - ring_.writeIndex();
                 // New spurt: receiver starts a fresh decoder, so reset the encoder.
@@ -114,25 +116,32 @@ uint64_t offsetFrameNumber(uint64_t ringReadPos, uint64_t clockOffset) {
 
 }  // namespace
 
-void CaptureEngine::holdPacket(const int16_t* pcm, uint64_t candidateFrameNumber) {
+CaptureEngine::HeldFrame& CaptureEngine::pushSlot() {
     const int slot = (historyOldest_ + historyCount_) % kHistorySlots;
-    std::memcpy(history_[slot].pcm, pcm, sizeof(history_[slot].pcm));
-    history_[slot].candidateFrameNumber = candidateFrameNumber;
     if (historyCount_ < kHistorySlots) {
         historyCount_++;
     } else {
         historyOldest_ = (historyOldest_ + 1) % kHistorySlots;
     }
+    return history_[slot];
 }
 
-CaptureEngine::PacketDecision CaptureEngine::judgePacket(const int16_t* packet) {
-    PacketDecision decision;
-    for (int f = 0; f < kFramesPerPacket; ++f) {
-        const auto frame = voiceActivity_->update(packet + f * kFrameSamples);
-        decision.transmit |= frame.transmit;
-        decision.closing |= frame.closing;
+uint64_t CaptureEngine::popPacket() {
+    const uint64_t frameNumber = history_[historyOldest_].candidateFrameNumber;
+    int taken = 0;
+    while (taken < kFramesPerPacket && readyFrames_ > 0) {
+        std::memcpy(scratch_.data() + taken * kFrameSamples, history_[historyOldest_].pcm,
+                    sizeof(history_[historyOldest_].pcm));
+        historyOldest_ = (historyOldest_ + 1) % kHistorySlots;
+        historyCount_--;
+        readyFrames_--;
+        taken++;
     }
-    return decision;
+    // A spurt ending on an odd frame ships a short packet rather than holding its last 10 ms for a
+    // partner that the closed gate will never produce.
+    std::memset(scratch_.data() + taken * kFrameSamples, 0,
+                (size_t(kTxPacketSamples) - size_t(taken) * kFrameSamples) * sizeof(int16_t));
+    return frameNumber;
 }
 
 void CaptureEngine::flushTerminator(uint64_t clockOffset, uint64_t* candidateFrameNumber) {
@@ -182,21 +191,18 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
         }
     }
 
-    if (burstRemaining_ > 0) {
-        // One held packet per poll, oldest first. Before the terminator claim so a close
-        // mid-burst cannot ship its terminator ahead of the burst audio.
-        const HeldPacket& held = history_[historyOldest_];
-        std::memcpy(scratch_.data(), held.pcm, sizeof(held.pcm));
-        candidateFrameNumber = held.candidateFrameNumber;
-        historyOldest_ = (historyOldest_ + 1) % kHistorySlots;
-        historyCount_--;
-        burstRemaining_--;
-        haveFrame = true;
-    } else {
-        uint64_t clockOffset = 0;
-        {
-            std::lock_guard<std::mutex> lk(spurtMutex_);
-            if (terminatorDebt_ != TerminatorDebt::None) {
+    uint64_t clockOffset = 0;
+    bool debtWaiting = false;
+    {
+        std::lock_guard<std::mutex> lk(spurtMutex_);
+        if (terminatorDebt_ != TerminatorDebt::None) {
+            // Refuse while committed frames are queued: a close can land between the reset
+            // exchange (:171) and this lock, leaving readyFrames_ > 0 with a debt. Claiming now
+            // would ship the terminator; the next poll's reset would then drop the leftover via
+            // clearHistory(). Deferring lets the pop branch (:218) drain it first.
+            if (readyFrames_ > 0) {
+                debtWaiting = true;
+            } else {
                 // Uses debtClockOffset_ (not the live offset, which a reopen may have already
                 // overwritten for the next spurt).
                 terminatorDebt_ = TerminatorDebt::None;
@@ -205,53 +211,81 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
                 transmittingSpurt_ = false;
             }
         }
+    }
 
-        if (haveTerminator) {
-            flushTerminator(clockOffset, &candidateFrameNumber);
-            haveFrame = true;
-        } else if (gateOpen_.load(std::memory_order_acquire)) {
-            // Read after gateOpen_ is true: setGateOpen() writes clockOffset_ before publishing
-            // gateOpen_, so this order guarantees the offset belongs to the current spurt.
-            {
+    if (haveTerminator) {
+        flushTerminator(clockOffset, &candidateFrameNumber);
+        haveFrame = true;
+    } else if (readyFrames_ >= kFramesPerPacket || debtWaiting) {
+        // A packet's worth is already committed — the preroll burst draining, or a leftover frame
+        // that a live frame has just partnered. Emit before reading more, so burst order holds.
+        // With a debt waiting, a lone committed frame ships short: its spurt is closed, so no
+        // partner frame is coming.
+        candidateFrameNumber = popPacket();
+        haveFrame = true;
+    } else if (gateOpen_.load(std::memory_order_acquire)) {
+        // Read after gateOpen_ is true: setGateOpen() writes clockOffset_ before publishing
+        // gateOpen_, so this order guarantees the offset belongs to the current spurt.
+        {
+            std::lock_guard<std::mutex> lk(spurtMutex_);
+            clockOffset = clockOffset_;
+        }
+        ring_.skipToNewest(kHighWaterSamples);
+        if (transmitMode_.load(std::memory_order_relaxed) == TransmitMode::PushToTalk) {
+            candidateFrameNumber = offsetFrameNumber(ring_.readIndex(), clockOffset);
+            haveFrame = assembler_.takePacket(ring_, scratch_.data());
+        } else {
+            // At most one packet's worth of new audio per poll: the same throughput as the
+            // packet-native take this replaces, and the bound that stops a silent ring draining
+            // in a single pass.
+            bool closing = false;
+            for (int taken = 0; taken < kFramesPerPacket && readyFrames_ < kFramesPerPacket;
+                 ++taken) {
+                // Checked before claiming a slot: a full queue claims by evicting the oldest
+                // frame, which no undo can restore — never claim against a dry ring.
+                if (ring_.available() < uint32_t(kFrameSamples)) break;
+                const uint64_t slotFrameNumber =
+                    offsetFrameNumber(ring_.readIndex(), clockOffset);
+                // Claimed before the read so the frame lands straight in the queue, skipping a
+                // copy. The availability check above guarantees the read fills it.
+                HeldFrame& slot = pushSlot();
+                ring_.readExact(slot.pcm, kFrameSamples);
+                slot.candidateFrameNumber = slotFrameNumber;
+                // Unconditional: the detector must see every frame to maintain its state.
+                const auto decision = voiceActivity_->update(slot.pcm);
                 std::lock_guard<std::mutex> lk(spurtMutex_);
-                clockOffset = clockOffset_;
-            }
-            ring_.skipToNewest(kHighWaterSamples);
-            const uint64_t readPos = ring_.readIndex();
-            candidateFrameNumber = offsetFrameNumber(readPos, clockOffset);
-            if (transmitMode_.load(std::memory_order_relaxed) == TransmitMode::PushToTalk) {
-                haveFrame = assembler_.takePacket(ring_, scratch_.data());
-            } else if (assembler_.takePacket(ring_, scratch_.data())) {
-                // Unconditional: the detector must see every packet to maintain its state.
-                const PacketDecision decision = judgePacket(scratch_.data());
-                std::lock_guard<std::mutex> lk(spurtMutex_);
-                if (!decision.transmit) {
-                    holdPacket(scratch_.data(), candidateFrameNumber);
-                } else if (!transmittingSpurt_) {
-                    // Opening edge: queue this packet behind the preroll burst.
+                if (!decision.transmit) continue;   // silence: stays queued as preroll
+                if (!transmittingSpurt_) {
+                    // Opening edge: everything queued becomes the burst, this frame included.
                     transmittingSpurt_ = true;
                     resetEncoderPending_.store(true, std::memory_order_release);
-                    holdPacket(scratch_.data(), candidateFrameNumber);
-                    burstRemaining_ = historyCount_;
+                    readyFrames_ = historyCount_;
                 } else {
-                    haveFrame = true;
-                    if (decision.closing) {
-                        haveTerminator = true;
-                        transmittingSpurt_ = false;
-                        // This closing packet IS the terminator — discharge any mid-poll mute debt.
-                        terminatorDebt_ = TerminatorDebt::None;
-                    }
+                    readyFrames_++;
                 }
+                if (decision.closing) {
+                    // Bounded to kFramesPerPacket: the unbounded opening-edge branch above needs
+                    // transmittingSpurt_ false, which only follows a debt claim — and every debt
+                    // path also sets resetDetectorPending_, resetting the gate before the next
+                    // update() can see transmitting_ still true.
+                    closing = true;
+                    transmittingSpurt_ = false;
+                    // This closing frame IS the terminator — discharge any mid-poll mute debt.
+                    terminatorDebt_ = TerminatorDebt::None;
+                    break;
+                }
+            }
+            if (readyFrames_ >= kFramesPerPacket || (closing && readyFrames_ > 0)) {
+                candidateFrameNumber = popPacket();
+                haveTerminator = closing;
+                haveFrame = true;
             }
         }
     }
 
     if (!haveFrame) {
-        // Skip the wait when a burst is queued — parking would add one poll to onset latency.
-        if (burstRemaining_ == 0) {
-            std::unique_lock<std::mutex> lk(wakeMutex_);
-            wakeCondition_.wait_for(lk, std::chrono::milliseconds(waitMillis_));
-        }
+        std::unique_lock<std::mutex> lk(wakeMutex_);
+        wakeCondition_.wait_for(lk, std::chrono::milliseconds(waitMillis_));
         return shutdown_.load(std::memory_order_acquire) ? kPollShutdown : 0;
     }
 

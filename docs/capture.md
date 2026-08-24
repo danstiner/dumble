@@ -1,19 +1,21 @@
 # Audio capture
 
 Microphone to Mumble UDP-tunnel packets on the TCP transport. Three layers with a single owner for
-the lifecycle. Transmit is push-to-talk today; the voice activity detector (below) is built and
-pinned but not wired into the engine yet. Details live in the code's comments; constants and their
-whys in `CaptureConstants.h`.
+the lifecycle. Transmit is push-to-talk today; the voice activity detector (below) is wired into
+`CaptureEngine`, but no app surface sets the transmit mode to use it yet. Details live in the
+code's comments; constants and their whys in `CaptureConstants.h`.
 
 ```
-mic ─► OboeCapture ─► PcmRing ─► PacketAssembler ─► AudioEncoder ─► pollPacket ─► VoiceSender ─► transport
-       (android/)     └───────────── CaptureEngine (core/) ─────────────┘         (Kotlin pump)
+mic ─► OboeCapture ─► PcmRing ─► assemble packet ─► AudioEncoder ─► pollPacket ─► VoiceSender ─► transport
+       (android/)     └────────── CaptureEngine (core/) ─────────┘                (Kotlin pump)
 ```
 
 **CaptureEngine** (`core/`, platform-free) owns everything between "PCM arrived" and "an Opus
-packet is ready". `OboeCapture` (`android/`) owns the input stream and its reopen backoff. The
-transmit gate lives in `onPcm`: while closed, samples advance the frame clock but are never
-captured, so the stream stays open and warm across presses.
+packet is ready" — packet assembly is `PacketAssembler` under push-to-talk, or the frame-native
+preroll queue's `popPacket` under voice activity; `PacketAssembler::takePacket` never runs in the
+latter. `OboeCapture` (`android/`) owns the input stream and its reopen backoff. The transmit gate
+lives in `onPcm`: while closed, samples advance the frame clock but are never captured, so the
+stream stays open and warm across presses.
 
 **VoiceSender** (Kotlin pump): one daemon thread parked in `pollPacket`, wrapping each packet for
 the transport. Its exit callback is the only signal the pump is gone; nothing may destroy the
@@ -43,7 +45,7 @@ failure, generation-keyed hold callbacks — are pinned by `CaptureLifecycleTest
 Silero VAD v6.2 as a hand-written forward pass in the portable core (`core/VoiceActivity.{h,cpp}`,
 `core/SileroVad.{h,cpp}`, `core/Decimator.{h,cpp}`), so no inference runtime ships. The units are
 built and pinned against ONNX Runtime reference traces, and `CaptureEngine` drives them: the
-transmit mode selects the path, and no app surface sets that mode until PR 3.
+transmit mode selects the path, and no app surface sets that mode yet.
 
 This section is detailed because the implementation deliberately diverges from how Silero is
 normally run — no ONNX Runtime, a different STFT, a 48 kHz front end the upstream model has never
@@ -54,8 +56,8 @@ seen — and a reader who assumes "it's just Silero" will draw wrong conclusions
 Capture has two gates. The **arming** gate in `onPcm` decides whether the
 microphone reaches the ring at all; it is push-to-talk's gate today, and under voice activity it
 becomes an arming level that stays open for the session — a detector cannot judge audio the gate
-already discarded. The **speech** gate is `SpeechGate`, downstream, between packet assembly and
-encode.
+already discarded. The **speech** gate is `SpeechGate`, downstream of the arming gate: it renders a
+transmit/closing decision per frame, before those frames are assembled into a packet.
 
 ### The path a frame takes
 
@@ -68,6 +70,15 @@ speech probability            held between inferences, so every frame has a leve
   ├─ SpeechGate               two-threshold hysteresis + a hangover counted in frames
 Decision{transmit, closing}
 ```
+
+Previously, `CaptureEngine` OR-folded two decided frames into one packet verdict before
+acting on it — a packet transmitted if either frame was speech — so this diagram described a
+decision the pipeline computed and then discarded. That fold is gone: a packet is now assembled
+from already-decided frames only at the encode boundary, so the diagram above is the literal path,
+not an approximation of it. The eval corpus shows the effect directly: frames the engine transmits
+that the model never predicted fell from 7 to 1 across the three clips; the survivor is a different
+mechanism — an odd-length spurt's closing packet zero-padding its unfilled half — not a fold
+artifact.
 
 160 does not divide 512, so a window completes on a fixed **4, 3, 3, 3, 3** cycle — five windows
 per sixteen frames, exactly, with no drift. `VoiceActivity` runs the inference *before* handing
@@ -85,11 +96,9 @@ preroll actually has to cover, because a window containing a few samples of spee
 the probability rises only as the window fills, so the gate opens roughly a gap plus a fill after
 onset — longer still if a nearly-full window fails to fire and the following gap is a long one.
 
-`kPrerollPackets` = 3 flushes 60 ms at gate-open, which is a little under that rather than over it.
-The residual is visible in the eval: the quiet talker measures 10 ms of onset clipping *with* the
-burst modelled, and would measure zero if 40 ms were the real requirement. That residual is
-inaudible and well inside the 20–80 ms upstream Mumble tolerates, so the constant stands — but it
-covers the blind spot with nothing to spare, not with margin.
+`kPrerollFrames` = 6 backfills 60 ms at gate-open. The queue holds 7 frames (`kHistorySlots` =
+`kPrerollFrames + 1`); the extra slot exists so the onset frame has somewhere to land on its way
+into the burst. Onset adequacy is what `MeetsThePinnedBars` scores against labelled speech.
 
 The burst is sized from the detector and only *checked* against the receiver — never derived from
 a receive-side constant. (An earlier draft justified 3 as "exactly the receiver's prebuffer",
@@ -244,10 +253,13 @@ All three are in `TODO.md` with what would close them.
   records no opening edge, so it is invisible to the rate — and it extends the spurt: one
   re-trigger on the last hangover frame adds up to 190 ms of live mic, and chained re-triggers are
   unbounded.
-- **The eval models the preroll burst rather than measuring it.** `kPrerollPackets` has no
-  production consumer until PR 2, so `VoiceActivityEvalTest` simulates the flush. The direction is
-  safe — the real engine flushes whole packets, so real coverage ≥ modelled — but the pinned bars
-  are not a product claim until PR 2 drives this eval through the real capture path.
+- **The engine-vs-model excess count is a lower bound, not an exact count, in general.**
+  `pollPacket` floor-clamps each emitted frame number upward-only for strict monotonicity, so a pad
+  in one spurt can leave the floor permanently ahead of true position; a later spurt's shifted range
+  can then land back inside the model's predicted run and hide a real excess frame instead of
+  reporting it. Nothing in the eval corpus sits downstream of a clamp shift — only clip 2 pads, on
+  its one spurt's closing packet, and clips 1 and 3 have none — so the pinned 0/1/0 excess counts
+  are exact today, but the check does not guarantee that in general.
 
 ### Regenerating
 
