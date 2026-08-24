@@ -22,6 +22,11 @@ std::vector<int16_t> speech() {
 
 }  // namespace
 
+TEST(VoiceActivity, ShippedWeightsLoad) {
+    EXPECT_NE(nullptr, make()) << "the shipped weight blob failed to load — a broken blob in "
+                                  "production would silently disable voice activity";
+}
+
 TEST(VoiceActivity, RefusesABlobOfTheWrongSize) {
     std::vector<float> tooSmall(16, 0.0f);
     EXPECT_EQ(nullptr, VoiceActivity::create(tooSmall.data(), tooSmall.size() * sizeof(float)));

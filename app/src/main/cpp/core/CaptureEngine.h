@@ -42,8 +42,8 @@ public:
      *  a reopen never merges: the close already reset the detector. */
     void setGateOpen(bool open);
 
-    /** Pump thread. Blocks up to the wait interval. Returns byte count, kPollRetry, or
-     *  kPollShutdown. 0 means nothing to send (may return immediately after queueing a burst). */
+    /** Pump thread. Blocks up to the wait interval when there is nothing to emit. Returns a
+     *  byte count, 0 for nothing to send, or kPollRetry / kPollShutdown / kPollUnavailable. */
     int pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, uint32_t* flags);
 
     /** Wakes a parked pump thread. Nothing else can: Thread.interrupt cannot reach a condvar. */
@@ -64,7 +64,7 @@ public:
     uint64_t encodedPackets() const { return encodedPackets_.load(std::memory_order_relaxed); }
     // Without this, a broken encoder and an idle gate both look like pollPacket returning 0.
     uint64_t encodeErrors() const { return encodeErrors_.load(std::memory_order_relaxed); }
-    // Test-only: verifies one reset per burst, not per held packet.
+    // Test-only: verifies one reset per burst, not per held frame.
     uint64_t encoderResets() const { return encoderResets_.load(std::memory_order_relaxed); }
 
     // Encode cost against the 20 ms packet budget. Mean hides spikes, max hides frequency.
@@ -77,20 +77,13 @@ public:
     void setWaitMillisForTest(int ms) { waitMillis_ = ms; }
     // Pump thread only, like historyCount_ itself — safe to call between polls in a single-threaded
     // test, not a general-purpose accessor.
-    int heldPacketsForTest() const { return historyCount_; }
+    int heldFramesForTest() const { return historyCount_; }
 
 private:
     CaptureEngine(int sampleRate, int packetSamples, std::unique_ptr<AudioEncoder> encoder,
                  std::unique_ptr<VoiceActivity> voiceActivity);
 
     void wakeup();
-
-    /** OR-fold of the two frames in a packet. Terminator rides a real packet, never empty. */
-    struct PacketDecision {
-        bool transmit = false;
-        bool closing = false;
-    };
-    PacketDecision judgePacket(const int16_t* packet);
 
     // Flushes buffered audio as one zero-padded terminator packet and resets the ring. Used by
     // gate close and detector reset — the two paths that orphan buffered audio. A detector's own
@@ -157,25 +150,33 @@ private:
     // a terminator. Guarded by spurtMutex_ for the cross-thread read from setGateOpen().
     bool transmittingSpurt_ = false;
 
-    // Silent packets held for preroll. PCM, not encoded: Opus is predictive, so encoding now
-    // would mismatch the predictor state when they go out in burst order. Fixed storage — the
-    // pump thread does not allocate.
-    struct HeldPacket {
-        int16_t pcm[kTxPacketSamples];
+    // Frames held for preroll and frames committed to the current spurt, one FIFO. PCM, not
+    // encoded: Opus is predictive, so encoding now would mismatch the predictor state when they go
+    // out in burst order. Fixed storage — the pump thread does not allocate.
+    struct HeldFrame {
+        int16_t pcm[kFrameSamples];
         uint64_t candidateFrameNumber;
     };
-    // +1: the onset packet transits through history on its way into the burst. Without it the
-    // burst back-fills only 40 ms against the detector's 40 ms blind spot — zero margin.
-    static constexpr int kHistorySlots = kPrerollPackets + 1;
-    HeldPacket history_[kHistorySlots];
-    int historyCount_ = 0;      // entries held, <= kHistorySlots
-    int historyOldest_ = 0;     // ring index of the oldest held entry
-    int burstRemaining_ = 0;    // held entries still to emit
+    // +1: the onset frame transits the queue on its way into the burst. Without it the onset
+    // evicts the oldest slot, and the burst back-fills one fewer frame than intended.
+    static constexpr int kHistorySlots = kPrerollFrames + 1;
+    HeldFrame history_[kHistorySlots];
+    int historyCount_ = 0;      // frames queued, <= kHistorySlots
+    int historyOldest_ = 0;     // ring index of the oldest queued frame
+    // Queued frames committed to the spurt, counted from the oldest end. The preroll burst is just
+    // this jumping to historyCount_ at an opening edge, which is why the burst needs no branch of
+    // its own. pushSlot() can never evict a committed frame: it only runs while readyFrames_ <
+    // kFramesPerPacket, and mid-spurt every queued frame is committed (historyCount_ ==
+    // readyFrames_ <= 1 there), so eviction only ever hits uncommitted preroll.
+    int readyFrames_ = 0;
 
-    void holdPacket(const int16_t* pcm, uint64_t candidateFrameNumber);
-    void clearHistory() {
-        historyCount_ = 0; historyOldest_ = 0; burstRemaining_ = 0;
-    }
+    /** The slot the next frame goes in, evicting the oldest when the queue is full. */
+    HeldFrame& pushSlot();
+    /** Pops up to kFramesPerPacket committed frames into scratch_, zero-padding a short tail.
+     *  Returns the packet's frame number — the oldest frame's. Precondition: readyFrames_ > 0;
+     *  both call sites guarantee it structurally, and this does not check. */
+    uint64_t popPacket();
+    void clearHistory() { historyCount_ = 0; historyOldest_ = 0; readyFrames_ = 0; }
 };
 
 }  // namespace dumble
