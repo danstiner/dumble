@@ -4,33 +4,27 @@
 
 namespace dumble {
 
-std::unique_ptr<CaptureEngine> CaptureEngine::create(int sampleRate, int packetSamples,
-                                                     int bitrate, const void* weights,
+std::unique_ptr<CaptureEngine> CaptureEngine::create(int bitrate, const void* weights,
                                                      size_t weightBytes) {
-    auto encoder = AudioEncoder::create(sampleRate, kChannels, bitrate);
+    auto encoder = AudioEncoder::create(kSampleRate, kChannels, bitrate);
     if (!encoder) return nullptr;
-    // Null VoiceActivity only costs voice-activity mode. popPacket() always memsets
-    // kTxPacketSamples into scratch_, sized to packetSamples, so any other packetSamples would
-    // overrun it; this check makes popPacket() unreachable instead.
-    auto voiceActivity = (weights && packetSamples == kTxPacketSamples)
-                             ? VoiceActivity::create(weights, weightBytes)
-                             : nullptr;
-    return std::unique_ptr<CaptureEngine>(new CaptureEngine(
-        sampleRate, packetSamples, std::move(encoder), std::move(voiceActivity)));
+    // The blob is a bundled asset the host tests pin, so weights that will not load are a broken
+    // build. No degraded mode, same as the encoder: a push-to-talk-only engine would leave the
+    // app's mode and the engine's disagreeing, with nothing able to say so.
+    auto voiceActivity = VoiceActivity::create(weights, weightBytes);
+    if (!voiceActivity) return nullptr;
+    return std::unique_ptr<CaptureEngine>(
+        new CaptureEngine(std::move(encoder), std::move(voiceActivity)));
 }
 
-CaptureEngine::CaptureEngine(int sampleRate, int packetSamples,
-                             std::unique_ptr<AudioEncoder> encoder,
+CaptureEngine::CaptureEngine(std::unique_ptr<AudioEncoder> encoder,
                              std::unique_ptr<VoiceActivity> voiceActivity)
-    : assembler_(packetSamples),
+    : assembler_(kTxPacketSamples),
       encoder_(std::move(encoder)),
       voiceActivity_(std::move(voiceActivity)),
-      scratch_(size_t(packetSamples)),
-      // frame_number counts 10 ms frames; a packet carries kFramesPerPacket of them.
-      frameNumberStep_(uint64_t(packetSamples) / uint64_t(sampleRate / 100)) {}
+      scratch_(size_t(kTxPacketSamples)) {}
 
 void CaptureEngine::setTransmitMode(TransmitMode mode) {
-    if (mode == TransmitMode::VoiceActivity && !voiceActivity_) return;
     // Push-to-talk never reads history_, so stale voice-activity entries must not survive.
     resetDetectorPending_.store(true, std::memory_order_release);
     transmitMode_.store(mode, std::memory_order_relaxed);
@@ -170,7 +164,7 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
     bool haveTerminator = false;
 
     if (resetDetectorPending_.exchange(false, std::memory_order_acq_rel)) {
-        if (voiceActivity_) voiceActivity_->reset();
+        voiceActivity_->reset();
         clearHistory();
         {
             std::lock_guard<std::mutex> lk(spurtMutex_);
@@ -313,7 +307,7 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
     // candidates that collide with the previous value. Never reset on gate transitions.
     const uint64_t emittedFn = std::max(candidateFrameNumber, frameNumber_);
     *frameNumber = emittedFn;
-    frameNumber_ = emittedFn + frameNumberStep_;
+    frameNumber_ = emittedFn + kFramesPerPacket;
     if (haveTerminator) *flags |= kFlagTerminator;
     encodedPackets_.fetch_add(1, std::memory_order_relaxed);
     return bytes;

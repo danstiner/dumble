@@ -52,6 +52,7 @@ TEST(AudioEncoder, AToneSurvivesEncodeAndDecode) {
 // must yield no object at all rather than one that fails every encode for the rest of the session.
 TEST(AudioEncoder, CreateRefusesAnUnsupportedSampleRate) {
     EXPECT_EQ(nullptr, dumble::AudioEncoder::create(44100, dumble::kChannels, 40000));
+    EXPECT_EQ(nullptr, dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 0));
 }
 
 // Pins the two-tier choice boundary-exactly. 32000 staying VOIP is the deliberate divergence

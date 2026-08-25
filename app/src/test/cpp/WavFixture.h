@@ -102,8 +102,10 @@ inline std::vector<float> readTrace(const std::string& path) {
 }
 
 /** The shipped Silero weight blob. Shared so the size and hash checks all read the same bytes. */
-inline std::vector<uint8_t> weightBlob() {
-    return readBytes(std::string(DUMBLE_ASSETS_DIR) + "/silero_vad_weights.bin");
+// Cached: every engine now needs it, and the file is 1.2 MB.
+inline const std::vector<uint8_t>& weightBlob() {
+    static const auto blob = readBytes(std::string(DUMBLE_ASSETS_DIR) + "/silero_vad_weights.bin");
+    return blob;
 }
 
 inline std::string corpusPath(const std::string& name) {

@@ -20,7 +20,14 @@ std::unique_ptr<AudioEncoder> AudioEncoder::create(int sampleRate, int channels,
         if (enc != nullptr) opus_encoder_destroy(enc);
         return nullptr;
     }
-    opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate));
+    // Checked: libopus refuses a bitrate at or below zero unless it is OPUS_AUTO or
+    // OPUS_BITRATE_MAX (it clamps 1..500 up and anything over 750000 per channel down), and an
+    // encoder left at the default rate instead of the one asked for would be a silent
+    // misconfiguration.
+    if (opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate)) != OPUS_OK) {
+        opus_encoder_destroy(enc);
+        return nullptr;
+    }
     // Constant bit-rate: steady packet size for predictable queueing delay.
     opus_encoder_ctl(enc, OPUS_SET_VBR(0));
     // 7 (not default 9) to save battery. Below 7 disables speech/music analysis (opus_encoder.c).

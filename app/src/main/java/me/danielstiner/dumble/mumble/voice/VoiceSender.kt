@@ -139,12 +139,13 @@ class NativeCaptureHandle(private val handle: Long) : VoiceSender.CaptureHandle 
 
 /** Build a started capture engine, or null on failure. Destroys the engine on a failed start. */
 fun openNativeCapture(context: Context): VoiceSender.CaptureHandle? {
+    // The blob is packaged in the APK, so a failed read is a broken build. No push-to-talk
+    // fallback: it would leave the app's mode and the engine's disagreeing.
     val weights = try {
         context.assets.open("silero_vad_weights.bin").use { it.readBytes() }
     } catch (e: IOException) {
-        // Not fatal: push-to-talk still works without weights.
-        Log.w("VoiceSender", "Silero weights missing; voice activity unavailable", e)
-        ByteArray(0)
+        Log.e("VoiceSender", "Silero weights could not be read", e)
+        return null
     }
     val handle = NativeCapture.create(TRANSMIT_BITRATE, weights)
     if (handle == 0L) {

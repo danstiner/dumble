@@ -135,7 +135,7 @@ namespace {
 /** Frames the real engine actually put on the wire, reconstructed from emitted frame numbers. */
 std::vector<bool> engineTransmitTrace(const Clip& clip) {
     const auto blob = dumble::fixture::weightBlob();
-    auto engine = dumble::CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000,
+    auto engine = dumble::CaptureEngine::create(40000,
                                                 blob.data(), blob.size());
     EXPECT_TRUE(engine);
     const int frames = int(clip.pcm.size()) / dumble::kFrameSamples;
