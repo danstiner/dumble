@@ -42,11 +42,9 @@ std::vector<uint8_t> firstPacketOfASpurt(CaptureEngine& e) {
     return packet;
 }
 
-// An engine with the shipped Silero blob, so voice-activity mode is actually selectable.
-std::unique_ptr<CaptureEngine> engineWithWeights() {
-    const auto blob = dumble::fixture::weightBlob();
-    return CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000,
-                                 blob.data(), blob.size());
+std::unique_ptr<CaptureEngine> engine(int bitrate = 40000) {
+    const auto& blob = dumble::fixture::weightBlob();
+    return CaptureEngine::create(bitrate, blob.data(), blob.size());
 }
 
 // Polls until the engine produces nothing, discarding whatever comes out.
@@ -57,7 +55,7 @@ void drain(CaptureEngine& e) {
 }  // namespace
 
 TEST(CaptureEngine, FrameNumberAdvancesByTwoPerTwentyMillisecondPacket) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setGateOpen(true);
     std::vector<uint8_t> out(4000);
@@ -73,7 +71,7 @@ TEST(CaptureEngine, FrameNumberAdvancesByTwoPerTwentyMillisecondPacket) {
 TEST(CaptureEngine, FrameNumberSurvivesAGateCycle) {
     // The Mumble client never resets iFrameCounter on key-up or key-down; resetting would hand
     // a receiving client's Speex jitter buffer a backward timestamp jump on every re-press.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -94,7 +92,7 @@ TEST(CaptureEngine, FrameNumberSurvivesAGateCycle) {
 }
 
 TEST(CaptureEngine, ClosingTheGateEmitsExactlyOneTerminator) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -114,7 +112,7 @@ TEST(CaptureEngine, ClosingTheGateEmitsExactlyOneTerminator) {
 }
 
 TEST(CaptureEngine, ASpurtShorterThanOneFrameStillTerminates) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -127,7 +125,7 @@ TEST(CaptureEngine, ASpurtShorterThanOneFrameStillTerminates) {
 }
 
 TEST(CaptureEngine, AudioDeliveredBeforeThePressIsNeverSentAsPreRoll) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -140,7 +138,7 @@ TEST(CaptureEngine, AudioDeliveredBeforeThePressIsNeverSentAsPreRoll) {
 }
 
 TEST(CaptureEngine, ShutdownAndStreamDownAreDistinguishable) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -158,7 +156,7 @@ TEST(CaptureEngine, StreamUnavailableIsDistinctFromRetryAndOutranksIt) {
     // former was already true from the disconnect that started the retry sequence). A caller
     // must see kPollUnavailable, not kPollRetry, or it would poll forever for a stream that is
     // never coming back.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -177,7 +175,7 @@ TEST(CaptureEngine, ShutdownOutranksStreamUnavailable) {
     // requestShutdown() (an explicit stop()) must win even if the stream had already been
     // declared unrecoverable — kPollShutdown, not kPollUnavailable, is what tells the pump loop
     // to exit rather than surface a "transmit unavailable" state after the user hung up anyway.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -195,7 +193,7 @@ TEST(CaptureEngine, ACloseThenReopenWithinOnePollIntervalMergesTheSpurts) {
     // release-and-press inside one frame -- continuous audio, no stream restart -- and a
     // terminator boundary here would need the close-position bookkeeping this design deleted.
     // The terminator arrives once, at the true end.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -229,7 +227,7 @@ TEST(CaptureEngine, DoubleCloseWithNoInterveningPollNeverEncodesGateClosedAudio)
     // reach the wire, unconditionally, regardless of gate-cycle count or poll timing -- a
     // privacy violation, not a glitch. The gate in onPcm() enforces it at the source: gate-closed
     // audio is never captured at all.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
@@ -276,7 +274,7 @@ TEST(CaptureEngine, FrameNumberReflectsElapsedTimeAcrossAClosedGateGap) {
     // is closed hands a resumed talkspurt a frame_number implying no time passed, which schedules
     // it in the past of a still-alive receive-side jitter buffer (retires after ~100ms) and gets
     // it dropped as late: the opening audio of a quick re-press silently disappears at the far end.
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -306,7 +304,7 @@ TEST(CaptureEngine, FrameNumberReflectsElapsedTimeAcrossAClosedGateGap) {
 }
 
 TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     std::vector<uint8_t> out(4000);
     uint64_t fn = 0; uint32_t flags = 0;
@@ -363,7 +361,7 @@ TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
 // buffered — but unguarded it would owe a second, empty terminator after the real one was spent.
 // Same privacy assertion as the double-close test, one gate cycle short, kept as regression proof.
 TEST(CaptureEngine, ARedundantCloseNeverFlushesGateClosedAudio) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
@@ -403,7 +401,7 @@ TEST(CaptureEngine, ARedundantCloseNeverFlushesGateClosedAudio) {
 // openIdx) wraps enormous, stamping the next packet with a garbage frame number. Milder than a
 // privacy breach and fixed by the same guard.
 TEST(CaptureEngine, ARedundantOpenDoesNotDisturbTheSpurtAlreadyInFlight) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setWaitMillisForTest(1);
     std::vector<uint8_t> out(4000);
@@ -420,7 +418,7 @@ TEST(CaptureEngine, ARedundantOpenDoesNotDisturbTheSpurtAlreadyInFlight) {
 }
 
 TEST(CaptureEngine, ResetsTheEncoderAtASpurtOnsetButNotOnAMerge) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     // Two spurts of identical audio, separated by a settled close. With a spurt-onset reset the
     // second spurt's first packet must be byte-identical to the first spurt's first packet.
@@ -435,14 +433,14 @@ TEST(CaptureEngine, AMergeKeepsEncoderStateThatAGenuineOnsetWouldReset) {
     // below. From there they diverge only in how the next spurt opens.
     auto pcm = tone(dumble::kTxPacketSamples);
 
-    auto merged = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto merged = engine();
     ASSERT_TRUE(merged);
     merged->setGateOpen(true);
     merged->onPcm(pcm.data(), pcm.size());
     pollUntilPacket(*merged);
     merged->setGateOpen(false);
 
-    auto settled = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto settled = engine();
     ASSERT_TRUE(settled);
     settled->setGateOpen(true);
     settled->onPcm(pcm.data(), pcm.size());
@@ -469,11 +467,11 @@ TEST(CaptureEngine, AMergeKeepsEncoderStateThatAGenuineOnsetWouldReset) {
 // The engine has no meaningful state without an encoder, so a failed encoder must fail the whole
 // construction — not leave a live engine whose every poll silently drops the frame it just built.
 TEST(CaptureEngine, CreateFailsWhenTheEncoderCannotBeBuilt) {
-    EXPECT_EQ(nullptr, CaptureEngine::create(44100, dumble::kTxPacketSamples, 40000, nullptr, 0));
+    EXPECT_EQ(nullptr, engine(/* bitrate = */ 0));
 }
 
 TEST(CaptureEngine, RecordsEncodeTiming) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setGateOpen(true);
     std::vector<uint8_t> out(4000);
@@ -490,7 +488,7 @@ TEST(CaptureEngine, RecordsEncodeTiming) {
 }
 
 TEST(CaptureEngine, EncodeTimingStaysZeroUntilSomethingIsEncoded) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
+    auto e = engine();
     ASSERT_TRUE(e);
     // Division by the count is the trap here — a mean read before the first encode must not
     // divide by zero.
@@ -498,40 +496,21 @@ TEST(CaptureEngine, EncodeTimingStaysZeroUntilSomethingIsEncoded) {
     EXPECT_EQ(0u, e->encodeMicrosMax());
 }
 
-TEST(CaptureEngine, WorksWithoutWeightsSoABadAssetCannotCostCapture) {
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000, nullptr, 0);
-    ASSERT_TRUE(e) << "a missing weight blob must not deny push-to-talk";
-    EXPECT_FALSE(e->voiceActivityAvailable());
-}
-
-TEST(CaptureEngine, RefusesAWrongSizedBlobWithoutRefusingTheEngine) {
+// A blob that will not load is a broken build. Refused outright: a push-to-talk-only engine would
+// leave the app holding the gate open against an engine that never entered voice activity.
+TEST(CaptureEngine, RefusesTheEngineWhenWeightsWillNotLoad) {
     std::vector<float> wrong(16, 0.0f);
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples, 40000,
-                                   wrong.data(), wrong.size() * sizeof(float));
-    ASSERT_TRUE(e);
-    EXPECT_FALSE(e->voiceActivityAvailable());
+    EXPECT_EQ(nullptr, CaptureEngine::create(40000,
+                                             wrong.data(), wrong.size() * sizeof(float)));
+    EXPECT_EQ(nullptr, CaptureEngine::create(40000, nullptr, 0));
 }
 
 TEST(CaptureEngine, AcceptsTheShippedBlob) {
-    auto e = engineWithWeights();
-    ASSERT_TRUE(e);
-    EXPECT_TRUE(e->voiceActivityAvailable());
-}
-
-TEST(CaptureEngine, AnUnusualPacketSizeCostsTheDetectorNotTheEngine) {
-    // popPacket() always memsets kTxPacketSamples into scratch_, sized to packetSamples; any other
-    // packetSamples would overrun it. create() refuses voice activity on a mismatch instead, so
-    // popPacket() is unreachable — same rule as a malformed blob: the mismatch costs
-    // voice-activity mode, never push-to-talk.
-    const auto blob = dumble::fixture::weightBlob();
-    auto e = CaptureEngine::create(dumble::kSampleRate, dumble::kTxPacketSamples * 2, 40000,
-                                   blob.data(), blob.size());
-    ASSERT_TRUE(e);
-    EXPECT_FALSE(e->voiceActivityAvailable());
+    ASSERT_TRUE(engine());
 }
 
 TEST(CaptureEngine, VoiceActivityEndsTheSpurtWithATerminatorWhenSpeechStops) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -556,7 +535,7 @@ TEST(CaptureEngine, VoiceActivityEndsTheSpurtWithATerminatorWhenSpeechStops) {
 }
 
 TEST(CaptureEngine, VoiceActivityDrainsTheRingWhileSilent) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);                    // armed for the session
@@ -574,7 +553,7 @@ TEST(CaptureEngine, VoiceActivityDrainsTheRingWhileSilent) {
 }
 
 TEST(CaptureEngine, VoiceActivityTransmitsSpeech) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -590,7 +569,7 @@ TEST(CaptureEngine, VoiceActivityTransmitsSpeech) {
 }
 
 TEST(CaptureEngine, ThePrerollQueueHoldsFramesNotPackets) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -607,7 +586,7 @@ TEST(CaptureEngine, ThePrerollQueueHoldsFramesNotPackets) {
 }
 
 TEST(CaptureEngine, AnOpeningEdgeFlushesTheHeldPreroll) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -667,7 +646,7 @@ TEST(CaptureEngine, AnOpeningEdgeFlushesTheHeldPreroll) {
 }
 
 TEST(CaptureEngine, AnOpeningEdgeResetsTheEncoderOncePerBurstNotPerPacket) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -699,7 +678,7 @@ TEST(CaptureEngine, AMuteCycleCannotReplayPreMuteAudioIntoTheNextBurst) {
     // unmutes, then speaks. Without the clear, the opening burst transmits up to 60 ms of audio
     // they believed was never sent — with frame numbers the floor clamp launders into valid
     // post-terminator values, so nothing on the wire marks it.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -725,7 +704,7 @@ TEST(CaptureEngine, AMuteCycleWithNoPollBetweenTransitionsCannotReplayPreMuteAud
     // Regression for a ring-leak found by adversarial review: without a ring reset in the
     // new-spurt branch of setGateOpen(true), a close→open with no intervening poll left
     // pre-mute audio in the ring, and the next session's VA loop read it into preroll.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -754,7 +733,7 @@ TEST(CaptureEngine, AMuteDoesNotLeaveTheDetectorsHangoverToLeakIntoTheNextSpurt)
     // 200 ms after speech stops. Without a detector reset, silence right after an unmute can still
     // ride the pre-mute hangover and open a spurt on its own -- new audio, but the decision to send
     // it was made by state left over from before the mute, not by anything heard since.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -788,7 +767,7 @@ TEST(CaptureEngine, AModeChangeMidSpurtOwesATerminator) {
     // A mode change lands while a VA spurt is already on the wire; switching away from the
     // detector must not orphan that spurt's receiver -- it gets one terminator, riding a real
     // packet, same as an arming-gate close would.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -823,7 +802,7 @@ TEST(CaptureEngine, ABurstAfterAResetTransitionStillGetsAFullPreroll) {
     // the burst mechanism -- once the session resumes and silence refills the history, the next
     // spurt still gets its full preroll. Constructed with a mode-change reset instead of the
     // arming-gate collision, which Task 6's reset policy makes unreachable.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -859,7 +838,7 @@ TEST(CaptureEngine, AnArmingGateCloseMidSpurtEmitsExactlyOneTerminatorNotTwo) {
     // setGateOpen(false) raises both a terminator debt and resetDetectorPending_ in the same
     // call, and the reset claim can promote a debt of its own. However many owe-sites fire for
     // one spurt, they must fold into one debt, or the receiver gets two terminators for it.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -896,7 +875,7 @@ TEST(CaptureEngine, AMuteAfterAModeChangeTerminatorStillClosesTheGate) {
     // repeat guard and no-opped -- gateOpen_ stayed true, onPcm kept capturing, and audio kept
     // transmitting after the user pressed mute. The arming state belongs to setGateOpen alone;
     // no terminator bookkeeping may move it.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -942,7 +921,7 @@ TEST(CaptureEngine, AMuteUnmuteUnderVoiceActivityIsASpurtEndNotAMerge) {
     // continuity: every arming transition resets the detector, so the spurt in flight at the
     // mute genuinely ends. The reopen must not cancel the owed terminator, and it is a genuine
     // onset -- the encoder goes cold for whatever spurt the fresh detector opens next.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -991,7 +970,7 @@ TEST(CaptureEngine, AMuteWhileTheDetectorIsIdleSendsNothing) {
     // one anyway put up to a packet of un-judged microphone audio on the wire -- the same class
     // of leak the reset policy exists to prevent -- plus a speaking-indicator blip at every
     // receiver, for a press that meant "send nothing".
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -1035,7 +1014,7 @@ TEST(CaptureEngine, AnIdleVoiceActivityMuteLeavesNothingBufferedForTheNextSpurt)
     // and left mid-packet would then still be there at the next unmute, spliced into the first
     // packet of a spurt the user believes started clean. The history clear does not reach it: the
     // audio is in the ring, not in history_.
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -1057,7 +1036,7 @@ TEST(CaptureEngine, AnIdleVoiceActivityMuteLeavesNothingBufferedForTheNextSpurt)
 }
 
 TEST(CaptureEngine, AnOddBurstShipsItsLeftoverFrameWithTheNextLiveOne) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);
@@ -1115,7 +1094,7 @@ TEST(CaptureEngine, AnOddBurstShipsItsLeftoverFrameWithTheNextLiveOne) {
 }
 
 TEST(CaptureEngine, ASpurtEndingOnAnOddFrameStillShipsThatFrame) {
-    auto e = engineWithWeights();
+    auto e = engine();
     ASSERT_TRUE(e);
     e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
     e->setGateOpen(true);

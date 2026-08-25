@@ -23,15 +23,12 @@ enum class TransmitMode { PushToTalk, VoiceActivity };
  */
 class CaptureEngine {
 public:
-    /** Null if the encoder could not be created — there is no degraded mode.
-     *  Null or malformed `weights` only disables voice activity; push-to-talk still works. */
-    static std::unique_ptr<CaptureEngine> create(int sampleRate, int packetSamples, int bitrate,
-                                                 const void* weights, size_t weightBytes);
+    /** Null if the encoder cannot be created or `weights` will not load — no degraded mode. */
+    static std::unique_ptr<CaptureEngine> create(int bitrate, const void* weights,
+                                                 size_t weightBytes);
 
-    /** Any thread. Falls back to PushToTalk when voice activity is unavailable. */
+    /** Any thread. */
     void setTransmitMode(TransmitMode mode);
-
-    bool voiceActivityAvailable() const { return voiceActivity_ != nullptr; }
 
     /** Audio-callback thread. Lock-free, allocation-free. While gated, samples advance the
      *  frame_number clock but never enter the ring. */
@@ -80,8 +77,8 @@ public:
     int heldFramesForTest() const { return historyCount_; }
 
 private:
-    CaptureEngine(int sampleRate, int packetSamples, std::unique_ptr<AudioEncoder> encoder,
-                 std::unique_ptr<VoiceActivity> voiceActivity);
+    CaptureEngine(std::unique_ptr<AudioEncoder> encoder,
+                  std::unique_ptr<VoiceActivity> voiceActivity);
 
     void wakeup();
 
@@ -94,7 +91,7 @@ private:
     PacketAssembler assembler_;
     // Non-null for the object's whole life: create() is the only way in and it refuses without one.
     const std::unique_ptr<AudioEncoder> encoder_;
-    // Null when the weight blob was absent or malformed. Touched only by the pump thread.
+    // Touched only by the pump thread.
     const std::unique_ptr<VoiceActivity> voiceActivity_;
     std::atomic<TransmitMode> transmitMode_{TransmitMode::PushToTalk};
     std::vector<int16_t> scratch_;
@@ -143,7 +140,6 @@ private:
 
     // Floor for the next frame_number — see pollPacket() for the clamping rationale.
     uint64_t frameNumber_ = 0;
-    const uint64_t frameNumberStep_;
     int waitMillis_ = kPollWaitMillis;
 
     // True while a spurt is on the wire. The close path reads it to decide whether a mute owes

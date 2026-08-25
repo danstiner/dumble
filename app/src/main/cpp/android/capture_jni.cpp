@@ -10,11 +10,9 @@
 
 namespace {
 struct Session {
-    // Constants, not parameters: OboeCapture opens the stream from these same values, so accepting
-    // them from Kotlin would let the encoder and the stream disagree.
     static Session* create(int bitrate, const void* weights, size_t weightBytes) {
-        std::shared_ptr<dumble::CaptureEngine> engine = dumble::CaptureEngine::create(
-            dumble::kSampleRate, dumble::kTxPacketSamples, bitrate, weights, weightBytes);
+        std::shared_ptr<dumble::CaptureEngine> engine =
+            dumble::CaptureEngine::create(bitrate, weights, weightBytes);
         if (!engine) return nullptr;
         return new Session(std::move(engine));
     }
@@ -35,14 +33,10 @@ extern "C" {
 
 JNIEXPORT jlong JNICALL
 FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights) {
-    std::vector<uint8_t> blob;
-    if (weights) {
-        const jsize n = env->GetArrayLength(weights);
-        blob.resize(size_t(n));
-        env->GetByteArrayRegion(weights, 0, n, reinterpret_cast<jbyte*>(blob.data()));
-    }
-    return reinterpret_cast<jlong>(
-        Session::create(bitrate, blob.empty() ? nullptr : blob.data(), blob.size()));
+    const jsize n = env->GetArrayLength(weights);
+    std::vector<uint8_t> blob(static_cast<size_t>(n));
+    env->GetByteArrayRegion(weights, 0, n, reinterpret_cast<jbyte*>(blob.data()));
+    return reinterpret_cast<jlong>(Session::create(bitrate, blob.data(), blob.size()));
 }
 
 JNIEXPORT jint JNICALL FN(start)(JNIEnv*, jobject, jlong h) {

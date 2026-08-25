@@ -24,8 +24,8 @@ object NativeCapture {
     /** libopus ceiling for a single-frame packet. */
     const val MAX_PACKET_BYTES = 1276
 
-    /** Returns 0 on failure (no degraded mode). [weights] is the Silero blob from assets, or
-     *  empty — a missing blob only disables voice activity. */
+    /** Returns 0 when the encoder cannot be built or the Silero blob ([weights]) will not load —
+     *  there is no degraded mode. */
     external fun create(bitrate: Int, weights: ByteArray): Long
     external fun start(handle: Long): Int
     external fun stop(handle: Long)

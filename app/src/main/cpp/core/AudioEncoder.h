@@ -8,7 +8,8 @@ namespace dumble {
 /** Opus encoder configured to match Mumble where applicable. */
 class AudioEncoder {
 public:
-    /** Null on failure. Factory so no half-built encoder exists. */
+    /** Null on failure, a bitrate libopus rejects included. Factory so no half-built encoder
+     *  exists. */
     static std::unique_ptr<AudioEncoder> create(int sampleRate, int channels, int bitrate);
 
     /** VOIP below 64 kb/s, RESTRICTED_LOWDELAY at or above. Public for test pinning. */
