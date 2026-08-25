@@ -108,4 +108,11 @@ JNIEXPORT jlong JNICALL FN(encodeErrors)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->encodeErrors()) : 0;
 }
 
+JNIEXPORT void JNICALL FN(setVoiceActivity)(JNIEnv*, jobject, jlong h, jboolean on) {
+    if (h) {
+        self(h)->engine->setTransmitMode(on ? dumble::TransmitMode::VoiceActivity
+                                            : dumble::TransmitMode::PushToTalk);
+    }
+}
+
 }  // extern "C"

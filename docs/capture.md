@@ -27,7 +27,7 @@ is a command on one channel with a single consumer, and state is levels, not eve
 compares them and is the only place a session opens or closes. Session and transmit are separate
 levels — a Talk press both re-asks for a session and opens the gate, which is what brings a
 session back after a hold or a terminal failure, still transmitting if the button is still down.
-The mirrored-write argument that makes that race-free is KDoc'd at `setTransmitting`.
+The mirrored-write argument that makes that race-free is KDoc'd at `apply`.
 
 **Platform call** (`TelecomCall`, behind the `VoiceCall` seam): registering a self-managed telecom
 call is what grants audio focus, communication routing, and the microphone foreground service. A

@@ -663,12 +663,9 @@ class SessionStateMachineTest {
      * A refusal is reported rather than swallowed, and the retry still puts a complete deafen on the
      * wire.
      *
-     * It does **not** pin `setSelfDeaf`'s "only advance the intent on a successful enqueue" guard,
-     * despite looking like it should — dropping that guard passes this test. Only deafen can move
-     * `selfMute` today, so the reachable intents are just (F,F,F) and (T,T,T), and from either one a
-     * recorded-but-unsent intent and an unmoved one emit the same frame on every retry. The guard is
-     * still correct and becomes observable the day a mute control lands; until then nothing here
-     * defends it. Confirmed by mutation.
+     * It does **not** pin the "advance the intent only on a successful enqueue" guard: from the two
+     * intents deafen alone can reach, an advanced-but-unsent intent and an unmoved one emit the
+     * same retry frame. [aRefusedMuteMustNotStrandTheNextUndeafen] defends that guard.
      */
     @Test
     fun aRefusedSendIsReportedAndTheRetryStillReachesTheWire() = runTest {
@@ -684,6 +681,89 @@ class SessionStateMachineTest {
         val sent = ch.userStates().single()
         assertTrue(sent.selfDeaf)
         assertTrue(sent.selfMute)
+    }
+
+    @Test
+    fun muteSendsSelfMuteAndLeavesDeafAloneForOurSession() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        assertTrue(sm.setSelfMute(true))
+
+        val sent = ch.userStates().single()
+        assertEquals(4, sent.session)
+        assertTrue(sent.selfMute)
+        assertFalse(sent.selfDeaf)
+    }
+
+    /** Unmuting takes the undeafen with it: a deafened user cannot be unmuted. */
+    @Test
+    fun unmutingWhileDeafenedUndeafensToo() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+        sm.setSelfDeaf(true)
+
+        assertTrue(sm.setSelfMute(false))
+
+        val sent = ch.userStates().last()
+        assertFalse("an unmute must not leave us deafened", sent.selfDeaf)
+        assertFalse(sent.selfMute)
+    }
+
+    /** A mute set before the deafen is the user's own: the undeafen still happens, the mute
+     *  stays, and the next tap clears it. */
+    @Test
+    fun unmutingWhileDeafenedKeepsAMuteTheDeafenDidNotSet() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+        sm.setSelfMute(true)
+        sm.setSelfDeaf(true)
+
+        sm.setSelfMute(false)
+        val undeafened = ch.userStates().last()
+        assertFalse("the undeafen must still happen", undeafened.selfDeaf)
+        assertTrue("a mute we set ourselves is not the deafen's to take back", undeafened.selfMute)
+
+        sm.setSelfMute(false)
+        assertFalse("the next ask clears it", ch.userStates().last().selfMute)
+    }
+
+    /** The repeat guard, mute's side: a double-tap inside one round trip re-sends the recorded
+     *  intent. */
+    @Test
+    fun muteTappedTwiceSendsTheSameMessageTwice() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.setSelfMute(true)
+        sm.setSelfMute(true)
+
+        val mutes = ch.userStates()
+        assertEquals(2, mutes.size)
+        mutes.forEach { assertTrue("every mute must set self_mute", it.selfMute) }
+    }
+
+    /**
+     * A refused send must not advance the recorded intent: a later deafen would compute its
+     * `unmuteOnUndeaf` debt against a mute the server never saw, and the undeafen would keep a
+     * mute the user has no control left to clear.
+     */
+    @Test
+    fun aRefusedMuteMustNotStrandTheNextUndeafen() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        ch.sendResult = false
+        assertFalse(sm.setSelfMute(true))
+        ch.sendResult = true
+
+        sm.setSelfDeaf(true)
+        sm.setSelfDeaf(false)
+
+        assertFalse(
+            "the deafen owed the unmute, since the mute before it never reached the wire",
+            ch.userStates().last().selfMute,
+        )
     }
 
     /** No optimistic echo: the tree only moves when the server says so. */

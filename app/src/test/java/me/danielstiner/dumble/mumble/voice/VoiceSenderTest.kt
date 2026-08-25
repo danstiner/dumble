@@ -132,6 +132,7 @@ class VoiceSenderTest {
         val fake = object : VoiceSender.CaptureHandle {
             override fun pollPacket(out: ByteArray, meta: LongArray): Int = throw RuntimeException("boom")
             override fun setGateOpen(open: Boolean) = Unit
+            override fun setTransmitMode(mode: TransmitMode) = Unit
             override fun stop() = Unit
             override fun destroy() = Unit
             override fun stats(): CaptureStats? = null
