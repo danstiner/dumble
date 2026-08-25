@@ -29,4 +29,9 @@ data class DeafenState(
     fun deafen(on: Boolean): DeafenState =
         if (on) DeafenState(selfDeaf = true, selfMute = true, unmuteOnUndeaf = !selfMute)
         else DeafenState(selfDeaf = false, selfMute = !unmuteOnUndeaf && selfMute, unmuteOnUndeaf = false)
+
+    /** Mute or unmute. Unmuting while deafened undeafens too, through [deafen] — murmur forces
+     *  the two together — and its `unmuteOnUndeaf` rule decides whether the mute stays. */
+    fun mute(on: Boolean): DeafenState =
+        if (!on && selfDeaf) deafen(false) else copy(selfMute = on)
 }

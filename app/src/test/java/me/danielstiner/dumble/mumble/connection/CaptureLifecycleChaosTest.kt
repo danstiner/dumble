@@ -10,6 +10,7 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,6 +96,8 @@ class CaptureLifecycleChaosTest {
             if (destroyed.get()) violations += "handle $id: setTransmitting reached a destroyed handle"
         }
 
+        override fun setTransmitMode(mode: TransmitMode) = Unit
+
         override fun stop() {
             // Idempotent like the real stopping_ latch: a second Release can land while a hold's
             // release is already in flight, and a second stop() on the same handle is expected.
@@ -155,10 +158,16 @@ class CaptureLifecycleChaosTest {
 
         // The cheap, high-frequency ops a real session sees constantly: a PTT press, a hold/resume
         // pair. None of these block, so HAMMER_THREADS racing them concurrently is the point.
+        // Mute and mode change are the other writers of the levels a rebuild reads. Their wire
+        // halves are inert: this connection never reaches Synchronized.
         val cheapOps: List<() -> Unit> = listOf(
             { conn.requestCapture() },
             { conn.setTransmitting(true) },
             { conn.setTransmitting(false) },
+            { conn.setMuted(true) },
+            { conn.setMuted(false) },
+            { conn.setTransmitMode(TransmitMode.PushToTalk) },
+            { conn.setTransmitMode(TransmitMode.VoiceActivity) },
             { call.hold() },
             { call.resume() },
         )

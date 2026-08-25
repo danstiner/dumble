@@ -321,9 +321,7 @@ class SessionStateMachine(
 
     /**
      * Deafen or undeafen. Returns whether it was enqueued; a no-op until Synchronized.
-     *
-     * `self_mute` rides along because murmur forces mute on with deaf (`Server::msgUserState`) and
-     * never takes it back off; [DeafenState.deafen] owns the coupling.
+     * [DeafenState.deafen] owns the coupling to `self_mute`.
      *
      * A repeat ask — a double-tap, before the server has answered — re-sends [sent] verbatim.
      * Advancing again would run [DeafenState.deafen] against state it just moved; returning early
@@ -333,9 +331,22 @@ class SessionStateMachine(
      * No optimistic echo, unlike [sendText]: the server broadcasts UserState back, so the reducer
      * shows what it believes. Safe off the reader thread — channel.send only enqueues.
      */
-    fun setSelfDeaf(on: Boolean): Boolean {
+    fun setSelfDeaf(on: Boolean): Boolean =
+        sendSelfState(if (on != sent.selfDeaf) sent.deafen(on) else sent)
+
+    /**
+     * Mute or unmute. Same shape and repeat guard as [setSelfDeaf]. Unmuting while deafened may
+     * take two taps: the first undeafens and keeps a mute the user set themselves
+     * ([DeafenState.mute]), and the button still reads muted after it because it is.
+     */
+    fun setSelfMute(on: Boolean): Boolean =
+        sendSelfState(if (on != sent.selfMute) sent.mute(on) else sent)
+
+    /** Ship [next] as our own UserState. Both fields ride together: murmur forces mute on with
+     *  deaf (`Server::msgUserState`) and never takes it back off, so a frame carrying one alone
+     *  would let the server's view and [sent] drift apart. */
+    private fun sendSelfState(next: DeafenState): Boolean {
         val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false
-        val next = if (on != sent.selfDeaf) sent.deafen(on) else sent
         val ok = channel.send(
             TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder()
@@ -346,9 +357,6 @@ class SessionStateMachine(
         )
         // Advanced only on a successful enqueue: a refused send must not leave this claiming
         // something the wire never carried, or the retry advances from a state that never existed.
-        // Not observable while deafen is the only thing that moves self_mute — both paths emit the
-        // same frames from the two reachable intents — so no test defends it; it becomes load
-        // bearing the day a mute control lands. Keep it.
         if (ok) sent = next
         return ok
     }

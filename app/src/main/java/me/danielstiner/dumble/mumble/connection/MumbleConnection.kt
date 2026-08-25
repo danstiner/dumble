@@ -34,6 +34,7 @@ import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -115,6 +116,10 @@ class MumbleConnection internal constructor(
     private var attempt = 0
     @Volatile private var current: Attempt? = null
 
+    /** The transmit mode, as a setting: outlives attempts and is applied to every session this
+     *  connection opens. UI thread writes it. */
+    @Volatile private var transmitMode = TransmitMode.PushToTalk
+
     /**
      * One connection attempt. Built by [connect]'s coroutine and published as [current] under
      * [lock] if [gen] is still the live generation; unpublished by the next connect(), by
@@ -141,13 +146,14 @@ class MumbleConnection internal constructor(
         /** The live capture session, or null. One field, one lifetime: the handle and its pump
          *  used to be two fields paired by convention in three places, and a window where only one
          *  had been cleared is how a hold could open a second microphone stream. Written only by
-         *  the lifecycle consumer; read on the UI thread by [setTransmitting]. */
+         *  the lifecycle consumer; read on the UI thread by [apply]. */
         @Volatile var capture: CaptureSession? = null,
-        /** Push-to-talk as a level, not an edge, so a session rebuilt under a still-held button
-         *  comes up transmitting. The UI thread writes it and [openSession] reads it after
-         *  publishing [capture]; that mirrored order is what makes a press racing an open
-         *  impossible to drop — see [setTransmitting]'s KDoc, and keep both fields `@Volatile`. */
-        @Volatile var transmitting: Boolean = false,
+        /** Talk is held. A level, not an edge, so a session rebuilt under a still-held button comes
+         *  up transmitting. UI thread writes it; [openSession] reads it after publishing [capture]
+         *  — see [apply] for why that order matters, and keep both `@Volatile`. */
+        @Volatile var pressed: Boolean = false,
+        /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
+        @Volatile var muted: Boolean = false,
         /** The app wants a capture session on this attempt — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
         var wanted: Boolean = false,
@@ -176,24 +182,37 @@ class MumbleConnection internal constructor(
      * push-to-talk edge racing a release is a use-after-free. The monitor is what closes it, and a
      * public `sender` would let a caller walk around it.
      */
-    private class CaptureSession(
+    private inner class CaptureSession(
         private val handle: VoiceSender.CaptureHandle,
         private val sender: VoiceSender,
     ) {
         private var destroyed = false
+        /** The engine's mode. A fresh engine is push-to-talk, and an engine never refuses a mode. */
+        private var appliedMode = TransmitMode.PushToTalk
 
         fun ownedBy(s: VoiceSender) = sender === s
 
         /**
-         * UI thread, on every push-to-talk edge, and deliberately not routed through the command
-         * channel. The hop itself would be cheap — benchmarked at p50 11 µs, p999 473 µs for this
-         * channel's shape — but the consumer is serial and blocks in `newCapture()` and `stop()`,
-         * so a queued gate edge inherits their latency, and the queue is busiest exactly when the
-         * user is pressing Talk (hold, resume, reconnect). That is an audible clip off the start of
-         * a spurt. Only the Acquire rides the channel; this stays direct, under the monitor.
+         * Push the levels to the engine: the mode, then the gate derived from it. Reads them under
+         * the monitor so concurrent callers agree on the newest values.
+         *
+         * A direct call from the UI thread, not a command: the channel's consumer blocks in
+         * `newCapture()` and `stop()`, busiest exactly when the user is pressing Talk, and a gate
+         * edge queued behind that clips the start of a spurt. (The hop itself is p50 11 µs.)
          */
-        fun setTransmitting(on: Boolean) =
-            synchronized(this) { if (!destroyed) sender.setTransmitting(on) }
+        fun apply(att: Attempt) {
+            synchronized(this) {
+                if (destroyed) return
+                // Only on a change: every mode write resets the engine's detector, mid-spurt too.
+                if (transmitMode != appliedMode) {
+                    handle.setTransmitMode(transmitMode)
+                    appliedMode = transmitMode
+                }
+                sender.setTransmitting(
+                    !att.muted && (att.pressed || transmitMode == TransmitMode.VoiceActivity),
+                )
+            }
+        }
 
         /** Free the engine. Lifecycle consumer only, and only after the pump has exited; the
          *  monitor is what keeps a racing push-to-talk edge off the freed engine. */
@@ -351,13 +370,10 @@ class MumbleConnection internal constructor(
         // blocks, so a disconnect landing in that window has already moved the world.
         if (!isLive(att)) { handle.stop(); handle.destroy(); return }
         val session = CaptureSession(handle, sender)
-        // Published before the level is read — the mirror of setTransmitting's order, and the reason
-        // a press racing this open cannot fall between the two. See its KDoc for why that holds.
+        // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
         att.capture = session
-        // Through the session, not the sender: this is the same monitor a push-to-talk edge takes,
-        // so the gate can never reach an engine a concurrent release has freed. Before start(), so
-        // the pump's first poll already reads an open gate.
-        if (att.transmitting) session.setTransmitting(true)
+        // Before start(), so the pump's first poll already reads the mode and the gate.
+        session.apply(att)
         sender.start()
     }
 
@@ -594,25 +610,47 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * Level first, then the live session — the mirror of [openSession], which publishes the session
-     * first and then reads the level. Each side writes one volatile field and then reads the other,
-     * which is what makes a press racing an open impossible to drop: for neither side to act, this
-     * read of `capture` would have to precede openSession's write of it *and* openSession's read of
-     * `transmitting` would have to precede this write of it — and each thread's own program order
-     * forbids that pair. Both fields have to stay `@Volatile` for the argument to hold. When both
-     * sides do act the gate is simply set twice, which costs nothing.
+     * Re-derive the gate: open when not muted and either Talk is held or voice activity is on.
+     * Wanting it open also asks for a session, which is what brings one back after a hold or a
+     * terminal engine failure.
+     *
+     * Levels first, then the live session — the mirror of [openSession], which publishes the
+     * session and then reads the levels. Each side writes one volatile and reads the other, so a
+     * press cannot be lost to a racing open: for both to miss, this read of `capture` would have
+     * to precede openSession's write of it *and* openSession's read of the level precede the
+     * caller's write of it, which program order forbids. Every level must stay `@Volatile` for
+     * that. When both act, the gate is set twice, which costs nothing.
      */
+    private fun apply(att: Attempt) {
+        if (!att.muted && (att.pressed || transmitMode == TransmitMode.VoiceActivity)) {
+            send(CaptureCommand.Acquire(att))
+        }
+        att.capture?.apply(att)
+    }
+
+    /** A press while muted stays shut: mute has no engine-side existence, and the Talk button is
+     *  only disabled once the server echoes `self_mute`. */
     override fun setTransmitting(on: Boolean) {
         val att = current ?: return
-        att.transmitting = on
-        // A press is also a request for capture — it is the user asking to transmit — which is what
-        // lets a session lost to a terminal engine failure, or to a hold, come back. Here rather
-        // than in the caller so every caller gets it: the pairing is this class's business.
-        // Only the Acquire rides the channel; the gate below stays a direct call, because the
-        // consumer blocks in newCapture()/stop() and a queued gate edge would clip the start of a
-        // spurt.
-        if (on) send(CaptureCommand.Acquire(att))
-        att.capture?.setTransmitting(on)
+        att.pressed = on
+        apply(att)
+    }
+
+    /** Switching to push-to-talk lifts a self-mute: that mode has no Mute control, so a mute
+     *  carried into it would disable Talk with nothing to clear it. Its gate is closed anyway. */
+    override fun setTransmitMode(mode: TransmitMode) {
+        transmitMode = mode
+        val att = current ?: return
+        if (transmitMode != TransmitMode.VoiceActivity && att.muted) setMuted(false) else apply(att)
+    }
+
+    /** Closes the gate here, not just on the wire: the microphone goes quiet at the tap rather
+     *  than at the server's echo, and a session rebuilt after the tap must not come up transmitting. */
+    override fun setMuted(on: Boolean) {
+        val att = current ?: return
+        att.sm.setSelfMute(on)
+        att.muted = on
+        apply(att)
     }
 
     /**

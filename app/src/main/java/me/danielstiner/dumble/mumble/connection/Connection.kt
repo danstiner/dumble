@@ -10,6 +10,7 @@ import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 /** The coordinator surface the UI depends on — narrow so the ViewModel can be tested with a fake. */
 interface Connection {
@@ -78,6 +79,20 @@ interface Connection {
      * recomputing it.
      */
     fun setSelfDeaf(on: Boolean)
+
+    /**
+     * Mute or unmute. Sends `self_mute` and closes the transmit gate locally, so a voice-activity
+     * microphone goes silent at the tap rather than at the server's echo. Fire-and-forget; the
+     * wire half is a no-op until synchronized.
+     */
+    fun setMuted(on: Boolean)
+
+    /**
+     * How the microphone decides to transmit. A setting rather than session state: it outlives
+     * connections and is applied to every capture session. Switching to push-to-talk lifts a
+     * self-mute, since that mode has no control to lift it. Fire-and-forget.
+     */
+    fun setTransmitMode(mode: TransmitMode)
 
     /**
      * Route call audio to [routeId], one of [audioRoutes]' available ids. Fire-and-forget, and a

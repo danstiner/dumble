@@ -31,6 +31,7 @@ object NativeCapture {
     external fun stop(handle: Long)
     external fun destroy(handle: Long)
     external fun setGateOpen(handle: Long, open: Boolean)
+    external fun setVoiceActivity(handle: Long, on: Boolean)
 
     /** Blocks until a packet is ready or the engine shuts down. Returns byte count, 0 (nothing
      *  to send), [POLL_RETRY], [POLL_UNAVAILABLE], or [POLL_SHUTDOWN]. [out] must be at least

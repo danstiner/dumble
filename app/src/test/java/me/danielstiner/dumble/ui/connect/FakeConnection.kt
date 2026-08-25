@@ -13,6 +13,7 @@ import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 class FakeConnection : Connection {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
@@ -36,6 +37,8 @@ class FakeConnection : Connection {
     var requestCaptureCalls = 0; private set
     val transmitting = mutableListOf<Boolean>()
     val selfDeaf = mutableListOf<Boolean>()
+    val muted = mutableListOf<Boolean>()
+    val transmitModes = mutableListOf<TransmitMode>()
     val routeRequests = mutableListOf<String>()
     val userStatsRequests = mutableListOf<Int>()
 
@@ -50,6 +53,10 @@ class FakeConnection : Connection {
     override fun setTransmitting(on: Boolean) { transmitting += on }
 
     override fun setSelfDeaf(on: Boolean) { selfDeaf += on }
+
+    override fun setMuted(on: Boolean) { muted += on }
+
+    override fun setTransmitMode(mode: TransmitMode) { transmitModes += mode }
 
     override fun requestAudioRoute(routeId: String) { routeRequests += routeId }
 

@@ -17,11 +17,13 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     // Volatile: written by the lifecycle consumer or the caller's thread, read by the test's own —
     // awaitTrue polls these in a plain loop, which without this is free to hoist the read.
     @Volatile var gateOpen = false; private set
+    @Volatile var transmitMode = TransmitMode.PushToTalk; private set
     @Volatile var stopped = false; private set
     @Volatile var destroyed = false; private set
 
     fun script(vararg s: Step) = s.forEach { steps.put(it) }
     override fun setGateOpen(open: Boolean) { gateOpen = open }
+    override fun setTransmitMode(mode: TransmitMode) { transmitMode = mode }
     override fun stop() { stopped = true; steps.put(Step.Shutdown) }
     override fun destroy() { destroyed = true }
 

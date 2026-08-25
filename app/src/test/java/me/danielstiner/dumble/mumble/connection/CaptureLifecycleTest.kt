@@ -12,6 +12,7 @@ import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import org.junit.Assert.assertEquals
@@ -55,6 +56,7 @@ class CaptureLifecycleTest {
         }
 
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { stopCalled = true }
         override fun destroy() { pollsInFlightAtDestroy = pollsInFlight.get() }
         override fun stats(): CaptureStats? = null
@@ -153,6 +155,7 @@ class CaptureLifecycleTest {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { unblock.countDown() }
         override fun destroy() { live.decrementAndGet() }
         override fun stats(): CaptureStats? = null
@@ -202,6 +205,7 @@ class CaptureLifecycleTest {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { stops.incrementAndGet(); unblock.countDown() }
         override fun destroy() { destroys.incrementAndGet() }
         override fun stats(): CaptureStats? = null
@@ -244,6 +248,7 @@ class CaptureLifecycleTest {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { log += "$name:stop"; unblock.countDown() }
         override fun destroy() { destroys.incrementAndGet(); log += "$name:destroy" }
         override fun stats(): CaptureStats? = null
@@ -304,6 +309,7 @@ class CaptureLifecycleTest {
             pollGate.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { Thread.sleep(stopMillis); pollGate.countDown() }
         override fun destroy() = Unit
         override fun stats(): CaptureStats? = null
@@ -455,6 +461,170 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
+    /** Voice activity arms by "not muted", push-to-talk by the thumb. A switch must re-derive the
+     *  gate, or the armed voice-activity session survives with nobody holding a button. */
+    @Test fun switchingToPushToTalkDisarmsAVoiceActivitySession() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the engine must open") { handles.size == 1 }
+
+        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        awaitTrue("voice activity must arm the gate") { handles[0].gateOpen }
+        assertEquals(TransmitMode.VoiceActivity, handles[0].transmitMode)
+
+        conn.setTransmitMode(TransmitMode.PushToTalk)
+        assertFalse("push-to-talk must not inherit voice activity's armed gate", handles[0].gateOpen)
+        assertEquals(TransmitMode.PushToTalk, handles[0].transmitMode)
+
+        conn.disconnect()
+    }
+
+
+    /** A rebuilt engine defaults to push-to-talk, so the mode must be reapplied to every session
+     *  or every cellular call silently loses voice activity. */
+    @Test fun voiceActivitySurvivesAHold() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the first engine must open") { handles.size == 1 }
+        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        awaitTrue("voice activity must arm the gate") { handles[0].gateOpen }
+
+        call.hold()
+        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        call.resume()
+        awaitTrue("the resume must rebuild") { handles.size == 2 }
+
+        awaitTrue("the rebuilt engine must come up in voice activity") { handles[1].transmitMode == TransmitMode.VoiceActivity }
+        awaitTrue("and armed, since nothing muted us") { handles[1].gateOpen }
+
+        conn.disconnect()
+    }
+
+    /** A mute must lower the level, not just close the gate: the next rebuild — a cellular call
+     *  is enough — reads the level. */
+    @Test fun aMuteUnderAHeldTalkSurvivesARebuild() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitting(true)
+        awaitTrue("the press must open an engine, transmitting") { handles.size == 1 && handles[0].gateOpen }
+
+        conn.setMuted(true)
+        awaitTrue("the mute must close the gate") { !handles[0].gateOpen }
+
+        call.hold()
+        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        call.resume()
+        awaitTrue("the resume must rebuild") { handles.size == 2 }
+
+        // The gate is applied before the pump starts, so a wrong answer is already visible.
+        awaitTrue("the rebuilt session must be running") { !handles[1].stopped }
+        assertFalse("a muted rebuild must not come up transmitting", handles[1].gateOpen)
+
+        conn.disconnect()
+    }
+
+    /** Mute has no engine-side existence, and the Talk button is only disabled once the server
+     *  echoes `self_mute` — every press before that echo lands here with the control still live. */
+    @Test fun aPressWhileMutedMustNotArm() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the engine must open") { handles.size == 1 }
+
+        conn.setMuted(true)
+        conn.setTransmitting(true)
+        assertFalse("a muted microphone must stay shut under the thumb", handles[0].gateOpen)
+
+        conn.setTransmitting(false)
+        conn.setMuted(false)
+        assertFalse("an unmute is not a press", handles[0].gateOpen)
+        conn.setTransmitting(true)
+        awaitTrue("a fresh press works") { handles[0].gateOpen }
+
+        conn.disconnect()
+    }
+
+    /** Push-to-talk has no Mute control, so a self-mute carried into it would disable Talk with
+     *  nothing to lift it. */
+    @Test fun switchingToPushToTalkLiftsASelfMute() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        awaitTrue("voice activity must open an armed engine") { handles.size == 1 && handles[0].gateOpen }
+        conn.setMuted(true)
+        assertFalse(handles[0].gateOpen)
+
+        conn.setTransmitMode(TransmitMode.PushToTalk)
+        assertFalse("push-to-talk's gate is the thumb", handles[0].gateOpen)
+        conn.setTransmitting(true)
+        awaitTrue("a press must open the gate, the mute having been lifted") { handles[0].gateOpen }
+
+        conn.disconnect()
+    }
+
+    /** An unmute satisfies voice activity's condition for the gate and not push-to-talk's. */
+    @Test fun unmutingReArmsOnlyUnderVoiceActivity() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the engine must open") { handles.size == 1 }
+
+        conn.setMuted(true)
+        conn.setMuted(false)
+        assertFalse("under push-to-talk an unmute must not press the button", handles[0].gateOpen)
+
+        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        awaitTrue("voice activity must arm the gate") { handles[0].gateOpen }
+        conn.setMuted(true)
+        assertFalse("a mute must disarm", handles[0].gateOpen)
+        conn.setMuted(false)
+        awaitTrue("under voice activity an unmute must re-arm") { handles[0].gateOpen }
+
+        conn.disconnect()
+    }
+
     /** A native stop() that throws — the JNI call into OboeCapture::close() is not exception-free. */
     private class ThrowingStopHandle : VoiceSender.CaptureHandle {
         private val unblock = CountDownLatch(1)
@@ -462,6 +632,7 @@ class CaptureLifecycleTest {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop(): Unit = throw RuntimeException("stop blew up")
         override fun destroy() = Unit
         override fun stats(): CaptureStats? = null
@@ -739,6 +910,7 @@ class CaptureLifecycleTest {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) { if (destroyed) gateAfterDestroy = true }
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { unblock.countDown() }
         override fun destroy() { destroyed = true }
         override fun stats(): CaptureStats? = null
@@ -791,6 +963,7 @@ class CaptureLifecycleTest {
             return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
+        override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { stopped = true }
         override fun destroy() { destroyed = true }
         override fun stats(): CaptureStats? = null

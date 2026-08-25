@@ -23,6 +23,7 @@ class VoiceSender(
     interface CaptureHandle {
         fun pollPacket(out: ByteArray, meta: LongArray): Int
         fun setGateOpen(open: Boolean)
+        fun setTransmitMode(mode: TransmitMode)
         fun stop()
 
         /** Releases the engine. Called by whoever owns the session, never by the pump. */
@@ -132,6 +133,11 @@ class VoiceSender(
 class NativeCaptureHandle(private val handle: Long) : VoiceSender.CaptureHandle {
     override fun pollPacket(out: ByteArray, meta: LongArray) = NativeCapture.pollPacket(handle, out, meta)
     override fun setGateOpen(open: Boolean) = NativeCapture.setGateOpen(handle, open)
+    // The engine's enum is two states, so the boundary carries a boolean rather than an ordinal:
+    // an ordinal silently means the other mode if either enum is ever reordered, and this one
+    // decides whether the microphone is live.
+    override fun setTransmitMode(mode: TransmitMode) =
+        NativeCapture.setVoiceActivity(handle, mode == TransmitMode.VoiceActivity)
     override fun stop() = NativeCapture.stop(handle)
     override fun destroy() = NativeCapture.destroy(handle)
     override fun stats() = CaptureStats.read(handle)

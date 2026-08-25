@@ -43,4 +43,34 @@ class DeafenStateTest {
     @Test fun undeafeningAlwaysClearsTheDebt() {
         assertEquals(false, state(deaf = true, mute = true, owed = true).deafen(false).unmuteOnUndeaf)
     }
+
+    @Test fun mutingWhileUnmutedSetsMute() {
+        assertEquals(state(mute = true), state().mute(true))
+    }
+
+    @Test fun mutingWhileMutedIsIdempotent() {
+        assertEquals(state(mute = true), state(mute = true).mute(true))
+    }
+
+    @Test fun unmutingWhileNotDeafenedClearsMute() {
+        assertEquals(state(), state(mute = true).mute(false))
+    }
+
+    @Test fun unmutingWhileDeafenedUndeafensToo() {
+        assertEquals(state(), state(deaf = true, mute = true, owed = true).mute(false))
+    }
+
+    @Test fun unmutingWhileDeafenedWithManualMuteUndeafensButKeepsMute() {
+        // mute was set before deafen, so unmuteOnUndeaf is false — unmute via deafen(false)
+        // preserves the mute the deafen didn't set.
+        assertEquals(state(mute = true), state(deaf = true, mute = true).mute(false))
+    }
+
+    @Test fun mutingWhileDeafenedIsIdempotent() {
+        // Already muted (deafen forces it), so mute(true) changes nothing.
+        assertEquals(
+            state(deaf = true, mute = true, owed = true),
+            state(deaf = true, mute = true, owed = true).mute(true),
+        )
+    }
 }
