@@ -37,6 +37,7 @@ import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +53,9 @@ fun ConnectedScreen(
     microphoneGranted: Boolean,
     talkBlock: TalkBlock?,
     deafened: Boolean,
+    transmitMode: TransmitMode,
+    muted: Boolean,
+    inaudible: Boolean,
     audioRoutes: AudioRoutes,
     selectedSession: Int?,
     selectedPlayoutTargetMillis: Int?,
@@ -65,6 +69,7 @@ fun ConnectedScreen(
     onMicrophoneReady: () -> Unit,
     onTransmitting: (Boolean) -> Unit,
     onToggleDeafen: () -> Unit,
+    onToggleMute: () -> Unit,
     onSelectRoute: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -160,6 +165,10 @@ fun ConnectedScreen(
                 onToggleDeafen = onToggleDeafen,
                 onSelectRoute = onSelectRoute,
                 onHangUp = onDisconnect,
+                transmitMode = transmitMode,
+                muted = muted,
+                inaudible = inaudible,
+                onToggleMute = onToggleMute,
             )
         },
     ) { padding ->

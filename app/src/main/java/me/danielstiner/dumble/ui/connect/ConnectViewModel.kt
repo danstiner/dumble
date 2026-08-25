@@ -28,6 +28,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -68,7 +69,14 @@ data class ConnectUiState(
     // server decides, and it can refuse or force this. One round trip of lag on the button, and no
     // second copy of the truth to drift.
     val deafened: Boolean = false,
+    // Same discipline as [deafened]: our own row, not the last tap.
+    val muted: Boolean = false,
+    // An admin mute or channel suppress: self-unmute stays legal but nobody hears us. Something
+    // the Mute control says, not a reason to disable it.
+    val inaudible: Boolean = false,
     val talkBlock: TalkBlock? = null,
+    // The user's setting; the connection applies it to every session.
+    val transmitMode: TransmitMode = TransmitMode.PushToTalk,
     // The platform's answer, not the last tap — same discipline as [deafened]. One round trip of
     // lag on the caption, and no second copy of the truth to drift.
     val audioRoutes: AudioRoutes = AudioRoutes(),
@@ -164,6 +172,8 @@ class ConnectViewModel internal constructor(
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 deafened = me?.selfDeaf == true,
+                muted = me?.selfMute == true,
+                inaudible = me?.mute == true || me?.suppress == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
                 selectedSession = selected,
@@ -187,6 +197,9 @@ class ConnectViewModel internal constructor(
             configStore.lastUsed()?.let { p ->
                 form.value = form.value.copy(draft = p, portText = p.port.toString())
             }
+            val mode = configStore.transmitMode()
+            form.value = form.value.copy(transmitMode = mode)
+            connection.setTransmitMode(mode)
         }
         viewModelScope.launch {
             connection.messages.collect { msgs ->
@@ -280,6 +293,16 @@ class ConnectViewModel internal constructor(
      * its own capture session, not just the one that happened to prompt.
      */
     fun onMicrophoneReady() = connection.requestCapture()
+
+    /** Reads the mute off [uiState] — the server's answer — for the same reason [onToggleDeafen]
+     *  does. */
+    fun onToggleMute() = connection.setMuted(!uiState.value.muted)
+
+    fun onSelectTransmitMode(mode: TransmitMode) {
+        form.value = form.value.copy(transmitMode = mode)
+        viewModelScope.launch { configStore.saveTransmitMode(mode) }
+        connection.setTransmitMode(mode)
+    }
 
     /**
      * Seam for [CallControls]: press and release open and close the transmit gate. Kept in

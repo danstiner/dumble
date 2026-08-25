@@ -3,6 +3,8 @@ package me.danielstiner.dumble.ui.connect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
@@ -16,6 +18,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -43,8 +46,16 @@ class CallControlsTest {
         onToggleDeafen: () -> Unit = {},
         onSelectRoute: (String) -> Unit = {},
         onHangUp: () -> Unit = {},
+        transmitMode: TransmitMode = TransmitMode.PushToTalk,
+        muted: Boolean = false,
+        inaudible: Boolean = false,
+        onToggleMute: () -> Unit = {},
     ) = compose.setContent {
-        CallControls(talkBlock, deafened, audioRoutes, onTransmitting, onToggleDeafen, onSelectRoute, onHangUp)
+        CallControls(
+            talkBlock, deafened, audioRoutes, onTransmitting, onToggleDeafen, onSelectRoute,
+            onHangUp, transmitMode = transmitMode, muted = muted, inaudible = inaudible,
+            onToggleMute = onToggleMute,
+        )
     }
 
     /** The whole point of the control: the gate opens on press and closes on release, not on click. */
@@ -424,5 +435,65 @@ class CallControlsTest {
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
+    }
+
+    /** One slot, chosen by mode: a Talk button under voice activity has nothing to do. */
+    @Test fun theSlotHoldsTalkUnderPushToTalkAndMuteUnderVoiceActivity() {
+        controls(transmitMode = TransmitMode.PushToTalk)
+        compose.onNodeWithText("Talk").assertExists()
+        compose.onAllNodesWithText("Mute").assertCountEquals(0)
+    }
+
+    @Test fun voiceActivityPutsMuteInTheSlot() {
+        controls(transmitMode = TransmitMode.VoiceActivity)
+        compose.onNodeWithText("Mute").assertExists()
+        compose.onAllNodesWithText("Talk").assertCountEquals(0)
+    }
+
+    /** A latch, not a press: the mute survives the finger leaving, unlike Talk. */
+    @Test fun muteTogglesOnClick() {
+        var taps = 0
+        controls(transmitMode = TransmitMode.VoiceActivity, onToggleMute = { taps++ })
+
+        compose.onNodeWithContentDescription("Mute — your microphone is live").performClick()
+        compose.waitForIdle()
+        assertEquals(1, taps)
+    }
+
+    /** Stock-dialer convention, like Deafen: the caption stays put, shape and colour carry the
+     *  state, and the description spells it out. */
+    @Test fun muteCaptionStaysPutWhileMuted() {
+        controls(transmitMode = TransmitMode.VoiceActivity, muted = true)
+        compose.onNodeWithText("Mute").assertExists()
+        compose.onAllNodesWithText("Muted").assertCountEquals(0)
+        compose.onNodeWithContentDescription("Unmute — your microphone is off").assertExists()
+    }
+
+    /** Only a denied microphone disables Mute: a self-mute is the state it exists to lift. */
+    @Test fun aSelfMuteLeavesMutePressable() {
+        controls(transmitMode = TransmitMode.VoiceActivity, muted = true, talkBlock = TalkBlock.MUTED)
+        compose.onNodeWithContentDescription("Unmute — your microphone is off").assertIsEnabled()
+    }
+
+    @Test fun aDeniedMicrophoneDisablesMute() {
+        controls(transmitMode = TransmitMode.VoiceActivity, talkBlock = TalkBlock.NO_MICROPHONE)
+        compose.onNodeWithContentDescription(
+            "Microphone permission denied — you can still hear others",
+        ).assertIsNotEnabled()
+    }
+
+    /** Self-unmute stays legal under an admin mute but nobody hears it, so the control says so
+     *  on both sides of the latch. */
+    @Test fun anAdminMuteIsSaidRatherThanBlocked() {
+        controls(transmitMode = TransmitMode.VoiceActivity, inaudible = true)
+        compose.onNodeWithContentDescription("Mute — the server is already muting you")
+            .assertIsEnabled()
+    }
+
+    @Test fun unmutingUnderAnAdminMuteSaysItWillNotBeHeard() {
+        controls(transmitMode = TransmitMode.VoiceActivity, muted = true, inaudible = true)
+        compose.onNodeWithContentDescription(
+            "Unmute — the server is muting you, so you still will not be heard",
+        ).assertIsEnabled()
     }
 }
