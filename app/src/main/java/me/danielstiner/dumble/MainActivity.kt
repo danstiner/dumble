@@ -54,6 +54,8 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
         Route.Settings -> SettingsScreen(
             onBack = vm::back,
             onAbout = vm::openAbout,
+            transmitMode = state.transmitMode,
+            onSelectTransmitMode = vm::onSelectTransmitMode,
             modifier = m,
         )
         Route.Main -> when (val s = state.status) {
@@ -78,6 +80,9 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     microphoneGranted = state.microphoneGranted,
                     talkBlock = state.talkBlock,
                     deafened = state.deafened,
+                    transmitMode = state.transmitMode,
+                    muted = state.muted,
+                    inaudible = state.inaudible,
                     audioRoutes = state.audioRoutes,
                     selectedSession = state.selectedSession,
                     selectedPlayoutTargetMillis =
@@ -92,6 +97,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onMicrophoneReady = vm::onMicrophoneReady,
                     onTransmitting = vm::onTransmitting,
                     onToggleDeafen = vm::onToggleDeafen,
+                    onToggleMute = vm::onToggleMute,
                     onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )

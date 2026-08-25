@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.routeMenuNeeded
 import me.danielstiner.dumble.mumble.voice.speakerToggleTarget
 
@@ -55,8 +57,9 @@ private val controlActiveShape = RoundedCornerShape(percent = 30)
  * The call screen's bottom bar. Buttons take equal weight so they are wide pills with large touch
  * targets rather than small circles, matching the stock phone app.
  *
- * Push-to-talk and mute are alternatives for the same slot, not separate controls: a mute button is
- * meaningless when the gate is already closed by default, so only Talk appears here. Deafen is not
+ * Talk and Mute share one slot, chosen by [transmitMode]: a mute button is meaningless while
+ * push-to-talk's gate is closed by default, and under voice activity it is the only thing that
+ * closes it. Deafen is not
  * redundant with push-to-talk — it is about not hearing others, not about not transmitting. Speaker
  * is now the audio-route control, which reads [AudioRoutes.available] to decide whether it is a
  * speaker toggle or a menu — see [RouteControl].
@@ -74,6 +77,10 @@ fun CallControls(
     onSelectRoute: (String) -> Unit,
     onHangUp: () -> Unit,
     modifier: Modifier = Modifier,
+    transmitMode: TransmitMode = TransmitMode.PushToTalk,
+    muted: Boolean = false,
+    inaudible: Boolean = false,
+    onToggleMute: () -> Unit = {},
 ) {
     Surface(modifier, color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 3.dp) {
         Row(
@@ -82,7 +89,14 @@ fun CallControls(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            TalkControl(talkBlock, onTransmitting, Modifier.weight(1f))
+            when (transmitMode) {
+                TransmitMode.PushToTalk ->
+                    TalkControl(talkBlock, onTransmitting, Modifier.weight(1f))
+                TransmitMode.VoiceActivity -> MuteControl(
+                    muted, inaudible, noMicrophone = talkBlock == TalkBlock.NO_MICROPHONE,
+                    onToggleMute, Modifier.weight(1f),
+                )
+            }
             ControlButton(
                 icon = if (deafened) Icons.Filled.HeadsetOff else Icons.Filled.Headphones,
                 label = "Deafen",
@@ -165,6 +179,38 @@ private fun TalkControl(
             Icon(Icons.Filled.Mic, null, modifier = Modifier.size(26.dp))
         }
     }
+}
+
+/**
+ * Mute, in the Talk slot under voice activity. A latch, unlike Talk, and captioned like Deafen:
+ * the label stays put and shape and colour carry the state. Only a denied microphone disables it —
+ * a self-mute is the state it exists to lift, so reusing [talkBlock] would grey it out exactly when
+ * it starts working. An admin mute or channel suppress ([inaudible]) leaves self-unmute legal but
+ * unheard, so the description says so rather than the control appearing to have worked.
+ */
+@Composable
+private fun MuteControl(
+    muted: Boolean,
+    inaudible: Boolean,
+    noMicrophone: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ControlButton(
+        icon = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
+        label = if (noMicrophone) "No mic" else "Mute",
+        description = when {
+            noMicrophone -> "Microphone permission denied — you can still hear others"
+            inaudible && muted -> "Unmute — the server is muting you, so you still will not be heard"
+            inaudible -> "Mute — the server is already muting you"
+            muted -> "Unmute — your microphone is off"
+            else -> "Mute — your microphone is live"
+        },
+        enabled = !noMicrophone,
+        active = muted,
+        onClick = onToggle,
+        modifier = modifier,
+    )
 }
 
 /**

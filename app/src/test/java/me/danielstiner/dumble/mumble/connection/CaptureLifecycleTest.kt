@@ -1143,4 +1143,23 @@ class CaptureLifecycleTest {
         }
         throw AssertionError("timed out waiting: $what")
     }
+
+    /** Re-applying the mode a session already has must leave a held press alone. */
+    @Test fun reApplyingPushToTalkDoesNotDropAHeldPress() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitting(true)
+        awaitTrue("the press must open an engine, transmitting") { handles.size == 1 && handles[0].gateOpen }
+
+        conn.setTransmitMode(TransmitMode.PushToTalk)
+        assertTrue("re-applying the mode must leave the press alone", handles[0].gateOpen)
+
+        conn.disconnect()
+    }
 }

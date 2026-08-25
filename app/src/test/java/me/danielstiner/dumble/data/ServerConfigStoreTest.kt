@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.data
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import org.junit.rules.TemporaryFolder
 
 class ServerConfigStoreTest {
@@ -48,6 +51,32 @@ class ServerConfigStoreTest {
             block(ServerConfigDataStore(PreferenceDataStoreFactory.create(scope = scope) { file }))
         } finally {
             runBlocking { scope.coroutineContext[Job]!!.cancelAndJoin() }
+        }
+    }
+
+    @Test fun freshStoreIsPushToTalk() = runBlocking {
+        withStore { store -> assertEquals(TransmitMode.PushToTalk, store.transmitMode()) }
+    }
+
+    @Test fun transmitModeRoundTrips() = runBlocking {
+        withStore { store ->
+            store.saveTransmitMode(TransmitMode.VoiceActivity)
+            assertEquals(TransmitMode.VoiceActivity, store.transmitMode())
+            store.saveTransmitMode(TransmitMode.PushToTalk)
+            assertEquals(TransmitMode.PushToTalk, store.transmitMode())
+        }
+    }
+
+    /** A name the enum no longer has reads as push-to-talk rather than throwing. */
+    @Test fun anUnknownStoredModeFallsBackToPushToTalk() = runBlocking {
+        val file = tmp.newFile("unknown_mode.preferences_pb").also { it.delete() }
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        try {
+            val ds = PreferenceDataStoreFactory.create(scope = scope) { file }
+            ds.edit { it[stringPreferencesKey("transmit_mode")] = "Telepathy" }
+            assertEquals(TransmitMode.PushToTalk, ServerConfigDataStore(ds).transmitMode())
+        } finally {
+            scope.coroutineContext[Job]!!.cancelAndJoin()
         }
     }
 }

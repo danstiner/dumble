@@ -18,6 +18,7 @@ import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -371,9 +372,10 @@ class ConnectViewModelTest {
         selfDeaf: Boolean = false,
         mute: Boolean = false,
         selfMute: Boolean = selfDeaf,
+        suppress: Boolean = false,
     ) = User(
         session = session, name = "u$session", channelId = 0,
-        mute = mute, deaf = false, selfMute = selfMute, selfDeaf = selfDeaf, suppress = false,
+        mute = mute, deaf = false, selfMute = selfMute, selfDeaf = selfDeaf, suppress = suppress,
     )
 
     private fun treeWith(vararg users: User) = ChannelTree(
@@ -726,5 +728,70 @@ class ConnectViewModelTest {
         runCurrent()
 
         assertNull(vm.uiState.value.userStats)
+    }
+
+    @Test fun theStoredModeLoadsAndReachesTheConnection() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null, TransmitMode.VoiceActivity), clock)
+        advanceUntilIdle()
+        assertEquals(TransmitMode.VoiceActivity, vm.uiState.value.transmitMode)
+        assertEquals(listOf(TransmitMode.VoiceActivity), conn.transmitModes)
+    }
+
+    @Test fun selectingAModePersistsItAndAppliesIt() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val store = FakeConfigStore(null)
+        val vm = ConnectViewModel(conn, store, clock)
+        advanceUntilIdle()
+
+        vm.onSelectTransmitMode(TransmitMode.VoiceActivity)
+        advanceUntilIdle()
+
+        assertEquals(TransmitMode.VoiceActivity, vm.uiState.value.transmitMode)
+        assertEquals(TransmitMode.VoiceActivity, store.savedMode)
+        assertEquals(TransmitMode.VoiceActivity, conn.transmitModes.last())
+    }
+
+    /** Same discipline as deafen: the button follows our own row, not the tap. */
+    @Test fun mutedReflectsTheServerNotTheTap() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7))
+        runCurrent()
+
+        vm.onToggleMute()
+        runCurrent()
+        assertEquals(listOf(true), conn.muted)
+        assertFalse("the tap alone must not move the button", vm.uiState.value.muted)
+
+        conn.channelTree.value = treeWith(user(7, selfMute = true))
+        runCurrent()
+        assertTrue(vm.uiState.value.muted)
+
+        // And the toggle reads the server's answer back, so the second tap is an unmute.
+        vm.onToggleMute()
+        runCurrent()
+        assertEquals(listOf(true, false), conn.muted)
+    }
+
+    /** Self-unmute stays legal under an admin mute or suppress; reported apart from [muted] so
+     *  the control stays pressable. */
+    @Test fun anAdminMuteOrSuppressIsReportedAsInaudible() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7))
+        runCurrent()
+        assertFalse(vm.uiState.value.inaudible)
+
+        conn.channelTree.value = treeWith(user(7, mute = true))
+        runCurrent()
+        assertTrue("an admin mute is inaudible", vm.uiState.value.inaudible)
+        assertFalse("but it is not a self-mute", vm.uiState.value.muted)
+
+        conn.channelTree.value = treeWith(user(7, suppress = true))
+        runCurrent()
+        assertTrue("a channel suppress is too", vm.uiState.value.inaudible)
     }
 }
