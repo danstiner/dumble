@@ -35,6 +35,10 @@ interface Connection {
      *  audio. */
     val selfSpeaking: StateFlow<Boolean>
 
+    /** A cellular call has taken the microphone. Capture is released while this is true;
+     *  [requestCapture] asks for both back. */
+    val callHeld: StateFlow<Boolean>
+
     /** The receive path's last second of measurement; null before the first one lands. */
     val playoutStats: StateFlow<PlayoutStats?>
 

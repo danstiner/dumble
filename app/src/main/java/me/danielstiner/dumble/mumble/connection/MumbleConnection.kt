@@ -104,6 +104,9 @@ class MumbleConnection internal constructor(
 
     @Volatile private var lastAudioSentNanos = 0L
 
+    private val _callHeld = MutableStateFlow(false)
+    override val callHeld: StateFlow<Boolean> = _callHeld.asStateFlow()
+
     private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
     override val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
 
@@ -357,6 +360,7 @@ class MumbleConnection internal constructor(
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=$gen")
             heldGen = if (held) gen else NO_GEN
+            _callHeld.value = held
             att?.let { reconcile(it) }
         } else {
             Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=$gen")
@@ -501,9 +505,10 @@ class MumbleConnection internal constructor(
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
-        // A packet still draining from the dying pump can raise this again; bounded and invisible,
-        // see onAudioSent.
+        // Speaking and held belong to the attempt being retired. A draining pump can raise
+        // speaking again — bounded and invisible, see onAudioSent.
         _selfSpeaking.value = false
+        _callHeld.value = false
         _playoutStats.value = null
         _userStats.value = null
         _audioRoutes.value = AudioRoutes()

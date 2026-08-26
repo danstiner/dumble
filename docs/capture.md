@@ -39,8 +39,10 @@ an open is KDoc'd at `apply`.
 **Platform call** (`TelecomCall`, behind the `VoiceCall` seam): registering a self-managed telecom
 call is what grants audio focus, communication routing, and the microphone foreground service. A
 hold — an incoming cellular call is the case that matters — releases the capture session entirely
-rather than gating it, because the platform owns the input device for the duration; a Talk press
-while held doubles as the resume request, since core-telecom sends no unsolicited resume.
+rather than gating it, because the platform owns the input device for the duration. Core-telecom
+sends no unsolicited resume, so any request for capture while held doubles as the resume request:
+a Talk press under push-to-talk, or the tap on the held-call banner (`callHeld`) that voice
+activity needs because it has no press.
 
 The invariants — never two open input streams, the engine freed only after its pump exits (a
 wedged pump leaks deliberately rather than risk a use-after-free), no auto-reopen after a terminal
