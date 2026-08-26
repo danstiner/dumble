@@ -33,8 +33,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -92,7 +92,15 @@ private fun UserRow(u: ChannelTreeRow.UserRow, onClick: (Int) -> Unit) {
         // ListItem's own 16dp start padding equals ChannelHeader's indent at depth 0; adding
         // depth * 12dp mirrors the header's per-level step so a user sits under its own channel.
         // clickable inside the padding so the ripple stays under the row, not the indent.
-        modifier = Modifier.padding(start = (u.depth * 12).dp).clickable { onClick(u.session) },
+        //
+        // stateDescription, not contentDescription: ListItem merges descendants, and a merged
+        // contentDescription replaces the text — the row read as "speaking" with the name gone.
+        modifier = Modifier.padding(start = (u.depth * 12).dp)
+            .clickable { onClick(u.session) }
+            .then(
+                if (u.isSpeaking) Modifier.semantics { stateDescription = "speaking" }
+                else Modifier
+            ),
         leadingContent = { Avatar(u) },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -136,10 +144,6 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
     Box(
         Modifier
             .size(HaloBoxSize)
-            .then(
-                if (u.isSpeaking) Modifier.semantics { contentDescription = "speaking" }
-                else Modifier
-            )
             .drawBehind {
                 if (haloAlpha <= 0f) return@drawBehind
                 // Full alpha out to the avatar's edge, then fall off. Starting the falloff any
