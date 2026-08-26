@@ -40,6 +40,16 @@ class MumbleEndpointTest {
         assertThrows(IllegalArgumentException::class.java) { MumbleEndpoint.parse("example.com:8080", 64738) }
     }
 
+    /** The IPv6 spelling of the case above: a whole "[host]:port" pasted into the host field. */
+    @Test fun rejectsBracketedIpv6WithEmbeddedPort() {
+        assertThrows(IllegalArgumentException::class.java) { MumbleEndpoint.parse("[::1]:64738", 64738) }
+    }
+
+    @Test fun rejectsAnUnbalancedBracket() {
+        assertThrows(IllegalArgumentException::class.java) { MumbleEndpoint.parse("[::1", 64738) }
+        assertThrows(IllegalArgumentException::class.java) { MumbleEndpoint.parse("::1]", 64738) }
+    }
+
     @Test fun rejectsEmptyHost() {
         assertThrows(IllegalArgumentException::class.java) { MumbleEndpoint.parse("   ", null) }
     }
