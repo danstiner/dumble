@@ -1,12 +1,10 @@
 package me.danielstiner.dumble.ui.connect
 
-import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.danielstiner.dumble.mumble.channeltree.Channel
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -54,21 +52,16 @@ class ChannelTreeViewTest {
         assertEquals(listOf(7), clicked)
     }
 
-    /**
-     * The halo is the only speaking signal now. The width assertion pins the description to the
-     * halo box — a revert to the old trailing icon would still pass a plain node count.
-     */
+    /** The mark belongs to the row; asserting the name on the same node pins it there. */
     @Test fun onlyTheSpeakingUsersRowIsMarkedSpeaking() {
         roster(speaking = setOf(7))
-        assertEquals(1, compose.onAllNodesWithContentDescription("speaking").fetchSemanticsNodes().size)
-        // ListItem sets mergeDescendants, so the merged finder resolves to the whole row.
-        compose.onNodeWithContentDescription("speaking", useUnmergedTree = true)
-            .assertWidthIsEqualTo(48.dp)
+        assertEquals(1, compose.onAllNodes(hasStateDescription("speaking")).fetchSemanticsNodes().size)
+        compose.onNode(hasStateDescription("speaking")).assertTextContains("alice")
     }
 
     @Test fun nobodyIsMarkedSpeakingWhenTheSetIsEmpty() {
         roster(speaking = emptySet())
-        assertEquals(0, compose.onAllNodesWithContentDescription("speaking").fetchSemanticsNodes().size)
+        assertEquals(0, compose.onAllNodes(hasStateDescription("speaking")).fetchSemanticsNodes().size)
     }
 
     /**
