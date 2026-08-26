@@ -964,6 +964,44 @@ TEST(CaptureEngine, AMuteUnmuteUnderVoiceActivityIsASpurtEndNotAMerge) {
         << "the mute produced a second packet";
 }
 
+TEST(CaptureEngine, AStreamDownCycleMidSpurtOwesATerminator) {
+    // An Oboe disconnect/reopen -- a headset unplugged, a route change -- resets the detector
+    // that was governing the spurt in flight, ending it the way a mute does. Recovery is never a
+    // merge, so the debt cannot be waived: without a terminator the far end sits on a stream that
+    // never resumes until its own timeout.
+    auto e = engine();
+    ASSERT_TRUE(e);
+    e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    e->setGateOpen(true);
+    e->setWaitMillisForTest(1);
+
+    const std::vector<int16_t> quiet(dumble::kTxPacketSamples, 0);
+    for (int i = 0; i < 10; i++) { e->onPcm(quiet.data(), dumble::kTxPacketSamples); drain(*e); }
+
+    const auto pcm = dumble::fixture::readWav(dumble::fixture::referencePath("synthetic.wav"));
+    uint8_t out[dumble::kMaxPacketBytes]; uint64_t fn; uint32_t flags;
+    int outputs = 0;
+    for (size_t at = 0; at + dumble::kTxPacketSamples <= pcm.size() &&
+                        outputs < kBurstPackets + 1;
+         at += dumble::kTxPacketSamples) {
+        e->onPcm(pcm.data() + at, dumble::kTxPacketSamples);
+        while (e->pollPacket(out, sizeof(out), &fn, &flags) > 0) outputs++;
+    }
+    ASSERT_GE(outputs, kBurstPackets + 1) << "the spurt never opened";
+
+    e->setStreamDown(true);
+    EXPECT_EQ(dumble::kPollRetry, e->pollPacket(out, sizeof(out), &fn, &flags))
+        << "a downed stream encoded something instead of asking to be retried";
+    e->setStreamDown(false);
+
+    ASSERT_GT(e->pollPacket(out, sizeof(out), &fn, &flags), 0)
+        << "the severed spurt was dropped without a terminator";
+    EXPECT_EQ(dumble::kFlagTerminator, flags & dumble::kFlagTerminator)
+        << "the recovery's packet did not carry the terminator";
+    EXPECT_EQ(0, e->pollPacket(out, sizeof(out), &fn, &flags))
+        << "the recovery produced a second packet";
+}
+
 TEST(CaptureEngine, AMuteWhileTheDetectorIsIdleSendsNothing) {
     // Under voice activity the arming gate stays open for the whole session and the DETECTOR
     // owns the spurt. A mute while nothing is transmitting has nothing to terminate: flushing
