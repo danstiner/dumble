@@ -19,10 +19,16 @@ class MumbleEndpoint private constructor(val host: String, val port: Int) {
         fun parse(rawHost: String, rawPort: Int? = null): MumbleEndpoint {
             val port = rawPort ?: DEFAULT_PORT
             require(port in 1..65535) { "port out of range: $port" }
-            var host = rawHost.trim().removeSuffix(".").removePrefix("[").removeSuffix("]")
+            var host = rawHost.trim().removeSuffix(".").removeSurrounding("[", "]")
             require(host.isNotEmpty()) { "host is empty" }
             val colons = host.count { it == ':' }
-            require(colons == 0 || colons >= 2) { "host looks like it includes a port; use the port field" }
+            // A lone colon is a mistyped host:port. A bracket surviving removeSurrounding is the
+            // same mistake wearing IPv6 clothes: "[::1]:64738" keeps its "[", because the closing
+            // one is no longer the last character. Stripping the two independently used to leave
+            // "::1]:64738" as the host, whose three colons sailed past this check to fail at connect.
+            require((colons == 0 || colons >= 2) && '[' !in host && ']' !in host) {
+                "host looks like it includes a port; use the port field"
+            }
             // Punycode Unicode hostnames; leave IPv6 literals alone. Locale-safe lowercase either way.
             host = if (colons == 0) IDN.toASCII(host).lowercase() else host.lowercase()
             return MumbleEndpoint(host, port)
