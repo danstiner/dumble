@@ -93,6 +93,8 @@ data class ConnectUiState(
     // the sheet cannot leave it describing the wrong person.
     val selectedSession: Int? = null,
     val playoutStats: PlayoutStats? = null,
+    // A cellular call has the microphone; capture is released until the user asks for it back.
+    val callHeld: Boolean = false,
     // The selected user's ping, or null when the server has not answered for them. Already
     // matched against [selectedSession]: the reply is asynchronous, so one for the user whose
     // sheet just closed must never be read under whoever is on screen now.
@@ -104,6 +106,7 @@ private data class ConnSnapshot(
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
     val audioRoutes: AudioRoutes,
+    val callHeld: Boolean,
 )
 
 /** How the link is carrying the session, as opposed to what is on it. */
@@ -138,7 +141,8 @@ class ConnectViewModel internal constructor(
     // keep the top-level inside it too. Split by what they describe rather than by arity.
     private val connSnapshot = combine(
         connection.status, connection.channelTree, connection.messages, connection.audioRoutes,
-    ) { status, tree, msgs, routes -> ConnSnapshot(status, tree, msgs, routes) }
+        connection.callHeld,
+    ) { status, tree, msgs, routes, held -> ConnSnapshot(status, tree, msgs, routes, held) }
 
     private val healthSnapshot = combine(
         connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
@@ -172,6 +176,7 @@ class ConnectViewModel internal constructor(
                 audioRoutes = c.audioRoutes,
                 selectedSession = selected,
                 userStats = health.userStats?.takeIf { it.session == selected },
+                callHeld = c.callHeld,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -296,6 +301,9 @@ class ConnectViewModel internal constructor(
 
     /** Seam for [CallControls]: press and release open and close the transmit gate. */
     fun onTransmitting(active: Boolean) = connection.setTransmitting(active)
+
+    /** The held-call banner's tap: requesting capture while held also asks for the call back. */
+    fun onResume() = connection.requestCapture()
 
     /**
      * Reads the current value off [uiState] — the server's answer — rather than taking it from the

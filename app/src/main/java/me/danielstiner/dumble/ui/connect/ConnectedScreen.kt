@@ -64,6 +64,7 @@ fun ConnectedScreen(
     transmitMode: TransmitMode,
     muted: Boolean,
     inaudible: Boolean,
+    callHeld: Boolean,
     audioRoutes: AudioRoutes,
     selectedSession: Int?,
     selectedPlayoutTargetMillis: Int?,
@@ -78,6 +79,7 @@ fun ConnectedScreen(
     onTransmitting: (Boolean) -> Unit,
     onToggleDeafen: () -> Unit,
     onToggleMute: () -> Unit,
+    onResume: () -> Unit,
     onSelectRoute: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -165,30 +167,33 @@ fun ConnectedScreen(
             )
         },
         bottomBar = {
-            CallControls(
-                talkBlock = talkBlock,
-                deafened = deafened,
-                audioRoutes = audioRoutes,
-                onTransmitting = onTransmitting,
-                onToggleDeafen = onToggleDeafen,
-                onSelectRoute = onSelectRoute,
-                onHangUp = onDisconnect,
-                transmitMode = transmitMode,
-                muted = muted,
-                inaudible = inaudible,
-                onToggleMute = onToggleMute,
-            )
+            // In the bottom bar, above the controls: the banner explains why the mic button is
+            // inert, and its tap is the way back — both belong near the thumb.
+            Column {
+                if (callHeld) HeldBanner(onResume)
+                CallControls(
+                    talkBlock = talkBlock,
+                    deafened = deafened,
+                    audioRoutes = audioRoutes,
+                    onTransmitting = onTransmitting,
+                    onToggleDeafen = onToggleDeafen,
+                    onSelectRoute = onSelectRoute,
+                    onHangUp = onDisconnect,
+                    transmitMode = transmitMode,
+                    muted = muted,
+                    inaudible = inaudible,
+                    onToggleMute = onToggleMute,
+                )
+            }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            ChannelTreeView(
-                channelTree,
-                mySession = sessionId,
-                speaking = speaking,
-                onUserClick = onUserClick,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        ChannelTreeView(
+            channelTree,
+            mySession = sessionId,
+            speaking = speaking,
+            onUserClick = onUserClick,
+            modifier = Modifier.fillMaxSize().padding(padding),
+        )
     }
     selectedSession?.let { channelTree.users[it] }?.let { u ->
         UserDetailSheet(
@@ -202,3 +207,28 @@ fun ConnectedScreen(
     }
 }
 
+/** Shown while a cellular call has the microphone; tapping asks for it back. */
+@Composable
+private fun HeldBanner(onResume: () -> Unit) {
+    Surface(
+        Modifier.fillMaxWidth().clickable(onClick = onResume),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.MicOff, null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                "Microphone paused for a phone call. Tap to resume.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+    }
+}

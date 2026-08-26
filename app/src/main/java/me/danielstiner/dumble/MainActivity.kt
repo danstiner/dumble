@@ -83,6 +83,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     transmitMode = state.transmitMode,
                     muted = state.muted,
                     inaudible = state.inaudible,
+                    callHeld = state.callHeld,
                     audioRoutes = state.audioRoutes,
                     selectedSession = state.selectedSession,
                     selectedPlayoutTargetMillis =
@@ -98,6 +99,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onTransmitting = vm::onTransmitting,
                     onToggleDeafen = vm::onToggleDeafen,
                     onToggleMute = vm::onToggleMute,
+                    onResume = vm::onResume,
                     onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )

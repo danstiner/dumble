@@ -1210,6 +1210,36 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
+    /** Core-telecom sends no unsolicited resume, so asking for capture while held is also the
+     *  ask for the call back — the held-call banner's tap under voice activity. */
+    @Test fun requestingCaptureWhileHeldAsksForTheCallBack() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the first engine must open") { handles.size == 1 }
+
+        call.hold()
+        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        awaitTrue("and be published") { conn.callHeld.value }
+
+        conn.requestCapture()
+        awaitTrue("the ask must reach the platform") { call.activeRequests.isNotEmpty() }
+
+        call.resume()
+        awaitTrue("and capture comes back with it") { handles.size == 2 }
+        awaitTrue("the hold clears") { !conn.callHeld.value }
+
+        conn.disconnect()
+    }
+
     /** Re-applying the mode a session already has must leave a held press alone. */
     @Test fun reApplyingPushToTalkDoesNotDropAHeldPress() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -1245,8 +1275,10 @@ class CaptureLifecycleTest {
         conn.requestCapture()
         awaitTrue("the engine must open") { handles.size == 1 }
         call.hold()
+        awaitTrue("the hold must publish") { conn.callHeld.value }
 
         conn.disconnect()
+        awaitTrue("disconnect must clear the hold") { !conn.callHeld.value }
         assertFalse(conn.selfSpeaking.value)
     }
 }

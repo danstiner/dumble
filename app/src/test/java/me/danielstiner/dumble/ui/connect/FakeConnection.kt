@@ -23,6 +23,7 @@ class FakeConnection : Connection {
     override val channelTree = MutableStateFlow(ChannelTree())
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val selfSpeaking = MutableStateFlow(false)
+    override val callHeld = MutableStateFlow(false)
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val playoutStats = MutableStateFlow<PlayoutStats?>(null)
     override val userStats = MutableStateFlow<UserStats?>(null)

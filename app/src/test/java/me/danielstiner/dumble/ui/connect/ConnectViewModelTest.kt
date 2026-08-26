@@ -756,4 +756,18 @@ class ConnectViewModelTest {
         assertTrue("a channel suppress is too", vm.uiState.value.inaudible)
     }
 
+    @Test fun aHeldCallReachesTheUiStateAndTheTapAsksForItBack() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        runCurrent()
+        assertFalse(vm.uiState.value.callHeld)
+
+        conn.callHeld.value = true
+        runCurrent()
+        assertTrue(vm.uiState.value.callHeld)
+
+        vm.onResume()
+        assertEquals(1, conn.requestCaptureCalls)
+    }
 }
