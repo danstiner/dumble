@@ -30,6 +30,11 @@ interface Connection {
     val messages: StateFlow<List<ChatMessage>>
     val speakingSessions: StateFlow<Set<Int>>
 
+    /** Our own audio reaching the wire, held ~200 ms past the last packet so it does not strobe
+     *  between words. [speakingSessions] never contains us: it is built from decoded incoming
+     *  audio. */
+    val selfSpeaking: StateFlow<Boolean>
+
     /** The receive path's last second of measurement; null before the first one lands. */
     val playoutStats: StateFlow<PlayoutStats?>
 

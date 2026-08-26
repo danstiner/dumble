@@ -1,9 +1,9 @@
 # Audio capture
 
 Microphone to Mumble UDP-tunnel packets on the TCP transport. Three layers with a single owner for
-the lifecycle. Transmit is push-to-talk today; the voice activity detector (below) is wired into
-`CaptureEngine`, but no app surface sets the transmit mode to use it yet. Details live in the
-code's comments; constants and their whys in `CaptureConstants.h`.
+the lifecycle. Transmit is push-to-talk or voice activity, chosen in Settings; the detector is
+described below. Details live in the code's comments; constants and their whys in
+`CaptureConstants.h`.
 
 ```
 mic ─► OboeCapture ─► PcmRing ─► assemble packet ─► AudioEncoder ─► pollPacket ─► VoiceSender ─► transport
@@ -19,15 +19,22 @@ stream stays open and warm across presses.
 
 **VoiceSender** (Kotlin pump): one daemon thread parked in `pollPacket`, wrapping each packet for
 the transport. Its exit callback is the only signal the pump is gone; nothing may destroy the
-engine while the pump can still touch it.
+engine while the pump can still touch it. It also reports each packet of speech that reaches the
+wire — not terminators, not refused sends; `MumbleConnection` holds that ~200 ms past the last
+packet as `selfSpeaking`, which is what lights the speaking indicator under either mode.
 
 **Lifecycle** (`MumbleConnection`): four producers demand transitions concurrently — the Talk
 button, telecom hold/resume, disconnect/reconnect, and the pump's own exit — so every transition
 is a command on one channel with a single consumer, and state is levels, not events: `reconcile()`
-compares them and is the only place a session opens or closes. Session and transmit are separate
-levels — a Talk press both re-asks for a session and opens the gate, which is what brings a
-session back after a hold or a terminal failure, still transmitting if the button is still down.
-The mirrored-write argument that makes that race-free is KDoc'd at `apply`.
+compares them and is the only place a session opens or closes.
+
+The transmit gate is not stored: `apply` derives it from three levels — Talk held, self-muted, and
+the transmit mode — as `!muted && (pressed || voiceActivity)`, whenever one of them moves and again
+when a session opens. Wanting it open also re-asks for a session, which is what brings one back
+after a hold or a terminal failure. Mute is one of those levels rather than only a `self_mute` on
+the wire, and the mode lives on the connection rather than the session, so a rebuilt engine — which
+comes up in push-to-talk — gets it back. The mirrored-write argument that keeps a press from racing
+an open is KDoc'd at `apply`.
 
 **Platform call** (`TelecomCall`, behind the `VoiceCall` seam): registering a self-managed telecom
 call is what grants audio focus, communication routing, and the microphone foreground service. A
@@ -44,8 +51,8 @@ failure, generation-keyed hold callbacks — are pinned by `CaptureLifecycleTest
 
 Silero VAD v6.2 as a hand-written forward pass in the portable core (`core/VoiceActivity.{h,cpp}`,
 `core/SileroVad.{h,cpp}`, `core/Decimator.{h,cpp}`), so no inference runtime ships. The units are
-built and pinned against ONNX Runtime reference traces, and `CaptureEngine` drives them: the
-transmit mode selects the path, and no app surface sets that mode yet.
+built and pinned against ONNX Runtime reference traces, and `CaptureEngine` drives them when the
+transmit mode is voice activity.
 
 This section is detailed because the implementation deliberately diverges from how Silero is
 normally run — no ONNX Runtime, a different STFT, a 48 kHz front end the upstream model has never
@@ -54,8 +61,8 @@ seen — and a reader who assumes "it's just Silero" will draw wrong conclusions
 ### Two gates, deliberately not one
 
 Capture has two gates. The **arming** gate in `onPcm` decides whether the
-microphone reaches the ring at all; it is push-to-talk's gate today, and under voice activity it
-becomes an arming level that stays open for the session — a detector cannot judge audio the gate
+microphone reaches the ring at all; under push-to-talk it is the Talk button, and under voice
+activity it stays open for the session while not muted — a detector cannot judge audio the gate
 already discarded. The **speech** gate is `SpeechGate`, downstream of the arming gate: it renders a
 transmit/closing decision per frame, before those frames are assembled into a packet.
 

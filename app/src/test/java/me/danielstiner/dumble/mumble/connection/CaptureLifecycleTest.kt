@@ -486,7 +486,6 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
-
     /** A rebuilt engine defaults to push-to-talk, so the mode must be reapplied to every session
      *  or every cellular call silently loses voice activity. */
     @Test fun voiceActivitySurvivesAHold() = runBlocking {
@@ -1144,6 +1143,73 @@ class CaptureLifecycleTest {
         throw AssertionError("timed out waiting: $what")
     }
 
+    /** Speaking follows packets on the wire, not the button: voice activity has no press, and a
+     *  press whose session never opened is not speech. */
+    @Test fun speakingFollowsThePacketsAndNotTheGate() = runBlocking {
+        val handle = FakeCaptureHandle()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() }, newCapture = { handle },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitting(true)
+        awaitTrue("the engine must open, transmitting") { handle.gateOpen }
+        assertFalse("an open gate alone is not speech", conn.selfSpeaking.value)
+
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), 0L, terminator = false))
+        awaitTrue("a packet on the wire is") { conn.selfSpeaking.value }
+
+        awaitTrue("and released once they stop", timeoutMillis = 3_000) { !conn.selfSpeaking.value }
+
+        conn.disconnect()
+    }
+
+    @Test fun aTerminatorIsNotSpeech() = runBlocking {
+        val handle = FakeCaptureHandle()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() }, newCapture = { handle },
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitting(true)
+        awaitTrue("the engine must open") { handle.gateOpen }
+
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), 4L, terminator = true))
+        // Nothing to await on a value that must never become true; give the pump room to be wrong.
+        delay(200)
+        assertFalse("a terminator must not light the halo", conn.selfSpeaking.value)
+
+        conn.disconnect()
+    }
+
+    /** Left standing across a release, the hold would light the next session's halo for audio
+     *  the previous one sent. */
+    @Test fun releasingCaptureClearsSpeaking() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitting(true)
+        awaitTrue("the engine must open") { handles.size == 1 && handles[0].gateOpen }
+
+        handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
+        awaitTrue("a packet lights it") { conn.selfSpeaking.value }
+
+        call.hold()
+        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        assertFalse("the release must clear it, ahead of the hold expiring", conn.selfSpeaking.value)
+
+        conn.disconnect()
+    }
+
     /** Re-applying the mode a session already has must leave a held press alone. */
     @Test fun reApplyingPushToTalkDoesNotDropAHeldPress() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -1161,5 +1227,26 @@ class CaptureLifecycleTest {
         assertTrue("re-applying the mode must leave the press alone", handles[0].gateOpen)
 
         conn.disconnect()
+    }
+
+    /** The hold already released the session, so this disconnect runs no release of its own:
+     *  retiring the attempt is what has to clear the signal. */
+    @Test fun disconnectClearsSpeaking() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), { FakeAudioOut() },
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+        awaitTrue("the engine must open") { handles.size == 1 }
+        call.hold()
+
+        conn.disconnect()
+        assertFalse(conn.selfSpeaking.value)
     }
 }

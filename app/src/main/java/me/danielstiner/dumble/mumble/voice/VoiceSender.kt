@@ -18,6 +18,9 @@ class VoiceSender(
     private val send: (TcpMessageType, ByteArray) -> Boolean,
     /** Fired once from the pump thread after its last use of [handle]. */
     private val onExit: (VoiceSender) -> Unit,
+    /** Fired on the pump thread for every packet of speech that reaches the wire — not
+     *  terminators, not refused sends. */
+    private val onAudioSent: () -> Unit = {},
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -105,11 +108,11 @@ class VoiceSender(
     }
 
     private fun transmit(frame: ByteArray, n: Int, meta: LongArray) {
+        val terminator = meta[NativeCapture.META_FLAGS] and NativeCapture.FLAG_TERMINATOR != 0L
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setTarget(NORMAL_TALKING_TARGET)
             .setFrameNumber(meta[NativeCapture.META_FRAME_NUMBER])
-            .setIsTerminator(
-                meta[NativeCapture.META_FLAGS] and NativeCapture.FLAG_TERMINATOR != 0L)
+            .setIsTerminator(terminator)
             .setOpusData(ByteString.copyFrom(frame, 0, n))
             .build()
         val body = audio.toByteArray()
@@ -118,6 +121,8 @@ class VoiceSender(
         body.copyInto(payload, 1)
         if (!send(TcpMessageType.UDPTunnel, payload)) {
             droppedFrames++
+        } else if (!terminator) {
+            onAudioSent()
         }
     }
 

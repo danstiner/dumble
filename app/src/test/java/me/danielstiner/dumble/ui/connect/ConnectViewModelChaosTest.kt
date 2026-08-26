@@ -203,13 +203,13 @@ class ConnectViewModelChaosTest {
             awaitTrue(c.violations, "seed=$seed: microphoneGranted did not converge to true in the deterministic tail") {
                 vm.uiState.value.microphoneGranted
             }
-            withContext(Dispatchers.Main) { vm.onTransmitting(true) }
+            conn.selfSpeaking.value = true
             awaitTrue(
                 c.violations,
                 "seed=$seed: self session never appeared in speakingSessions once " +
-                    "Connected+transmitting+granted all held",
+                    "Connected+speaking+granted all held",
             ) { ownId in vm.uiState.value.speakingSessions }
-            withContext(Dispatchers.Main) { vm.onTransmitting(false) }
+            conn.selfSpeaking.value = false
 
             checkerStop.set(true)
             checkerThread.join(5_000)
