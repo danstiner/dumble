@@ -1,14 +1,19 @@
 package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.HeadsetMic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -18,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -31,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -172,13 +180,15 @@ fun ConnectedScreen(
             )
         },
     ) { padding ->
-        ChannelTreeView(
-            channelTree,
-            mySession = sessionId,
-            speaking = speaking,
-            onUserClick = onUserClick,
-            modifier = Modifier.fillMaxSize().padding(padding),
-        )
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            ChannelTreeView(
+                channelTree,
+                mySession = sessionId,
+                speaking = speaking,
+                onUserClick = onUserClick,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
     selectedSession?.let { channelTree.users[it] }?.let { u ->
         UserDetailSheet(
@@ -191,3 +201,4 @@ fun ConnectedScreen(
         )
     }
 }
+

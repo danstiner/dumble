@@ -357,11 +357,11 @@ class ConnectViewModelTest {
         vm.onMicrophonePermissionResult(granted = true)
         runCurrent()
 
-        vm.onTransmitting(true)
+        conn.selfSpeaking.value = true
         runCurrent()
         assertTrue(7 in vm.uiState.value.speakingSessions)
 
-        vm.onTransmitting(false)
+        conn.selfSpeaking.value = false
         runCurrent()
         assertFalse(7 in vm.uiState.value.speakingSessions)
     }
@@ -467,7 +467,7 @@ class ConnectViewModelTest {
         conn.channelTree.value = treeWith(user(7))
         runCurrent()
 
-        vm.onTransmitting(true)
+        conn.selfSpeaking.value = true
         runCurrent()
         assertTrue(7 in vm.uiState.value.speakingSessions)
 
@@ -476,56 +476,17 @@ class ConnectViewModelTest {
         assertFalse(7 in vm.uiState.value.speakingSessions)
     }
 
-    /** The gate can be open while capture never started — showing yourself speaking would be a lie. */
+    /** A talk block outranks the signal: nothing we send is carried, so showing yourself speaking
+     *  would be a lie. */
     @Test fun deniedMicrophoneNeverMarksYouSpeaking() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         vm.onMicrophonePermissionResult(granted = false)
-        vm.onTransmitting(true)
+        conn.selfSpeaking.value = true
         runCurrent()
 
         assertFalse(7 in vm.uiState.value.speakingSessions)
-    }
-
-    /**
-     * A drop mid-press disposes the call screen, and the composition is gone before `clickable`
-     * emits its Cancel — so the button's release never reaches the gate. Left open, it marks our
-     * own row speaking for the whole of the next call.
-     */
-    @Test fun aDropMidPressDoesNotLeaveTheNextSessionSpeaking() = runTest(dispatcher) {
-        val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
-        conn.emitConnected(sessionId = 7)
-        vm.onMicrophonePermissionResult(granted = true)
-        runCurrent()
-        vm.onTransmitting(true)
-        runCurrent()
-        assertTrue(7 in vm.uiState.value.speakingSessions)
-
-        conn.status.value = ConnectionStatus.Error(ErrorKind.DISCONNECTED, null)
-        runCurrent()
-        conn.emitConnected(sessionId = 8)
-        runCurrent()
-
-        assertFalse(8 in vm.uiState.value.speakingSessions)
-    }
-
-    /** status is a StateFlow, so the disconnect between two sessions can be conflated away. */
-    @Test fun aConflatedReconnectAlsoClosesTheGate() = runTest(dispatcher) {
-        val conn = FakeConnection()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
-        conn.emitConnected(sessionId = 7)
-        vm.onMicrophonePermissionResult(granted = true)
-        runCurrent()
-        vm.onTransmitting(true)
-        runCurrent()
-        assertTrue(7 in vm.uiState.value.speakingSessions)
-
-        conn.emitConnected(sessionId = 8)
-        runCurrent()
-
-        assertFalse(8 in vm.uiState.value.speakingSessions)
     }
 
     @Test fun aConflatedReconnectRestartsTheCallTimer() = runTest(dispatcher) {
@@ -584,7 +545,7 @@ class ConnectViewModelTest {
         vm.onMicrophonePermissionResult(granted = true)
         runCurrent()
 
-        vm.onTransmitting(true)
+        conn.selfSpeaking.value = true
         conn.emitSpeaking(setOf(9))
         runCurrent()
 
@@ -794,4 +755,5 @@ class ConnectViewModelTest {
         runCurrent()
         assertTrue("a channel suppress is too", vm.uiState.value.inaudible)
     }
+
 }

@@ -134,11 +134,6 @@ class ConnectViewModel internal constructor(
 
     private val form = MutableStateFlow(ConnectUiState(microphoneGranted = microphoneHeld()))
 
-    // The push-to-talk gate as the UI knows it. connection.setTransmitting is fire-and-forget, so
-    // this is the only record of it, and speakingSessions never contains us: it is built from
-    // decoded incoming audio and our own audio is never decoded locally.
-    private val transmitting = MutableStateFlow(false)
-
     // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
     // keep the top-level inside it too. Split by what they describe rather than by arity.
     private val connSnapshot = combine(
@@ -152,16 +147,15 @@ class ConnectViewModel internal constructor(
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
-            form, connSnapshot, healthSnapshot, connection.speakingSessions, transmitting,
-        ) { f, c, health, speaking, tx ->
+            form, connSnapshot, healthSnapshot, connection.speakingSessions, connection.selfSpeaking,
+        ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
             val session = (status as? ConnectionStatus.Connected)?.sessionId
             val me = session?.let { c.channelTree.users[it] }
             val block = talkBlock(me, f.microphoneGranted)
-            // Gated on the block rather than the microphone alone: the gate can be open while
-            // nothing we send is carried — a denied permission, an engine that never opened, or a
-            // server discarding us — and showing yourself speaking then would be a lie.
-            val speakingMe = session?.takeIf { tx && block == null }
+            // Still gated on the block: the packets are real, but the server discards a muted or
+            // suppressed talker's audio, and showing yourself speaking then would be a lie.
+            val speakingMe = session?.takeIf { selfSpeaking && block == null }
             // Dropped when its subject leaves — including at disconnect, which empties the tree.
             // The sheet renders from the tree, so a selection that outlived its user would leave
             // it with a name it cannot look up.
@@ -220,10 +214,6 @@ class ConnectViewModel internal constructor(
                 val session = (s as? ConnectionStatus.Connected)?.sessionId
                 if (session == anchoredSession) return@collect
                 anchoredSession = session
-                // A drop mid-press disposes the call screen before `clickable` emits its Cancel,
-                // so the button's release never arrives; left open, the gate would mark our own
-                // row speaking for the whole of the next call.
-                transmitting.value = false
                 form.value = form.value.copy(
                     connectedSince = session?.let { timeSource.markNow() },
                 )
@@ -304,15 +294,8 @@ class ConnectViewModel internal constructor(
         connection.setTransmitMode(mode)
     }
 
-    /**
-     * Seam for [CallControls]: press and release open and close the transmit gate. Kept in
-     * [transmitting], not just forwarded, so it can be merged into speakingSessions above — our
-     * own session never otherwise appears there.
-     */
-    fun onTransmitting(active: Boolean) {
-        transmitting.value = active
-        connection.setTransmitting(active)
-    }
+    /** Seam for [CallControls]: press and release open and close the transmit gate. */
+    fun onTransmitting(active: Boolean) = connection.setTransmitting(active)
 
     /**
      * Reads the current value off [uiState] — the server's answer — rather than taking it from the

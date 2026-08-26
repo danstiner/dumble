@@ -37,7 +37,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(4, 5, 6), 2L, true),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }) { }
+        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }, onExit = { })
         sender.start()
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -66,7 +66,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(9), 0L, false),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }) { }
+        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }, onExit = { })
         sender.start()
         assertTrue("pump exited on POLL_RETRY", latch.await(2, TimeUnit.SECONDS))
         sender.stop()
