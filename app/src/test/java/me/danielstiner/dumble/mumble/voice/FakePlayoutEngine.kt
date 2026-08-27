@@ -73,6 +73,18 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     /** A fill that never arrives parks the loop, the way silence does in production. */
     fun scriptSilence(count: Int) = repeat(count) { fills.put(Fill()) }
 
+    /**
+     * A talk spurt: [count] consecutive producing fills from one speaker.
+     *
+     * One producing fill is not a spurt, and a test that scripts one cannot reliably observe the
+     * speaking state it publishes. `speakingSessions` is a StateFlow, so `{9}` lasts exactly until
+     * the next fill — one [FakeAudioOut] write — and any observer that has not sampled it by then
+     * sees only the `{}` that replaces it, conflation having dropped the value on the floor. Real
+     * speech is a stream of packets, so a spurt is what the fake should be asked for.
+     */
+    fun scriptSpeaking(session: Int, count: Int) =
+        repeat(count) { fills.put(Fill(producing = listOf(session))) }
+
     @Synchronized
     override fun offer(
         session: Int,
