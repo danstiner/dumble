@@ -1,14 +1,16 @@
 package me.danielstiner.dumble.mumble.voice
 
 import java.util.Locale
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.microseconds
 
 /**
  * One second of receive-path measurement, or a talk spurt's final tally.
  *
  * Receive-side only, and named for it: capture latency will arrive as a sibling from the transmit
  * path, and composing the two is [me.danielstiner.dumble.mumble.connection.MumbleConnection]'s job,
- * since it is the only place that also sees ping. The UI reads [targetMillis] off it for one
- * speaker at a time; the rest is still logcat-only.
+ * since it is the only place that also sees ping. The UI reads [depth] and [latencyMs] off it
+ * for one speaker at a time; the rest is still logcat-only.
  *
  * [underruns], [concealedGaps] and [droppedPackets] are counts within the current talk spurt,
  * not cumulative: a cumulative underrun count would report the silence we deliberately leave
@@ -45,22 +47,20 @@ data class PlayoutStats(
     val targetSamples: Map<Int, Int>,
 ) {
     /**
-     * One speaker's target in milliseconds, or null if the engine holds no slot for them — it
-     * retires a speaker after `kRetireIdlePolls`, so absence means "has not sent recently".
+     * One speaker's queued audio, or null if the engine holds no slot for them — it retires a
+     * speaker after `kRetireIdlePolls`, so absence means "has not sent recently".
      */
-    fun targetMillis(session: Int): Int? = targetSamples[session]?.div(SAMPLE_RATE / 1000)
+    fun depth(session: Int): Duration? =
+        bufferedSamples[session]?.let { (it * 1_000_000L / SAMPLE_RATE).microseconds }
 
     /**
      * Sibling of [CaptureStats.summary]; the two are read side by side in one logcat, so they
      * share a shape. Latency is the floor on mouth-to-ear.
      *
-     * [bufferedSamples] reads 0 on a healthy link and is not the jitter margin, which is the
-     * intuitive reading and the wrong one. Measured on a Pixel 7a: the playback loop writes ahead
-     * until AudioTrack's own buffer blocks it, so the prebuffer — adaptive, ~30 ms on an idle
-     * link and 80 ms cold — ends up downstream of this measurement, inside the track — visible in
-     * [latencyMs] at 120-180 ms rather than here. What a nonzero depth means is that packets
-     * arrived faster than the loop drained them: a burst still being absorbed, or playback failing
-     * to keep up.
+     * [bufferedSamples] reads 0 on a healthy link: the playback loop writes ahead until AudioTrack
+     * blocks it, so the prebuffer drains into the track and shows up in [latencyMs]; what stays
+     * here is the part the track could not hold. `depth + latency` is the standing delay — the two
+     * trade off one for one from second to second while their sum holds — and neither alone is.
      */
     fun summary(): String =
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +

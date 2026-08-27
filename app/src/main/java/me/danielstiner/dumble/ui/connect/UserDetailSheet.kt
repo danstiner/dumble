@@ -19,34 +19,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.protocol.UserStats
-import java.util.Locale
-import kotlin.math.roundToInt
+import me.danielstiner.dumble.mumble.voice.PlayoutDelay
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.DurationUnit
 import kotlinx.coroutines.delay
 
 /**
  * One speaker's receive-path measurements.
  *
- * [playoutTargetMillis] is labelled for the buffer, not for delay: it is only the buffer's share
- * of the total, which runs 120-180 ms on a Pixel 7a where this reads 30.
+ * [delay] is what their audio costs to reach us, and only that — their capture delay is not on
+ * the wire, so the total is shown as a floor. Its parts are indented under it and add up to it.
  *
- * [stats] is the other half of the path: what the server measures about them, which we cannot.
- * Our own round trip sits in the status line above the roster, so they read together.
- *
- * Voice path is derived rather than reported — murmur exchanges UDP pings only with a peer that
- * has a working UDP path, so an average there is the evidence. Cumulative since they connected, so
- * it says "has had UDP", not "is on UDP this second". Everyone reads TCP until dumble gains a UDP
- * path of its own.
- *
- * Jitter sits directly above the buffer it explains: their variation in arrival, then how much we
- * hold to absorb it.
+ * [stats] is what the server measures about them. Both pings get a row even though only one leg
+ * carries voice: murmur exchanges UDP pings only with a peer that has a working UDP path, so a
+ * UDP reading is the evidence for which — a dash for everyone until dumble gains a UDP path of
+ * its own. Our own round trip is in the status line above the roster.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserDetailSheet(
     session: Int,
     name: String,
-    playoutTargetMillis: Int?,
+    delay: PlayoutDelay?,
     stats: UserStats?,
     onRefresh: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -72,12 +68,14 @@ fun UserDetailSheet(
                 )
             }
             Spacer(Modifier.height(24.dp))
-            StatRow("Voice path", if (stats?.udpPingMillis != null) "UDP" else "TCP")
+            StatRow("Latency", delay?.total.floor())
+            StatRow("Network", delay?.network.label(), part = true)
+            StatRow("Jitter buffer", delay?.jitterBuffer.label(), part = true)
+            StatRow("Audio output", delay?.audioOutput.label(), part = true)
             StatRow("TCP ping", stats?.tcpPingMillis.millis())
             StatRow("UDP ping", stats?.udpPingMillis.millis())
             StatRow("Jitter", stats?.jitterMillis.millis())
             StatRow("Bandwidth", stats?.bandwidthBitsPerSecond.kilobits())
-            StatRow("Jitter buffer", playoutTargetMillis?.let { "$it ms" } ?: NoReading)
         }
     }
 }
@@ -92,31 +90,40 @@ private const val NoReading = "—"
 private val RefreshInterval = 2.seconds
 
 /**
- * Whole milliseconds, except below 10 where a tenth is what distinguishes readings: a LAN peer
- * measures a fraction of a millisecond, and rounding that to "0 ms" reads as a broken zero rather
- * than as a fast link.
+ * Whole milliseconds, except below 10 where the tenth is what tells a LAN peer's fraction of a
+ * millisecond from a broken zero. An exact zero stays whole: a drained queue really is 0.
  */
-private fun Float?.millis(): String = when {
-    this == null -> NoReading
-    this < 10f -> "%.1f ms".format(Locale.ROOT, this)
-    else -> "${roundToInt()} ms"
+private fun Duration?.label(): String {
+    val ms = this?.toDouble(DurationUnit.MILLISECONDS) ?: return NoReading
+    return (if (ms > 0 && ms < 10) "%.1f ms" else "%.0f ms").format(ms)
 }
+
+/** The server reports its pings and jitter as float milliseconds. */
+private fun Float?.millis(): String = this?.toDouble()?.milliseconds.label()
+
+/** A floor, since their capture is never in it. */
+private fun Duration?.floor(): String = this?.let { "> ${it.label()}" } ?: NoReading
 
 /** Kilobits, because a voice stream is tens of them and the bits are noise at this width. */
 private fun Int?.kilobits(): String =
-    this?.let { "%.1f kbit/s".format(Locale.ROOT, it / 1000f) } ?: NoReading
+    this?.let { "%.1f kbit/s".format(it / 1000f) } ?: NoReading
 
+/** [part] marks a row as a component of the one above it: indented, and a step down in size. */
 @Composable
-private fun StatRow(label: String, value: String) {
+private fun StatRow(label: String, value: String, part: Boolean = false) {
+    val style = if (part) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        Modifier.fillMaxWidth()
+            .padding(start = if (part) 16.dp else 0.dp)
+            .padding(vertical = if (part) 4.dp else 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
+        Text(label, style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            value,
+            style = style,
+            color = if (part) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurface,
         )
-        Text(value, style = MaterialTheme.typography.bodyLarge)
     }
 }

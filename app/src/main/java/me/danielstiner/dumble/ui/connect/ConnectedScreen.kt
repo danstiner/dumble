@@ -45,6 +45,7 @@ import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.PlayoutDelay
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,7 +68,7 @@ fun ConnectedScreen(
     callHeld: Boolean,
     audioRoutes: AudioRoutes,
     selectedSession: Int?,
-    selectedPlayoutTargetMillis: Int?,
+    selectedDelay: PlayoutDelay?,
     selectedStats: UserStats?,
     onUserClick: (Int) -> Unit,
     onRefreshUserStats: (Int) -> Unit,
@@ -199,7 +200,7 @@ fun ConnectedScreen(
         UserDetailSheet(
             session = u.session,
             name = u.name,
-            playoutTargetMillis = selectedPlayoutTargetMillis,
+            delay = selectedDelay,
             stats = selectedStats,
             onRefresh = onRefreshUserStats,
             onDismiss = onDismissUserDetail,

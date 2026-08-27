@@ -12,6 +12,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import me.danielstiner.dumble.mumble.voice.PlayoutDelay
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.ui.about.AboutScreen
 import me.danielstiner.dumble.ui.connect.Route
@@ -86,8 +87,10 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     callHeld = state.callHeld,
                     audioRoutes = state.audioRoutes,
                     selectedSession = state.selectedSession,
-                    selectedPlayoutTargetMillis =
-                        state.selectedSession?.let { state.playoutStats?.targetMillis(it) },
+                    selectedDelay = state.selectedSession?.let {
+                        PlayoutDelay.of(it, state.playoutStats, state.userStats,
+                                        state.roundTripTime)
+                    },
                     selectedStats = state.userStats,
                     onUserClick = vm::openUserDetail,
                     onRefreshUserStats = vm::refreshUserStats,
