@@ -7,6 +7,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.resetMain
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.cancel
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.test.setMain
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
@@ -63,10 +66,10 @@ class ConnectViewModelChaosTest {
         val uiExecutor = Executors.newSingleThreadExecutor { Thread(it, "chaos-ui").apply { isDaemon = true } }
         val uiDispatcher = uiExecutor.asCoroutineDispatcher()
         Dispatchers.setMain(uiDispatcher)
+        val heldInitially = Random(seed).nextBoolean()
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), TestTimeSource()) { heldInitially }
         try {
-            val heldInitially = Random(seed).nextBoolean()
-            val conn = FakeConnection()
-            val vm = ConnectViewModel(conn, FakeConfigStore(null), TestTimeSource()) { heldInitially }
 
             // A connectable draft so onConnect() picks below actually reach conn.connect() instead
             // of dead-ending on port/host validation, which is not this test's concern.
@@ -215,8 +218,14 @@ class ConnectViewModelChaosTest {
             checkerThread.join(5_000)
             if (checkerThread.isAlive) c.violations += "seed=$seed: checker thread did not finish"
         } finally {
+            // Quiesce before resetMain. The ViewModel's eagerly shared combine dispatches onto
+            // Main from the executor thread, and kotlinx-coroutines-test records a read of
+            // Dispatchers.Main that overlaps resetMain as an error it throws at the *next* setMain
+            // — the next seed, or whichever test class runs after this one.
+            vm.viewModelScope.cancel()
+            uiExecutor.shutdown()
+            uiExecutor.awaitTermination(5, TimeUnit.SECONDS)
             Dispatchers.resetMain()
-            uiExecutor.shutdownNow()
         }
     }
 
