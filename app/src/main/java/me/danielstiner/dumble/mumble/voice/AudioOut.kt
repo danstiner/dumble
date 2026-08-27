@@ -21,6 +21,14 @@ data class OutputStats(val latencyMs: Double?, val underrunsTotal: Int)
  */
 interface AudioOut : AutoCloseable {
     /**
+     * How far ahead of playout this sink holds audio, in samples: a blocking [write] returns once
+     * the sink is this full, so audio is handed over this long before it is heard. The engine
+     * adds it to the jitter target — see `PlayoutEngine::setWriteAheadSamples` — because audio
+     * already handed over is delay but not margin. Fixed for the life of the sink.
+     */
+    val writeAheadSamples: Int
+
+    /**
      * Blocking. Paces the playback loop off the audio clock — see VoiceReceiver. Returns false on
      * failure (e.g. AudioTrack.write returning a negative error code such as ERROR_DEAD_OBJECT
      * after an audioserver restart). Unlike a blocking success, a failed write does not block, so

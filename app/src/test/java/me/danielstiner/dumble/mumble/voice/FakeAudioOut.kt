@@ -9,7 +9,10 @@ package me.danielstiner.dumble.mumble.voice
  * [writeSleepMillis] is lowered by tests that need many writes: a stats sample costs 100 of them,
  * which is a full second at the default.
  */
-class FakeAudioOut(private val writeSleepMillis: Long = 10) : AudioOut {
+class FakeAudioOut(
+    private val writeSleepMillis: Long = 10,
+    override val writeAheadSamples: Int = 0,
+) : AudioOut {
     @Volatile var closed = false
         private set
 

@@ -18,6 +18,7 @@ class VoiceReceiverTest {
 
     /** Releases a latch on write, so tests wait on real progress rather than sleeping. */
     private class LatchingOut(private val latch: CountDownLatch) : AudioOut {
+        override val writeAheadSamples = 0
         @Volatile var closed = false
         override fun write(pcm: ShortArray, n: Int): Boolean { latch.countDown(); return true }
         override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
@@ -109,6 +110,7 @@ class VoiceReceiverTest {
         val closed = CountDownLatch(1)
         val writes = AtomicInteger()
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             // Returns false without blocking, like a real AudioTrack whose track has died. The
             // loop's only pacing is a successful write, so a loop that ignored this would spin a
             // core at THREAD_PRIORITY_URGENT_AUDIO rather than stop.
@@ -127,6 +129,23 @@ class VoiceReceiverTest {
             // published non-empty. close() runs after the clear, so awaiting it above orders this
             // read. Without the clear an audioserver restart lights a speaker for the session.
             assertEquals("a self-death must not strand speaking state", emptySet<Int>(), rx.speakingSessions.value)
+        } finally {
+            rx.stop()
+        }
+    }
+
+    /** The engine's targets are measured against the queue, so it needs to know how much audio
+     *  the output holds ahead of playout — and can only be told once the output exists. */
+    @Test
+    fun theOutputsWriteAheadReachesTheEngine() {
+        val fake = FakePlayoutEngine()
+        fake.script(FakePlayoutEngine.Fill(producing = listOf(1)))
+        val rx = VoiceReceiver({ fake }) { FakeAudioOut(writeSleepMillis = 0, writeAheadSamples = 960) }
+        rx.start()
+        try {
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (fake.writeAheadGiven != 960 && System.nanoTime() < deadline) Thread.sleep(5)
+            assertEquals(960, fake.writeAheadGiven)
         } finally {
             rx.stop()
         }
@@ -197,6 +216,7 @@ class VoiceReceiverTest {
         val speakingAtWrite = AtomicReference<Set<Int>?>(null)
         lateinit var rx: VoiceReceiver
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean {
                 // Sampled here rather than polled from the test thread. loop() publishes the set
                 // before it writes, so any write is a valid observation point.
@@ -380,6 +400,7 @@ class VoiceReceiverTest {
     fun concealedGapsDoesNotCarryAcrossSpurts() {
         val writes = AtomicInteger()
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean { writes.incrementAndGet(); return true }
             override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
             override fun close() = Unit
@@ -456,6 +477,7 @@ class VoiceReceiverTest {
     @Test
     fun aThrowingOutputStatsStillPublishesTheEnginesOwnCounters() {
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean = true
             override fun outputStats(): OutputStats = error("stats are broken")
             override fun close() = Unit
@@ -497,6 +519,7 @@ class VoiceReceiverTest {
     fun underrunsAreCountedFromTheSpurtBaseline() {
         val calls = AtomicInteger()
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean = true
             override fun outputStats() = OutputStats(
                 latencyMs = null,
@@ -617,6 +640,7 @@ class VoiceReceiverTest {
         val samples = AtomicInteger()
         lateinit var rx: VoiceReceiver
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean {
                 writes.incrementAndGet()
                 Thread.sleep(1)
@@ -672,6 +696,7 @@ class VoiceReceiverTest {
         val writes = AtomicInteger()
         val firstWrite = CountDownLatch(1)
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean {
                 writes.incrementAndGet()
                 firstWrite.countDown()
@@ -710,6 +735,7 @@ class VoiceReceiverTest {
     fun aFailedBaselineNullsTheUnderrunCount() {
         val calls = AtomicInteger()
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean = true
             override fun outputStats(): OutputStats {
                 // The first call is the spurt-start baseline read; later calls are the publishes.
@@ -746,6 +772,7 @@ class VoiceReceiverTest {
         val armThrow = AtomicBoolean(false)
         val thrown = AtomicBoolean(false)
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean = true
             override fun outputStats(): OutputStats {
                 val call = calls.incrementAndGet()
@@ -810,6 +837,7 @@ class VoiceReceiverTest {
         fake.refuseBuffers = true
         val writes = AtomicInteger()
         val out = object : AudioOut {
+            override val writeAheadSamples = 0
             override fun write(pcm: ShortArray, n: Int): Boolean { writes.incrementAndGet(); return true }
             override fun outputStats() = OutputStats(latencyMs = null, underrunsTotal = 0)
             override fun close() = Unit

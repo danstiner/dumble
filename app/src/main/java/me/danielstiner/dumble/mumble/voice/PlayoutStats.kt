@@ -57,10 +57,12 @@ data class PlayoutStats(
      * Sibling of [CaptureStats.summary]; the two are read side by side in one logcat, so they
      * share a shape. Latency is the floor on mouth-to-ear.
      *
-     * [bufferedSamples] reads 0 on a healthy link: the playback loop writes ahead until AudioTrack
-     * blocks it, so the prebuffer drains into the track and shows up in [latencyMs]; what stays
-     * here is the part the track could not hold. `depth + latency` is the standing delay — the two
-     * trade off one for one from second to second while their sum holds — and neither alone is.
+     * [bufferedSamples] is the margin against a late packet, and the only margin: a packet is
+     * popped a track's worth ahead of playout, so audio already in the track is delay without
+     * margin. The engine adds that write-ahead to every target — see
+     * `PlayoutEngine::setWriteAheadSamples` — which is why [targetSamples] reads above the
+     * estimator's own figure, and why depth should sit near it. `depth + latency` is the standing
+     * delay; neither alone is.
      */
     fun summary(): String =
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +
