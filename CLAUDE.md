@@ -8,6 +8,7 @@ Agent cycles are cheap; committed code is debt. Spend extra passes — rewrites,
 
 - Simplicity first, no speculative features, use minimal abstractions.
 - Comment only project-specific, non-obvious whys — workarounds, measured tradeoffs.
+- Change history belongs in the commit message and PR body, not in comments or docs.
 - Plain names; no acronyms except universal ones (API, UDP, PCM).
 - Abandon an approach that stops earning its complexity: one line saying so, restart clean.
 - Terse output: one-line assumptions and tradeoffs; ask only when genuinely ambiguous.
