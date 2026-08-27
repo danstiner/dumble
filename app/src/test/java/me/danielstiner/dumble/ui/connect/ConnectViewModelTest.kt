@@ -595,30 +595,30 @@ class ConnectViewModelTest {
         assertEquals(12.5.milliseconds, vm.uiState.value.roundTripTime)
     }
 
-    @Test fun theSelectedUsersTargetReachesUiState() = runTest(dispatcher) {
+    @Test fun theSelectedUsersDepthReachesUiState() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9))
-        conn.emitTargets(mapOf(9 to 120 * 48))
+        conn.emitDepths(mapOf(9 to 120 * 48))
         vm.openUserDetail(9)
         runCurrent()
 
         assertEquals(9, vm.uiState.value.selectedSession)
-        assertEquals(120, vm.uiState.value.playoutStats?.targetMillis(9))
+        assertEquals(120.milliseconds, vm.uiState.value.playoutStats?.depth(9))
     }
 
-    /** A speaker the engine has retired has no target, and the sheet must say so rather than 0. */
-    @Test fun aSilentUserHasNoTarget() = runTest(dispatcher) {
+    /** A speaker the engine has retired has no queue, and the sheet must say so rather than 0. */
+    @Test fun aSilentUserHasNoDepth() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9))
-        conn.emitTargets(mapOf(7 to 80 * 48))
+        conn.emitDepths(mapOf(7 to 80 * 48))
         vm.openUserDetail(9)
         runCurrent()
 
-        assertNull(vm.uiState.value.playoutStats?.targetMillis(9))
+        assertNull(vm.uiState.value.playoutStats?.depth(9))
     }
 
     /**
