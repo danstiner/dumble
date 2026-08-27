@@ -4,6 +4,7 @@ import me.danielstiner.dumble.mumble.protocol.UserStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -14,12 +15,12 @@ class PlayoutDelayTest {
         shrunkPackets = 0, catchUpPackets = 0, bufferedSamples = depths, targetSamples = emptyMap(),
     )
 
-    private fun stats(tcp: Float? = null, udp: Float? = null) =
+    private fun stats(tcp: Duration? = null, udp: Duration? = null) =
         UserStats(7, tcp, udp, null, null, null)
 
     /** Both pings are round trips to the server, and audio is relayed, so each hop is half. */
     @Test fun theNetworkIsHalfOfEachPing() {
-        val d = PlayoutDelay.of(7, playout(mapOf(7 to 30 * 48), 20.0), stats(tcp = 8f),
+        val d = PlayoutDelay.of(7, playout(mapOf(7 to 30 * 48), 20.0), stats(tcp = 8.milliseconds),
                                 6.milliseconds)
         assertEquals(7.milliseconds, d.network)
         assertEquals(30.milliseconds, d.jitterBuffer)
@@ -32,7 +33,7 @@ class PlayoutDelayTest {
      * only holds a UDP ping for a peer whose voice actually travels that way.
      */
     @Test fun theLegCarryingVoiceIsTheOneMeasured() {
-        val d = PlayoutDelay.of(7, null, stats(tcp = 40f, udp = 10f), 4.milliseconds)
+        val d = PlayoutDelay.of(7, null, stats(tcp = 40.milliseconds, udp = 10.milliseconds), 4.milliseconds)
         assertEquals(7.milliseconds, d.network)
     }
 
@@ -53,7 +54,7 @@ class PlayoutDelayTest {
 
     /** Half a path is not a path: one missing round trip leaves the network unread, not halved. */
     @Test fun theNetworkNeedsBothRoundTrips() {
-        assertNull(PlayoutDelay.of(7, null, stats(tcp = 8f), null).network)
+        assertNull(PlayoutDelay.of(7, null, stats(tcp = 8.milliseconds), null).network)
         assertNull(PlayoutDelay.of(7, null, null, 6.milliseconds).network)
     }
 

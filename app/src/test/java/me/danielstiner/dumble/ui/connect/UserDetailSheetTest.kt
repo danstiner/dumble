@@ -13,6 +13,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Robolectric for the reason [ChannelTreeViewTest] gives: CI runs testDebugUnitTest only. */
@@ -26,13 +27,12 @@ class UserDetailSheetTest {
 
     @Composable
     private fun stats(
-        tcpPingMillis: Float? = null,
-        udpPingMillis: Float? = null,
-        tcpJitterMillis: Float? = null,
-        udpJitterMillis: Float? = null,
+        tcpPing: Duration? = null,
+        udpPing: Duration? = null,
+        tcpJitter: Duration? = null,
+        udpJitter: Duration? = null,
         bandwidthBitsPerSecond: Int? = null,
-    ) = UserStats(9, tcpPingMillis, udpPingMillis, tcpJitterMillis, udpJitterMillis,
-                  bandwidthBitsPerSecond)
+    ) = UserStats(9, tcpPing, udpPing, tcpJitter, udpJitter, bandwidthBitsPerSecond)
 
     /** A delay with only the jitter-buffer depth read: what most of these cases care about. */
     private fun buffered(millis: Int?) =
@@ -54,7 +54,7 @@ class UserDetailSheetTest {
 
     @Test fun showsEveryReadingInMillis() {
         compose.setContent {
-            sheet(buffered(120), stats(tcpPingMillis = 23.5f, udpPingMillis = 18.2f))
+            sheet(buffered(120), stats(tcpPing = 23.5.milliseconds, udpPing = 18.2.milliseconds))
         }
         compose.onNodeWithText("alice").assertExists()
         compose.onNodeWithText("Jitter buffer").assertExists()
@@ -69,14 +69,14 @@ class UserDetailSheetTest {
      * a broken zero rather than as a fast link, so below 10 ms the tenth is what distinguishes it.
      */
     @Test fun aSubMillisecondPingKeepsItsTenth() {
-        compose.setContent { sheet(buffered(30), stats(tcpPingMillis = 0.27f)) }
+        compose.setContent { sheet(buffered(30), stats(tcpPing = 0.27.milliseconds)) }
         compose.onNodeWithText("0.3 ms").assertExists()
         compose.onNodeWithText("0 ms").assertDoesNotExist()
     }
 
     /** Fixed labels for both pings; a dash under UDP is the evidence that a peer tunnels. */
     @Test fun eachPingHasItsOwnRow() {
-        compose.setContent { sheet(buffered(30), stats(tcpPingMillis = 23f, udpPingMillis = 18f)) }
+        compose.setContent { sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds)) }
         compose.onNodeWithText("TCP ping").assertExists()
         compose.onNodeWithText("UDP ping").assertExists()
         compose.onNodeWithText("23 ms").assertExists()
@@ -84,7 +84,7 @@ class UserDetailSheetTest {
     }
 
     @Test fun aTunnellingPeerHasNoUdpPing() {
-        compose.setContent { sheet(buffered(30), stats(tcpPingMillis = 23f)) }
+        compose.setContent { sheet(buffered(30), stats(tcpPing = 23.milliseconds)) }
         compose.onNodeWithText("UDP ping").assertExists()
         // Network, audio output, UDP ping, jitter, bandwidth.
         compose.onAllNodesWithText("—").assertCountEquals(5)
@@ -107,7 +107,7 @@ class UserDetailSheetTest {
     /** Absent readings do not blank the ones that are present. */
     @Test fun aPresentReadingSurvivesAnAbsentOne() {
         compose.setContent {
-            sheet(buffered(null), stats(tcpPingMillis = 12f), name = "dan")
+            sheet(buffered(null), stats(tcpPing = 12.milliseconds), name = "dan")
         }
         compose.onNodeWithText("12 ms").assertExists()
         compose.onAllNodesWithText("—").assertCountEquals(7)
@@ -126,8 +126,8 @@ class UserDetailSheetTest {
      */
     @Test fun jitterFollowsThePathCarryingVoice() {
         compose.setContent {
-            sheet(buffered(30), stats(tcpPingMillis = 23f, udpPingMillis = 18f,
-                            tcpJitterMillis = 9f, udpJitterMillis = 2f))
+            sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds,
+                            tcpJitter = 9.milliseconds, udpJitter = 2.milliseconds))
         }
         compose.onNodeWithText("2.0 ms").assertExists()
         compose.onNodeWithText("9.0 ms").assertDoesNotExist()
@@ -135,14 +135,14 @@ class UserDetailSheetTest {
 
     @Test fun aTunnellingPeerIsDescribedByItsTcpJitter() {
         compose.setContent {
-            sheet(buffered(30), stats(tcpPingMillis = 23f, tcpJitterMillis = 9f, udpJitterMillis = 2f))
+            sheet(buffered(30), stats(tcpPing = 23.milliseconds, tcpJitter = 9.milliseconds, udpJitter = 2.milliseconds))
         }
         compose.onNodeWithText("9.0 ms").assertExists()
     }
 
     /** Kilobits: a voice stream is tens of them, and the bits are noise at this width. */
     @Test fun bandwidthReadsInKilobits() {
-        compose.setContent { sheet(buffered(30), stats(tcpPingMillis = 1f, bandwidthBitsPerSecond = 8060)) }
+        compose.setContent { sheet(buffered(30), stats(tcpPing = 1.milliseconds, bandwidthBitsPerSecond = 8060)) }
         compose.onNodeWithText("8.1 kbit/s").assertExists()
     }
 

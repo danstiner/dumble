@@ -15,7 +15,6 @@ import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
-import kotlin.math.sqrt
 import kotlin.time.TimeSource
 import me.danielstiner.dumble.time.BootTimeSource
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -251,25 +250,8 @@ class SessionStateMachine(
             // Raw UDP packet bytes: Mumble.proto's UDPTunnel message is dead code, never sent.
             TcpMessageType.UDPTunnel -> audioListener?.onTunneledAudio(frame.payload, clockNanos())
 
-            TcpMessageType.UserStats -> {
-                val stats = MumbleProtos.UserStats.parseFrom(frame.payload)
-                // Zero is how the server reports "no average", not a round trip of no time: a peer
-                // not using UDP, or one it has not pinged yet. A reply with neither leg leaves the
-                // last reading alone rather than replacing it with a pair of nothings — a server
-                // that refuses answers with PermissionDenied instead, which is not this.
-                val tcp = stats.tcpPingAvg.takeIf { stats.hasTcpPingAvg() && it > 0f }
-                val udp = stats.udpPingAvg.takeIf { stats.hasUdpPingAvg() && it > 0f }
-                if (stats.hasSession() && (tcp != null || udp != null)) {
-                    _userStats.value = UserStats(
-                        session = stats.session,
-                        tcpPingMillis = tcp,
-                        udpPingMillis = udp,
-                        tcpJitterMillis = stats.tcpPingVar.deviation(),
-                        udpJitterMillis = stats.udpPingVar.deviation(),
-                        bandwidthBitsPerSecond = stats.bandwidth.takeIf { stats.hasBandwidth() && it > 0 },
-                    )
-                }
-            }
+            TcpMessageType.UserStats ->
+                _userStats.value = UserStats.from(MumbleProtos.UserStats.parseFrom(frame.payload))
 
             // Deliberately ignored — see the design's non-goals.
             TcpMessageType.CodecVersion,
@@ -301,7 +283,6 @@ class SessionStateMachine(
     }
 
     /** The wire carries a variance; jitter is its deviation. Zero is "no reading", as with ping. */
-    private fun Float.deviation(): Float? = if (this > 0f) sqrt(this) else null
 
     /**
      * Ask the server for [session]'s stats. The answer arrives on [userStats], asynchronously and

@@ -41,8 +41,7 @@ data class PlayoutDelay(
         ): PlayoutDelay {
             // The leg carrying voice, matching how UserStats picks its jitter: murmur only has a
             // UDP ping for a peer with a working UDP path.
-            val theirRoundTrip =
-                (stats?.udpPingMillis ?: stats?.tcpPingMillis)?.toDouble()?.milliseconds
+            val theirRoundTrip = stats?.udpPing ?: stats?.tcpPing
             return PlayoutDelay(
                 network = if (theirRoundTrip == null || ourRoundTrip == null) null
                           else (theirRoundTrip + ourRoundTrip) / 2,
