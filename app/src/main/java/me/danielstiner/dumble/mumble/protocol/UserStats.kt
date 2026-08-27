@@ -1,5 +1,12 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import kotlin.math.roundToLong
+import kotlin.math.sqrt
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.ZERO
+import kotlin.time.Duration.Companion.microseconds
+
 /**
  * What the server measures about one user — the half of the path we cannot see from here. Ours is
  * [SessionStateMachine.roundTripTime]; together they approximate the path between two people.
@@ -16,12 +23,34 @@ package me.danielstiner.dumble.mumble.protocol
  */
 data class UserStats(
     val session: Int,
-    val tcpPingMillis: Float?,
-    val udpPingMillis: Float?,
-    val tcpJitterMillis: Float?,
-    val udpJitterMillis: Float?,
+    val tcpPing: Duration?,
+    val udpPing: Duration?,
+    val tcpJitter: Duration?,
+    val udpJitter: Duration?,
     val bandwidthBitsPerSecond: Int?,
 ) {
-    /** Jitter on the leg actually carrying voice — see [udpPingMillis] for how that is decided. */
-    val jitterMillis: Float? get() = if (udpPingMillis != null) udpJitterMillis else tcpJitterMillis
+    /** Jitter on the leg actually carrying voice — see [udpPing] for how that is decided. */
+    val jitter: Duration? get() = if (udpPing != null) udpJitter else tcpJitter
+
+    companion object {
+        /** Zero is how the server reports "no reading" — a leg it has not pinged — not a round
+         *  trip of no time, so every zero below becomes null. */
+        fun from(p: MumbleProtos.UserStats) = UserStats(
+            session = p.session,
+            tcpPing = wireMillis(p.tcpPingAvg).takeUnless { it == ZERO },
+            udpPing = wireMillis(p.udpPingAvg).takeUnless { it == ZERO },
+            // The wire carries a variance; jitter is its square root.
+            tcpJitter = wireMillis(sqrt(p.tcpPingVar)).takeUnless { it == ZERO },
+            udpJitter = wireMillis(sqrt(p.udpPingVar)).takeUnless { it == ZERO },
+            bandwidthBitsPerSecond = p.bandwidth.takeUnless { it == 0 },
+        )
+
+        /**
+         * A wire float of milliseconds, rounded to the microsecond. Not `toDouble().milliseconds`:
+         * that is exact, and exactness is the problem — 18.2f is 18.200000762939453, and a Duration
+         * to the nanosecond would keep digits the wire never measured. A microsecond is finer than
+         * the average and coarser than the float's noise.
+         */
+        private fun wireMillis(millis: Float): Duration = (millis * 1000f).roundToLong().microseconds
+    }
 }

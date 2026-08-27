@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 import kotlinx.coroutines.delay
@@ -72,9 +71,9 @@ fun UserDetailSheet(
             StatRow("Network", delay?.network.label(), part = true)
             StatRow("Jitter buffer", delay?.jitterBuffer.label(), part = true)
             StatRow("Audio output", delay?.audioOutput.label(), part = true)
-            StatRow("TCP ping", stats?.tcpPingMillis.millis())
-            StatRow("UDP ping", stats?.udpPingMillis.millis())
-            StatRow("Jitter", stats?.jitterMillis.millis())
+            StatRow("TCP ping", stats?.tcpPing.label())
+            StatRow("UDP ping", stats?.udpPing.label())
+            StatRow("Jitter", stats?.jitter.label())
             StatRow("Bandwidth", stats?.bandwidthBitsPerSecond.kilobits())
         }
     }
@@ -97,9 +96,6 @@ private fun Duration?.label(): String {
     val ms = this?.toDouble(DurationUnit.MILLISECONDS) ?: return NoReading
     return (if (ms > 0 && ms < 10) "%.1f ms" else "%.0f ms").format(ms)
 }
-
-/** The server reports its pings and jitter as float milliseconds. */
-private fun Float?.millis(): String = this?.toDouble()?.milliseconds.label()
 
 /** A floor, since their capture is never in it. */
 private fun Duration?.floor(): String = this?.let { "> ${it.label()}" } ?: NoReading

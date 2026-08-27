@@ -1197,7 +1197,7 @@ class SessionStateMachineTest {
             MumbleProtos.UserStats.newBuilder()
                 .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(18.2f).build()))
 
-        assertEquals(UserStats(9, 23.5f, 18.2f, null, null, null), sm.userStats.value)
+        assertEquals(UserStats(9, 23.5.milliseconds, 18.2.milliseconds, null, null, null), sm.userStats.value)
     }
 
     /**
@@ -1213,7 +1213,7 @@ class SessionStateMachineTest {
             MumbleProtos.UserStats.newBuilder()
                 .setSession(9).setTcpPingAvg(23.5f).setUdpPingAvg(0f).build()))
 
-        assertEquals(UserStats(9, 23.5f, null, null, null, null), sm.userStats.value)
+        assertEquals(UserStats(9, 23.5.milliseconds, null, null, null, null), sm.userStats.value)
     }
 
     /**
@@ -1229,7 +1229,7 @@ class SessionStateMachineTest {
             MumbleProtos.UserStats.newBuilder()
                 .setSession(9).setTcpPingAvg(23f).setTcpPingVar(4f).setBandwidth(8060).build()))
 
-        assertEquals(2f, sm.userStats.value?.tcpJitterMillis)
+        assertEquals(2.milliseconds, sm.userStats.value?.tcpJitter)
         assertEquals(8060, sm.userStats.value?.bandwidthBitsPerSecond)
     }
 
@@ -1244,23 +1244,19 @@ class SessionStateMachineTest {
                 .setSession(9).setTcpPingAvg(23f).setTcpPingVar(81f)
                 .setUdpPingAvg(18f).setUdpPingVar(4f).build()))
 
-        assertEquals(2f, sm.userStats.value?.jitterMillis)
+        assertEquals(2.milliseconds, sm.userStats.value?.jitter)
     }
 
-    /**
-     * A server that has not pinged a freshly connected user yet answers with no average. Zero is
-     * not a round trip, and publishing it would read as a perfect link rather than as no reading.
-     */
+    /** A server that has not pinged a freshly connected user yet answers with no average, which
+     *  is no reading — not a perfect link. */
     @Test
-    fun aReplyWithNoAverageLeavesTheLastReadingAlone() = runTest {
+    fun aReplyWithNoAverageHasNoReadings() = runTest {
         val ch = FakeChannel()
         val sm = synchronizedMachine(ch, backgroundScope)
-        sm.onFrame(frame(TcpMessageType.UserStats,
-            MumbleProtos.UserStats.newBuilder().setSession(9).setTcpPingAvg(23.5f).build()))
 
         sm.onFrame(frame(TcpMessageType.UserStats,
             MumbleProtos.UserStats.newBuilder().setSession(11).build()))
 
-        assertEquals(UserStats(9, 23.5f, null, null, null, null), sm.userStats.value)
+        assertEquals(UserStats(11, null, null, null, null, null), sm.userStats.value)
     }
 }

@@ -669,10 +669,10 @@ class ConnectViewModelTest {
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9))
         vm.openUserDetail(9)
-        conn.userStats.value = UserStats(9, 23.5f, null, null, null, null)
+        conn.userStats.value = UserStats(9, 23.5.milliseconds, null, null, null, null)
         runCurrent()
 
-        assertEquals(UserStats(9, 23.5f, null, null, null, null), vm.uiState.value.userStats)
+        assertEquals(UserStats(9, 23.5.milliseconds, null, null, null, null), vm.uiState.value.userStats)
     }
 
     /**
@@ -685,7 +685,7 @@ class ConnectViewModelTest {
         conn.emitConnected(sessionId = 7)
         conn.channelTree.value = treeWith(user(7), user(9), user(11))
         vm.openUserDetail(11)
-        conn.userStats.value = UserStats(9, 23.5f, null, null, null, null)
+        conn.userStats.value = UserStats(9, 23.5.milliseconds, null, null, null, null)
         runCurrent()
 
         assertNull(vm.uiState.value.userStats)
