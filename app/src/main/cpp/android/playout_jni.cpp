@@ -41,6 +41,11 @@ FN(create)(JNIEnv*, jobject, jint sampleRate, jint maxQuantumSamples) {
         pl::PlayoutEngine::create(sampleRate, maxQuantumSamples).release());
 }
 
+JNIEXPORT void JNICALL
+FN(setWriteAhead)(JNIEnv*, jobject, jlong h, jint samples) {
+    self(h)->setWriteAheadSamples(samples);
+}
+
 JNIEXPORT jint JNICALL
 FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
           jboolean terminator) {

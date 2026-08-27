@@ -63,6 +63,7 @@ object NativePlayout {
     ): Int
 
     external fun fillQuantum(handle: Long, pcm: ShortArray, status: IntArray): Int
+    external fun setWriteAhead(handle: Long, samples: Int)
     external fun readStats(
         handle: Long,
         sessions: IntArray,
@@ -80,6 +81,8 @@ class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngin
 
     override fun fillQuantum(pcm: ShortArray, status: IntArray) =
         NativePlayout.fillQuantum(handle, pcm, status)
+
+    override fun setWriteAhead(samples: Int) = NativePlayout.setWriteAhead(handle, samples)
 
     override fun readStats(
         sessions: IntArray,

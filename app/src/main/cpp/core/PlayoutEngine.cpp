@@ -157,7 +157,7 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             // is still talking, which 64 entries against 8 slots makes vanishingly unlikely. The
             // cold constant is the right answer if it ever happens.
             const JitterEstimator* est = estimatorForSlot(i);
-            target[liveCount] = est ? est->targetSamples() : kColdStartSamples;
+            target[liveCount] = (est ? est->targetSamples() : kColdStartSamples) + writeAhead_;
             // Unlike target, catchUpAllowed is not snapshotted here: the gate latches, so a target
             // that moves between snapshot and pop cannot re-close it and staleness there is
             // harmless. discontinuous() can flip false->true inside this same window if a fresh
@@ -290,7 +290,7 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
         out.sessions[n] = sessions_[i];
         out.depths[n] = queues_[i].depthSamples();
         const JitterEstimator* est = estimatorForSlot(i);
-        out.targets[n] = est ? est->targetSamples() : kColdStartSamples;
+        out.targets[n] = (est ? est->targetSamples() : kColdStartSamples) + writeAhead_;
         dropped += queues_[i].droppedPackets();
         shrunk += queues_[i].shrunkPackets();
         caughtUp += queues_[i].catchUpPackets();
@@ -328,6 +328,11 @@ int PlayoutEngine::slotFor(int32_t session) {
     stallQuanta_[free] = 0;
     shrinkQuanta_[free] = 0;
     return free;
+}
+
+void PlayoutEngine::setWriteAheadSamples(int samples) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    writeAhead_ = samples > 0 ? samples : 0;
 }
 
 }  // namespace dumble::playout

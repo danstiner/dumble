@@ -32,6 +32,11 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     /** Every offer the reader made, in order. */
     val offered = mutableListOf<Offer>()
 
+    /** The last write-ahead the loop handed over; -1 until it has. */
+    @Volatile var writeAheadGiven = -1
+
+    override fun setWriteAhead(samples: Int) { writeAheadGiven = samples }
+
     /** What [offer] returns. Tests that exercise the cap or a broken engine override it. */
     @Volatile var offerResult = NativePlayout.OFFER_ACCEPTED
 

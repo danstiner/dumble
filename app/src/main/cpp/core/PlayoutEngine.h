@@ -123,6 +123,12 @@ public:
     /** Any thread; takes mutex_. */
     Stats stats();
 
+    /** Any thread; takes mutex_. How far ahead of playout the output sink holds audio, in
+     *  samples. Added to every target a queue is measured against, so the estimator's target is
+     *  what the *queue* holds: a packet is popped this far before it plays, and only what is still
+     *  queued at that instant is margin against a late arrival. 0 until the sink reports. */
+    void setWriteAheadSamples(int samples);
+
 private:
     PlayoutEngine(int sampleRate, int maxQuantumSamples);
 
@@ -161,6 +167,7 @@ private:
 
     const int sampleRate_;
     const int maxQuantumSamples_;
+    int writeAhead_ = 0;
 
     std::mutex mutex_;
     Bitmap slots_;

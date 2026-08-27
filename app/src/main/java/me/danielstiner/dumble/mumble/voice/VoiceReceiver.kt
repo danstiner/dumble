@@ -36,6 +36,10 @@ class VoiceReceiver(
          *  `status[STATUS_ACTIVE_SPEAKERS]`. */
         fun fillQuantum(pcm: ShortArray, status: IntArray): Int
 
+        /** Playback thread, once the output exists: how far ahead of playout it holds audio —
+         *  see [AudioOut.writeAheadSamples]. */
+        fun setWriteAhead(samples: Int)
+
         /** Playback thread. Returns the live speaker count. */
         fun readStats(
             sessions: IntArray,
@@ -248,6 +252,7 @@ class VoiceReceiver(
             synchronized(idleLock) { engine.destroy() }
             return
         }
+        engine.setWriteAhead(out.writeAheadSamples)
         try {
             while (!stopped) {
                 val producing = engine.fillQuantum(mix, status)

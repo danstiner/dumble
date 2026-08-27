@@ -763,6 +763,26 @@ TEST(PlayoutEngine, AColdSpeakerWaitsOutTheColdStartTarget) {
     EXPECT_EQ(engine->fillQuantum(out.data(), kFrame, sessions, &live), 1);
 }
 
+TEST(PlayoutEngine, TheWriteAheadIsAddedToEveryTarget) {
+    auto engine = newEngine();
+    ASSERT_TRUE(engine);
+    // Two frames sit in the output sink ahead of playout, so the gate must hold two packets
+    // longer than the cold-start target for the queue itself to hold that target once they drain.
+    engine->setWriteAheadSamples(2 * kFrame);
+    int32_t sessions[pl::kMaxSpeakers];
+    int32_t live = 0;
+    std::vector<int16_t> out(kFrame);
+    const auto payload = dumble::testtone::encodeToneAlone(kFrame);
+    for (int i = 0; i < kColdStartPackets + 1; i++) {
+        engine->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+        EXPECT_EQ(engine->fillQuantum(out.data(), kFrame, sessions, &live), 0)
+            << "the gate opened before target + write-ahead at packet " << i;
+    }
+    engine->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    EXPECT_EQ(engine->fillQuantum(out.data(), kFrame, sessions, &live), 1);
+    EXPECT_EQ(engine->stats().targets[0], pl::kColdStartSamples + 2 * kFrame);
+}
+
 TEST(PlayoutEngine, TheTargetIsReportedPerSpeaker) {
     auto engine = newEngine();
     ASSERT_TRUE(engine);
