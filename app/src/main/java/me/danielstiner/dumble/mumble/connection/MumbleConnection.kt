@@ -29,8 +29,6 @@ import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
-import me.danielstiner.dumble.mumble.voice.AndroidAudioOut
-import me.danielstiner.dumble.mumble.voice.AudioOut
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
@@ -60,7 +58,6 @@ import javax.inject.Singleton
 @Singleton
 class MumbleConnection internal constructor(
     private val pinStore: PinStore,
-    private val newAudioOut: () -> AudioOut,
     // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
     // Defaulted to no receive at all, the same way newCapture defaults to no send: a JVM test
@@ -76,7 +73,7 @@ class MumbleConnection internal constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,
     ) : this(
-        pinStore, { AndroidAudioOut(context) }, { openNativeCapture(context) },
+        pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
         newTransport = { MumbleTcpTransport(it) },
@@ -361,6 +358,9 @@ class MumbleConnection internal constructor(
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=$gen")
             heldGen = if (held) gen else NO_GEN
             _callHeld.value = held
+            // The output stream follows the hold too: the platform has the device, and the
+            // receiver's poll is the one owner of that stream.
+            att?.receiver?.setHeld(held)
             att?.let { reconcile(it) }
         } else {
             Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=$gen")
@@ -548,7 +548,7 @@ class MumbleConnection internal constructor(
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), and
             // only an attempt that survives every guard below ever reaches that call. Building
             // the engine here, eagerly, is what used to leak one per superseded/failed attempt.
-            val receiver = VoiceReceiver(newPlayout, newAudioOut)
+            val receiver = VoiceReceiver(newPlayout)
             val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { teardown(att); return@launch }   // superseded before publish
@@ -597,17 +597,18 @@ class MumbleConnection internal constructor(
             childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
             childScope.launch { receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
             childScope.launch { sm.userStats.collect { publishUserStats(gen, it) } }
-            // Start the receiver if we are still on the current attempt. Guarded to avoid racing
-            // with teardown(), which could leave a dangling playback thread. Both halves matter:
+            // Start the receiver if we are still on the current attempt. Both halves matter:
             // retire() clears `current` without bumping `attempt`. Every earlier return in this
-            // function skips this line, so an attempt that never gets here never calls newPlayout()
-            // — see the comment where `receiver` is built.
+            // function skips this line, so an attempt that never gets here never calls
+            // newPlayout() — see the comment where `receiver` is built.
             //
-            // start() runs newPlayout() inside this lock, and the first one per process pays a
-            // dlopen of libdumble while a main-thread disconnect() may be waiting. Accepted
-            // rather than hoisted: once per process, against a thread already tearing the
-            // connection down.
-            synchronized(lock) { if (gen == attempt && current === att) receiver.start() }
+            // The check is under the lock; the start is not. start() opens the output stream,
+            // ~100 ms of HAL on a Pixel 7a, and holding `lock` across that stalls a main-thread
+            // disconnect() and every publish. A teardown landing in between is the receiver's
+            // own latch to handle: its stop() before start() refuses the start, and after it
+            // joins and destroys.
+            val stillCurrent = synchronized(lock) { gen == attempt && current === att }
+            if (stillCurrent) receiver.start()
         }
     }
 
@@ -728,8 +729,8 @@ class MumbleConnection internal constructor(
         // can produce. Queueing it inside the launch destroys that ordering. trySend never blocks,
         // so this is safe on the main thread.
         send(CaptureCommand.Release(att, reason))
-        // IO because both block: stop() joins the playback thread for up to a second, and
-        // SSLSocket.close can stall writing close-notify to a dead peer. Kept off the capture
+        // IO because both block: stop() joins the receiver's poll, which can be inside a stream
+        // start, and SSLSocket.close can stall writing close-notify to a dead peer. Kept off the capture
         // channel for that reason — one slow socket must not delay every other attempt's release.
         scope.launch(Dispatchers.IO) {
             runCatching { att.transport.close() }

@@ -70,7 +70,7 @@ class FakeConnection : Connection {
     /** Only [PlayoutStats.bufferedSamples] is read today; the rest of the record stays at zero. */
     fun emitDepths(depths: Map<Int, Int>) {
         playoutStats.value = PlayoutStats(
-            latencyMs = null, underruns = null, concealedGaps = 0, droppedPackets = 0,
+            latencyMs = null, underruns = 0, concealedGaps = 0, droppedPackets = 0,
             shrunkPackets = 0, catchUpPackets = 0, contendedFills = 0, fillMicrosMax = 0,
             fillMicrosMean = 0, bufferedSamples = depths, targetSamples = emptyMap(),
         )

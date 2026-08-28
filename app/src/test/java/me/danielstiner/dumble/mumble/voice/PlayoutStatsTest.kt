@@ -9,7 +9,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class PlayoutStatsTest {
 
     private fun stats(buffered: Map<Int, Int>) = PlayoutStats(
-        latencyMs = null, underruns = null, concealedGaps = 0, droppedPackets = 0,
+        latencyMs = null, underruns = 0, concealedGaps = 0, droppedPackets = 0,
         shrunkPackets = 0, catchUpPackets = 0, contendedFills = 0, fillMicrosMax = 0,
         fillMicrosMean = 0, bufferedSamples = buffered, targetSamples = emptyMap(),
     )
