@@ -53,50 +53,6 @@ class NativePlayoutTest {
         return s
     }
 
-    private fun status() = IntArray(NativePlayout.STATUS_LENGTH)
-    private fun pcm() = ShortArray(FRAME_SAMPLES)
-
-    @Test
-    fun aSpurtOfferedAsBytesComesBackAsMixedPcm() {
-        // The whole seam in one assertion: a Kotlin ByteArray copied in, decoded by the real
-        // libopus for this ABI, mixed, and copied back into a Kotlin ShortArray. The terminator
-        // is what opens the prebuffer gate on a single packet.
-        assertEquals(
-            NativePlayout.OFFER_ACCEPTED,
-            NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), true),
-        )
-        val pcm = pcm()
-        val status = status()
-        assertEquals("one speaker producing", 1, NativePlayout.fillQuantum(handle, pcm, status))
-        assertEquals(1, status[NativePlayout.STATUS_ACTIVE_SPEAKERS])
-        assertEquals(SESSION, status[NativePlayout.STATUS_SESSIONS])
-        assertTrue("the frame came back silent", pcm.any { it.toInt() != 0 })
-    }
-
-    @Test
-    fun anIdleEngineFillsSilenceAndReportsNobody() {
-        val pcm = ShortArray(FRAME_SAMPLES) { 999 }
-        val status = status()
-        assertEquals(0, NativePlayout.fillQuantum(handle, pcm, status))
-        assertEquals(0, status[NativePlayout.STATUS_ACTIVE_SPEAKERS])
-        assertTrue("an idle frame must be written, not left alone", pcm.all { it.toInt() == 0 })
-    }
-
-    @Test
-    fun aRefusedQuantumLeavesTheCallersBufferAlone() {
-        // The caller must not play a refused call, so nothing is copied into its buffer.
-        val refused = ShortArray(FRAME_SAMPLES) { 999 }
-        assertEquals(
-            NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.fillQuantum(handle, refused, IntArray(1)),
-        )
-        assertTrue("a refused quantum was published", refused.all { it.toInt() == 999 })
-        assertEquals(
-            NativePlayout.ERROR_BUFFER_TOO_SMALL,
-            NativePlayout.fillQuantum(handle, ShortArray(0), status()),
-        )
-    }
-
     @Test
     fun anEngineRefusesARateLibopusCannot() {
         // The null handle openNativePlayout turns into "voice unavailable". It is the only failure

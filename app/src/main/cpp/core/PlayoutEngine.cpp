@@ -385,9 +385,10 @@ void PlayoutEngine::setOutputDown(bool down) {
     if (!down) return;
     std::lock_guard<std::mutex> guard(mutex_);
     // Off the playback thread, which releaseSlot's decoder reset normally requires. Safe here
-    // because there is no playback thread to race: AAudio delivers a stream error from the
-    // callback thread after its data loop has exited (AudioStreamInternalPlay::callbackLoop;
-    // AudioStreamLegacy::forceDisconnect), and Oboe stops the stream before onErrorBeforeClose.
+    // because there is no playback thread to race: the stream has settled in Paused, or AAudio
+    // delivered a stream error from the callback thread after its data loop had exited
+    // (AudioStreamInternalPlay::callbackLoop; AudioStreamLegacy::forceDisconnect), and Oboe
+    // stops the stream before onErrorBeforeClose.
     for (int i = 0; i < kMaxSpeakers; i++) {
         if (slots_.test(i)) releaseSlot(i);
     }

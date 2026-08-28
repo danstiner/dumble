@@ -100,13 +100,21 @@ bool OboePlayout::start() {
 void OboePlayout::pause() {
     streamStarted_ = false;
     if (!stream_) return;
-    // Flushed as well as paused, so the silence buffered while idle is not what plays first
-    // when the next spurt starts. AAudio refuses a flush until the pause has completed, so the
-    // poll — which has nothing else to do — waits for it.
+    // A pause that fails is a dead stream, which the start() after the hold notices.
     if (stream_->requestPause() != oboe::Result::OK) return;
     oboe::StreamState next = oboe::StreamState::Unknown;
     stream_->waitForStateChange(oboe::StreamState::Pausing, &next,
                                 100 * oboe::kNanosPerMillisecond);
+    // Still pausing after 100 ms is the one state in which a callback may yet run: nothing
+    // below is safe, and AAudio refuses the flush anyway.
+    if (next == oboe::StreamState::Pausing) return;
+    // Settled, so no callback runs, which is what releasing the engine's speakers needs. The
+    // hold ends every spurt here: whoever was mid-word is not left "speaking" for its length,
+    // and their queue is emptied rather than played stale on resume — the receiver drops
+    // packets while held for the same reason.
+    engine_.setOutputDown(true);
+    // Flushed as well as paused, so the silence buffered while idle is not what plays first
+    // when the next spurt starts.
     const oboe::Result r = stream_->requestFlush();
     if (r != oboe::Result::OK) LOGW("requestFlush: %s", oboe::convertToText(r));
 }

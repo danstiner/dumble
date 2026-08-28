@@ -29,12 +29,6 @@ object NativePlayout {
      *  speaking" and leave the app silently mute with no diagnostic. */
     const val ERROR_BUFFER_TOO_SMALL = -1
 
-    /** Layout of [fillQuantum]'s `status`: the live speaker count, then one entry per producing
-     *  session. Leaves with the AudioTrack loop. */
-    const val STATUS_ACTIVE_SPEAKERS = 0
-    const val STATUS_SESSIONS = 1
-    const val STATUS_LENGTH = STATUS_SESSIONS + MAX_SPEAKERS
-
     /** Indices into [readStats]' `counters`: `PlayoutEngine::Stats` is a struct, and JNI carries
      *  primitive arrays. Monotonic since the session was created unless noted — the caller
      *  subtracts a talk-spurt baseline. */
@@ -88,33 +82,24 @@ object NativePlayout {
         counters: LongArray,
     ): Int
 
-    /** The AudioTrack loop's two calls; they leave with it. */
-    external fun fillQuantum(handle: Long, pcm: ShortArray, status: IntArray): Int
-    external fun setWriteAhead(handle: Long, samples: Int)
-
     external fun destroy(handle: Long)
 }
 
-/** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. Still the AudioTrack
- *  loop's seam: the stream the session opened stays unstarted until the receiver drives it. */
+/** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
-    private val audible = IntArray(MAX_SPEAKERS)
-
     override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean) =
         NativePlayout.offer(handle, session, opusData, frameNumber, terminator)
-
-    override fun fillQuantum(pcm: ShortArray, status: IntArray) =
-        NativePlayout.fillQuantum(handle, pcm, status)
-
-    override fun setWriteAhead(samples: Int) = NativePlayout.setWriteAhead(handle, samples)
 
     override fun readStats(
         sessions: IntArray,
         depths: IntArray,
         targets: IntArray,
+        audible: IntArray,
         counters: LongArray,
     ) = NativePlayout.readStats(handle, sessions, depths, targets, audible, counters)
 
+    override fun start() = NativePlayout.start(handle)
+    override fun pause() = NativePlayout.pause(handle)
     override fun destroy() = NativePlayout.destroy(handle)
 }
 

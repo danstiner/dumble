@@ -7,7 +7,6 @@ import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.CaptureStats
-import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.TransmitMode
@@ -142,7 +141,7 @@ class CaptureLifecycleChaosTest {
         val created = AtomicInteger()
         val endpoint = MumbleEndpoint.parse("chaos")
         val conn = MumbleConnection(
-            InMemoryPinStore(), { FakeAudioOut() },
+            InMemoryPinStore(),
             newCapture = {
                 ChaosCaptureHandle(
                     c.streamLive, c.streamPeak, c.engineLive, c.enginePeak, c.violations,
