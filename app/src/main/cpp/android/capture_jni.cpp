@@ -59,6 +59,10 @@ JNIEXPORT jlong JNICALL FN(framesPerBurst)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->capture->framesPerBurst()) : 0;
 }
 
+JNIEXPORT jdouble JNICALL FN(inputLatencyMillis)(JNIEnv*, jobject, jlong h) {
+    return h ? jdouble(self(h)->capture->inputLatencyMillis()) : -1;
+}
+
 JNIEXPORT void JNICALL FN(stop)(JNIEnv*, jobject, jlong h) {
     // The stream is the pump's: it closes on the poll that reports this shutdown, below.
     if (h) self(h)->engine->requestShutdown();

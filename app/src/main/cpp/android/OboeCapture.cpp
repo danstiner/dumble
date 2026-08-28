@@ -144,4 +144,12 @@ int32_t OboeCapture::framesPerBurst() const {
     return stream_ ? stream_->getFramesPerBurst() : 0;
 }
 
+double OboeCapture::inputLatencyMillis() const {
+    if (!stream_) return -1;
+    // Drops when the callback reads and climbs as frames accumulate — Oboe's own note on input
+    // streams — so this is a snapshot of wherever the burst happens to sit, not a constant.
+    const auto latency = stream_->calculateLatencyMillis();
+    return latency ? latency.value() : -1;
+}
+
 }  // namespace dumble

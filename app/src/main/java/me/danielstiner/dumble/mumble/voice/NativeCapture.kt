@@ -61,4 +61,8 @@ object NativeCapture {
     external fun streamOverruns(handle: Long): Long
 
     external fun framesPerBurst(handle: Long): Long
+
+    /** Milliseconds between the ADC and this app: the device input buffer. Negative when there
+     *  is no stream or the platform has no timestamp for it yet. */
+    external fun inputLatencyMillis(handle: Long): Double
 }

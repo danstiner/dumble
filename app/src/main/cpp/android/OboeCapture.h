@@ -36,6 +36,12 @@ public:
     int32_t streamOverruns() const;
     int32_t framesPerBurst() const;
 
+    /** Milliseconds a frame spends between the ADC and this app — the device input buffer. Read
+     *  from the pump, never from onAudioReady: Oboe advises against it there before Android R
+     *  (TechNote_ReleaseBuffer). Negative with no stream, or before the platform has a timestamp
+     *  for it: latency is never negative, and 0 ms is a reading no input path can produce. */
+    double inputLatencyMillis() const;
+
 private:
     struct Callbacks : oboe::AudioStreamDataCallback, oboe::AudioStreamErrorCallback {
         explicit Callbacks(std::shared_ptr<CaptureEngine> e) : engine(std::move(e)) {}
