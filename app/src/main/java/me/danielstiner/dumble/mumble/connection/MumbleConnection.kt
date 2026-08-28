@@ -223,8 +223,8 @@ class MumbleConnection internal constructor(
          *  monitor is what keeps a racing push-to-talk edge off the freed engine. */
         fun destroy() = synchronized(this) { if (!destroyed) { destroyed = true; handle.destroy() } }
 
-        /** Lifecycle consumer only. Off the monitor deliberately: this is an unbounded HAL call
-         *  and the UI must not queue behind it. */
+        /** Lifecycle consumer only. Off the monitor deliberately: this waits on a HAL close and
+         *  the UI must not queue behind it. */
         fun stop() = sender.stop()
 
         val stopReason: VoiceSender.StopReason? get() = sender.stopReason
@@ -426,9 +426,9 @@ class MumbleConnection internal constructor(
      *  pump's own exit to free via [onPumpExited]. Lifecycle consumer only; callers guarantee
      *  `!att.releasing`. */
     private fun beginRelease(att: Attempt, session: CaptureSession) {
-        // Synchronous, inline: handle.stop() closes the Oboe stream before returning and latches it
-        // shut. That ordering is the entire one-microphone invariant — making it asynchronous
-        // because stop() no longer joins would silently reopen the hole.
+        // Synchronous, inline: stop() returns once the pump has closed the Oboe stream (or, wedged,
+        // after its bound). That ordering is the entire one-microphone invariant — making it
+        // asynchronous would silently reopen the hole.
         session.stop()
         // The signal belongs to the session being released; left standing, the hold would carry
         // it into whatever opens next. A late packet racing this raises it again for at most one

@@ -49,7 +49,7 @@ public:
     /** Set by the Oboe error callback around a disconnect/reopen cycle. */
     void setStreamDown(bool down);
 
-    /** Terminal: platform adapter exhausted reopen attempts. pollPacket() returns
+    /** Terminal: the device will not open a stream this engine can use. pollPacket() returns
      *  kPollUnavailable instead of kPollRetry. */
     void setStreamUnavailable();
 
