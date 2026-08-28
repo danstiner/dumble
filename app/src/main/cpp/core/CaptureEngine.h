@@ -53,8 +53,9 @@ public:
      *  kPollUnavailable instead of kPollRetry. */
     void setStreamUnavailable();
 
-    // One write is one Oboe burst; a dropped burst at capture is an overrun.
-    uint64_t overrunBursts() const { return ring_.droppedWrites(); }
+    // Bursts the ring had no room for, each one lost. The stream's own overruns, one stage
+    // earlier, are the adapter's to count.
+    uint64_t ringOverruns() const { return ring_.droppedWrites(); }
     uint64_t skippedSamples() const { return ring_.skippedSamples(); }
     // Test-only: verifies voice-activity drains the ring even while silent.
     uint32_t bufferedSamples() const { return ring_.available(); }
@@ -129,7 +130,7 @@ private:
     uint64_t debtClockOffset_ = 0;
     // Ring-to-clock translation: sampleClock_ − writeIndex() at spurt open. Converts any ring
     // position to wall-clock frame_number. Under voice activity, overrun-dropped writes make
-    // this slightly lag wall clock (bounded by overrunBursts(), not spurt length).
+    // this slightly lag wall clock (bounded by ringOverruns(), not spurt length).
     uint64_t clockOffset_ = 0;
 
     // Set on any thread, claimed by the pump before the spurt's first encode. Atomic rather than

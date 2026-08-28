@@ -8,7 +8,7 @@ class CaptureStatsTest {
 
     private val sample = CaptureStats(
         encodedPackets = 500, encodeErrors = 0, encodeMicrosMean = 310, encodeMicrosMax = 1_900,
-        overrunBursts = 2, skippedSamples = 960, xRunCount = 4, framesPerBurst = 192,
+        ringOverruns = 2, skippedSamples = 960, streamOverruns = 4, framesPerBurst = 192,
         droppedFrames = 1,
     )
 
@@ -19,7 +19,7 @@ class CaptureStatsTest {
     @Test fun summaryNamesEveryCounter() {
         assertEquals(
             "capture: packets=500 encodeErr=0 encode=310us/1900us burst=192 " +
-                "xrun=4 overrun=2 skipped=960 sendDropped=1",
+                "streamOverruns=4 ringOverruns=2 skipped=960 sendDropped=1",
             sample.summary(),
         )
     }

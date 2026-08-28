@@ -224,12 +224,9 @@ void OboeCapture::retryReopen() {
     retryCondition_.notify_all();
 }
 
-int32_t OboeCapture::xRunCount() const {
+int32_t OboeCapture::streamOverruns() const {
     std::lock_guard<std::mutex> lock(streamMutex_);
     if (!stream_) return 0;
-    // The direct measure of the callback missing its deadline, and so the number that settles
-    // whether signalling a condvar from onAudioReady would have been safe — i.e. whether the
-    // 5 ms timed wait in the engine can go.
     auto count = stream_->getXRunCount();
     return count ? count.value() : 0;
 }

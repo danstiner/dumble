@@ -14,21 +14,21 @@ data class CaptureStats(
     val encodeErrors: Long,
     val encodeMicrosMean: Long,
     val encodeMicrosMax: Long,
-    val overrunBursts: Long,
+    val ringOverruns: Long,
     val skippedSamples: Long,
-    val xRunCount: Long,
+    val streamOverruns: Long,
     val framesPerBurst: Long,
     val droppedFrames: Int,
 ) {
     /**
-     * Overruns and XRuns are the two that mean microphone audio was lost; the rest is context for
+     * The two overruns are the ones that mean microphone audio was lost; the rest is context for
      * them. Encode time is against a 20 ms budget — a mean far below it with a max near it is an
      * encoder that mostly keeps up and occasionally does not.
      */
     fun summary(): String =
         "capture: packets=$encodedPackets encodeErr=$encodeErrors " +
             "encode=${encodeMicrosMean}us/${encodeMicrosMax}us burst=$framesPerBurst " +
-            "xrun=$xRunCount overrun=$overrunBursts skipped=$skippedSamples " +
+            "streamOverruns=$streamOverruns ringOverruns=$ringOverruns skipped=$skippedSamples " +
             "sendDropped=$droppedFrames"
 
     companion object {
@@ -38,9 +38,9 @@ data class CaptureStats(
             encodeErrors = NativeCapture.encodeErrors(handle),
             encodeMicrosMean = NativeCapture.encodeMicrosMean(handle),
             encodeMicrosMax = NativeCapture.encodeMicrosMax(handle),
-            overrunBursts = NativeCapture.overrunBursts(handle),
+            ringOverruns = NativeCapture.ringOverruns(handle),
             skippedSamples = NativeCapture.skippedSamples(handle),
-            xRunCount = NativeCapture.xRunCount(handle),
+            streamOverruns = NativeCapture.streamOverruns(handle),
             framesPerBurst = NativeCapture.framesPerBurst(handle),
             droppedFrames = 0,
         )
