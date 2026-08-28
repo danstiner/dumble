@@ -183,7 +183,8 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
             // is still talking, which 64 entries against 8 slots makes vanishingly unlikely. The
             // cold constant is the right answer if it ever happens.
             const JitterEstimator* est = estimatorForSlot(i);
-            target[liveCount] = (est ? est->targetSamples() : kColdStartSamples) + writeAhead_;
+            target[liveCount] = (est ? est->targetSamples() : kColdStartSamples) +
+                                writeAhead_.load(std::memory_order_relaxed);
             // Unlike target, catchUpAllowed is not snapshotted here: the gate latches, so a target
             // that moves between snapshot and pop cannot re-close it and staleness there is
             // harmless. discontinuous() can flip false->true inside this same window if a fresh
@@ -325,7 +326,8 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
         out.sessions[n] = sessions_[i];
         out.depths[n] = queues_[i].depthSamples();
         const JitterEstimator* est = estimatorForSlot(i);
-        out.targets[n] = (est ? est->targetSamples() : kColdStartSamples) + writeAhead_;
+        out.targets[n] = (est ? est->targetSamples() : kColdStartSamples) +
+                         writeAhead_.load(std::memory_order_relaxed);
         out.audible[n] = audible_[i];
         dropped += queues_[i].droppedPackets();
         shrunk += queues_[i].shrunkPackets();
@@ -372,8 +374,7 @@ int PlayoutEngine::slotFor(int32_t session) {
 }
 
 void PlayoutEngine::setWriteAheadSamples(int samples) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    writeAhead_ = samples > 0 ? samples : 0;
+    writeAhead_.store(samples > 0 ? samples : 0, std::memory_order_relaxed);
 }
 
 void PlayoutEngine::setRealtime(bool realtime) {
@@ -384,8 +385,9 @@ void PlayoutEngine::setOutputDown(bool down) {
     if (!down) return;
     std::lock_guard<std::mutex> guard(mutex_);
     // Off the playback thread, which releaseSlot's decoder reset normally requires. Safe here
-    // because there is no playback thread to race: the sink stopped delivering before its error
-    // callback reached us.
+    // because there is no playback thread to race: AAudio delivers a stream error from the
+    // callback thread after its data loop has exited (AudioStreamInternalPlay::callbackLoop;
+    // AudioStreamLegacy::forceDisconnect), and Oboe stops the stream before onErrorBeforeClose.
     for (int i = 0; i < kMaxSpeakers; i++) {
         if (slots_.test(i)) releaseSlot(i);
     }
