@@ -14,12 +14,12 @@ import kotlin.time.Duration.Companion.milliseconds
  * so each contributes half. Theirs is what the server reports about them.
  *
  * [jitterBuffer] is what is queued for this speaker now — the margin against a late packet.
- * Whatever has already been handed to the track is inside [audioOutput] instead, so the two rows
+ * Whatever has already been handed to the stream is inside [audioOutput] instead, so the two rows
  * partition the delay rather than overlap; the engine sizes its targets so that the queue, not
- * the track, holds the estimator's margin.
+ * the stream, holds the estimator's margin.
  *
- * [audioOutput] is what is written and not yet presented — track fill plus the HAL, see
- * [LatencyMath.outputLatencyMs]. One output stream, so the same figure for every speaker.
+ * [audioOutput] is what the stream holds ahead of the speaker — its buffer plus the HAL, from
+ * Oboe's `calculateLatencyMillis`. One output stream, so the same figure for every speaker.
  */
 data class PlayoutDelay(
     val network: Duration?,

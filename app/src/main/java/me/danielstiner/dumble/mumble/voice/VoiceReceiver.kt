@@ -1,61 +1,73 @@
 package me.danielstiner.dumble.mumble.voice
 
-import android.os.Process
 import android.util.Log
 import com.google.protobuf.InvalidProtocolBufferException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 
 /** First byte of a Mumble UDP plaintext packet. */
 private const val UDP_TYPE_AUDIO = 0
 
 /**
- * Owns inbound voice: hands packets to the native playout engine, runs the playback thread that
- * pulls mixed frames from it, and republishes the speaking-session set the UI observes.
+ * Owns inbound voice: hands packets to the native playout session, and runs the one coroutine —
+ * the poll — that owns the session's output stream and republishes what it reports.
  *
- * Pacing: while any speaker is draining, the loop is clocked by the blocking [AudioOut.write] —
- * AudioTrack consumes exactly one frame per frame-duration off the audio clock, so no timer
- * is used and none should be added. When nobody is draining there is nothing to block on, so the
- * loop parks on [idleLock]: unbounded when no speaker exists at all, and 10 ms at a time while one
- * does.
+ * The audio itself never comes up here. The native session's output stream pulls each burst from
+ * the engine on its own realtime thread; the poll's job is to keep that stream started for the
+ * life of the receiver — paused only while the platform holds the call — and to read the engine's
+ * stats every [POLL_MILLIS]: the speaking set for the UI, the counters for [playoutStats].
+ *
+ * Started throughout rather than around speech: a start costs up to ~150 ms, and every packet
+ * that lands during it piles up ahead of the prebuffer gate — on a sender that never pauses,
+ * that pile stays as standing delay (`docs/playout.md` has the numbers). An idle stream costs
+ * one silent fill per burst, and during a call the capture stream keeps the audio HAL awake
+ * regardless.
+ *
+ * Two rules carry the threading. `offer()` and `destroy()` share this object's monitor, so a
+ * packet can never reach a freed session; `offer()` never touches the stream. And the poll is
+ * the only caller of `start()`/`pause()`, and [stop] joins it before destroying, so no stream
+ * call is ever in flight against a dead session.
  */
-class VoiceReceiver(
-    private val newEngine: () -> PlayoutEngine?,
-    private val outFactory: () -> AudioOut,
-) {
-    /** Seam so JVM tests can drive the loop without loading native code. */
+class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
+    /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
         /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
          *  own frame counter, which the engine measures arrival jitter against. */
         fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Int
 
-        /** Playback thread. Fills [pcm] with one mixed frame, returns how many speakers
-         *  produced, writes their sessions into `status[1..n]` and the live speaker count into
-         *  `status[STATUS_ACTIVE_SPEAKERS]`. */
-        fun fillQuantum(pcm: ShortArray, status: IntArray): Int
-
-        /** Playback thread, once the output exists: how far ahead of playout it holds audio —
-         *  see [AudioOut.writeAheadSamples]. */
-        fun setWriteAhead(samples: Int)
-
-        /** Playback thread. Returns the live speaker count. */
+        /** Poll only. Returns the live speaker count and fills the four arrays for it;
+         *  `audible[i]` is 1 when `sessions[i]` produced in the last fill. Negative when the
+         *  arrays are too small — this side's bug. */
         fun readStats(
             sessions: IntArray,
             depths: IntArray,
             targets: IntArray,
+            audible: IntArray,
             counters: LongArray,
         ): Int
 
-        /** Playback thread, from the loop's finally — never from another thread. */
+        /** Poll only — the one owner of stream state. [start] is idempotent and answers whether
+         *  a started stream exists, so the poll calls it every interval: that is how a stream
+         *  lost to an error comes back. [pause] holds it while the platform has the device. */
+        fun start(): Boolean
+        fun pause()
+
+        /** Under the receiver's monitor, after the poll has been joined. */
         fun destroy()
     }
 
-    // java.lang.Object rather than Any: the bounded park in loop() needs wait/notifyAll, which
-    // Kotlin's Any does not expose.
-    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-    private val idleLock = Object()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
@@ -65,11 +77,11 @@ class VoiceReceiver(
 
     // Null until start() builds one, and permanently null if it never does (newEngine() refused,
     // or start() is never called at all — the ordinary case for a superseded or failed attempt).
-    // Written once by start() before the playback thread is spawned; read by onTunneledAudio,
-    // which can already be admitting packets by then. @Volatile because writer (start(), on the
-    // receiver's monitor) and reader (onTunneledAudio, under idleLock) share no lock.
-    @Volatile
+    // Guarded by this object's monitor.
     private var engine: PlayoutEngine? = null
+
+    // The poll, once start() has launched it. Guarded by the monitor.
+    private var poll: Job? = null
 
     // Latched by the parse catch in onTunneledAudio, its one setter — see the reasoning there.
     @Volatile
@@ -77,99 +89,67 @@ class VoiceReceiver(
 
     // Codes already logged once. Every refusal is a condition a misbehaving server can produce on
     // every packet, and this path runs at ~100 Hz, so an unlatched log is its own liveness
-    // problem. Guarded by idleLock, like everything else on the offer path.
+    // problem. Guarded by the monitor, like everything else on the offer path.
     private val refusalLogged = HashSet<Int>()
 
-    // Same latching, but for the playback thread's own bug class rather than the reader's: a
-    // readStats() this side sized wrong would otherwise refuse silently on every spurt close for
-    // the rest of the session.
-    private var statsRefusedReported = false
-
-    // One-way, and the loop's only exit condition. Set by stop() and by loop() on its way out, so
-    // a playback thread that died on its own silences the reader too. One-way rather than a pair
-    // of flags because every "stop" is terminal here; `thread` already distinguishes not-yet-started
-    // from running, and a latch cannot be clobbered by a thread that is on its way out.
+    // One-way, and the poll's exit condition. Set by stop(), and by start() when there is no
+    // engine to be had. One-way because every "stop" is terminal here: the caller builds a
+    // receiver per attempt and never restarts one.
     @Volatile
     private var stopped = false
 
-    // Written by start() outside the stop() monitor and read by stop() under it — no other
-    // ordering ties the two, so without @Volatile a stop() on another thread could observe a
-    // stale null and race start()'s own write.
+    // The platform has the audio device (an incoming cellular call). Read by the poll, which
+    // pauses the stream and keeps it paused for as long as this holds.
     @Volatile
-    private var thread: Thread? = null
+    private var held = false
 
     /**
      * Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per attempt.
      *
      * [newEngine] is called from here, not from the constructor: the engine must exist if and only
-     * if the playback loop that owns destroying it is running, and this is the one place that
-     * guarantees a thread is about to be spawned before anything native gets allocated. Building it
-     * eagerly at construction — as an earlier version of this class did — leaked one engine per
-     * attempt that was superseded, retired, or failed before ever reaching this call.
+     * if the poll that owns its stream is running. Building it eagerly at construction leaked one
+     * engine per attempt that was superseded, retired, or failed before ever reaching this call.
      */
     @Synchronized
     fun start() {
-        if (stopped || thread != null) return
+        if (stopped || poll != null) return
         val built = newEngine()
         if (built == null) {
-            // Mirrors outFactory's failure path in loop(): voice is additive, so an unavailable
-            // engine disables receive for this session rather than failing the connection. Unlike
-            // that path this runs on the caller's thread, before any playback thread exists, so
-            // there is nothing to destroy — newEngine() returning null means nothing was built.
+            // Voice is additive, so an unavailable engine disables receive for this session
+            // rather than failing the connection. Nothing was built, so there is nothing to free.
             stopped = true
             return
         }
         engine = built
-        thread = Thread({
-            // Here rather than in start(): setThreadPriority applies to the calling thread. JVM
-            // Thread.priority is a hint Android mostly ignores — only this nice-value bump holds
-            // the 10 ms cadence. Priority is an optimisation, so a refusal (SecurityException on
-            // some OEM builds) must degrade cadence, not throw.
-            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
-                .onFailure { Log.w(TAG, "could not raise playback thread priority", it) }
-
-            loop(built)
-        }, "dumble-voice-playback").apply {
-            isDaemon = true
-            start()
-        }
+        poll = scope.launch { poll(built) }
     }
 
     /**
-     * Synchronized because teardown can reach the same attempt twice (a handshake completing
-     * after it was superseded), and each teardown hands the join to a coroutine — so two calls
-     * genuinely race. Unserialized, both would observe a dead thread and both would destroy the
-     * engine, which is the same double-free this method is careful to avoid on the timeout path.
+     * Safe to call before start(), twice, or from two threads at once: `stopped` latches, the
+     * join is idempotent, and the destroy is guarded by the engine going null under the monitor.
      */
-    @Synchronized
     fun stop() {
-        // Before the join, so the loop sees its exit condition and a reader arriving later never
-        // offers into a dead engine; one already inside onTunneledAudio is serialized against the
-        // latch by idleLock. Safe to call before start() too: it latches stopped, so a start() that
-        // hasn't run yet — or is racing this on another thread, blocked on the same monitor — will
-        // see it and refuse, per the check at the top of start().
         stopped = true
-        synchronized(idleLock) { idleLock.notifyAll() }
-        val worker = thread
-        worker?.join(1_000)
-        if (worker == null || !worker.isAlive) {
-            // Only clear `thread` when the join actually observed exit. If a repeat call sees
-            // `thread == null` it must mean this branch already ran, not "the thread must have
-            // exited by now" — that conflation is what let a second stop() destroy the engine out
-            // from under a still-running loop() the last time this bug happened.
-            thread = null
-        } else {
-            // join timing out doesn't mean the thread died — it can still be blocked in a wedged
-            // AudioTrack.write and will destroy the engine itself on its way out. Leaving `thread`
-            // set means a later stop() re-joins and re-checks liveness instead of trusting a stale
-            // "already gone".
-            Log.w(TAG, "playback thread outlived stop(); leaking the playout engine")
+        // Joined, not merely cancelled: a start()/pause() in flight on the poll's thread must
+        // have returned before the session underneath it is freed. Outside the monitor because
+        // the poll takes it for readStats, and a join under it would wait on itself.
+        val job = synchronized(this) { poll }
+        if (job != null) runBlocking { job.cancelAndJoin() }
+        synchronized(this) {
+            // Under the monitor, like offer(): a reader already inside offer() finishes first,
+            // and one arriving later sees `stopped`.
+            engine?.destroy()
+            engine = null
         }
-        // Both flows, for the same reason: loop()'s finally clears them, but it only runs if the
-        // thread actually exited. On the join-timeout path above it never does, and a stats
-        // reading from a dead connection would sit in the flow for the life of the process.
+        scope.cancel()
         _speakingSessions.value = emptySet()
         _playoutStats.value = null
+    }
+
+    /** Any thread. While held the poll keeps the stream paused; a resume starts it again, within
+     *  a poll interval. */
+    fun setHeld(held: Boolean) {
+        this.held = held
     }
 
     /**
@@ -198,10 +178,7 @@ class VoiceReceiver(
             return
         }
         val session = audio.senderSession
-        // Under idleLock so the `stopped` check and the offer are atomic against the loop's
-        // destroy(). The playback thread takes this monitor only when it has nothing to mix, so
-        // the paced path never contends for it.
-        synchronized(idleLock) {
+        synchronized(this) {
             if (stopped) return
             // Null before start() has built one — reachable, since sm.audioListener is wired
             // before receiver.start() runs — or permanently null if it never will. Either way,
@@ -219,193 +196,132 @@ class VoiceReceiver(
                 else -> null
             }
             if (refusal != null && refusalLogged.add(code)) Log.w(TAG, refusal)
-            idleLock.notifyAll()
         }
     }
 
-    private fun loop(engine: PlayoutEngine) {
-        val mix = ShortArray(FRAME_SAMPLES)
-        // Allocated once: the playback thread must not allocate per fill. Sized by the constants
-        // the seam validates against — undersize one and every call answers ERROR_BUFFER_TOO_SMALL.
-        val status = IntArray(NativePlayout.STATUS_LENGTH)
-        val statSessions = IntArray(MAX_SPEAKERS)
-        val statDepths = IntArray(MAX_SPEAKERS)
-        val statTargets = IntArray(MAX_SPEAKERS)
+    /** Counters are monotonic since the session was built, so a spurt's numbers are read against
+     *  where they stood when it opened (the stream's own xRuns) or when the previous one closed
+     *  (everything the engine counts). */
+    private class Baselines {
+        var xRuns = 0L
+        var concealed = 0L
+        var dropped = 0L
+        var shrunk = 0L
+        var catchUp = 0L
+        var contended = 0L
+
+        /** Re-armed from the reading the closing publish just took, rather than a second read:
+         *  a drop landing between two reads would be published in neither spurt. */
+        fun rearm(c: LongArray) {
+            concealed = c[NativePlayout.COUNTER_CONCEALED_GAPS]
+            dropped = c[NativePlayout.COUNTER_DROPPED_PACKETS]
+            shrunk = c[NativePlayout.COUNTER_SHRUNK_PACKETS]
+            catchUp = c[NativePlayout.COUNTER_CATCH_UP_PACKETS]
+            contended = c[NativePlayout.COUNTER_CONTENDED_FILLS]
+        }
+    }
+
+    private suspend fun poll(engine: PlayoutEngine) {
+        // Allocated once, sized by the constants the seam validates against.
+        val sessions = IntArray(MAX_SPEAKERS)
+        val depths = IntArray(MAX_SPEAKERS)
+        val targets = IntArray(MAX_SPEAKERS)
+        val audible = IntArray(MAX_SPEAKERS)
         val counters = LongArray(NativePlayout.COUNTER_COUNT)
-
+        val baselines = Baselines()
+        var started = false
         var inSpurt = false
-        var writesThisSpurt = 0
-        var underrunBaseline: Int? = null
-        var concealedBaseline = 0L
-        var droppedBaseline = 0L
-        var shrunkBaseline = 0L
-        var catchUpBaseline = 0L
-        var contendedBaseline = 0L
-
-        val out = try {
-            outFactory()
-        } catch (t: Throwable) {
-            Log.e(TAG, "audio output unavailable, voice playback disabled", t)
-            stopped = true
-            // Same monitor onTunneledAudio admits under, even though this thread never reached the
-            // main loop below: a reader that already passed the `stopped` check can be inside
-            // offer() right now, and an unguarded destroy() here would free the engine under it.
-            synchronized(idleLock) { engine.destroy() }
-            return
-        }
-        engine.setWriteAhead(out.writeAheadSamples)
-        try {
-            while (!stopped) {
-                val producing = engine.fillQuantum(mix, status)
-                if (producing < 0) {
-                    // Our arrays, our bug. Treated like a failed write: it does not block, so
-                    // continuing would spin this thread at THREAD_PRIORITY_URGENT_AUDIO.
-                    Log.e(TAG, "playout engine refused our buffers, stopping playback")
-                    stopped = true
-                    continue
-                }
-                if (producing == 0) {
-                    _speakingSessions.value = emptySet()
-                    if (inSpurt) {
-                        val published = publishStats(engine, out, underrunBaseline,
-                                                     concealedBaseline, droppedBaseline,
-                                                     shrunkBaseline, catchUpBaseline,
-                                                     contendedBaseline, statSessions,
-                                                     statDepths, statTargets, counters)
-                        inSpurt = false
-                        if (published) {
-                            // Rearmed from the reading publishStats just took rather than a
-                            // second readStats — a drop landing between two reads would be
-                            // published in neither spurt. Once, here, rather than on every
-                            // poll: the engine charges a gap once and then re-arms the speaker's
-                            // prebuffer gate, so the charge a poll books is already inside this
-                            // reading and later polls cannot add to it. And not at the next
-                            // spurt's open, whose opening frame has already run by the time that
-                            // branch checks — a partial-fill opening frame would vanish into its
-                            // own baseline.
-                            concealedBaseline = counters[NativePlayout.COUNTER_CONCEALED_GAPS]
-                            // Unlike concealment, drops can move while idle — the reader fills
-                            // queues the loop is not draining yet. Those land in the next spurt's
-                            // window, which is where they belong: a backlog thrown away while a
-                            // speaker prebuffers is that spurt's burst, not the previous one's.
-                            droppedBaseline = counters[NativePlayout.COUNTER_DROPPED_PACKETS]
-                            shrunkBaseline = counters[NativePlayout.COUNTER_SHRUNK_PACKETS]
-                            catchUpBaseline = counters[NativePlayout.COUNTER_CATCH_UP_PACKETS]
-                            contendedBaseline = counters[NativePlayout.COUNTER_CONTENDED_FILLS]
-                        } else if (!statsRefusedReported) {
-                            // Our arrays, our bug — see fillQuantum's refusal above. Left
-                            // unresolved, every future spurt would silently stop publishing:
-                            // publishStats gives up on the whole reading, not just the baseline.
-                            statsRefusedReported = true
-                            Log.e(TAG, "playout engine refused our stats buffers; baselines are stale")
-                        }
-                    }
-                    // Nothing to block on. Do NOT zero-fill to keep the clock: that would leave
-                    // AudioTrack permanently full after a burst, ratcheting latency up with no
-                    // gap to drain it.
-                    synchronized(idleLock) {
-                        if (!stopped) {
-                            if (status[NativePlayout.STATUS_ACTIVE_SPEAKERS] == 0) idleLock.wait()
-                            else idleLock.wait(10)
-                        }
-                    }
-                    continue
-                }
-
-                if (!inSpurt) {
-                    inSpurt = true
-                    writesThisSpurt = 0
-                    // Read before the spurt's first write, so the underrun the platform recorded
-                    // for the preceding silence is inside the baseline and drops out. Unlike
-                    // concealedBaseline, this is safe to read here: an output write, not
-                    // fillQuantum(), is what moves the platform's underrun counter, so it cannot
-                    // yet reflect a write this spurt has not made.
-                    underrunBaseline = runCatching { out.outputStats().underrunsTotal }.getOrNull()
-                }
-
-                val speaking = HashSet<Int>(producing)
-                for (i in 0 until producing) speaking += status[NativePlayout.STATUS_SESSIONS + i]
-                if (_speakingSessions.value != speaking) _speakingSessions.value = speaking
-
-                if (!out.write(mix, FRAME_SAMPLES)) {
-                    Log.e(TAG, "audio output write failed, stopping playback")
-                    stopped = true
-                } else if (++writesThisSpurt >= WRITES_PER_SAMPLE) {
-                    writesThisSpurt = 0
-                    publishStats(engine, out, underrunBaseline, concealedBaseline,
-                                 droppedBaseline, shrunkBaseline, catchUpBaseline,
-                                 contendedBaseline, statSessions, statDepths, statTargets,
-                                 counters)
-                }
+        var lastPublishNanos = 0L
+        var refusalReported = false
+        while (true) {
+            if (stopped) return
+            // Every interval, not once: start() is cheap while the stream runs, and it is what
+            // reopens one lost to an error the adapter's own retries gave up on. Before the read
+            // rather than after it, so the first packet finds the stream running.
+            if (held) {
+                if (started) engine.pause()
+                started = false
+            } else {
+                val up = engine.start()
+                if (up != started) Log.i(TAG, if (up) "output stream started" else "output stream lost; retrying")
+                started = up
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "playback loop died", t)
-        } finally {
-            stopped = true
-            _speakingSessions.value = emptySet()
-            _playoutStats.value = null
-            out.close()
-            // After the latch and inside the monitor the reader admits under, so no offer can
-            // straddle it. The playback thread is fillQuantum's only caller, so this is the same
-            // rule capture uses: free only once the thread that touches it is done.
-            synchronized(idleLock) { engine.destroy() }
+            val live = synchronized(this) {
+                if (stopped) return
+                runCatching { engine.readStats(sessions, depths, targets, audible, counters) }
+                    .getOrDefault(-1)
+            }
+            if (live < 0) {
+                // Our arrays, our bug. Logged once and polled on: a refusal here must not take
+                // the stream's start and pause with it.
+                if (!refusalReported) {
+                    refusalReported = true
+                    Log.e(TAG, "playout engine refused our stats buffers")
+                }
+                delay(POLL_MILLIS)
+                continue
+            }
+            val now = System.nanoTime()
+
+            val speaking = HashSet<Int>(live)
+            for (i in 0 until live) if (audible[i] == 1) speaking += sessions[i]
+
+            // A spurt, for the counters, is speech: from the first poll that sees someone
+            // audible to the first that sees nobody. Published once a second inside one and once
+            // at its close, so a spurt shorter than a second still reports — a stall segments
+            // glitchy speech into exactly such spurts. The closing sample goes out before the
+            // speaking set clears, so whoever sees the set empty sees that spurt's numbers.
+            if (speaking.isNotEmpty() && !inSpurt) {
+                inSpurt = true
+                baselines.xRuns = counters[NativePlayout.COUNTER_X_RUNS]
+                lastPublishNanos = now
+            }
+            if (inSpurt && speaking.isEmpty()) {
+                inSpurt = false
+                publishStats(live, sessions, depths, targets, counters, baselines)
+                baselines.rearm(counters)
+            } else if (inSpurt && now - lastPublishNanos >= STATS_PERIOD_MILLIS * 1_000_000) {
+                lastPublishNanos = now
+                publishStats(live, sessions, depths, targets, counters, baselines)
+            }
+            if (_speakingSessions.value != speaking) _speakingSessions.value = speaking
+            delay(POLL_MILLIS)
         }
     }
 
-    /**
-     * Every path is wrapped: the loop's catch (Throwable) is fatal to playback, and instrumentation
-     * must never be able to reach it. A failed [underrunBaseline] publishes a null count rather
-     * than subtracting a stale one, which would be wrong for the entire spurt.
-     *
-     * True when `counters` holds a reading good enough to rearm the caller's baselines from, which
-     * turns on [engine] alone: neither a platform that cannot answer nor a failure to present the
-     * sample may cost the next spurt its baseline.
-     */
     private fun publishStats(
-        engine: PlayoutEngine,
-        out: AudioOut,
-        underrunBaseline: Int?,
-        concealedBaseline: Long,
-        droppedBaseline: Long,
-        shrunkBaseline: Long,
-        catchUpBaseline: Long,
-        contendedBaseline: Long,
+        live: Int,
         sessions: IntArray,
         depths: IntArray,
         targets: IntArray,
         counters: LongArray,
-    ): Boolean {
-        // Refused, or thrown: publishing off untouched scratch would report a spurt's worth of
-        // zeros as if they were measurements.
-        val speakers =
-            runCatching { engine.readStats(sessions, depths, targets, counters) }.getOrDefault(-1)
-        if (speakers < 0) return false
-        // Everything below is presentation. Wrapped so it cannot reach the loop's fatal catch, and
-        // outside the decision above so that it cannot withhold the rearm either: the counters are
-        // already good, and a baseline left stale corrupts the next spurt as well as this one.
+        baselines: Baselines,
+    ) {
+        // Presentation only, and wrapped: a formatting bug must not take the poll — and with it
+        // the stream's start and pause — down.
         runCatching {
-            // Tolerated separately from the counters: a platform that cannot answer costs the two
-            // fields derived from it, not the sample.
-            val reading = runCatching { out.outputStats() }.getOrNull()
-            val buffered = HashMap<Int, Int>(speakers)
-            val targeted = HashMap<Int, Int>(speakers)
-            for (i in 0 until speakers) {
+            val buffered = HashMap<Int, Int>(live)
+            val targeted = HashMap<Int, Int>(live)
+            for (i in 0 until live) {
                 buffered[sessions[i]] = depths[i]
                 targeted[sessions[i]] = targets[i]
             }
+            val latencyMicros = counters[NativePlayout.COUNTER_LATENCY_MICROS]
             val stats = PlayoutStats(
-                latencyMs = reading?.latencyMs,
-                underruns = reading?.let { r -> underrunBaseline?.let { r.underrunsTotal - it } },
+                latencyMs = if (latencyMicros >= 0) latencyMicros / 1000.0 else null,
+                // Clamped: the stream's count restarts at zero on a reopen mid-spurt.
+                underruns = (counters[NativePlayout.COUNTER_X_RUNS] - baselines.xRuns)
+                    .coerceAtLeast(0).toInt(),
                 concealedGaps =
-                    (counters[NativePlayout.COUNTER_CONCEALED_GAPS] - concealedBaseline).toInt(),
+                    (counters[NativePlayout.COUNTER_CONCEALED_GAPS] - baselines.concealed).toInt(),
                 droppedPackets =
-                    (counters[NativePlayout.COUNTER_DROPPED_PACKETS] - droppedBaseline).toInt(),
+                    (counters[NativePlayout.COUNTER_DROPPED_PACKETS] - baselines.dropped).toInt(),
                 shrunkPackets =
-                    (counters[NativePlayout.COUNTER_SHRUNK_PACKETS] - shrunkBaseline).toInt(),
+                    (counters[NativePlayout.COUNTER_SHRUNK_PACKETS] - baselines.shrunk).toInt(),
                 catchUpPackets =
-                    (counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] - catchUpBaseline).toInt(),
+                    (counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] - baselines.catchUp).toInt(),
                 contendedFills =
-                    (counters[NativePlayout.COUNTER_CONTENDED_FILLS] - contendedBaseline).toInt(),
+                    (counters[NativePlayout.COUNTER_CONTENDED_FILLS] - baselines.contended).toInt(),
                 fillMicrosMax = counters[NativePlayout.COUNTER_FILL_MICROS_MAX],
                 fillMicrosMean = counters[NativePlayout.COUNTER_FILL_MICROS_MEAN],
                 bufferedSamples = buffered,
@@ -416,13 +332,15 @@ class VoiceReceiver(
             // being readable off a shipped build is the point of collecting this at all.
             Log.d(TAG, stats.summary())
         }
-        return true
     }
 
     private companion object {
         const val TAG = "VoiceReceiver"
 
-        /** One second of audio at [FRAME_SAMPLES] per write. */
-        const val WRITES_PER_SAMPLE = 100
+        /** How often the poll reads the engine. The speaking set and a hold's pause lag by at
+         *  most this. */
+        const val POLL_MILLIS = 50L
+
+        const val STATS_PERIOD_MILLIS = 1_000L
     }
 }

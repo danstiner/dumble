@@ -11,14 +11,9 @@ namespace pl = dumble::playout;
 
 namespace {
 
-// Flat layouts for the calls that answer with more than one number. JNI carries primitive arrays
-// and not structs, so the packing lives here, in the seam, and is named on the other side by
-// NativePlayout's STATUS_* and COUNTER_* constants. PlayoutEngine::Stats deliberately knows
-// nothing about it.
-constexpr int kStatusActiveSpeakers = 0;
-constexpr int kStatusSessions = 1;
-constexpr int kStatusLength = kStatusSessions + pl::kMaxSpeakers;
-
+// Flat layout for the one call that answers with more than one number. JNI carries primitive
+// arrays and not structs, so the packing lives here, in the seam, and is named on the other side
+// by NativePlayout's COUNTER_* constants. PlayoutEngine::Stats deliberately knows nothing about it.
 constexpr int kCounterConcealedGaps = 0;
 constexpr int kCounterDroppedPackets = 1;
 constexpr int kCounterShrunkPackets = 2;
@@ -86,29 +81,6 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
     return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
                                   uint64_t(frameNumber), terminator == JNI_TRUE);
-}
-
-// The two entry points the AudioTrack loop still needs; they leave with it.
-JNIEXPORT void JNICALL FN(setWriteAhead)(JNIEnv*, jobject, jlong h, jint samples) {
-    self(h)->engine->setWriteAheadSamples(samples);
-}
-
-JNIEXPORT jint JNICALL
-FN(fillQuantum)(JNIEnv* env, jobject, jlong h, jshortArray pcm, jintArray status) {
-    const jsize samples = env->GetArrayLength(pcm);
-    if (env->GetArrayLength(status) < kStatusLength) return pl::kErrorBufferTooSmall;
-    if (samples <= 0 || samples > pl::kMaxPacketSamples) return pl::kErrorBufferTooSmall;
-    // Stack scratch, then one copy of exactly the quantum produced: pinning the caller's arrays
-    // across the mix would couple ART's moving collector to the playback path.
-    int16_t out[pl::kMaxPacketSamples];
-    int32_t statusOut[kStatusLength] = {};
-    const int producing = self(h)->engine->fillQuantum(out, int(samples),
-                                                       statusOut + kStatusSessions,
-                                                       statusOut + kStatusActiveSpeakers);
-    if (producing < 0) return producing;
-    env->SetShortArrayRegion(pcm, 0, samples, out);
-    env->SetIntArrayRegion(status, 0, kStatusSessions + producing, statusOut);
-    return producing;
 }
 
 JNIEXPORT jint JNICALL

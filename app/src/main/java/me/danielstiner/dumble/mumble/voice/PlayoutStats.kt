@@ -14,7 +14,7 @@ import kotlin.time.Duration.Companion.microseconds
  *
  * [underruns], [concealedGaps] and [droppedPackets] are counts within the current talk spurt,
  * not cumulative: a cumulative underrun count would report the silence we deliberately leave
- * between spurts as glitches. [underruns] is null when the spurt's baseline could not be read.
+ * between spurts as glitches.
  *
  * [concealedGaps] is the more trustworthy of the two platform-adjacent numbers, because we
  * generate it: it counts gaps in a speaker's audio, whether the fill carried real audio short of
@@ -43,7 +43,7 @@ import kotlin.time.Duration.Companion.microseconds
  */
 data class PlayoutStats(
     val latencyMs: Double?,
-    val underruns: Int?,
+    val underruns: Int,
     val concealedGaps: Int,
     val droppedPackets: Int,
     val shrunkPackets: Int,
@@ -66,15 +66,15 @@ data class PlayoutStats(
      * share a shape. Latency is the floor on mouth-to-ear.
      *
      * [bufferedSamples] is the margin against a late packet, and the only margin: a packet is
-     * popped a track's worth ahead of playout, so audio already in the track is delay without
-     * margin. The engine adds that write-ahead to every target — see
+     * popped a stream buffer's worth ahead of playout, so audio already in the stream is delay
+     * without margin. The engine adds that write-ahead to every target — see
      * `PlayoutEngine::setWriteAheadSamples` — which is why [targetSamples] reads above the
      * estimator's own figure, and why depth should sit near it. `depth + latency` is the standing
      * delay; neither alone is.
      */
     fun summary(): String =
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +
-            "underruns=${underruns ?: "n/a"} concealed=$concealedGaps dropped=$droppedPackets " +
+            "underruns=$underruns concealed=$concealedGaps dropped=$droppedPackets " +
             "shrunk=$shrunkPackets caughtUp=$catchUpPackets " +
             "depths=$bufferedSamples targets=$targetSamples " +
             "contended=$contendedFills fill=$fillMicrosMean/${fillMicrosMax}us"

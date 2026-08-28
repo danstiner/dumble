@@ -6,7 +6,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.voice.FakeAudioOut
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,7 +40,7 @@ class TelecomLifecycleChaosTest {
         val call = FakeVoiceCall(autoGrant = false)
         val endpoint = MumbleEndpoint.parse("chaos")
         val conn = MumbleConnection(
-            InMemoryPinStore(), { FakeAudioOut() },
+            InMemoryPinStore(),
             newCapture = { null },
             call = call,
         ) { FakeControlTransport { _, _ -> } }
