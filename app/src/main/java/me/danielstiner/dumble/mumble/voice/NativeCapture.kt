@@ -38,8 +38,8 @@ object NativeCapture {
      *  [MAX_PACKET_BYTES]; meta carries frame_number and flags. */
     external fun pollPacket(handle: Long, out: ByteArray, meta: LongArray): Int
 
-    /** Oboe bursts the ring had no room for: capture overruns. */
-    external fun overrunBursts(handle: Long): Long
+    /** Bursts the ring had no room for, each one lost. */
+    external fun ringOverruns(handle: Long): Long
     /** Samples discarded to bound staleness when the pump fell behind. */
     external fun skippedSamples(handle: Long): Long
     external fun encodedPackets(handle: Long): Long
@@ -51,8 +51,9 @@ object NativeCapture {
     external fun encodeMicrosMean(handle: Long): Long
     external fun encodeMicrosMax(handle: Long): Long
 
-    /** Oboe's own count of the callback missing its deadline. 0 with no stream open. */
-    external fun xRunCount(handle: Long): Long
+    /** Bursts the callback did not consume in time, which the device overwrote. 0 with no
+     *  stream open. */
+    external fun streamOverruns(handle: Long): Long
 
     external fun framesPerBurst(handle: Long): Long
 }

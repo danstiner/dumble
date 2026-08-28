@@ -29,7 +29,9 @@ public:
     // Diagnostics, callable from any thread. Both take streamMutex_: open() and close() replace
     // stream_ from the app thread and from the reopen thread, so reading it unguarded would race
     // a shared_ptr assignment.
-    int32_t xRunCount() const;
+    /** Bursts the callback did not consume in time, which the device overwrote — Oboe's
+     *  getXRunCount, which for an input stream can only mean overruns. 0 with no stream. */
+    int32_t streamOverruns() const;
     int32_t framesPerBurst() const;
 
 private:

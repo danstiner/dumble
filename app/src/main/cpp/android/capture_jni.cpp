@@ -52,8 +52,8 @@ JNIEXPORT jlong JNICALL FN(encodeMicrosMax)(JNIEnv*, jobject, jlong h) {
     return h ? jlong(self(h)->engine->encodeMicrosMax()) : 0;
 }
 
-JNIEXPORT jlong JNICALL FN(xRunCount)(JNIEnv*, jobject, jlong h) {
-    return h ? jlong(self(h)->capture->xRunCount()) : 0;
+JNIEXPORT jlong JNICALL FN(streamOverruns)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->capture->streamOverruns()) : 0;
 }
 
 JNIEXPORT jlong JNICALL FN(framesPerBurst)(JNIEnv*, jobject, jlong h) {
@@ -92,8 +92,8 @@ FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     return n;
 }
 
-JNIEXPORT jlong JNICALL FN(overrunBursts)(JNIEnv*, jobject, jlong h) {
-    return h ? jlong(self(h)->engine->overrunBursts()) : 0;
+JNIEXPORT jlong JNICALL FN(ringOverruns)(JNIEnv*, jobject, jlong h) {
+    return h ? jlong(self(h)->engine->ringOverruns()) : 0;
 }
 
 JNIEXPORT jlong JNICALL FN(skippedSamples)(JNIEnv*, jobject, jlong h) {
