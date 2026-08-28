@@ -31,6 +31,7 @@ file(GLOB CORE_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
 add_library(dumble SHARED
     ${CORE_SRC}
     android/OboeCapture.cpp
+    android/OboePlayout.cpp
     android/capture_jni.cpp
     android/playout_jni.cpp)
 target_include_directories(dumble PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

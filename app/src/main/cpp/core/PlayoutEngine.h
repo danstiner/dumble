@@ -137,10 +137,11 @@ public:
     /** Any thread; takes mutex_. */
     Stats stats();
 
-    /** Any thread; takes mutex_. How far ahead of playout the output sink holds audio, in
-     *  samples. Added to every target a queue is measured against, so the estimator's target is
-     *  what the *queue* holds: a packet is popped this far before it plays, and only what is still
-     *  queued at that instant is margin against a late arrival. 0 until the sink reports. */
+    /** Any thread; no lock, so the realtime callback may call it when the sink's buffer changes.
+     *  How far ahead of playout the output sink holds audio, in samples. Added to every target a
+     *  queue is measured against, so the estimator's target is what the *queue* holds: a packet
+     *  is popped this far before it plays, and only what is still queued at that instant is
+     *  margin against a late arrival. 0 until the sink reports. */
     void setWriteAheadSamples(int samples);
 
     /** Any thread; takes mutex_. The output sink has gone (true) or come back (false). Going
@@ -220,7 +221,7 @@ private:
 
     const int sampleRate_;
     const int maxQuantumSamples_;
-    int writeAhead_ = 0;
+    std::atomic<int> writeAhead_{0};
     std::atomic<bool> realtime_{false};
     // Both written on the fill path without mutex_ — a contended fill is exactly the one that
     // could not take it — so stats() and the next fill read them atomically.
