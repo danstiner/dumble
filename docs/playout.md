@@ -1,81 +1,90 @@
-# Audio playout
+# Playout
 
-Incoming voice packets to mixed PCM on the speaker. Three layers, mirroring capture
-(`docs/capture.md`): a platform-free native engine, a thin JNI seam, and one Kotlin thread that
-owns the engine's lifetime. Details live in the code's comments; tuning constants and their
-reasoning in `PlayoutConstants.h`.
-
-```
-transport ─► onTunneledAudio ─► offer() ─► PacketQueue ─► SpeakerDecoder ─► Mixer ─► fillQuantum ─► AudioTrack
-             (reader coroutine)            └────────── PlayoutEngine (core/) ──────────┘           (playback thread)
-```
+How inbound voice gets from the wire to the speaker, where the delay in that path sits, and
+which part of it is margin against a late packet. The numbers are measured; the sections say
+where.
 
 ## Layers
 
 **PlayoutEngine** (`core/`) owns one `PacketQueue` and one `SpeakerDecoder` per sender. Its only
-clock is the `fillQuantum` call, shaped as an audio data callback — non-blocking, allocation-free —
-so an Oboe output stream could drive it; today a Kotlin thread does, between `AudioTrack` writes.
-Packets wait compressed behind a per-speaker prebuffer gate so a network stall cannot glitch the
-opening syllable, and the mix finalizes through `Mixer`'s soft-knee limiter. Every limit the
-engine keeps — conceal hold, idle windows, shrink cooldown — is a count of samples accumulated
-from each fill's size, so a fill of one device burst means the same time as a fill of one frame;
-a fill larger than the engine was sized for is served as consecutive whole chunks.
+clock is the `fillQuantum` call, shaped as an audio data callback — non-blocking in realtime
+mode, allocation-free, taking its sample count per call — and that is what drives it: the Oboe
+output stream's data callback, once per device burst. Packets wait compressed behind a
+per-speaker prebuffer gate so a network stall cannot glitch the opening syllable, and the mix
+finalizes through `Mixer`'s soft-knee limiter. Every limit the engine keeps — conceal hold, idle
+windows, shrink cooldown — is a count of samples accumulated from each fill's size, so a fill of
+one device burst means the same time as a fill of one frame; a fill larger than the engine was
+sized for is served as consecutive whole chunks.
 
 Two ownership rules carry the design:
 
 - `offer()`, on the reader thread, touches queues only, under the mutex; decode and mix happen on
-  the playback thread with the mutex released. No refusal in `offer` is terminal — each is a
-  condition a misbehaving server can produce at will, so the caller logs rather than disabling
-  receive.
-- A speaker's slot is released only by retirement, inside `fillQuantum`, never in `offer` —
-  neither side of the seam can tell a speaker that stopped talking from one still filling its
-  prebuffer, so the engine alone decides.
+  the callback thread, with the mutex released around the decodes. No refusal in `offer` is
+  terminal — each is a condition a misbehaving server can produce at will, so the caller logs
+  rather than disabling receive.
+- A speaker's slot is released only by retirement, inside a fill, or by `setOutputDown` when the
+  stream is gone — never in `offer`. Neither side of the seam can tell a speaker that stopped
+  talking from one still filling its prebuffer, so the engine alone decides.
 
-**JNI seam** (`android/playout_jni.cpp`): one `jlong` handle. Data crosses on stack scratch so no
-GC-visible pin is held across the engine's mutex or the mix, and multi-value answers are flattened
-into primitive arrays whose layouts are named by `NativePlayout`'s constants.
+**OboePlayout** (`android/`) is the only Android-aware piece: it owns the Oboe output stream and
+pulls each burst from the engine in `onAudioReady`. The mirror of `OboeCapture` — a shared
+`Callbacks` object holding the engine strongly and the adapter weakly, the same reopen backoff
+after a disconnect, the same refusal of a stream that did not come back mono I16 — plus two
+things capture does not have: a per-stream `LatencyTuner`, and a `wantStarted` flag so a reopen
+lands in the state the receiver last asked for. The callback is exactly `fillQuantum`, `tune()`,
+and `setWriteAheadSamples` when the tuner changed the buffer; nothing else — no logging, no
+allocation, no other stream call — because it runs on AAudio's realtime thread under that API's
+contract. A fill that finds the reader holding the engine's mutex answers one burst of silence
+and counts it (`contended`) rather than block: bionic's mutex has no priority inheritance.
 
-**Playback loop** (`VoiceReceiver`): one daemon thread, paced by the blocking `AudioTrack` write
-while any speaker is draining — the audio clock is the only clock, so no timer exists or should —
-and parked otherwise. The engine exists iff the loop is running, and only the playback thread
-frees it; `stop()` never does, so a loop wedged in a blocked write cannot be raced by its own
-teardown. Once the output exists the loop tells the engine how far ahead of playout it holds audio
-(`AudioOut.writeAheadSamples` → `setWriteAheadSamples`); see below for why that number matters.
+**JNI seam** (`android/playout_jni.cpp`): one `jlong` handle to a session — engine and adapter
+together. The stream is opened at `create` and started by the receiver's poll. Payloads cross on
+stack scratch so no GC-visible pin is held across the engine's mutex; the multi-value stats
+answer is flattened into primitive arrays whose layouts are named by `NativePlayout`'s
+constants, with the stream's own two readings — xRuns and latency — appended after the engine's.
+
+**The poll** (`VoiceReceiver`): one coroutine, the only owner of stream state. Every 50 ms it
+calls the adapter's `start()` — idempotent while a stream runs, and what brings one back after
+the adapter's own reopen gave up or after an error that was not a disconnect, at most one open a
+second — pauses the stream while the platform holds the call, and reads the engine's stats: the
+audible set for the UI, the counters for `PlayoutStats`, sampled once a second inside a talk
+spurt and once at its close. `offer()` and `destroy()` share the receiver's monitor, and `stop()`
+joins the poll before destroying, so no packet and no stream call is ever in flight against a
+freed session.
+
+The stream stays started for the receiver's life rather than around speech. A start is not free
+— `requestStart` measured 6–112 ms on a Pixel 7a's legacy path and ~150 ms on the emulator —
+and every packet that lands while it runs piles up ahead of the gate. On a sender that never
+pauses, that pile is standing delay for the rest of the session: measured at ~150 ms above the
+target on both devices with a start-on-first-packet design (emulator: queue 296 ms against a
+141 ms target), and gone with the stream started up front (139 against 130). An idle stream
+costs one callback per burst filling silence, well under a percent of a core, and during a call
+the capture stream keeps the audio HAL awake regardless.
 
 ## Where the delay lives, and which part of it is margin
 
 One speaker's audio, from arrival to ear:
 
 ```
-arrival ─► PacketQueue ─► SpeakerDecoder ─► AudioTrack ─► HAL / mixer ─► speaker
-           depth           ≤ one packet     write-ahead    platform
-           the only margin                  2 bursts, capped
+arrival ─► PacketQueue ─► SpeakerDecoder ─► stream buffer ─► HAL / mixer ─► speaker
+           depth           ≤ one packet     write-ahead       platform
+           the only margin                  2 bursts, tuned
 ```
 
-A packet is popped from its queue when the loop needs the next quantum, and the loop needs it
-when the blocking write returns — which is when the track has room, i.e. a *write-ahead* before
-that quantum plays. So a packet that has not arrived by (playout − write-ahead) is concealed, no
-matter how much audio the track already holds. **Only what is still queued is margin against a
-late arrival; everything downstream of the pop is delay without margin.**
+A packet is popped from its queue when the callback needs the next burst, and the callback
+fires when the stream has room for one — a *write-ahead* (the stream's buffer size) before that
+burst plays. So a packet that has not arrived by (playout − write-ahead) is concealed, no matter
+how much audio the stream already holds. **Only what is still queued is margin against a late
+arrival; everything downstream of the pop is delay without margin.**
 
-That is why the engine measures every target against the queue *plus* the write-ahead:
+The engine is told the write-ahead (`setWriteAheadSamples`, from the stream's buffer size at
+open and whenever the tuner changes it) and adds it to every target a queue is measured against
+— gate, shrink floor, catch-up, and the figure `stats()` reports — so the *queue* holds the
+estimator's margin and the reported target reads beside depth. The tuner starts the buffer at
+two bursts and grows it one burst per xRun, which is the AAudio guide's procedure and Oboe's
+`LatencyTuner` default.
 
-- `JitterEstimator` turns arrival jitter (sender frame numbers against arrival time, 20 ms
-  histogram buckets, 95th percentile, +10 ms safety, decayed so it forgets) into a target depth —
-  10 ms floor, 450 ms ceiling, 80 ms cold. The target is a *margin*: how late a packet may be.
-- `PlayoutEngine::setWriteAheadSamples` adds the track's granted write-ahead to that target at
-  every site a queue is compared to it — the prebuffer gate, the shrink floor, the catch-up trim
-  and the figure `stats()` reports — so once the gate opens and the write-ahead drains into the
-  track, the queue is left holding the estimator's margin. `PacketQueue` itself never learns the
-  number; it is handed a target per call.
-
-Without the second half, the cap alone changes nothing: the gate opens on the bare target, the
-same audio drains into a smaller track, and the margin at the start of every spurt is
-`target − write-ahead` — zero on a healthy link, until concealment has pushed playout back far
-enough to create one. That was the shipped behaviour, with a 91 ms track (`getMinBufferSize` on
-the emulator) draining 80 ms cold targets whole.
-
-The rest of the queue policy, for orientation — each is reasoned in `PlayoutConstants.h`:
+## Queue policy
 
 - **Gate**: a new spurt is held until the target is queued, or the ring is full, or the sender's
   terminator arrives (a short spurt plays whole). Latched open; re-arms only once the spurt has
@@ -89,134 +98,130 @@ The rest of the queue policy, for orientation — each is reasoned in `PlayoutCo
 - **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 100 ms (`kConcealSamples`),
   then the speaker goes silent; a slot retires after 100 ms of silence with its queue drained
   (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`).
-- **Output down**: `setOutputDown(true)` releases every slot — tallies harvested, queues and
-  decoders reset — and keeps every estimator, so a spurt cut by a stream error prebuffers afresh
-  on reopen against a warm estimate rather than playing its backlog as standing delay.
-- **Realtime fills**: opt-in, `setRealtime(true)` makes every mutex acquisition on the fill path
-  a `try_lock`; a fill that finds the reader inside `offer()` answers one fill of silence and
-  counts it, rather than block a realtime thread behind a normal-priority one. Off under today's
-  push loop.
+- **Output down**: a stream error calls `setOutputDown(true)`, which releases every slot —
+  tallies harvested, queues and decoders reset — and keeps every estimator, so a spurt cut by
+  the error prebuffers afresh on reopen against a warm estimate rather than playing its backlog
+  as standing delay. Below API 37 an MMAP stream disconnects on every route change, so a
+  headset plug or a speakerphone toggle mid-sentence costs the reopen (~100 ms) plus a fresh
+  prebuffer — a cost the AudioTrack loop, which followed reroutes internally, did not have.
+  The legacy path still reroutes in place.
+- **Realtime fills**: `setRealtime(true)`, on for the life of the session, makes every mutex
+  acquisition on the fill path a `try_lock`; a fill that finds the reader inside `offer()`
+  answers one burst of silence and counts it.
 
-## The AudioTrack cap: why two device bursts
+## What the platform grants, by route
 
-`AudioTrack.getMinBufferSize` is documented as "an estimate" that "doesn't guarantee a smooth
-playback under load, and higher values should be chosen according to the expected frequency at
-which the buffer will be refilled" — it is sized for an app that refills lazily, and comes out
-generous (91 ms on the emulator) for a thread that refills every 10 ms frame.
-`setBufferSizeInFrames` "limits the effective size of the AudioTrack buffer that the application
-writes to … a smaller size will give lower latency but there may be more glitches due to buffer
-underruns", and "the actual size used may not be equal to this requested size".
+The builder asks for Output, LowLatency, Exclusive, I16, 48 kHz, mono, `Usage::VoiceCommunication`,
+`ContentType::Speech`. Every one of those is a request, and what comes back depends on the route
+more than on the device. `OboePlayout: open:` in logcat says what was granted.
 
-The unit to size in is the device burst, `AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER` — the
-latency guide says to "construct your audio buffers so that they contain an exact multiple of this
-number", and the AAudio guide that "you get the lowest latency if your … buffer size is a multiple
-of the reported burst size". Two bursts is double buffering — one being consumed by the HAL while
-the other is written — and is the floor Google's own tuner starts from: Oboe's `LatencyTuner`
-sets `kDefaultNumBursts = 2` and raises by one burst per underrun, which is also the AAudio
-guide's procedure ("start with a small buffer size and if that produces underruns, increase the
-buffer size until the output flows cleanly again"). One burst was tried: with the whole track
-emptied on every HAL read, the refill has no slack, and the emulator underran twice a minute for
-a 23 ms saving. Our 480-sample write not dividing the burst — or even exceeding two of them — does not
-matter: `AudioTrack::write` with `WRITE_BLOCKING` loops on `obtainBuffer`, copying whatever fits
-each time the HAL frees room, and while it waits the track is full. What the track leaves after
-a HAL read is the window the loop has to wake and refill, and on a phone two bursts is not a
-window at all: a Pixel 7a reports a 128-sample (2.7 ms) HAL buffer, and with a 256-sample track
-the Kotlin loop — which refills a whole 480-sample frame per iteration — underran ~3000 times a
-minute, fell behind real time, and drove every queue to its 600 ms high-water mark. The floor is
-therefore two of *our* frames, not two of the HAL's; growing by a burst per underrun (Oboe's
-`LatencyTuner`) remains the documented answer if a device still underruns.
+| device / mode / usage                                   | api / sharing          | burst | buffer | latency |
+|---------------------------------------------------------|------------------------|-------|--------|---------|
+| Pixel 7a, `MODE_NORMAL`, VoiceCommunication (or Media)  | MMAP / Exclusive       | 96    | 192    | 8 ms    |
+| Pixel 7a, `MODE_IN_COMMUNICATION`, VoiceCommunication   | legacy `voip_rx` / Shared | 480 | 960    | 81 ms   |
+| Pixel 7a, `MODE_IN_COMMUNICATION`, Media                | legacy fast track / Shared | 128 | 256   | 54 ms   |
+| Pixel 7a, Bluetooth SCO headset, in call                | legacy / Shared        | —     | —      | ~170 ms |
+| Emulator (no FastMixer)                                 | legacy / Shared        | 960   | 1920   | 110–150 ms |
 
-Pixel 7a, continuous tone with 0–30 ms jitter, 60 s per size:
+Probed with the same process on the speaker route, no call object, only `AudioManager.setMode`
+changed. Telecom's part in this is the mode: every connection registers a self-managed call,
+which puts the device in `MODE_IN_COMMUNICATION`. In that mode the 7a's HAL refuses MMAP for
+any usage (`openMmapStream` returns ENOSYS, logged by `MmapStreamInterface`), so AAudio falls
+back to legacy. Which legacy path is the usage's doing: `VoiceCommunication` maps to stream
+`VOICE_CALL`, and the policy replaces the requested flags with `VOIP_RX|DIRECT`
+(`AudioPolicyManager::getOutputForAttrInt`), selecting the DSP voice path with the echo
+canceller — burst 480, 81 ms, the route the old AudioTrack loop was on at 89 ms. Media usage
+lands on the primary fast track at 54 ms but loses the AEC reference and call-volume pairing;
+not taken, pending a listen. The 8 ms is real and reachable only outside a call.
 
-| write-ahead            | underruns / min | dropped | latency |
-|------------------------|-----------------|---------|---------|
-| 256 = 2 × HAL (5 ms)   | ~3000           | 3203    | 19 ms   |
-| 640 = HAL + frame (13) | 2852            | 1115    | 54 ms   |
-| 960 = 2 frames (20 ms) | 0               | 0       | 89 ms   |
-| 1920 (40 ms)           | 0               | 0       | 120 ms  |
-
-Shipped: `max(2 × HAL, 2 × frame)` as whole HAL buffers — 1024 on the Pixel (0 underruns, queue
-60–69 ms against a 61 ms target over 90 s), 2176 on the emulator.
-
-`AndroidAudioOut` asks for two bursts or two 10 ms frames, whichever is larger, as a whole
-number of bursts, and logs what it got beside what it asked
-(`AudioOut: track: … writeAhead=2176 (asked 2176)`). What it does *not* do yet is tune upward on
-underruns the way `LatencyTuner` does; the underrun count in the playout summary is the reading
-that would justify it, and a phone's bursts are a fifth of the emulator's, so that is where to
-look first.
-
-What the cap cannot reach is the platform below the track. `latencyMs` on the emulator reads
-~120 ms with a 45 ms track because its output thread has `No FastMixer` and a HAL write latency
-averaging 89 ms (`dumpsys media.audio_flinger`); the track is a *normal* track on the normal
-mixer's 20 ms period (AOSP's latency design: the fast mixer runs at 2–5 ms and only a *fast
-track* rides it). We never ask for one — no `PERFORMANCE_MODE_LOW_LATENCY`, and
-`USAGE_VOICE_COMMUNICATION` may route around it anyway — so that is the next lever on a phone,
-and untested.
-
-### What the CDD says
-
-The CDD's definitions (§5.6) are the ones this doc uses. *Output latency* is "the interval between
-when an application writes a frame of PCM-coded data and when the corresponding sound is
-presented" — which is exactly what `latencyMs` measures from our own writes via
-`AudioTrack.getTimestamp`, a timestamp the CDD requires to be "accurate to +/- 2 ms" (C-1-1), so
-the sheet's "Audio output" row is a measurement, not an estimate. *Continuous output latency* is
-strongly recommended (C-SR) to be ≤ 45 ms — but that recommendation is stated for the low-latency
-path ("when using both the OpenSL ES PCM buffer queue and AAudio native audio APIs"), which a
-plain Java `AudioTrack` on the normal mixer is not on; the emulator's 120 ms is that path. The
-CDD also pins `PROPERTY_OUTPUT_FRAMES_PER_BUFFER` as an *upper* bound on a low-latency stream's
-burst, so on a device that grants a fast track the burst — and our two-burst cap — would be
-smaller still.
-
-Two CDD numbers we do not yet control for: *cold output latency* — up to 500 ms allowed
-(C-1-2), ≤ 100 ms recommended — applies whenever "the audio output system has been idle and
-powered down", which AudioFlinger does after a few seconds without writes. The loop deliberately
-does not zero-fill between spurts, because with a 91 ms track that ratcheted latency up after a
-burst; with the track capped at two bursts that reason is gone, and keeping the track warm
-through short pauses (the latency guide's "minimize warm-up latency") would spare the first
-syllable after a pause its cold start. Untested; recorded in TODO.
-
-## Measured
-
-Emulator (burst 1088 samples = 22.7 ms; track 4360 samples granted, capped to 2176), a paced sender in 4 s
-spurts with uniform per-packet jitter, 150 s per build. Numbers are from the playout summary
-line; "concealed" is the per-spurt gap count summed across spurts.
-
-| jitter  | build  | latency | concealed / spurt | underruns  |
-|---------|--------|---------|-------------------|------------|
-| 0–30 ms | before | 142 ms  | 2.05              | 0          |
-| 0–30 ms | after  | 120 ms  | 1.76              | 0          |
-| 0–60 ms | before | 140 ms  | 2.15              | 0          |
-| 0–60 ms | after  | 119 ms  | 1.86              | 1 in 150 s |
-
-On a continuous jittered tone the queue held the estimator's target in 100% of samples (target
-44 ms, depth 60–120 ms); before, it sat at 0–60 ms against a 50 ms target and refilled only by
-concealing. The ~1.7 gaps per spurt that remain on both builds are the test sender's own spurt
-start and end (pymumble sends no terminator), not jitter.
-
-A measurement trap worth recording: a sender that paces itself with `sleep` *after* each packet
-runs a few percent slow, and a slow source drains any jitter buffer regardless of its depth — it
-produced hundreds of conceals per spurt on both builds and looked exactly like missing margin.
-Pace test senders on an absolute schedule.
+Two consequences of the legacy path worth knowing. Its `getXRunCount` stayed at 0 while
+AudioFlinger counted 480 underruns on the fast track over a session (mostly around Bluetooth
+route flaps), so the tuner never grows the buffer there; and each of those underruns inserts a
+burst of silence *into* the stream, so the stream's reported latency steps up and stays up until
+a flush. Neither is visible from the app's counters today.
 
 ## What the numbers mean
 
 `PlayoutStats`, sampled once a second per spurt and shown per speaker on the user sheet:
 
 - **depth** (`bufferedSamples`, the sheet's "Jitter buffer") — the queue, i.e. the margin.
-- **latencyMs** (the sheet's "Audio output") — samples written minus samples presented, from
-  `AudioTrack.getTimestamp`: the track's fill plus the HAL below it. One output stream, so shared
-  by every speaker.
+- **latencyMs** (the sheet's "Audio output") — Oboe's `calculateLatencyMillis`: the stream's
+  buffer plus the HAL below it, from the stream's own timestamp. One output stream, so shared by
+  every speaker. Null while the stream is not started.
 - **target** — the estimator's figure *plus* the write-ahead, so it reads beside depth.
 - `depth + latencyMs` is the standing delay for that speaker; neither alone is.
-- **audible** (`Stats::audible`, engine only) — which live speakers produced in the last fill,
-  read under the same lock as the rest so a retire-and-reclaim cannot misattribute it. Unused
-  until a poller publishes the speaking set from stats rather than from each fill's return.
-- **contended** — realtime-mode fills answered with silence because the reader held the mutex.
-  Always 0 under the push loop.
+- **underruns** — the stream's xRun count over the spurt: the callback missing a burst.
+- **audible** — which live speakers produced in the last fill, read under the same lock as the
+  rest so a retire-and-reclaim cannot misattribute it; what the poll publishes as speaking.
+- **contended** — fills answered with silence because the reader held the engine's mutex. Each
+  is one burst of silence in the output. Measured at 0.1–0.7 per spurt (below).
 - **fill** — mean/max wall time per fill since the last sample, decodes included. The host
   benchmark (`PlayoutEngineBench`, Release tree) pins the engine at Opus decode plus at most half
-  again; on a device this is the number to read against one burst.
+  again; on a device this is the number to read against one burst. Debug builds compile the
+  engine at `-O0`, so their fill times overstate a release build's.
+
+## Measured
+
+Test sender: `pymumble`, 20 ms packets on an absolute schedule with uniform 0–30 ms jitter per
+packet, 4 s spurts with 2 s off unless stated; a second client in the channel spoke at times.
+Debug build.
+
+| device / route / load                     | latency | concealed / spurt | underruns | contended / spurt | fill mean / max |
+|-------------------------------------------|---------|-------------------|-----------|-------------------|-----------------|
+| Emulator, spurts (25)                     | 154 ms  | 1.52              | 0         | 0.04              | 34 / 312 µs     |
+| Emulator, continuous, 60 s                | 155 ms  | 0                 | 2         | 1 / 60 s          | 48 / 292 µs     |
+| Pixel 7a earpiece in call, spurts (27)    | 76 ms   | 1.11              | 0         | 0.70              | 257 / 1842 µs   |
+| Pixel 7a earpiece, continuous, 90 s       | 76 ms   | 0                 | 0         | 26 / 90 s         | 405 / 1781 µs   |
+| Pixel 7a earpiece, continuous, 8 cores busy, 60 s | 78 ms | 1              | 0         | 41 / 60 s         | 112 / 1069 µs   |
+
+Reference, the AudioTrack path (#105): emulator spurts 120 ms / 1.76 per spurt / 0; Pixel
+continuous 89 ms / 0 underruns. The ~1–2 conceals per spurt on both paths are the sender's spurt
+start and end (`pymumble` sends no terminator), not jitter.
+
+Two things the phone numbers carry that the path does not. The link: the phone's WiFi delivers
+the TCP tunnel in bursts of 60–300 ms (power-save batching; the queue depth shows a 60 ms
+sawtooth), so the estimator's target on the phone sits at 100–210 ms where the emulator's
+loopback sits at 30–100. And a full CPU load moved nothing — 0 underruns, fill times *lower*
+(the cores clocked up).
+
+Fill time in the device test, one speaker, MMAP on the speaker route: 18–34 µs mean, 244–390 µs
+max, against a 2 ms burst. The 250–600 µs means in the app are the Debug build's `-O0` engine
+mixing 480-sample bursts; the Release host benchmark reads 17 µs for eight speakers at 128.
+
+## What the CDD says
+
+The CDD's definitions (§5.6) are the ones this doc uses. *Output latency* is "the interval between
+when an application writes a frame of PCM-coded data and when the corresponding sound is
+presented"; AAudio's timestamp is what `latencyMs` measures it from. *Continuous output latency*
+is strongly recommended (C-SR) to be ≤ 45 ms "when using both the OpenSL ES PCM buffer queue
+and AAudio native audio APIs" — the path this is now on, and met on the Pixel's speaker route
+(8 ms) but not on its in-call route (75 ms), where the platform's VoIP path is what answers.
+*Cold output latency* — up to 500 ms allowed, ≤ 100 ms recommended — is what a stream start
+costs, which is why the stream is kept started.
+
+## How we got here
+
+Until #105 playout was a Kotlin thread writing 10 ms frames into an `AudioTrack` whose buffer,
+sized by `getMinBufferSize`, held 91 ms on the emulator; a packet was popped a whole track
+ahead of playout, so the estimator's target bought delay without margin. #105 capped the track
+at `max(2 × HAL buffer, 2 × frame)` — on a Pixel 7a a Kotlin loop refilling a frame at a time
+could not survive two 2.7 ms HAL buffers (~3000 underruns a minute), hence the frame floor — and
+taught the engine to add the write-ahead to its targets. This PR replaced the loop and the track
+with the Oboe stream above; the write-ahead is now the stream's tuned buffer, two bursts, and
+the engine's targets account for it the same way.
+
+## Open
+
+- **Exclusive vs Shared under duplex.** Exclusive is requested; whether the platform's echo
+  canceller still gets its reference on an exclusive MMAP output has not been tested with a
+  listener. The in-call route is Shared regardless, so the question only bites on routes that
+  grant MMAP.
+- **Legacy-path underruns.** Not surfaced by `getXRunCount`, so the tuner cannot react; a
+  larger buffer request on routes that came back legacy is the lever, untested.
+- **Concealment at burst grain.** `SpeakerDecoder::conceal` documents that grid-sized PLC
+  requests fade to silence after the first; a 96-sample burst asks for exactly those. Not yet
+  listened to.
 
 Invariants are pinned by `PlayoutEngineTest.cpp`, `PlayoutEngineBench.cpp`, `PacketQueueTest.cpp`,
 `JitterEstimatorTest.cpp`, `VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and
-`PlayoutLoopDeviceTest.kt`.
+`OboePlayoutDeviceTest.kt`.
