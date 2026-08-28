@@ -1,6 +1,7 @@
 #pragma once
 #include <oboe/Oboe.h>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -58,8 +59,8 @@ private:
         const std::weak_ptr<OboeCapture> owner;
     };
 
-    void logActualConfig(const char* phase, int64_t startMicros,
-                          const std::shared_ptr<oboe::AudioStream>& stream);
+    void logActualConfig(const char* phase, std::chrono::steady_clock::time_point started,
+                         const std::shared_ptr<oboe::AudioStream>& stream);
     // Exponential-backoff reopen loop, run on the thread Oboe creates to deliver
     // onErrorAfterClose — documented as safe to block/sleep on, unlike onAudioReady's thread.
     void retryReopen();

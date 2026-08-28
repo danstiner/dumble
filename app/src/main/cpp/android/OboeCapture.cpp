@@ -1,16 +1,12 @@
 #include "android/OboeCapture.h"
 #include <android/log.h>
-#include <chrono>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "OboeCapture", __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "OboeCapture", __VA_ARGS__)
 
 namespace dumble {
 namespace {
-int64_t nowMicros() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now().time_since_epoch()).count();
-}
+using Clock = std::chrono::steady_clock;
 constexpr int kMaxReopenFailures = 5;
 }  // namespace
 
@@ -26,7 +22,7 @@ std::shared_ptr<OboeCapture> OboeCapture::create(std::shared_ptr<CaptureEngine> 
 oboe::Result OboeCapture::open() {
     if (stopping_.load(std::memory_order_acquire)) return oboe::Result::ErrorClosed;
 
-    const int64_t t0 = nowMicros();
+    const Clock::time_point t0 = Clock::now();
     oboe::AudioStreamBuilder b;
     b.setDirection(oboe::Direction::Input)
         ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
@@ -97,7 +93,7 @@ oboe::Result OboeCapture::open() {
     return oboe::Result::OK;
 }
 
-void OboeCapture::logActualConfig(const char* phase, int64_t startMicros,
+void OboeCapture::logActualConfig(const char* phase, Clock::time_point started,
                                    const std::shared_ptr<oboe::AudioStream>& stream) {
     if (!stream) return;
     // Every builder setting is a request. Oboe documents performance and sharing mode in
@@ -105,8 +101,9 @@ void OboeCapture::logActualConfig(const char* phase, int64_t startMicros,
     // says what we actually got: the burst size that sets how often onPcm() fires, whether we
     // landed on the low-latency path, and what an open — or a reopen — costs. Not one of the
     // three has a value we could predict, which is the whole reason they are logged.
+    const auto took = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started);
     LOGI("%s: %lld us, rate=%d ch=%d perf=%s sharing=%s burst=%d",
-         phase, (long long)(nowMicros() - startMicros),
+         phase, (long long)took.count(),
          stream->getSampleRate(), stream->getChannelCount(),
          oboe::convertToText(stream->getPerformanceMode()),
          oboe::convertToText(stream->getSharingMode()),
@@ -192,7 +189,7 @@ void OboeCapture::retryReopen() {
 
     bool reopened = false;
     for (int attempt = 1; attempt <= kMaxReopenFailures && !reopened; ++attempt) {
-        const int64_t t0 = nowMicros();
+        const Clock::time_point t0 = Clock::now();
         if (open() == oboe::Result::OK) {
             std::shared_ptr<oboe::AudioStream> s;
             {
