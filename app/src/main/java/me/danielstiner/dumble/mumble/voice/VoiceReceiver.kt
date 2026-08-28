@@ -240,6 +240,7 @@ class VoiceReceiver(
         var droppedBaseline = 0L
         var shrunkBaseline = 0L
         var catchUpBaseline = 0L
+        var contendedBaseline = 0L
 
         val out = try {
             outFactory()
@@ -269,8 +270,8 @@ class VoiceReceiver(
                         val published = publishStats(engine, out, underrunBaseline,
                                                      concealedBaseline, droppedBaseline,
                                                      shrunkBaseline, catchUpBaseline,
-                                                     statSessions, statDepths, statTargets,
-                                                     counters)
+                                                     contendedBaseline, statSessions,
+                                                     statDepths, statTargets, counters)
                         inSpurt = false
                         if (published) {
                             // Rearmed from the reading publishStats just took rather than a
@@ -290,6 +291,7 @@ class VoiceReceiver(
                             droppedBaseline = counters[NativePlayout.COUNTER_DROPPED_PACKETS]
                             shrunkBaseline = counters[NativePlayout.COUNTER_SHRUNK_PACKETS]
                             catchUpBaseline = counters[NativePlayout.COUNTER_CATCH_UP_PACKETS]
+                            contendedBaseline = counters[NativePlayout.COUNTER_CONTENDED_FILLS]
                         } else if (!statsRefusedReported) {
                             // Our arrays, our bug — see fillQuantum's refusal above. Left
                             // unresolved, every future spurt would silently stop publishing:
@@ -332,7 +334,8 @@ class VoiceReceiver(
                     writesThisSpurt = 0
                     publishStats(engine, out, underrunBaseline, concealedBaseline,
                                  droppedBaseline, shrunkBaseline, catchUpBaseline,
-                                 statSessions, statDepths, statTargets, counters)
+                                 contendedBaseline, statSessions, statDepths, statTargets,
+                                 counters)
                 }
             }
         } catch (t: Throwable) {
@@ -366,6 +369,7 @@ class VoiceReceiver(
         droppedBaseline: Long,
         shrunkBaseline: Long,
         catchUpBaseline: Long,
+        contendedBaseline: Long,
         sessions: IntArray,
         depths: IntArray,
         targets: IntArray,
@@ -400,6 +404,10 @@ class VoiceReceiver(
                     (counters[NativePlayout.COUNTER_SHRUNK_PACKETS] - shrunkBaseline).toInt(),
                 catchUpPackets =
                     (counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] - catchUpBaseline).toInt(),
+                contendedFills =
+                    (counters[NativePlayout.COUNTER_CONTENDED_FILLS] - contendedBaseline).toInt(),
+                fillMicrosMax = counters[NativePlayout.COUNTER_FILL_MICROS_MAX],
+                fillMicrosMean = counters[NativePlayout.COUNTER_FILL_MICROS_MEAN],
                 bufferedSamples = buffered,
                 targetSamples = targeted,
             )

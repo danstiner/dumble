@@ -26,6 +26,11 @@ constexpr int kFrame = 480;
 constexpr int kColdStartPackets =
     (pl::kColdStartSamples + kFrame - 1) / kFrame;
 
+// The engine's windows, as fills of one quantum: the unit the tests below count in.
+constexpr int kConcealFills = pl::kConcealSamples / kFrame;
+constexpr int kRetireIdleFills = pl::kRetireIdleSamples / kFrame;
+constexpr int kStallIdleFills = pl::kStallIdleSamples / kFrame;
+
 std::vector<uint8_t> encode(int tenMsUnits) {
     return dumble::testtone::encodeTone(tenMsUnits * 480);
 }
@@ -166,17 +171,35 @@ TEST(PlayoutEngine, ActiveCountIncludesASpeakerThatIsStillPrebuffering) {
     EXPECT_EQ(1, live);
 }
 
-TEST(PlayoutEngine, RefusesAQuantumLargerThanTheEngineWasBuiltFor) {
-    // maxQuantumSamples is this engine's alone, so no caller above can catch the mismatch. A 0
-    // here would read as "nobody is speaking" and mute the app silently.
+TEST(PlayoutEngine, AFillLargerThanTheQuantumIsServedInWholeChunks) {
+    // maxQuantumSamples sizes the engine's scratch, not the caller's request: a device callback
+    // can ask for more than the engine was built for, and it is served as consecutive whole fills.
     auto e = newEngine();
-    std::vector<int16_t> pcm(kFrame * 2, 999);
-    std::vector<int32_t> speaking(pl::kMaxSpeakers, -1);
-    int32_t live = -1;
-    EXPECT_EQ(pl::kErrorBufferTooSmall,
-              e->fillQuantum(pcm.data(), kFrame * 2, speaking.data(), &live));
+    std::vector<int16_t> pcm(3 * kFrame, int16_t(0x7777));
+    std::vector<int32_t> sessions(pl::kMaxSpeakers);
+    int32_t live = 0;
+    arm(*e, 1);
+    // Terminated, so what is left of the spurt is exactly the packets not yet played.
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, frameFor(1)++, true));
+    // Three quanta in one call: every chunk must be written (the fill pattern is gone) and the
+    // spurt must have advanced three quanta, not one.
+    ASSERT_EQ(1, e->fillQuantum(pcm.data(), 3 * kFrame, sessions.data(), &live));
+    for (int i = 0; i < 3 * kFrame; i += kFrame)
+        EXPECT_NE(int16_t(0x7777), pcm[i]) << "chunk " << i / kFrame;
+    EXPECT_EQ(1, sessions[0]);
+    EXPECT_EQ(1, live);
+    EXPECT_EQ(kColdStartPackets - 3, drainSpurt(*e));
+}
+
+TEST(PlayoutEngine, AFillOfZeroSamplesIsStillRefused) {
+    // A 0 would read as "nobody is speaking" and mute a caller that sized its frame wrong.
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame, int16_t(0x7777));
+    std::vector<int32_t> sessions(pl::kMaxSpeakers);
+    int32_t live = 7;
+    EXPECT_EQ(pl::kErrorBufferTooSmall, e->fillQuantum(pcm.data(), 0, sessions.data(), &live));
+    EXPECT_EQ(int16_t(0x7777), pcm[0]) << "a refused fill wrote into the caller's buffer";
     EXPECT_EQ(0, live);
-    EXPECT_EQ(999, pcm[0]) << "a refused fill wrote into the caller's buffer";
 }
 
 TEST(PlayoutEngine, MixesTwoSpeakersLouderThanOne) {
@@ -207,7 +230,7 @@ TEST(PlayoutEngine, RetiresASilentSpeakerAndFreesItsSlot) {
     std::vector<int16_t> pcm(kFrame);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
-    for (int i = 0; i < kColdStartPackets + pl::kConcealQuanta + pl::kRetireIdlePolls + 1; i++)
+    for (int i = 0; i < kColdStartPackets + kConcealFills + kRetireIdleFills + 1; i++)
         e->fillQuantum(pcm.data(), kFrame, speaking.data(), &live);
     EXPECT_EQ(0, live);
 }
@@ -218,7 +241,7 @@ TEST(PlayoutEngine, ASessionReclaimsASlotAfterRetirement) {
     std::vector<int16_t> pcm(kFrame);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
-    for (int i = 0; i < kColdStartPackets + pl::kConcealQuanta + pl::kRetireIdlePolls + 1; i++)
+    for (int i = 0; i < kColdStartPackets + kConcealFills + kRetireIdleFills + 1; i++)
         e->fillQuantum(pcm.data(), kFrame, speaking.data(), &live);
     ASSERT_EQ(0, live);
     arm(*e, 5);
@@ -262,7 +285,7 @@ TEST(PlayoutEngine, ReportsAPayloadLibopusCannotParse) {
 TEST(PlayoutEngine, AMalformedFinalPacketStillEndsItsSpurt) {
     // is_terminator is a protobuf field, not part of opus_data, so a corrupt last packet still
     // ends the spurt. Lose the flag with the payload and this tail — one 10 ms packet, far below
-    // the target — waits out kStallIdlePolls instead, and is never heard.
+    // the target — waits out kStallIdleSamples instead, and is never heard.
     auto e = newEngine();
     const std::vector<uint8_t> good = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(3, good.data(), int(good.size()), frameFor(3)++, false));
@@ -336,7 +359,7 @@ TEST(PlayoutEngine, ARetiredSpeakersDropsSurviveItsSlot) {
     ASSERT_EQ(1, droppedOf(*e));
     std::vector<int16_t> pcm(kFrame);
     int live = 1;
-    for (int i = 0; i < pl::kStallIdlePolls + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
+    for (int i = 0; i < kStallIdleFills + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
     ASSERT_EQ(0, live) << "the speaker never retired";
     EXPECT_EQ(1, droppedOf(*e)) << "retirement lost the tally, or counted it twice";
 }
@@ -361,7 +384,7 @@ TEST(PlayoutEngine, CountsAMidSpurtStallAsConcealment) {
     auto e = newEngine();
     arm(*e, 1);
     std::vector<int16_t> pcm(kFrame);
-    ASSERT_EQ(kColdStartPackets + pl::kConcealQuanta, drainSpurt(*e))
+    ASSERT_EQ(kColdStartPackets + kConcealFills, drainSpurt(*e))
         << "the cold-start packets, then the hold";
     // The charge landed on the first concealed fill — the leading edge of the gap — and the fills
     // after it are the same gap being held, not new ones.
@@ -411,15 +434,15 @@ TEST(PlayoutEngine, ConcealedGapsAreMonotonic) {
     EXPECT_EQ(3, previous);
 }
 
-TEST(PlayoutEngine, ConcealsAMidSpurtStallForABoundedNumberOfQuanta) {
+TEST(PlayoutEngine, ConcealsAMidSpurtStallForABoundedSpan) {
     // A speaker mid-sentence whose packets stop arriving: concealment keeps the fill producing,
-    // bounded by kConcealQuanta (the why lives on the constant).
+    // bounded by kConcealSamples (the why lives on the constant).
     auto e = newEngine();
     std::vector<int16_t> pcm(kFrame);
     ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
-    for (int i = 0; i < pl::kConcealQuanta; i++)
+    for (int i = 0; i < kConcealFills; i++)
         EXPECT_EQ(1, producingThisFill(*e, pcm)) << "the hold ended early, at fill " << i;
-    EXPECT_EQ(0, producingThisFill(*e, pcm)) << "the hold outlived kConcealQuanta";
+    EXPECT_EQ(0, producingThisFill(*e, pcm)) << "the hold outlived kConcealSamples";
 }
 
 TEST(PlayoutEngine, ConcealedAudioIsNotSilence) {
@@ -450,15 +473,15 @@ TEST(PlayoutEngine, APacketDelayedByAStallPlaysWithoutRebuffering) {
 }
 
 TEST(PlayoutEngine, RealAudioReArmsTheHold) {
-    // A spurt that survives a stall gets a full hold for the next one — the stallQuanta_ invariant.
+    // A spurt that survives a stall gets a full hold for the next one — the stallSamples_ invariant.
     auto e = newEngine();
     std::vector<int16_t> pcm(kFrame);
     ASSERT_NO_FATAL_FAILURE(playSpurt(*e, 1, pcm));
-    for (int i = 0; i < pl::kConcealQuanta - 1; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
+    for (int i = 0; i < kConcealFills - 1; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
     const std::vector<uint8_t> p = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), frameFor(1)++, false));
     ASSERT_EQ(1, producingThisFill(*e, pcm)) << "the resumed packet did not play";
-    for (int i = 0; i < pl::kConcealQuanta; i++)
+    for (int i = 0; i < kConcealFills; i++)
         EXPECT_EQ(1, producingThisFill(*e, pcm)) << "the second hold was short at fill " << i;
     EXPECT_EQ(0, producingThisFill(*e, pcm));
 }
@@ -470,7 +493,7 @@ TEST(PlayoutEngine, DoesNotConcealForASpeakerStillPrebuffering) {
     const std::vector<uint8_t> p = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(1, p.data(), int(p.size()), frameFor(1)++, false));
     std::vector<int16_t> pcm(kFrame);
-    for (int i = 0; i < pl::kConcealQuanta + 2; i++)
+    for (int i = 0; i < kConcealFills + 2; i++)
         EXPECT_EQ(0, producingThisFill(*e, pcm)) << "concealed while prebuffering, fill " << i;
 }
 
@@ -486,11 +509,11 @@ TEST(PlayoutEngine, DoesNotConcealPastASpurtItsSenderClosed) {
 }
 
 TEST(PlayoutEngine, AnExpiredHoldChargesItsGapOnce) {
-    // stallQuanta_ keeps counting past kConcealQuanta, so the fill that gives up is not a fresh gap.
+    // stallSamples_ keeps counting past kConcealSamples, so the fill that gives up is not a fresh gap.
     auto e = newEngine();
     arm(*e, 1);
     std::vector<int16_t> pcm(kFrame);
-    for (int i = 0; i < kColdStartPackets + pl::kConcealQuanta; i++)
+    for (int i = 0; i < kColdStartPackets + kConcealFills; i++)
         ASSERT_EQ(1, producingThisFill(*e, pcm));
     ASSERT_EQ(1, concealedOf(*e));
     for (int i = 0; i < 6; i++) producingThisFill(*e, pcm);
@@ -503,11 +526,11 @@ TEST(PlayoutEngine, RetiresAStalledSpeakerAfterItsHold) {
     auto e = newEngine();
     arm(*e, 1);
     std::vector<int16_t> pcm(kFrame);
-    for (int i = 0; i < kColdStartPackets + pl::kConcealQuanta; i++)
+    for (int i = 0; i < kColdStartPackets + kConcealFills; i++)
         ASSERT_EQ(1, liveThisFill(*e, pcm));
     // Exact, not slack: the loop above ends on the last concealed fill, so the idle window starts
-    // on the next one and retirement lands on its kRetireIdlePolls'th.
-    for (int i = 0; i < pl::kRetireIdlePolls - 1; i++)
+    // on the next one and retirement lands on its kRetireIdleSamples'th.
+    for (int i = 0; i < kRetireIdleFills - 1; i++)
         ASSERT_EQ(1, liveThisFill(*e, pcm)) << "retired during its hold, fill " << i;
     EXPECT_EQ(0, liveThisFill(*e, pcm));
 }
@@ -550,7 +573,7 @@ TEST(PlayoutEngine, TenMillisecondSenderDrainsOneFramePerFill) {
     // Six 10 ms packets, deliberately below the cold-start target: the terminator opens the gate
     // regardless, and the quantum is one frame, so the spurt must come back out as six full fills — no
     // packet stranded, none played twice. Terminated so the count stays exactly six: an
-    // unterminated spurt earns kConcealQuanta of concealment after its last packet, and a stranded
+    // unterminated spurt earns kConcealSamples of concealment after its last packet, and a stranded
     // seventh packet would hide inside that.
     arm(*e, 7, 6);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, nullptr, 0, frameFor(7)++, true));
@@ -570,9 +593,9 @@ TEST(PlayoutEngine, SixtyMillisecondSenderDrainsOneFramePerFill) {
 TEST(PlayoutEngine, GoingIdleReArmsThePrebufferForTheNextSpurt) {
     auto e = newEngine();
     arm(*e, 7, kColdStartPackets);
-    ASSERT_EQ(kColdStartPackets + pl::kConcealQuanta, drainSpurt(*e));
+    ASSERT_EQ(kColdStartPackets + kConcealFills, drainSpurt(*e));
     // The gate re-arms on the fill after the hold expires: that is the first one to produce
-    // nothing. Still well inside kRetireIdlePolls, so the slot is this speaker's.
+    // nothing. Still well inside kRetireIdleSamples, so the slot is this speaker's.
     std::vector<int16_t> pcm(kFrame);
     const std::vector<uint8_t> p = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), frameFor(7)++, false));
@@ -586,7 +609,7 @@ TEST(PlayoutEngine, PrebufferingDoesNotCountAsTheShortIdleWindow) {
     const std::vector<uint8_t> p = encode(1);
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), frameFor(7)++, false));
     std::vector<int16_t> pcm(kFrame);
-    for (int i = 0; i < pl::kRetireIdlePolls + 5; i++)
+    for (int i = 0; i < kRetireIdleFills + 5; i++)
         EXPECT_EQ(1, liveThisFill(*e, pcm)) << "retired while prebuffering at fill " << i;
 }
 
@@ -596,7 +619,7 @@ TEST(PlayoutEngine, ASpurtStalledBelowThePrebufferEventuallyReleasesItsSlot) {
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), frameFor(7)++, false));
     std::vector<int16_t> pcm(kFrame);
     int live = 1;
-    for (int i = 0; i < pl::kStallIdlePolls + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
+    for (int i = 0; i < kStallIdleFills + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
     EXPECT_EQ(0, live);
 }
 
@@ -609,7 +632,7 @@ TEST(PlayoutEngine, AReclaimedSlotDoesNotInheritStrandedPackets) {
     ASSERT_EQ(pl::kOfferAccepted, e->offer(7, p.data(), int(p.size()), frameFor(7)++, false));
     std::vector<int16_t> pcm(kFrame);
     int live = 1;
-    for (int i = 0; i < pl::kStallIdlePolls + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
+    for (int i = 0; i < kStallIdleFills + 2 && live != 0; i++) live = liveThisFill(*e, pcm);
     ASSERT_EQ(0, live) << "the stalled speaker never released its slot";
 
     // Below the cold-start target from a new sender, opened early by the terminator, which must
@@ -639,8 +662,8 @@ TEST(PlayoutEngine, AReclaimedSlotDecodesLikeAFreshOne) {
 
     auto e = newEngine();
     armWith(*e, 7);
-    ASSERT_EQ(kColdStartPackets + pl::kConcealQuanta, drainSpurt(*e));
-    for (int i = 0; i < pl::kRetireIdlePolls + 1; i++) liveThisFill(*e, pcm);
+    ASSERT_EQ(kColdStartPackets + kConcealFills, drainSpurt(*e));
+    for (int i = 0; i < kRetireIdleFills + 1; i++) liveThisFill(*e, pcm);
     ASSERT_EQ(0, liveThisFill(*e, pcm)) << "session 7 never released its slot";
     armWith(*e, 8);
     ASSERT_EQ(1, e->fillQuantum(reused.data(), kFrame, speaking.data(), &live));
@@ -793,6 +816,136 @@ TEST(PlayoutEngine, TheTargetIsReportedPerSpeaker) {
     EXPECT_EQ(stats.targets[0], pl::kColdStartSamples);
 }
 
+TEST(PlayoutEngine, StatsReportWhoWasAudibleInTheLastFill) {
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame);
+    arm(*e, 1);
+    const std::vector<uint8_t> p = encode(1);
+    e->offer(2, p.data(), int(p.size()), frameFor(2)++, false);  // one packet in: still gated
+    ASSERT_EQ(1, producingThisFill(*e, pcm));
+    const auto s = e->stats();
+    ASSERT_EQ(2, s.speakers);
+    for (int n = 0; n < s.speakers; n++)
+        EXPECT_EQ(s.sessions[n] == 1, s.audible[n]) << "session " << s.sessions[n];
+}
+
+TEST(PlayoutEngine, ATerminatedSpeakerStaysAudibleWhileItsTailPlays) {
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame);
+    arm(*e, 1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, frameFor(1)++, true));
+    ASSERT_EQ(1, producingThisFill(*e, pcm));
+    EXPECT_TRUE(e->stats().audible[0]);
+    drainSpurt(*e);
+    ASSERT_EQ(0, producingThisFill(*e, pcm));
+    const auto s = e->stats();
+    ASSERT_EQ(1, s.speakers) << "the slot is held through the idle window";
+    EXPECT_FALSE(s.audible[0]);
+}
+
+TEST(PlayoutEngine, AReclaimedSlotStartsInaudible) {
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame);
+    arm(*e, 1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, frameFor(1)++, true));
+    drainSpurt(*e);
+    for (int i = 0; i < kRetireIdleFills + 1; i++) producingThisFill(*e, pcm);
+    ASSERT_EQ(0, e->stats().speakers) << "session 1 never retired";
+    const std::vector<uint8_t> p = encode(1);
+    e->offer(2, p.data(), int(p.size()), frameFor(2)++, false);
+    const auto s = e->stats();
+    ASSERT_EQ(1, s.speakers);
+    EXPECT_FALSE(s.audible[0]);
+}
+
+TEST(PlayoutEngine, OutputDownAbandonsEveryQueueAndKeepsEveryEstimate) {
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame);
+    const auto payload = dumble::testtone::encodeToneAlone(kFrame);
+    // Earn a target above the cold constant — two stalled bursts 600 ms apart, as in
+    // ARetiredSpeakerKeepsItsEstimate — so a kept estimate is distinguishable from a fresh one.
+    e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    for (int i = 0; i < 12; i++) e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    for (int i = 0; i < 12; i++) e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    const int32_t earned = e->stats().targets[0];
+    ASSERT_GT(earned, pl::kColdStartSamples) << "no histogram update landed";
+    // Overflow the queue so there is a tally to harvest.
+    for (int i = 0; i < 10; i++) e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    const int64_t droppedBefore = droppedOf(*e);
+    ASSERT_GT(droppedBefore, 0);
+
+    e->setOutputDown(true);
+    const auto down = e->stats();
+    EXPECT_EQ(0, down.speakers);
+    EXPECT_EQ(droppedBefore, down.droppedPackets) << "the tally must survive the reset";
+
+    e->setOutputDown(false);
+    e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
+    const auto back = e->stats();
+    ASSERT_EQ(1, back.speakers);
+    EXPECT_EQ(earned, back.targets[0]) << "the estimate was not kept";
+    EXPECT_EQ(0, producingThisFill(*e, pcm)) << "the old backlog played instead of a fresh prebuffer";
+}
+
+TEST(PlayoutEngine, StatsReportFillTimeSinceTheLastRead) {
+    auto e = newEngine();
+    std::vector<int16_t> pcm(kFrame);
+    arm(*e, 1);
+    for (int i = 0; i < 4; i++) producingThisFill(*e, pcm);
+    const auto s = e->stats();
+    EXPECT_GT(s.fillMicrosMean, 0u);
+    EXPECT_GE(s.fillMicrosMax, s.fillMicrosMean);
+    EXPECT_EQ(0u, e->stats().fillMicrosMax) << "a read resets the window";
+}
+
+TEST(PlayoutEngine, ARealtimeFillThatFindsTheMutexHeldFallsSilentAndCountsIt) {
+    auto e = newEngine();
+    e->setRealtime(true);
+    std::vector<int16_t> pcm(kFrame, int16_t(0x7777));
+    std::vector<int32_t> s(pl::kMaxSpeakers);
+    int32_t live = 0;
+    arm(*e, 1);
+    ASSERT_EQ(1, producingThisFill(*e, pcm));
+    const int depthBefore = depthOf(*e);
+    // Hold the mutex from another thread across one fill, the way a preempted offer() would.
+    std::atomic<bool> release{false};
+    std::thread holder([&] {
+        e->holdMutexForTest([&] { while (!release.load()) std::this_thread::yield(); });
+    });
+    while (!e->mutexHeldForTest()) std::this_thread::yield();
+    const auto t0 = std::chrono::steady_clock::now();
+    const int producing = e->fillQuantum(pcm.data(), kFrame, s.data(), &live);
+    const double us =
+        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    release = true;
+    holder.join();
+    EXPECT_EQ(0, producing);
+    EXPECT_LT(us, 1000.0);
+    for (int i = 0; i < kFrame; i++) ASSERT_EQ(0, pcm[i]) << "sample " << i;
+    EXPECT_EQ(1, live);
+    EXPECT_EQ(1u, e->stats().contendedFills);
+    EXPECT_EQ(depthBefore, depthOf(*e)) << "a contended fill popped a packet";
+}
+
+TEST(PlayoutEngine, ARealtimeFillWithTheMutexFreeMatchesBlockingMode) {
+    auto a = newEngine(), b = newEngine();
+    b->setRealtime(true);
+    std::vector<int16_t> pa(kFrame), pb(kFrame);
+    // One payload for both: encode()'s encoder predicts across calls.
+    const std::vector<uint8_t> p = encode(1);
+    for (int i = 0; i < kColdStartPackets; i++) {
+        ASSERT_EQ(pl::kOfferAccepted, a->offer(1, p.data(), int(p.size()), frameFor(1)++, false));
+        ASSERT_EQ(pl::kOfferAccepted, b->offer(1, p.data(), int(p.size()), frameFor(1)++, false));
+    }
+    for (int i = 0; i < kColdStartPackets; i++) {
+        ASSERT_EQ(producingThisFill(*a, pa), producingThisFill(*b, pb));
+        ASSERT_EQ(pa, pb) << "fill " << i;
+    }
+    EXPECT_EQ(0u, b->stats().contendedFills);
+}
+
 TEST(PlayoutEngine, ASlotSurvivesItsEstimatorBeingEvicted) {
     auto e = newEngine();
     std::vector<int16_t> pcm(kFrame);
@@ -879,7 +1032,7 @@ TEST(PlayoutEngine, DepthIsShedWhileTheSpeakerIsQuiet) {
     // Long enough for several cooldowns. Silence, so the energy gate opens.
     talkSteadily(*engine, t, 900, /*quiet=*/true);
     EXPECT_LT(depthOf(*engine), opened);
-    // One shrink per kShrinkCooldownQuanta producing fills, and the gate-open fill counts: the
+    // One shrink per kShrinkCooldownSamples of produced audio, and the gate-open fill counts: the
     // releases land at talk-fill 200, 401, 602 and 803. Asserted exactly, because "more than zero"
     // passes just as well with a cooldown of one, which would shed on every quiet fill.
     EXPECT_EQ(engine->stats().shrunkPackets, 4);
@@ -956,7 +1109,7 @@ TEST(PlayoutEngine, AStallInsideTheConcealHoldKeepsItsStandingDelay) {
     const int before = depthOf(*engine);
 
     // Fifteen fills with nothing arriving: the first seven drain what the gate had queued, then
-    // eight starve and conceal — inside kConcealQuanta, so the gate never closes and there is no
+    // eight starve and conceal — inside kConcealSamples, so the gate never closes and there is no
     // gate-open for the catch-up drop to fire at. The delay this leaves behind is real and comes
     // back only through shrink, at about 10 ms per second of quiet speech.
     for (int i = 0; i < 15; i++) producingThisFill(*engine, pcm);
@@ -998,3 +1151,53 @@ TEST(PlayoutEngine, DeliberateDiscardCountsSurviveRetirement) {
         << "a retiring queue's catch-up tally was lost";
     EXPECT_EQ(engine->stats().shrunkPackets, shrunk);
 }
+
+// The engine's limits are sample counts, so a fill of one device burst — 128 samples on a Pixel
+// 7a, 1088 on the emulator — must reach the same wall-clock outcome as today's 480, to within a
+// fill. The engine is sized for 480 throughout: 1088 exercises the chunked path.
+class PlayoutEngineQuantum : public ::testing::TestWithParam<int> {
+protected:
+    int quantum() const { return GetParam(); }
+    std::unique_ptr<PlayoutEngine> engine() {
+        auto e = PlayoutEngine::create(dumble::kSampleRate, kFrame);
+        EXPECT_TRUE(e);
+        return e;
+    }
+    int fill(PlayoutEngine& e, std::vector<int16_t>& pcm) {
+        std::vector<int32_t> s(pl::kMaxSpeakers);
+        return e.fillQuantum(pcm.data(), quantum(), s.data(), &live_);
+    }
+    int32_t live_ = 0;
+};
+
+TEST_P(PlayoutEngineQuantum, AStalledSpeakerIsConcealedForAboutOneHundredMilliseconds) {
+    auto e = engine();
+    std::vector<int16_t> pcm(quantum());
+    arm(*e, 1);
+    // Starved mid-spurt: the real audio plays, then concealment holds the gate for
+    // kConcealSamples, then the speaker stops producing. Concealment is cut on libopus's grid, so
+    // up to one grid of it can still be buffered when the hold expires, and plays out.
+    int producingFills = 0;
+    while (fill(*e, pcm) == 1 && producingFills < 100) producingFills++;
+    const int real = kColdStartPackets * kFrame;
+    EXPECT_GE(producingFills * quantum(), real + pl::kConcealSamples - quantum());
+    EXPECT_LE(producingFills * quantum(),
+              real + pl::kConcealSamples + quantum() + pl::kConcealGridSamples);
+}
+
+TEST_P(PlayoutEngineQuantum, ADrainedSpeakerRetiresAfterAboutOneHundredMilliseconds) {
+    auto e = engine();
+    std::vector<int16_t> pcm(quantum());
+    arm(*e, 1);
+    ASSERT_EQ(pl::kOfferAccepted, e->offer(1, nullptr, 0, frameFor(1)++, true));
+    // The fill that first produces nothing opens the idle window; the slot goes with the fill
+    // that reaches kRetireIdleSamples of it. Two fills of slack: the spurt ends somewhere inside
+    // the first of those fills, and the window closes somewhere inside the last.
+    while (fill(*e, pcm) == 1) {}
+    int idleFills = 1;
+    while (live_ > 0 && idleFills < 100) { fill(*e, pcm); idleFills++; }
+    EXPECT_GE(idleFills * quantum(), pl::kRetireIdleSamples);
+    EXPECT_LE(idleFills * quantum(), pl::kRetireIdleSamples + 2 * quantum());
+}
+
+INSTANTIATE_TEST_SUITE_P(Quantum, PlayoutEngineQuantum, ::testing::Values(128, 480, 1088));

@@ -21,7 +21,10 @@ constexpr int kCounterConcealedGaps = 0;
 constexpr int kCounterDroppedPackets = 1;
 constexpr int kCounterShrunkPackets = 2;
 constexpr int kCounterCatchUpPackets = 3;
-constexpr int kCounterCount = 4;
+constexpr int kCounterContendedFills = 4;
+constexpr int kCounterFillMicrosMax = 5;
+constexpr int kCounterFillMicrosMean = 6;
+constexpr int kCounterCount = 7;
 
 // No handle is checked for null below. NativePlayoutEngine is only ever constructed around a
 // non-zero create() result — a zero becomes a Kotlin null and no engine object at all — so a null
@@ -105,10 +108,14 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
         return pl::kErrorBufferTooSmall;
     }
     const pl::PlayoutEngine::Stats stats = self(h)->stats();
-    const jlong countersOut[kCounterCount] = {jlong(stats.concealedGaps),
-                                              jlong(stats.droppedPackets),
-                                              jlong(stats.shrunkPackets),
-                                              jlong(stats.catchUpPackets)};
+    jlong countersOut[kCounterCount];
+    countersOut[kCounterConcealedGaps] = jlong(stats.concealedGaps);
+    countersOut[kCounterDroppedPackets] = jlong(stats.droppedPackets);
+    countersOut[kCounterShrunkPackets] = jlong(stats.shrunkPackets);
+    countersOut[kCounterCatchUpPackets] = jlong(stats.catchUpPackets);
+    countersOut[kCounterContendedFills] = jlong(stats.contendedFills);
+    countersOut[kCounterFillMicrosMax] = jlong(stats.fillMicrosMax);
+    countersOut[kCounterFillMicrosMean] = jlong(stats.fillMicrosMean);
     if (stats.speakers > 0) {
         env->SetIntArrayRegion(sessions, 0, stats.speakers, stats.sessions);
         env->SetIntArrayRegion(depths, 0, stats.speakers, stats.depths);

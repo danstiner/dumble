@@ -109,7 +109,7 @@ class PlayoutLoopDeviceTest {
      * mid-sentence for 300 ms and then resumes.
      *
      * Every sample is collected rather than only the last, because the loop treats the hole as the
-     * end of a talk spurt — it is longer than kRetireIdlePolls, so the speaker retires and the
+     * end of a talk spurt — it is longer than kRetireIdleSamples, so the speaker retires and the
      * resume is a fresh spurt with fresh baselines. That is the right accounting (the gap is
      * charged to the spurt it interrupted) but it means the closing sample of the *second* spurt
      * correctly reports nothing, and a test reading only that one would call this a silent
@@ -130,7 +130,7 @@ class PlayoutLoopDeviceTest {
             }
             assertTrue("the speaker never lit up", samples.isNotEmpty())
 
-            // Past the cold-start target and past kRetireIdlePolls: the queue drains, the gate
+            // Past the cold-start target and past kRetireIdleSamples: the queue drains, the gate
             // re-arms, and the slot retires. The resume below has to prebuffer again.
             repeat(30) { Thread.sleep(10); sample() }
 

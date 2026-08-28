@@ -109,6 +109,9 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         counters[NativePlayout.COUNTER_DROPPED_PACKETS] = droppedPackets
         counters[NativePlayout.COUNTER_SHRUNK_PACKETS] = 0
         counters[NativePlayout.COUNTER_CATCH_UP_PACKETS] = 0
+        counters[NativePlayout.COUNTER_CONTENDED_FILLS] = 0
+        counters[NativePlayout.COUNTER_FILL_MICROS_MAX] = 0
+        counters[NativePlayout.COUNTER_FILL_MICROS_MEAN] = 0
         depthsBySession.entries.forEachIndexed { i, (session, depth) ->
             sessions[i] = session
             depths[i] = depth
