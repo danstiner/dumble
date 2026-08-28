@@ -247,7 +247,7 @@ class MumbleConnectionTest {
         // Scripted before the packet arrives: onTunneledAudio's admission notifies idleLock, which
         // is what wakes a parked playback thread to pick this call back up. Scripting it after
         // would race that wakeup and could leave it sitting unconsumed.
-        playout.scriptSpeaking(session = 9, count = SpurtFills)
+        playout.scriptSpeaking(session = 9, count = spurtFills)
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
@@ -292,7 +292,7 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         // Reach the receiver first, so there is a live playout and an open output to release.
-        playout.scriptSpeaking(session = 9, count = SpurtFills)
+        playout.scriptSpeaking(session = 9, count = spurtFills)
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
@@ -650,21 +650,14 @@ class MumbleConnectionTest {
     }
 
     /**
-     * Long enough that the speaking state outlives the whole 5 s `withTimeout` budget below it:
-     * fills are consumed one per [FakeAudioOut] write, which sleeps 10 ms, so 600 covers 6 s. The
-     * surplus is never consumed — `first {}` returns on the first non-empty value and teardown
-     * latches `stopped` — so the cost is 600 small objects, not 6 seconds.
-     *
-     * Sized rather than left at one because one is what made
-     * `aFailedSessionReleasesTheReceiver` flake on CI (2026-08-26, PRs #96 and #98, neither of
-     * which could touch it). A single producing fill publishes `{9}` for exactly one write before
-     * the next idle fill resets it, and that value has two conflating StateFlow hops to cross —
-     * VoiceReceiver's, then the collector that republishes into MumbleConnection's. Miss the
-     * window and conflation drops `{9}` outright; nothing non-empty is ever published again, so
-     * the wait runs out its full budget. Reproduced 2/7 under core saturation and 5/5 with the
-     * window closed by hand (`FakeAudioOut(writeSleepMillis = 0)`).
+     * A spurt long enough to outlive the 5 s `withTimeout` budget below: fills go one per
+     * [FakeAudioOut] write, which sleeps 10 ms. One producing fill is not enough — it publishes
+     * `{9}` for a single write before the next idle fill clears it, and the value has two
+     * conflating StateFlow hops to cross before the test's collector sees it. The surplus is
+     * never consumed: `first {}` returns on the first non-empty value and teardown latches
+     * `stopped`.
      */
-    private val SpurtFills = 600
+    private val spurtFills = 600
 
     private suspend fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMillis
