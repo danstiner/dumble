@@ -11,7 +11,7 @@ import org.junit.Test
  * The seam itself, on a real ABI: array validation, the flat `counters` layout, and a payload's
  * trip into the engine's queue. [FakePlayoutEngine] stands in for all of this in the JVM tests, so
  * nothing there can catch a layout that drifted from `playout_jni.cpp` — which is the one bug this
- * file exists for. What the loop does with the queued audio is [PlayoutLoopDeviceTest]'s.
+ * file exists for. What the stream does with the queued audio is [OboePlayoutDeviceTest]'s.
  */
 class NativePlayoutTest {
 

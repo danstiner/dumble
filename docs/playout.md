@@ -157,8 +157,8 @@ a flush. Neither is visible from the app's counters today.
   every speaker. Null while the stream is not started.
 - **target** — the estimator's figure *plus* the write-ahead, so it reads beside depth.
 - `depth + latencyMs` is the standing delay for that speaker; neither alone is.
-- **underruns** — the stream's underrun count (Oboe's xRunCount) over the spurt: bursts the
-  callback did not fill in time.
+- **underruns** — bursts the stream played as silence over the spurt because the callback did
+  not fill them in time.
 - **audible** — which live speakers produced in the last fill, read under the same lock as the
   rest so a retire-and-reclaim cannot misattribute it; what the poll publishes as speaking.
 - **contended** — fills answered with silence because the reader held the engine's mutex. Each
