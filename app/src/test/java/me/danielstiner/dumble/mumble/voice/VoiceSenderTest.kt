@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class VoiceSenderTest {
 
-    /** Counts pump exits. Replaces the join stop() used to do — see VoiceSender.stop's comment. */
+    /** Counts pump exits, which stop()'s bounded join does not report. */
     private class Exits {
         private val count = AtomicInteger()
         private val first = CountDownLatch(1)

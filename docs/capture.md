@@ -13,7 +13,8 @@ mic ─► OboeCapture ─► PcmRing ─► assemble packet ─► AudioEncoder
 **CaptureEngine** (`core/`, platform-free) owns everything between "PCM arrived" and "an Opus
 packet is ready" — packet assembly is `PacketAssembler` under push-to-talk, or the frame-native
 preroll queue's `popPacket` under voice activity; `PacketAssembler::takePacket` never runs in the
-latter. `OboeCapture` (`android/`) owns the input stream and its reopen backoff. The transmit gate
+latter. `OboeCapture` (`android/`) owns the input stream; the pump thread is its only caller, and a
+poll that finds it down reopens it. The transmit gate
 lives in `onPcm`: while closed, samples advance the frame clock but are never captured, so the
 stream stays open and warm across presses.
 

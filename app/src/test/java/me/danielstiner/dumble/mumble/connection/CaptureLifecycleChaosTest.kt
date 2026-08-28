@@ -98,7 +98,7 @@ class CaptureLifecycleChaosTest {
         override fun setTransmitMode(mode: TransmitMode) = Unit
 
         override fun stop() {
-            // Idempotent like the real stopping_ latch: a second Release can land while a hold's
+            // Idempotent like the real shutdown latch: a second Release can land while a hold's
             // release is already in flight, and a second stop() on the same handle is expected.
             if (shutdown.compareAndSet(false, true)) streamLive.decrementAndGet()
         }

@@ -2,89 +2,63 @@
 #include <oboe/Oboe.h>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
 #include "core/CaptureEngine.h"
 
 namespace dumble {
 
 /**
- * The only Android-aware piece of the capture path. Owns the Oboe stream and translates its
- * callbacks into CaptureEngine calls. Swapping Oboe for another backend means replacing this file
- * and nothing in core/.
+ * The only Android-aware piece of the capture path: owns the Oboe input stream and hands each
+ * burst to CaptureEngine. Swapping Oboe for another backend means replacing this file and nothing
+ * in core/.
  *
- * Shared-owned, because Oboe outlives us: it delivers stream errors on a detached thread it never
- * joins, so a disconnect landing at the same moment as stop() would otherwise run callbacks
- * against freed memory. See Callbacks below.
+ * The pump thread owns the stream, as the receiver's poll owns playout's: it is the only caller
+ * of start(), close() and the diagnostics, in sequence, which is all Oboe's thread-safety
+ * contract asks — so there is no lock. The error callback runs on a thread Oboe detaches and
+ * never joins, possibly after the session is gone, so it touches only the Callbacks object,
+ * which Oboe keeps alive, and through it the engine, which Callbacks holds strongly for exactly
+ * that reason.
  */
 class OboeCapture {
 public:
-    static std::shared_ptr<OboeCapture> create(std::shared_ptr<CaptureEngine> engine);
+    explicit OboeCapture(std::shared_ptr<CaptureEngine> engine);
     ~OboeCapture() { close(); }
 
-    oboe::Result open();
+    /** True when a started stream exists on return. Cheap while one runs. A stream Oboe closed
+     *  after an error is noticed here, dropped, and another opened — at most once a second, since
+     *  the device state that decides the next attempt does not change faster. Below API 37 a
+     *  disconnect lands on every routed-device change, so this is the normal path. */
+    bool start();
     void close();
 
-    // Diagnostics, callable from any thread. Both take streamMutex_: open() and close() replace
-    // stream_ from the app thread and from the reopen thread, so reading it unguarded would race
-    // a shared_ptr assignment.
     /** Bursts the callback did not consume in time, which the device overwrote — Oboe's
      *  getXRunCount, which for an input stream can only mean overruns. 0 with no stream. */
     int32_t streamOverruns() const;
     int32_t framesPerBurst() const;
 
 private:
-    explicit OboeCapture(std::shared_ptr<CaptureEngine> engine) : engine_(std::move(engine)) {}
-
-    /**
-     * What Oboe calls into. Separate from OboeCapture so it can be handed over as a shared_ptr:
-     * the raw-pointer setters are deprecated precisely because "the errorCallback object might get
-     * deleted by the app while it is being used", and OboeCapture itself cannot be the one shared
-     * — it holds the stream, the stream would hold it back, and nothing would ever break the
-     * cycle. The reference back to the capture is therefore weak, which is also the guard: if the
-     * session is gone, lock() fails and the callback does nothing.
-     */
     struct Callbacks : oboe::AudioStreamDataCallback, oboe::AudioStreamErrorCallback {
-        Callbacks(std::shared_ptr<CaptureEngine> e, std::weak_ptr<OboeCapture> o)
-            : engine(std::move(e)), owner(std::move(o)) {}
+        explicit Callbacks(std::shared_ptr<CaptureEngine> e) : engine(std::move(e)) {}
 
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* audioData,
                                               int32_t numFrames) override;
         void onErrorBeforeClose(oboe::AudioStream*, oboe::Result) override;
-        void onErrorAfterClose(oboe::AudioStream*, oboe::Result) override;
 
-        // Strong, unlike owner: onAudioReady is the realtime callback and must not lock() a
-        // weak_ptr to reach the engine it writes into. Holding the engine directly keeps it alive
-        // for exactly as long as Oboe keeps these callbacks alive, and costs the hot path nothing.
         const std::shared_ptr<CaptureEngine> engine;
-        const std::weak_ptr<OboeCapture> owner;
+        // Set by the error callback, on Oboe's thread; consumed by start() on the pump's.
+        std::atomic<bool> streamDead{false};
     };
 
-    void logActualConfig(const char* phase, std::chrono::steady_clock::time_point started,
+    oboe::Result open();
+    void logActualConfig(std::chrono::steady_clock::time_point started,
                          const std::shared_ptr<oboe::AudioStream>& stream);
-    // Exponential-backoff reopen loop, run on the thread Oboe creates to deliver
-    // onErrorAfterClose — documented as safe to block/sleep on, unlike onAudioReady's thread.
-    void retryReopen();
 
-    const std::shared_ptr<CaptureEngine> engine_;
-    // Built once by create(), then handed to every stream this object opens.
-    std::shared_ptr<Callbacks> callbacks_;
-
-    // Guards stream_ only — never onAudioReady's hot path, which doesn't touch it. open() (app
-    // thread via start(), or the retry loop's own thread) and close() (app thread via stop())
-    // both read and write it, with nothing else serializing them.
-    mutable std::mutex streamMutex_;
+    // Shared with Oboe, which holds it for every stream it is set on. Not shared with anything
+    // of ours.
+    const std::shared_ptr<Callbacks> callbacks_;
+    // shared_ptr because openStream() hands out nothing else; no one but this object holds it.
     std::shared_ptr<oboe::AudioStream> stream_;
-
-    // Guards retriesInProgress_ and backs the interruptible backoff sleep in retryReopen(). Also
-    // what gives close() a definite point after which no reopen attempt is running or will start:
-    // without it, close() could return leaving a retry loop about to open a fresh stream.
-    std::mutex retryMutex_;
-    std::condition_variable retryCondition_;
-    int retriesInProgress_ = 0;   // guarded by retryMutex_; supports overlapping retry sequences
-
-    std::atomic<bool> stopping_{false};   // latched by close(); never cleared
+    std::chrono::steady_clock::time_point nextOpenAt_{};
 };
 
 }  // namespace dumble

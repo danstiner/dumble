@@ -11,7 +11,8 @@ object NativeCapture {
     /** Byte count is non-negative; these three are the negative returns. */
     const val POLL_RETRY = -1
     const val POLL_SHUTDOWN = -2
-    // Terminal: native exhausted reopen attempts. Distinct from POLL_RETRY.
+    // Terminal: the device will not open a stream the engine can use. Distinct from POLL_RETRY,
+    // which [pollPacket] recovers from on its own.
     const val POLL_UNAVAILABLE = -3
     // Contract violations, not conditions to handle. Separate from POLL_SHUTDOWN.
     const val POLL_NO_SESSION = -4
@@ -27,7 +28,9 @@ object NativeCapture {
     /** Returns 0 when the encoder cannot be built or the Silero blob ([weights]) will not load —
      *  there is no degraded mode. */
     external fun create(bitrate: Int, weights: ByteArray): Long
-    external fun start(handle: Long): Int
+    /** Opens and starts the stream. A stream lost later is [pollPacket]'s to bring back. */
+    external fun start(handle: Long): Boolean
+    /** Shuts the engine down; the stream closes on the pump's next [pollPacket]. */
     external fun stop(handle: Long)
     external fun destroy(handle: Long)
     external fun setGateOpen(handle: Long, open: Boolean)
@@ -35,7 +38,9 @@ object NativeCapture {
 
     /** Blocks until a packet is ready or the engine shuts down. Returns byte count, 0 (nothing
      *  to send), [POLL_RETRY], [POLL_UNAVAILABLE], or [POLL_SHUTDOWN]. [out] must be at least
-     *  [MAX_PACKET_BYTES]; meta carries frame_number and flags. */
+     *  [MAX_PACKET_BYTES]; meta carries frame_number and flags. The calling thread owns the
+     *  stream: a poll that reports [POLL_RETRY] has tried to reopen it, and the one that reports
+     *  [POLL_SHUTDOWN] has closed it. */
     external fun pollPacket(handle: Long, out: ByteArray, meta: LongArray): Int
 
     /** Bursts the ring had no room for, each one lost. */

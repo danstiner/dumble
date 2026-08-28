@@ -17,14 +17,14 @@ struct Session {
         return new Session(std::move(engine));
     }
 
-    // Shared: Oboe's error callback may still reference engine/capture after destroy().
+    // The engine is shared because Oboe's error callback can reach it after destroy(); the
+    // adapter is ours alone. Declared in this order so the adapter, and its stream, go first.
     const std::shared_ptr<dumble::CaptureEngine> engine;
-    const std::shared_ptr<dumble::OboeCapture> capture;
+    const std::unique_ptr<dumble::OboeCapture> capture;
 
 private:
-    // Declaration order matters: engine is live before OboeCapture::create() reads it.
     explicit Session(std::shared_ptr<dumble::CaptureEngine> e)
-        : engine(std::move(e)), capture(dumble::OboeCapture::create(engine)) {}
+        : engine(std::move(e)), capture(std::make_unique<dumble::OboeCapture>(engine)) {}
 };
 inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
 }  // namespace
@@ -39,9 +39,8 @@ FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights) {
     return reinterpret_cast<jlong>(Session::create(bitrate, blob.data(), blob.size()));
 }
 
-JNIEXPORT jint JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
-    if (!h) return -1;
-    return static_cast<jint>(self(h)->capture->open());
+JNIEXPORT jboolean JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
+    return h && self(h)->capture->start() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN(encodeMicrosMean)(JNIEnv*, jobject, jlong h) {
@@ -61,10 +60,8 @@ JNIEXPORT jlong JNICALL FN(framesPerBurst)(JNIEnv*, jobject, jlong h) {
 }
 
 JNIEXPORT void JNICALL FN(stop)(JNIEnv*, jobject, jlong h) {
-    if (!h) return;
-    // Shutdown before close: the pump must see kPollShutdown, not park against a closing stream.
-    self(h)->engine->requestShutdown();
-    self(h)->capture->close();
+    // The stream is the pump's: it closes on the poll that reports this shutdown, below.
+    if (h) self(h)->engine->requestShutdown();
 }
 
 JNIEXPORT void JNICALL FN(destroy)(JNIEnv*, jobject, jlong h) {
@@ -84,6 +81,10 @@ FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     uint64_t frameNumber = 0;
     uint32_t flags = 0;
     const int n = self(h)->engine->pollPacket(buf, int(sizeof(buf)), &frameNumber, &flags);
+    // The pump is the stream's only thread, so the stream's recovery and its close ride on the
+    // poll: a down stream is reopened here, and the poll that ends the pump closes it.
+    if (n == dumble::kPollRetry) self(h)->capture->start();
+    else if (n == dumble::kPollShutdown) self(h)->capture->close();
     if (n > 0) {
         env->SetByteArrayRegion(out, 0, n, reinterpret_cast<const jbyte*>(buf));
         jlong m[2] = {jlong(frameNumber), jlong(flags)};

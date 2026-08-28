@@ -54,10 +54,16 @@ class VoiceSender(
             .apply { isDaemon = true; start() }
     }
 
-    /** Requests shutdown and returns. Does not join — [onExit] is the only completion signal. */
+    /**
+     * Requests shutdown and waits, bounded, for the pump to exit: the stream closes on its way
+     * out, and the caller's one-microphone invariant needs that to have happened before it opens
+     * another. A pump wedged in native code past the bound is left to [onExit] and the
+     * connection's wedge check, as before.
+     */
     fun stop() {
         stopped = true
         handle.stop()
+        thread?.join(STOP_JOIN_MILLIS)
     }
 
     fun setTransmitting(on: Boolean) = handle.setGateOpen(on)
@@ -83,7 +89,7 @@ class VoiceSender(
             }
             when (n) {
                 0 -> {}   // not a spin — pollPacket already blocked
-                NativeCapture.POLL_RETRY -> {} // stream down, native reopening; common below API 37
+                NativeCapture.POLL_RETRY -> {} // stream down; that poll reopened it or will
                 NativeCapture.POLL_SHUTDOWN -> {
                     stopReason = StopReason.REQUESTED
                     return
@@ -131,6 +137,7 @@ class VoiceSender(
         const val NORMAL_TALKING_TARGET = 0
         private const val UDP_TYPE_AUDIO: Byte = 0
         private const val STATS_INTERVAL_NANOS = 10_000_000_000L
+        private const val STOP_JOIN_MILLIS = 1_000L
     }
 }
 
@@ -163,9 +170,8 @@ fun openNativeCapture(context: Context): VoiceSender.CaptureHandle? {
         Log.e("VoiceSender", "capture engine could not be created")
         return null
     }
-    val rc = NativeCapture.start(handle)
-    if (rc != 0) {
-        Log.e("VoiceSender", "capture engine could not be started ($rc)")
+    if (!NativeCapture.start(handle)) {
+        Log.e("VoiceSender", "capture engine could not be started")
         NativeCapture.destroy(handle)
         return null
     }
