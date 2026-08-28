@@ -12,7 +12,8 @@ class PlayoutDelayTest {
 
     private fun playout(depths: Map<Int, Int>, latencyMs: Double?) = PlayoutStats(
         latencyMs = latencyMs, underruns = null, concealedGaps = 0, droppedPackets = 0,
-        shrunkPackets = 0, catchUpPackets = 0, bufferedSamples = depths, targetSamples = emptyMap(),
+        shrunkPackets = 0, catchUpPackets = 0, contendedFills = 0, fillMicrosMax = 0,
+        fillMicrosMean = 0, bufferedSamples = depths, targetSamples = emptyMap(),
     )
 
     private fun stats(tcp: Duration? = null, udp: Duration? = null) =

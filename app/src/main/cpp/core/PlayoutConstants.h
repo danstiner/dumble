@@ -8,7 +8,7 @@ namespace dumble::playout {
 
 // Concurrent speakers we mix — the intelligibility bound itself: past about eight overlapping
 // voices nothing is intelligible anyway. A slot is also held by a speaker draining its last
-// packets (kRetireIdlePolls) and by one stalled below the prebuffer gate (kStallIdlePolls, ~1 s),
+// packets (kRetireIdleSamples) and by one stalled below the prebuffer gate (kStallIdleSamples),
 // so a channel with rapid turn-taking can hold more slots than it has talkers and briefly park a
 // real speaker at kOfferSpeakerCap — accepted: the held slots retire on their own inside a
 // second, and a mix that crowded is already unintelligible.
@@ -38,31 +38,24 @@ constexpr int kConcealGridSamples = 120;
 // 60 ms one.
 constexpr int kHighWaterSamples = 600 * kSamplesPerMilli;
 
-// Polls after a speaker's queue has drained before its decoder and pool are released. A poll is a
-// fillQuantum call that produced nothing, so the loop parks rather than writing and these outrun real
-// time — this is a ceiling on fills, not a duration. Matches the desktop client, which retires on
-// AudioOutputSpeech's `iMissCount > 10`.
-constexpr int kRetireIdlePolls = 10;
+// Samples of silence after a speaker's queue has drained before its decoder and pool are
+// released. Matches the desktop client, which retires on AudioOutputSpeech's `iMissCount > 10`
+// at 10 ms a miss.
+constexpr int kRetireIdleSamples = 100 * kSamplesPerMilli;
 
-// Quanta of concealment a speaker gets when its queue starves mid-spurt, before we give up on the
-// spurt and let it re-anchor. Concealment counts as production, so each of these is written to the
-// output and paced by it — quanta, not polls, and therefore a real ~100 ms at today's quantum
-// rather than a count of fills. Matches the desktop client's AudioOutputSpeech miss count.
-//
-// libopus fades its concealment to near-silence over ~60 ms (see SpeakerDecoder::conceal),
-// so the number is really how long the speaker's playout anchor is held open: past ~100 ms the
-// break has been heard as one, and re-anchoring with a fresh prebuffer beats splicing across it.
-constexpr int kConcealQuanta = 10;
+// Samples of concealment a speaker gets when its queue starves mid-spurt, before we give up on
+// the spurt and let it re-anchor. libopus fades its concealment to near-silence over ~60 ms (see
+// SpeakerDecoder::conceal), so the number is really how long the speaker's playout anchor is
+// held open: past ~100 ms the break has been heard as one, and re-anchoring with a fresh
+// prebuffer beats splicing across it.
+constexpr int kConcealSamples = 100 * kSamplesPerMilli;
 
 // Backstop for a spurt that stalled below the target and never got a terminator — a sender
 // that died mid-spurt. It produces nothing and never drains, so the short window can never apply
-// to it and the slot would be held for the life of the connection.
-//
-// ~1 s at best, and a ceiling rather than a period: these are polls, which outrun real time. Sized
-// from what the fragment is worth, not from how long a link can stall — the most this window can
-// protect is the sub-target audio sitting below the gate, at most kMaxTargetMillis of it, and
-// audio spliced in a second after it was spoken is heard as a click, not as speech.
-constexpr int kStallIdlePolls = 100;
+// to it and the slot would be held for the life of the connection. Sized from what the fragment
+// is worth, not from how long a link can stall: audio spliced in a second after it was spoken is
+// heard as a click, not as speech.
+constexpr int kStallIdleSamples = 1000 * kSamplesPerMilli;
 
 // Packets a speaker's queue can hold at once. 32 is 320 ms from a 10 ms sender and 1.9 s from a
 // 60 ms one, so kHighWaterSamples binds first at every packet duration of 20 ms and above.
@@ -142,21 +135,19 @@ constexpr int kColdStartMillis = 80;
 constexpr int kColdStartSamples = kColdStartMillis * kSamplesPerMilli;
 
 // How far past the target a gate-open may sit before the backlog is trimmed rather than carried.
-// The same 100 ms span and the same reasoning as kConcealQuanta — prose, not arithmetic, because
-// that one counts quanta and quanta are not durations: past about that long the break has already
-// been heard as one, so splicing the pre-gap audio back in gains a listener little and costs
-// standing delay for the rest of the spurt. Generous on purpose — an ordinary gate-open sits at
-// the target plus at most one packet, so the trim is a no-op and only a real overshoot reaches it.
+// The same 100 ms span and the same reasoning as kConcealSamples: past about that long the break
+// has already been heard as one, so splicing the pre-gap audio back in gains a listener little
+// and costs standing delay for the rest of the spurt. Generous on purpose — an ordinary gate-open
+// sits at the target plus at most one packet, so the trim is a no-op and only a real overshoot
+// reaches it.
 constexpr int kCatchUpThresholdSamples = 100 * kSamplesPerMilli;
 
 // Hysteresis on the shrink test. Overshoot is prevented by canShrink's arithmetic, not by this;
 // all it does is stop the depth oscillating across the target between quiet windows.
 constexpr int kShrinkDeadbandSamples = 20 * kSamplesPerMilli;
 
-// 2 s between shrinks, counted only on fills that produced — each is one quantum, paced by the
-// output write, so the count is real time. Polls run faster than 100 Hz because an arriving
-// packet wakes the loop, which is why idlePolls_ cannot be reused here.
-constexpr int kShrinkCooldownQuanta = 200;
+// 2 s between shrinks, counted only on fills that produced.
+constexpr int kShrinkCooldownSamples = 2000 * kSamplesPerMilli;
 
 // Senders whose estimate we keep. Not kMaxSpeakers: 8 is the simultaneous-mixing bound, but a
 // channel has many more members than that and turn-taking cycles through them, so the table wants

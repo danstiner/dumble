@@ -30,6 +30,9 @@ add_subdirectory(${REPO_ROOT}/third_party/googletest ${CMAKE_BINARY_DIR}/googlet
 file(GLOB CORE_SRC CONFIGURE_DEPENDS ${CORE_DIR}/core/*.cpp)
 add_library(dumble_core STATIC ${CORE_SRC})
 target_include_directories(dumble_core PUBLIC ${CORE_DIR})
+# Compiles in the hooks a test needs to stage what only another thread can cause; the Android
+# build never defines it.
+target_compile_definitions(dumble_core PUBLIC DUMBLE_TESTING)
 target_link_libraries(dumble_core PUBLIC opus)
 
 enable_testing()

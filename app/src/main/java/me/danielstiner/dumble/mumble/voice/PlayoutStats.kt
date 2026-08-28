@@ -35,6 +35,11 @@ import kotlin.time.Duration.Companion.microseconds
  * [shrunkPackets] and [catchUpPackets] are audio we threw away on purpose to shed standing delay,
  * so neither is loss and neither is in [droppedPackets]. [targetSamples] is what each speaker's
  * gate is measuring against, and is read beside [bufferedSamples].
+ *
+ * [contendedFills] are fills the engine's realtime path answered with silence because the reader
+ * held its mutex — see `PlayoutEngine::setRealtime`; per spurt, like the other counts. The fill
+ * time pair is the wall time the engine spent per fill since the last sample, decodes included:
+ * a device callback's budget is one burst, and this is how much of it the engine used.
  */
 data class PlayoutStats(
     val latencyMs: Double?,
@@ -43,12 +48,15 @@ data class PlayoutStats(
     val droppedPackets: Int,
     val shrunkPackets: Int,
     val catchUpPackets: Int,
+    val contendedFills: Int,
+    val fillMicrosMax: Long,
+    val fillMicrosMean: Long,
     val bufferedSamples: Map<Int, Int>,
     val targetSamples: Map<Int, Int>,
 ) {
     /**
      * One speaker's queued audio, or null if the engine holds no slot for them — it retires a
-     * speaker after `kRetireIdlePolls`, so absence means "has not sent recently".
+     * speaker after `kRetireIdleSamples`, so absence means "has not sent recently".
      */
     fun depth(session: Int): Duration? =
         bufferedSamples[session]?.let { (it * 1_000_000L / SAMPLE_RATE).microseconds }
@@ -68,5 +76,6 @@ data class PlayoutStats(
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +
             "underruns=${underruns ?: "n/a"} concealed=$concealedGaps dropped=$droppedPackets " +
             "shrunk=$shrunkPackets caughtUp=$catchUpPackets " +
-            "depths=$bufferedSamples targets=$targetSamples"
+            "depths=$bufferedSamples targets=$targetSamples " +
+            "contended=$contendedFills fill=$fillMicrosMean/${fillMicrosMax}us"
 }

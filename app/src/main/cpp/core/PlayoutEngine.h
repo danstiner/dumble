@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -37,19 +38,17 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
  * per method rather than once for the type, as PacketQueue and SpeakerDecoder each state theirs:
  * this is the one class where the two sides meet, so there is no single rule to state.
  *
- * fillQuantum is deliberately shaped as an audio data callback: non-blocking, allocation-free, and
- * taking its sample count per call. Today a Kotlin playback thread drives it between AudioTrack
+ * fillQuantum is deliberately shaped as an audio data callback: non-blocking in realtime mode,
+ * allocation-free, and taking its sample count per call. Today a Kotlin playback thread drives it between AudioTrack
  * writes; an Oboe callback will call the same function unchanged.
  *
  * One fillQuantum call — a fill — is the engine's only clock; nothing in here advances between
  * fills. What a fill produces is a **quantum**: `samples` of audio, picked by the caller, which
  * today's playback loop sets to one frame. A fill produces at most that, and often less.
  *
- * Fills come in two kinds, and that is what decides whether counting them measures time. A fill
- * that produced is written to the output, so the device paces it and kConcealQuanta really is
- * about 100 ms at today's quantum. A fill that produced nothing is a **poll** — the loop parks and
- * an arriving packet wakes it — so polls outrun real time and kRetireIdlePolls and kStallIdlePolls
- * are ceilings on fills, not durations. Concealment counts as production.
+ * Every limit below is a count of samples accumulated from each fill's `samples`, so it means the
+ * same time at any fill size. A fill that produced nothing counts its samples as elapsed too:
+ * under a device-paced caller it was, and under the push loop it is the 10 ms park.
  */
 class PlayoutEngine {
 public:
@@ -77,9 +76,11 @@ public:
      * Writes exactly `samples` of mixed audio into `out`. Returns how many speakers produced
      * audio and writes their sessions into `sessions[0..n)`, which must hold kMaxSpeakers entries.
      * `liveSpeakers` receives the claimed-slot count — how the caller tells "nobody is here" from
-     * "somebody is prebuffering" — and is always written, refusals included. A `samples` outside
-     * (0, the maxQuantumSamples given to create()] answers kErrorBufferTooSmall rather than a
-     * silent frame, and leaves `out` untouched: the caller must not play a refused fill.
+     * "somebody is prebuffering" — and is always written, refusals included. A `samples` of zero
+     * or less answers kErrorBufferTooSmall rather than a silent frame, and leaves `out` untouched:
+     * the caller must not play a refused fill. A `samples` above the maxQuantumSamples given to
+     * create() is served as consecutive whole fills, and the return value and `liveSpeakers`
+     * describe the last of them.
      */
     int fillQuantum(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers);
 
@@ -97,6 +98,10 @@ public:
         // against depth is the only reading that shows whether the buffer is converging, and
         // without it there is no way to tell a healthy 200 ms from a ratcheted one.
         int32_t targets[kMaxSpeakers];
+        // Whether each live speaker produced audio in the most recent fill — what a caller shows
+        // as "speaking". Aligned with sessions[]. Taken under the same lock as everything else
+        // here, so a retire-and-reclaim between two reads cannot map a bit to the wrong session.
+        bool audible[kMaxSpeakers];
 
         // The two totals below are monotonic since the engine was built: the caller subtracts a
         // talk-spurt baseline, the way it already does for the platform's underrun counter.
@@ -118,6 +123,15 @@ public:
         // outward; if it moves, it moves here first.
         int64_t shrunkPackets;
         int64_t catchUpPackets;
+        // Realtime-mode fills answered with silence because the reader held mutex_ — see
+        // setRealtime. Monotonic, like the totals above.
+        uint64_t contendedFills;
+
+        // Wall time per fill, max and mean, over the fills since the last stats() read. A device
+        // callback's budget is one burst, and this is how much of it the engine — decodes
+        // included — used.
+        uint64_t fillMicrosMax;
+        uint64_t fillMicrosMean;
     };
 
     /** Any thread; takes mutex_. */
@@ -129,12 +143,51 @@ public:
      *  queued at that instant is margin against a late arrival. 0 until the sink reports. */
     void setWriteAheadSamples(int samples);
 
+    /** Any thread; takes mutex_. The output sink has gone (true) or come back (false). Going
+     *  down releases every slot — tallies harvested, queues and decoders reset — and keeps every
+     *  estimator: with no fills nothing can conceal a spurt in flight, and a backlog played out
+     *  on reopen would be standing delay with no catch-up to trim it, so the next spurt
+     *  prebuffers afresh against a warm estimate. Coming back changes nothing; the argument
+     *  exists so the adapter's two error callbacks are symmetric. */
+    void setOutputDown(bool down);
+
+    /** Any thread. In realtime mode every mutex_ acquisition on the fill path is a try_lock: a
+     *  fill that finds the reader inside offer() outputs silence, touches no per-speaker state,
+     *  and counts one in Stats::contendedFills, rather than blocking a realtime thread behind a
+     *  normal-priority one — bionic's std::mutex has no priority inheritance, and AAudio's
+     *  callback contract forbids waiting on one. Off by default: the push loop's own thread is
+     *  the only other caller, and blocking there is harmless. */
+    void setRealtime(bool realtime);
+
+#ifdef DUMBLE_TESTING
+    /** Holds mutex_ around `f`, so a test can stage the contention a realtime fill must survive. */
+    template <class F>
+    void holdMutexForTest(F f) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        heldForTest_ = true;
+        f();
+        heldForTest_ = false;
+    }
+    bool mutexHeldForTest() const { return heldForTest_.load(); }
+#endif
+
 private:
     PlayoutEngine(int sampleRate, int maxQuantumSamples);
+
+    /** One fill of at most maxQuantumSamples_: fillQuantum's contract, minus the size loop. */
+    int fillOnce(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers);
 
     /** Any thread; caller already holds mutex_. Slot for this session, claiming a free one if
      *  needed; -1 at the cap. */
     int slotFor(int32_t session);
+
+    /** Playback thread; no lock, this is the path that could not take one. Silence for the whole
+     *  fill, the last live count the commit phase saw, and one more contended fill. */
+    int contendedFill(int16_t* out, int samples, int32_t* liveSpeakers);
+
+    /** Playback thread, or any thread while the output is down; caller already holds mutex_.
+     *  Frees a claimed slot: tallies harvested, queue and decoder reset. */
+    void releaseSlot(int slot);
 
     /** Any thread; caller already holds mutex_. Index of this session's estimator, claiming or
      *  evicting one if needed. Never negative. */
@@ -168,27 +221,42 @@ private:
     const int sampleRate_;
     const int maxQuantumSamples_;
     int writeAhead_ = 0;
+    std::atomic<bool> realtime_{false};
+    // Both written on the fill path without mutex_ — a contended fill is exactly the one that
+    // could not take it — so stats() and the next fill read them atomically.
+    std::atomic<uint64_t> contendedFills_{0};
+    std::atomic<int32_t> lastLive_{0};
+#ifdef DUMBLE_TESTING
+    std::atomic<bool> heldForTest_{false};
+#endif
 
     std::mutex mutex_;
     Bitmap slots_;
     int32_t sessions_[kMaxSpeakers] = {};
-    // Consecutive polls a claimed slot has answered with nothing. Zeroed on claim.
-    int idlePolls_[kMaxSpeakers] = {};
-    // Consecutive quanta a claimed slot has starved mid-spurt, and so the hold's clock. Cleared
-    // only by real audio, never by a fill that merely did not conceal: an expired hold would
-    // otherwise clear its own counter and start concealing again on the next fill, forever. Keeps
-    // counting past kConcealQuanta for the same reason. Zeroed on claim, like idlePolls_.
-    int stallQuanta_[kMaxSpeakers] = {};
-    // Quanta produced since this slot last shrank. Counted only on fills that produced, which is
-    // what makes kShrinkCooldownQuanta a real two seconds: each is paced by the output write,
-    // while polls run faster than real time.
-    int shrinkQuanta_[kMaxSpeakers] = {};
+    // Samples of silence a claimed slot has answered with in a row. Zeroed on claim.
+    int idleSamples_[kMaxSpeakers] = {};
+    // Whether the slot produced in the last fill. Written in the commit phase and read by stats(),
+    // both under mutex_. Zeroed on claim.
+    bool audible_[kMaxSpeakers] = {};
+    // Samples a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only by real
+    // audio, never by a fill that merely did not conceal: an expired hold would otherwise clear
+    // its own counter and start concealing again on the next fill, forever. Keeps counting past
+    // kConcealSamples for the same reason. Zeroed on claim, like idleSamples_.
+    int stallSamples_[kMaxSpeakers] = {};
+    // Samples produced since this slot last shrank. Counted only on fills that produced, which is
+    // what makes kShrinkCooldownSamples a real two seconds.
+    int shrinkSamples_[kMaxSpeakers] = {};
     // Whole-engine totals, monotonic since construction. A retiring queue's own tally is
     // harvested into droppedPackets_ before reset() clears it.
     int64_t concealedGaps_ = 0;
     int64_t droppedPackets_ = 0;
     int64_t shrunkPackets_ = 0;
     int64_t catchUpPackets_ = 0;
+    // Fill timing since the last stats() read. Written in the commit phase and read and zeroed
+    // by stats(), both under mutex_.
+    uint64_t fillMicrosSum_ = 0;
+    uint64_t fillMicrosMax_ = 0;
+    uint64_t fillCount_ = 0;
     // Built by create() and never rebuilt, which is what lets the playback thread hold references
     // into them across an unlocked decode.
     PacketQueue queues_[kMaxSpeakers];

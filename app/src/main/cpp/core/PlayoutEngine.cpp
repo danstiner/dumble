@@ -1,4 +1,5 @@
 #include "core/PlayoutEngine.h"
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include "core/AudioDecoder.h"
@@ -29,6 +30,12 @@ int64_t bootMillis() {
     timespec ts{};
     clock_gettime(kArrivalClock, &ts);
     return int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+int64_t monotonicMicros() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return int64_t(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
 }  // namespace
@@ -126,14 +133,32 @@ JitterEstimator* PlayoutEngine::estimatorForSlot(int slot) {
 
 int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
                                int32_t* liveSpeakers) {
-    if (samples <= 0 || samples > maxQuantumSamples_) {
-        // Diagnostic, not silence: maxQuantumSamples is this engine's alone, so no caller above
-        // can catch the mismatch, and a 0 would leave one that sized its frame wrong permanently
+    if (samples <= 0) {
+        // Diagnostic, not silence: a 0 would leave a caller that sized its frame wrong permanently
         // mute with nothing to look at. `out` is left alone — writing `samples` of anything would
         // mean trusting the number this branch exists to reject.
         *liveSpeakers = 0;
         return kErrorBufferTooSmall;
     }
+    // Chunked here rather than by the caller so the host suite covers it: a device callback can
+    // ask for more than the engine was sized for, and the platform adapter is not built on the
+    // host.
+    int producing = 0;
+    for (int done = 0; done < samples; done += maxQuantumSamples_) {
+        const int n = std::min(maxQuantumSamples_, samples - done);
+        producing = fillOnce(out + done, n, sessions, liveSpeakers);
+    }
+    return producing;
+}
+
+int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers) {
+    const int64_t started = monotonicMicros();
+    // Taken (blocking mode) or attempted (realtime mode); every acquisition below is this one.
+    const auto acquire = [this] {
+        return realtime_.load(std::memory_order_relaxed)
+                   ? std::unique_lock<std::mutex>(mutex_, std::try_to_lock)
+                   : std::unique_lock<std::mutex>(mutex_);
+    };
     std::memset(accumulator_.data(), 0, size_t(samples) * sizeof(int32_t));
 
     // Snapshot which slots are claimed, so the decode phase runs with the mutex released. The
@@ -146,7 +171,8 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     int target[kMaxSpeakers];
     int liveCount = 0;
     {
-        std::lock_guard<std::mutex> guard(mutex_);
+        const auto guard = acquire();
+        if (!guard.owns_lock()) return contendedFill(out, samples, liveSpeakers);
         for (int i = 0; i < kMaxSpeakers; i++) {
             if (!slots_.test(i)) continue;
             // Snapshotted with the slot rather than read in the decode phase, which runs with the
@@ -181,7 +207,10 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
         while (decoder.available() < samples) {
             int len;
             {
-                std::lock_guard<std::mutex> guard(mutex_);
+                // Contention here costs the speakers already drained this fill their burst: the
+                // read indexes moved, the mix is discarded. One burst of silence, no splice.
+                const auto guard = acquire();
+                if (!guard.owns_lock()) return contendedFill(out, samples, liveSpeakers);
                 const JitterEstimator* est = estimatorForSlot(live[n]);
                 len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
                                 est && !est->discontinuous());
@@ -192,10 +221,10 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
         // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed frame then
         // counts as production, which is what holds the prebuffer gate open and the retire clock at
         // zero: packets the stall delayed play on the frame they arrive instead of waiting out a
-        // second prebuffer. Bounded by kConcealQuanta — past that the speaker re-anchors.
+        // second prebuffer. Bounded by kConcealSamples — past that the speaker re-anchors.
         const int shortfall = samples - decoder.available();
         concealed[n] = false;
-        if (shortfall > 0 && speaking[n] && stallQuanta_[live[n]] < kConcealQuanta)
+        if (shortfall > 0 && speaking[n] && stallSamples_[live[n]] < kConcealSamples)
             concealed[n] = decoder.conceal(shortfall) > 0;
         produced[n] = decoder.drain(speakerOut_.data(), samples);
         if (produced[n] > 0) mixAccumulate(accumulator_.data(), speakerOut_.data(), samples);
@@ -205,22 +234,25 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
     // Commit: sessions, per-fill bookkeeping and retirement, in one acquisition.
     int producing = 0;
     {
-        std::lock_guard<std::mutex> guard(mutex_);
+        const auto guard = acquire();
+        if (!guard.owns_lock()) return contendedFill(out, samples, liveSpeakers);
         for (int n = 0; n < liveCount; n++) {
             const int i = live[n];
             PacketQueue& queue = queues_[i];
             const bool audible = produced[n] > 0;
+            audible_[i] = audible;
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
             if (audible) sessions[producing++] = sessions_[i];
             // Judged before endFill, which closes the gate speaking() reads. One gap, one charge,
-            // however many frames its hold spans — and stallQuanta_ keeps counting past
-            // kConcealQuanta, so the frame that gives up on a stall is not a second gap. speaking()
+            // however many fills its hold spans — and stallSamples_ keeps counting past
+            // kConcealSamples, so the fill that gives up on a stall is not a second gap. speaking()
             // is read here rather than taken from the snapshot, so a terminator that landed during
             // the decodes is honoured: the end of speech is not a dropout.
             if (concealed[n] || (produced[n] < samples && queue.speaking())) {
-                if (stallQuanta_[i]++ == 0) concealedGaps_++;
+                if (stallSamples_[i] == 0) concealedGaps_++;
+                stallSamples_[i] += samples;
             } else {
-                stallQuanta_[i] = 0;
+                stallSamples_[i] = 0;
                 // Speech spliced with silence with the queue already closed: the tail of a spurt,
                 // which no hold could have covered.
                 if (produced[n] > 0 && produced[n] < samples) concealedGaps_++;
@@ -237,42 +269,45 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
             // concealed fill can also reach here on a stale quiet(), which is harmless: it wants
             // delay shed if the backlog allows it, the same as any other fill.
             if (produced[n] > 0) {
-                if (shrinkQuanta_[i] >= kShrinkCooldownQuanta && decoders_[i]->quiet() &&
+                if (shrinkSamples_[i] >= kShrinkCooldownSamples && decoders_[i]->quiet() &&
                     queue.canShrink(target[n] + kShrinkDeadbandSamples)) {
                     queue.shrink();
-                    shrinkQuanta_[i] = 0;
+                    shrinkSamples_[i] = 0;
                 } else {
-                    shrinkQuanta_[i]++;
+                    shrinkSamples_[i] += samples;
                 }
             }
-            idlePolls_[i] = audible ? 0 : idlePolls_[i] + 1;
+            idleSamples_[i] = audible ? 0 : idleSamples_[i] + samples;
             // Two windows, because "produced nothing this fill" means two different things. Once
             // the queue is drained it means the speaker stopped talking, the short window. While
             // packets remain it means the prebuffer gate has not opened yet — a spurt is silent
-            // until it reaches the target, and the loop fills faster than 100 Hz while doing
-            // so because each arriving packet wakes it, so charging those as idle would retire a
-            // speaker before it plays. Read fresh here, unlike the pop-time record endFill's
-            // re-arm judges by: retiring resets the queue, and a packet that arrived during the
-            // decodes must widen the window rather than be destroyed with the slot.
-            if (idlePolls_[i] >= (queue.empty() ? kRetireIdlePolls : kStallIdlePolls)) {
+            // until it reaches the target, so charging that as idle would retire a speaker before
+            // it plays. Read fresh here, unlike the pop-time record endFill's re-arm judges by:
+            // retiring resets the queue, and a packet that arrived during the decodes must widen
+            // the window rather than be destroyed with the slot.
+            if (idleSamples_[i] >= (queue.empty() ? kRetireIdleSamples : kStallIdleSamples)) {
                 // Cleaned here rather than on the next claim: this thread is PcmRing's consumer,
                 // the only side allowed to move its read index, and the only one that can see the
                 // slot idle. The stall window retires with packets still queued, so this is not
-                // defensive. decoder->reset() under the mutex is fine — it is a small memset, not
-                // a decode, and retirement is rare. Harvest the queue's tally first: reset()
-                // clears it, and a channel that dropped audio all session must not report zero
-                // the moment its speaker goes quiet.
-                droppedPackets_ += queue.droppedPackets();
-                shrunkPackets_ += queue.shrunkPackets();
-                catchUpPackets_ += queue.catchUpPackets();
-                queue.reset();
-                decoders_[i]->reset();
-                slots_.clear(i);
+                // defensive.
+                releaseSlot(i);
             }
         }
         *liveSpeakers = slots_.count();
+        lastLive_.store(*liveSpeakers, std::memory_order_relaxed);
+        const uint64_t micros = uint64_t(monotonicMicros() - started);
+        fillMicrosSum_ += micros;
+        fillCount_++;
+        if (micros > fillMicrosMax_) fillMicrosMax_ = micros;
     }
     return producing;
+}
+
+int PlayoutEngine::contendedFill(int16_t* out, int samples, int32_t* liveSpeakers) {
+    std::memset(out, 0, size_t(samples) * sizeof(int16_t));
+    contendedFills_.fetch_add(1, std::memory_order_relaxed);
+    *liveSpeakers = lastLive_.load(std::memory_order_relaxed);
+    return 0;
 }
 
 PlayoutEngine::Stats PlayoutEngine::stats() {
@@ -291,6 +326,7 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
         out.depths[n] = queues_[i].depthSamples();
         const JitterEstimator* est = estimatorForSlot(i);
         out.targets[n] = (est ? est->targetSamples() : kColdStartSamples) + writeAhead_;
+        out.audible[n] = audible_[i];
         dropped += queues_[i].droppedPackets();
         shrunk += queues_[i].shrunkPackets();
         caughtUp += queues_[i].catchUpPackets();
@@ -301,6 +337,10 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
     out.droppedPackets = dropped;
     out.shrunkPackets = shrunk;
     out.catchUpPackets = caughtUp;
+    out.contendedFills = contendedFills_.load(std::memory_order_relaxed);
+    out.fillMicrosMax = fillMicrosMax_;
+    out.fillMicrosMean = fillCount_ ? fillMicrosSum_ / fillCount_ : 0;
+    fillMicrosSum_ = fillMicrosMax_ = fillCount_ = 0;
     return out;
 }
 
@@ -324,15 +364,44 @@ int PlayoutEngine::slotFor(int32_t session) {
     // No allocation and no reset — a free slot was cleaned by whoever retired it.
     slots_.set(free);
     sessions_[free] = session;
-    idlePolls_[free] = 0;
-    stallQuanta_[free] = 0;
-    shrinkQuanta_[free] = 0;
+    idleSamples_[free] = 0;
+    audible_[free] = false;
+    stallSamples_[free] = 0;
+    shrinkSamples_[free] = 0;
     return free;
 }
 
 void PlayoutEngine::setWriteAheadSamples(int samples) {
     std::lock_guard<std::mutex> lock(mutex_);
     writeAhead_ = samples > 0 ? samples : 0;
+}
+
+void PlayoutEngine::setRealtime(bool realtime) {
+    realtime_.store(realtime, std::memory_order_relaxed);
+}
+
+void PlayoutEngine::setOutputDown(bool down) {
+    if (!down) return;
+    std::lock_guard<std::mutex> guard(mutex_);
+    // Off the playback thread, which releaseSlot's decoder reset normally requires. Safe here
+    // because there is no playback thread to race: the sink stopped delivering before its error
+    // callback reached us.
+    for (int i = 0; i < kMaxSpeakers; i++) {
+        if (slots_.test(i)) releaseSlot(i);
+    }
+}
+
+void PlayoutEngine::releaseSlot(int i) {
+    // Harvest the queue's tally first: reset() clears it, and a channel that dropped audio all
+    // session must not report zero the moment its speaker goes quiet. decoder->reset() under the
+    // mutex is fine — it is a small memset, not a decode, and release is rare.
+    droppedPackets_ += queues_[i].droppedPackets();
+    shrunkPackets_ += queues_[i].shrunkPackets();
+    catchUpPackets_ += queues_[i].catchUpPackets();
+    queues_[i].reset();
+    decoders_[i]->reset();
+    audible_[i] = false;
+    slots_.clear(i);
 }
 
 }  // namespace dumble::playout

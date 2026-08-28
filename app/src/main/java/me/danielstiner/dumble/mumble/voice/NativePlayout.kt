@@ -48,7 +48,16 @@ object NativePlayout {
      *  states why these are split from each other and from [COUNTER_DROPPED_PACKETS]. */
     const val COUNTER_SHRUNK_PACKETS = 2
     const val COUNTER_CATCH_UP_PACKETS = 3
-    const val COUNTER_COUNT = 4
+
+    /** Fills the realtime path answered with silence because the reader held the engine's mutex;
+     *  see `PlayoutEngine::setRealtime`. Monotonic like the four above. */
+    const val COUNTER_CONTENDED_FILLS = 4
+
+    /** Wall time per fill in microseconds, max and mean. A window since the last [readStats],
+     *  not a total: the only two counters here that are not monotonic. */
+    const val COUNTER_FILL_MICROS_MAX = 5
+    const val COUNTER_FILL_MICROS_MEAN = 6
+    const val COUNTER_COUNT = 7
 
     /** Returns 0 if native could not build an engine — libopus being unreachable is the only way
      *  that happens, and there is no degraded mode. */

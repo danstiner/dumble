@@ -16,7 +16,10 @@ transport ─► onTunneledAudio ─► offer() ─► PacketQueue ─► Speake
 clock is the `fillQuantum` call, shaped as an audio data callback — non-blocking, allocation-free —
 so an Oboe output stream could drive it; today a Kotlin thread does, between `AudioTrack` writes.
 Packets wait compressed behind a per-speaker prebuffer gate so a network stall cannot glitch the
-opening syllable, and the mix finalizes through `Mixer`'s soft-knee limiter.
+opening syllable, and the mix finalizes through `Mixer`'s soft-knee limiter. Every limit the
+engine keeps — conceal hold, idle windows, shrink cooldown — is a count of samples accumulated
+from each fill's size, so a fill of one device burst means the same time as a fill of one frame;
+a fill larger than the engine was sized for is served as consecutive whole chunks.
 
 Two ownership rules carry the design:
 
@@ -83,8 +86,16 @@ The rest of the queue policy, for orientation — each is reasoned in `PlayoutCo
 - **Shrink**: mid-spurt, one packet is shed per 2 s, only while the decoded audio is quiet, only
   while 20 ms over target — standing delay unwinds where it cannot be heard.
 - **Bounds**: 600 ms or 32 packets per queue; past either, the oldest is dropped and counted.
-- **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 10 quanta (100 ms), then the
-  speaker goes silent; a slot retires after 10 empty polls.
+- **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 100 ms (`kConcealSamples`),
+  then the speaker goes silent; a slot retires after 100 ms of silence with its queue drained
+  (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`).
+- **Output down**: `setOutputDown(true)` releases every slot — tallies harvested, queues and
+  decoders reset — and keeps every estimator, so a spurt cut by a stream error prebuffers afresh
+  on reopen against a warm estimate rather than playing its backlog as standing delay.
+- **Realtime fills**: opt-in, `setRealtime(true)` makes every mutex acquisition on the fill path
+  a `try_lock`; a fill that finds the reader inside `offer()` answers one fill of silence and
+  counts it, rather than block a realtime thread behind a normal-priority one. Off under today's
+  push loop.
 
 ## The AudioTrack cap: why two device bursts
 
@@ -197,6 +208,15 @@ Pace test senders on an absolute schedule.
   by every speaker.
 - **target** — the estimator's figure *plus* the write-ahead, so it reads beside depth.
 - `depth + latencyMs` is the standing delay for that speaker; neither alone is.
+- **audible** (`Stats::audible`, engine only) — which live speakers produced in the last fill,
+  read under the same lock as the rest so a retire-and-reclaim cannot misattribute it. Unused
+  until a poller publishes the speaking set from stats rather than from each fill's return.
+- **contended** — realtime-mode fills answered with silence because the reader held the mutex.
+  Always 0 under the push loop.
+- **fill** — mean/max wall time per fill since the last sample, decodes included. The host
+  benchmark (`PlayoutEngineBench`, Release tree) pins the engine at Opus decode plus at most half
+  again; on a device this is the number to read against one burst.
 
-Invariants are pinned by `PlayoutEngineTest.cpp`, `PacketQueueTest.cpp`, `JitterEstimatorTest.cpp`,
-`VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and `PlayoutLoopDeviceTest.kt`.
+Invariants are pinned by `PlayoutEngineTest.cpp`, `PlayoutEngineBench.cpp`, `PacketQueueTest.cpp`,
+`JitterEstimatorTest.cpp`, `VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and
+`PlayoutLoopDeviceTest.kt`.
