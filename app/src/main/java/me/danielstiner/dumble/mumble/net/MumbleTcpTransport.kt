@@ -85,6 +85,14 @@ class MumbleTcpTransport(
     @VisibleForTesting
     @Volatile internal var TESTONLY_beforeWrite: (() -> Unit)? = null
 
+    /**
+     * Test seam: invoked at the head of the reader coroutine, before it touches the socket, so a
+     * test can land a close() in the window between publish and the reader's first dispatch —
+     * otherwise reachable only by losing a scheduling race. Null in production.
+     */
+    @VisibleForTesting
+    @Volatile internal var TESTONLY_beforeRead: (() -> Unit)? = null
+
     val isConnected: Boolean get() = !closed && socket != null
 
     @Volatile var trustOutcome: TrustOutcome? = null
@@ -163,9 +171,14 @@ class MumbleTcpTransport(
         // coroutine is dispatched: the finally is the sole place onClosed is delivered, and a listener
         // told the connection opened must always be told it closed.
         cs.launch(start = CoroutineStart.ATOMIC) {
-            val input = DataInputStream(s.inputStream.buffered())
             var cause: Throwable? = null
             try {
+                // Inside the try, not before it: a close() that lands between publish and this
+                // coroutine's first dispatch has already closed the socket, and getInputStream then
+                // throws. Outside, that throw escaped past the finally and the listener was never
+                // told the connection closed — the exact guarantee ATOMIC is here to keep.
+                TESTONLY_beforeRead?.invoke()
+                val input = DataInputStream(s.inputStream.buffered())
                 while (isActive) {
                     val frame = MumbleCodec.readFrame(input)
                     // No lock: the reader is the only caller of onFrame, and delivering onClosed from
@@ -184,8 +197,11 @@ class MumbleTcpTransport(
         }
 
         cs.launch {
-            val output = DataOutputStream(s.outputStream.buffered())
             try {
+                // Same window as the reader's: a close() before this dispatch makes getOutputStream
+                // throw. Nothing is owed to the listener here, but an uncaught throw would still
+                // skip the teardown below and print a spurious stack trace.
+                val output = DataOutputStream(s.outputStream.buffered())
                 for (bytes in sendQueue) {
                     TESTONLY_beforeWrite?.invoke()
                     output.write(bytes)
