@@ -246,6 +246,7 @@ class MumbleConnectionTest {
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
             .build()
+        awaitEngineBuilt(playout)
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
 
         // speakingSessions updates on the receiver's poll; the flow collect that republishes it
@@ -288,6 +289,7 @@ class MumbleConnectionTest {
             .setSenderSession(9)
             .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
             .build()
+        awaitEngineBuilt(playout)
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
         withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
 
@@ -637,6 +639,16 @@ class MumbleConnectionTest {
 
         assertEquals(emptyList<String>(), call.routeRequests)
     }
+
+    /**
+     * Handshaking is published by sm.start(); receiver.start() — which builds the engine — runs
+     * several statements later, and a packet arriving before it is dropped by design (there is
+     * nothing yet to queue into). Delivering a tunneled frame on the status alone therefore races
+     * that gap: measured at one lost packet in 40 runs, which is the CI flake. The poll's first
+     * start() call is the earliest observable proof the engine exists.
+     */
+    private suspend fun awaitEngineBuilt(playout: FakePlayoutEngine) =
+        awaitTrue("the receiver's poll never started") { playout.startAttempts.get() > 0 }
 
     private suspend fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMillis
