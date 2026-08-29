@@ -1,6 +1,4 @@
 <resources>
     <string name="app_name">Dumble</string>
     <string name="voice_channel_name">Voice connection</string>
-    <string name="voice_notification_title">Connected</string>
-    <string name="voice_notification_disconnect">Disconnect</string>
 </resources>
