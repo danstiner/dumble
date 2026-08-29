@@ -13,6 +13,7 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
@@ -98,31 +99,38 @@ class VoiceService : Service() {
                 NotificationChannel(
                     CHANNEL_ID,
                     getString(R.string.voice_channel_name),
-                    // Ongoing state, not something to interrupt for.
-                    NotificationManager.IMPORTANCE_LOW,
-                )
+                    // Anything under DEFAULT lands in the shade's silent section. Rank, not
+                    // alert: connecting is something the user just tapped for.
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                }
             )
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(getString(R.string.voice_notification_title))
-            .setContentText(server)
             .setOngoing(true)
             .setContentIntent(resumeIntent())
-            // Ranks it with calls rather than with general ongoing work, which is what it is.
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                getString(R.string.voice_notification_disconnect),
-                PendingIntent.getService(
-                    this,
-                    REQUEST_DISCONNECT,
-                    Intent(this, VoiceService::class.java).setAction(ACTION_DISCONNECT),
-                    PendingIntent.FLAG_IMMUTABLE,
-                ),
+            // CallStyle: the system ranks the call above the rest of the shade and draws the
+            // status bar's call chip. Requires ongoing + foreground service; both hold here.
+            .setStyle(
+                NotificationCompat.CallStyle.forOngoingCall(
+                    // A Mumble call's other end is a server; the host is the best name for
+                    // the Person the platform requires.
+                    Person.Builder().setName(server).build(),
+                    disconnectIntent(),
+                )
             )
             .build()
     }
+
+    private fun disconnectIntent(): PendingIntent = PendingIntent.getService(
+        this,
+        REQUEST_DISCONNECT,
+        Intent(this, VoiceService::class.java).setAction(ACTION_DISCONNECT),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
 
     /**
      * SINGLE_TOP|CLEAR_TOP reuses the running activity instead of stacking a second one on top of
@@ -143,7 +151,9 @@ class VoiceService : Service() {
     )
 
     companion object {
-        private const val CHANNEL_ID = "voice"
+        // "call", not "voice": Android only lets an app lower an existing channel's importance,
+        // so the raise to DEFAULT needs a fresh id.
+        private const val CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1
         private const val EXTRA_SERVER = "server"
         private const val TAG = "VoiceService"
