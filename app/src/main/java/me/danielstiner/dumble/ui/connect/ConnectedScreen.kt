@@ -14,7 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -163,7 +163,7 @@ fun ConnectedScreen(
                             Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat")
                         }
                     }
-                    IconButton(onClick = onSettings) { Icon(Icons.Filled.Tune, "Settings") }
+                    IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings") }
                 },
             )
         },
