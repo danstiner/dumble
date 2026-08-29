@@ -119,6 +119,26 @@ class MumbleTcpTransportTest {
         assertEquals(1, closedCount.get())
     }
 
+    // A close() landing between publish and the reader's first dispatch leaves a socket that is
+    // already closed when the reader reaches for its stream. getInputStream throws there, and while
+    // that throw sat outside the reader's try it escaped past the finally — the sole delivery site —
+    // so the listener was never told the connection closed. It surfaced as a ~1-in-200 CI flake in
+    // closeIsIdempotentAndReportsOnce; the seam makes the window deterministic.
+    @Test
+    fun aCloseBeforeTheReaderStartsStillReportsClosed() = runBlocking {
+        val srv = startServer()
+        val closedFired = CountDownLatch(1)
+        lateinit var transport: MumbleTcpTransport
+        transport = MumbleTcpTransport(expectedPin = srv.certSha256)
+        transport.TESTONLY_beforeRead = { transport.close() }
+        transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
+            override fun onFrame(f: TcpFrame) = Unit
+            override fun onClosed(cause: Throwable?) { closedFired.countDown() }
+        })
+
+        assertTrue("onClosed never delivered", closedFired.await(5, TimeUnit.SECONDS))
+    }
+
     @Test
     fun sendAfterCloseReturnsFalse() = runBlocking {
         val srv = startServer()
