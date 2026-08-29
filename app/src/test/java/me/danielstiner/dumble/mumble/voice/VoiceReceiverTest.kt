@@ -258,12 +258,19 @@ class VoiceReceiverTest {
         awaitTrue("the spurt never opened") { rx.speakingSessions.value == setOf(1) }
     }
 
-    /** Closes the open spurt and returns once its closing sample is published. */
+    /**
+     * Closes the open spurt and returns once its closing sample is published *and* the speaking
+     * set has caught up. Both halves: the poll publishes the closing sample before it clears
+     * speakingSessions, so returning on the sample alone leaves the set still reading `{1}` — and
+     * the next openSpurt is then satisfied by that stale value without the poll ever seeing the
+     * new spurt, which never opens and so never closes. Measured at 2 in 30 runs.
+     */
     private fun closeSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver, before: PlayoutStats?) {
         fake.audibleSessions = emptySet()
         awaitTrue("a spurt must publish stats when it ends") {
             rx.playoutStats.value != null && rx.playoutStats.value !== before
         }
+        awaitTrue("the spurt never cleared the speaking set") { rx.speakingSessions.value.isEmpty() }
     }
 
     /**
