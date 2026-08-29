@@ -15,6 +15,14 @@ jobs:
     services:
       mumble:
         image: mumblevoip/mumble-server:latest
+        env:
+          # Murmur globally bans an address after 10 connection attempts in 120 s, and
+          # LiveServerIntegrationTest's readiness probe retries once a second for up to a minute:
+          # a container slow to accept would ban the runner, and every test after it would fail
+          # on a handshake the server refuses to answer — indistinguishable from a client bug.
+          # The ban cannot be lifted, only waited out, so the whole run would be lost. Nothing a
+          # throwaway test container gets from the protection it exists to give public servers.
+          MUMBLE_CONFIG_autobanAttempts: 0
         ports:
           - 64738:64738/tcp
     steps:
