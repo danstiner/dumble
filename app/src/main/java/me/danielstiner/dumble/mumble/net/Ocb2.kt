@@ -31,8 +31,16 @@ class Ocb2(key: ByteArray) {
      * [tagOut]. In-place use (same array, same offset) is safe.
      *
      * Returns false only when the last full block is one the XEX* forgery can exploit and
-     * [modifyPlainOnXEXStarAttack] is false; with the flag set (production) that block is rewritten
-     * and the result is true.
+     * [modifyPlainOnXEXStarAttack] is false. **A false return does not mean nothing was written:**
+     * [output] and [tagOut] are filled either way, and in that case they hold exactly the
+     * ciphertext the forgery of eprint 2019/311 wants. A caller passing the flag as false must
+     * discard both rather than treat false as "no output".
+     *
+     * With the flag set, which is production, the exploitable block has one bit of its first byte
+     * flipped and the result is true. The flip lands only in this class's scratch, so [input] is
+     * untouched and the sender is never told its frame will decrypt one bit different at the peer.
+     * That is deliberate -- nothing here re-reads a sent frame -- but it is why the flag's name
+     * describes upstream's behaviour rather than this one's.
      */
     fun seal(
         nonce: ByteArray,
@@ -173,7 +181,11 @@ class Ocb2(key: ByteArray) {
             "in-place output must not start after the input, got in=$inOff out=$outOff"
         }
         // The tag is written last and would otherwise land on top of finished ciphertext.
-        require(tagOut !== output && tagOut !== input) { "tag buffer must be its own array" }
+        // Also not the nonce: it is consumed into delta up front and the tag is written last, so
+        // aliasing them corrupts the caller's counter silently -- correct output, lost nonce.
+        require(tagOut !== output && tagOut !== input && tagOut !== nonce) {
+            "tag buffer must be its own array"
+        }
 
         encryptor.doFinal(nonce, 0, BLOCK, delta, 0)
         checksum.fill(0)

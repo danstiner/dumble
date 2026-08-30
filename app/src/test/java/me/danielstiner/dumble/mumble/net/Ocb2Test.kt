@@ -183,6 +183,15 @@ class Ocb2Test {
         assertThrows(IllegalArgumentException::class.java) {
             Ocb2(key).seal(nonce, buf, 0, 64, buf, 0, buf)
         }
+        // The nonce is the third array the tag must not be: it is read up front and the tag is
+        // written last, so aliasing loses the caller's counter with no other symptom.
+        val ownNonce = ByteArray(16) { (0x40 + it).toByte() }
+        assertThrows(IllegalArgumentException::class.java) {
+            Ocb2(key).seal(ownNonce, ByteArray(64), 0, 64, ByteArray(64), 0, ownNonce)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            Ocb2(key).open(ownNonce, ByteArray(64), 0, 64, ByteArray(64), 0, ownNonce)
+        }
 
         // The documented in-place case still works and matches the non-aliased result.
         val plain = ByteArray(64) { (it * 7).toByte() }
@@ -261,5 +270,66 @@ class Ocb2Test {
             assertArrayEquals("len=$len", want, buf.copyOf(len))
             assertArrayEquals("len=$len tag", wantTag, tag)
         }
+    }
+
+
+    /**
+     * The forgery of eprint 2019/311 §4, and the only test in which [Ocb2.open]'s countermeasure
+     * fires. Everything else here drives it on its negative path, so without this the whole check
+     * could be inverted or removed and the suite would stay green — while [CryptState] consumes
+     * exactly that boolean as half of what authenticates a packet.
+     *
+     * The attack: encrypt a two-block message whose first block is the 128-bit encoding of the
+     * length 128, and `C1 xor M1` is then a valid one-block ciphertext under the same nonce whose
+     * tag is `C2 xor M2`. The assertion that the recomputed tag equals that forged tag is what
+     * makes this a forgery rather than garbage — it would verify if the check were not there.
+     */
+    @Test
+    fun openRejectsTheXexStarForgery() {
+        val key = ByteArray(16) { it.toByte() }
+        val nonce = ByteArray(16) { (0x40 + it).toByte() }
+
+        // M1 is len(128) as a 128-bit big-endian integer; M2 is arbitrary.
+        val plain = ByteArray(32) { if (it == 15) 0x80.toByte() else if (it >= 16) 0x42 else 0 }
+        val cipher = ByteArray(32)
+        val tag = ByteArray(16)
+
+        // With the countermeasure off, seal reports the shape rather than perturbing it.
+        assertFalse(
+            "the encrypt side must flag an exploitable block",
+            Ocb2(key).seal(nonce, plain, 0, 32, cipher, 0, tag, modifyPlainOnXEXStarAttack = false),
+        )
+
+        val forgedCipher = ByteArray(16) { (cipher[it].toInt() xor plain[it].toInt()).toByte() }
+        val forgedTag = ByteArray(16) { (cipher[16 + it].toInt() xor plain[16 + it].toInt()).toByte() }
+
+        val recovered = ByteArray(16)
+        val recomputed = ByteArray(16)
+        val accepted = Ocb2(key).open(nonce, forgedCipher, 0, 16, recovered, 0, recomputed)
+
+        assertArrayEquals(
+            "the forged tag must be the one open() recomputes, or this is not a forgery",
+            forgedTag,
+            recomputed,
+        )
+        assertFalse("open() must refuse the forgery", accepted)
+    }
+
+    /** With the countermeasure on, the same plaintext seals and opens, one bit perturbed. */
+    @Test
+    fun theExploitableBlockIsPerturbedRatherThanRefused() {
+        val key = ByteArray(16) { it.toByte() }
+        val nonce = ByteArray(16) { (0x40 + it).toByte() }
+        val plain = ByteArray(32) { if (it == 15) 0x80.toByte() else if (it >= 16) 0x42 else 0 }
+        val cipher = ByteArray(32)
+        val tag = ByteArray(16)
+        assertTrue(Ocb2(key).seal(nonce, plain, 0, 32, cipher, 0, tag))
+        assertEquals("the caller's plaintext is never written to", 0, plain[0].toInt())
+
+        val recovered = ByteArray(32)
+        val recomputed = ByteArray(16)
+        assertTrue(Ocb2(key).open(nonce, cipher, 0, 32, recovered, 0, recomputed))
+        assertArrayEquals(tag, recomputed)
+        assertEquals("the receiver recovers the perturbed byte", 1, recovered[0].toInt())
     }
 }
