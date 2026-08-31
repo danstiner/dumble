@@ -230,10 +230,12 @@ class CryptStateTest {
         assertNotNull(receive(b, send(a, payload(1))))
         val before = b.stats()
         val random = Random(11)
+        val unkeyed = CryptState()
         repeat(2000) {
-            val junk = ByteArray(random.nextInt(80))
+            val junk = ByteArray(random.nextInt(2048))
             random.nextBytes(junk)
             assertNull(receive(b, junk))
+            assertEquals(-1, unkeyed.decrypt(junk, junk.size, junk))
         }
         // Junk whose low byte happens to rebuild into a spent slot is refused by the window
         // rather than the tag, so the replay count moves; nothing else may.

@@ -160,6 +160,7 @@ class CryptStatePropertyTest {
             var accepted = 0
             var replays = 0
             var highest = 0
+            var expectedLate = 0
             var i = 0
             while (i < packets) {
                 // Groups are consecutive and disjoint, so every index reaches the receiver at most
@@ -173,6 +174,9 @@ class CryptStatePropertyTest {
                     assertEquals("seed=$seed: in-window packet $idx was refused", 48, result)
                     assertEquals("seed=$seed: wrong plaintext for $idx", idx.toByte(), out[0])
                     accepted++
+                    // Ground truth for the late count: a delivery is late exactly when a higher
+                    // counter was already accepted.
+                    if (idx + 1 < highest) expectedLate++
                     highest = maxOf(highest, idx + 1)
                     // A quarter are sent again immediately, so the replay path runs throughout.
                     if (rnd.nextInt(4) == 0) {
@@ -192,7 +196,7 @@ class CryptStatePropertyTest {
             // Conservation: every counter up to the highest accepted is either good or still
             // missing, and reordering registered as late without inflating either.
             assertEquals("seed=$seed: good + lost", highest, stats.good + stats.lost)
-            assertTrue("seed=$seed: late=${stats.late}", stats.late in 1 until stats.good)
+            assertEquals("seed=$seed: late", expectedLate, stats.late)
         }
     }
 
@@ -214,7 +218,8 @@ class CryptStatePropertyTest {
             val receiver = CryptState().apply { setKeys(key, theirs, ours) }
 
             repeat(8) { packet ->
-                val len = rnd.nextInt(0, 300)
+                // Up to MTU-scale, so multi-block payloads the size of real voice datagrams run too.
+                val len = rnd.nextInt(0, 1500)
                 val plain = ByteArray(len).also { rnd.nextBytes(it) }
                 val wire = ByteArray(len + CryptState.OVERHEAD)
                 val out = ByteArray(len)
