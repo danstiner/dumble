@@ -13,7 +13,7 @@ A session is one TLS-over-TCP **control channel** plus, optionally, one encrypte
 channel** to the same host and port. Everything the UDP channel carries can also ride the control
 channel inside `UDPTunnel` frames, so TCP alone is a complete session — that is dumble today.
 The UDP transport is in flight (`docs/superpowers/specs/2026-08-27-udp-voice-transport-design.md`);
-its crypto layer is `net/CryptState.kt` (#116, in flight).
+its crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`.
 
 ## Control channel
 
@@ -104,8 +104,11 @@ the UDP path exists.
 
 ## The UDP channel: OCB2-AES128
 
-UDP datagrams are encrypted with OCB2 under AES-128 (`net/CryptState.kt`, a port of upstream
-`CryptStateOCB2.cpp`). The handshake `CryptSetup` delivers the shared key and two 16-byte
+UDP datagrams are encrypted with OCB2 under AES-128. The cipher is `net/Ocb2.kt` and the packet
+layer around it is `net/CryptState.kt`; both are written from Rogaway's OCB2 paper and this
+protocol description rather than ported from upstream's `CryptStateOCB2.cpp`, so what follows
+describes the wire format both must produce, then where dumble's receiver differs by choice.
+The handshake `CryptSetup` delivers the shared key and two 16-byte
 nonces — `client_nonce` seeds the client's encrypt IV and the server's decrypt IV,
 `server_nonce` the reverse. On the wire:
 
@@ -117,28 +120,43 @@ nonces — `client_nonce` seeds the client's encrypt IV and the server's decrypt
 4-byte datagram with no payload is legal). The tag is the first 3 bytes of the 16-byte OCB
 authentication tag.
 
-**IV scheme.** The IV is the full 16-byte nonce used as a counter: the sender increments byte 0
-before every packet, carrying into higher bytes on wrap. Only byte 0 is transmitted; the
-receiver reconstructs the rest by tracking. In-order is `(iv[0]+1) & 0xFF`. The window is
-asymmetric: packets up to 29 behind are decrypted against a temporarily rewound IV, wrap-aware
-(byte 1 borrows); 30 or more behind are dropped. A forward gap skips the IV ahead, wrap-aware
-(byte 1 carries), and counts the skipped packets as `lost` — accepted all the way to the
-128-value ambiguity boundary of the mod-256 counter, past which a jump reads as behind and is
-dropped. Replays are caught by a 256-slot history table, one slot per value of `iv[0]`, recording the "generation" (`iv[1]`) last accepted there.
+**IV scheme.** The IV is the full 16-byte nonce used as a counter: the sender increments it
+before every packet, carrying into higher bytes on wrap. Only the low byte is transmitted, so the
+receiver must rebuild the other fifteen from the counter it already holds — and that byte gives
+it 256 candidates to choose between. Which one it picks is receiver-local: nothing on the wire
+records the choice, so a client is free to set its own tolerance for reordering and loss.
 
-**Upstream's replay table has a stall defect, fixed here.** Upstream zero-fills the byte-valued
-history table, so "never visited" is indistinguishable from "visited in generation 0x00".
-Nonces are random, so 1 keying in 256 starts with `iv[1] == 0` — and then the first lost or
-reordered packet lands on an untouched slot, falsely matches as a replay, and is rejected; since
-rejection restores the IV, every following packet recomputes the identical comparison and the
-receive direction wedges permanently. Measured on this port with upstream semantics: after one
-dropped packet, 0 of the next 600 decrypt (the stall survives IV wrap); with generation 1
-instead of 0, 600 of 600. Upstream never noticed because the desktop client masks it — any
-failed decrypt with no success in 5 s triggers a crypt resync (below) and the symptom collapses
-to a rare few-second one-way dropout indistinguishable from network loss. Dumble instead fixes
-the table: entries widened to `Int`, unvisited slots `-1`, a generation no byte can hold. The
-table is receiver-local bookkeeping — no wire byte derives from it — so this diverges from
-upstream's code, not its protocol. Pinned by `CryptStateTest.lossDoesNotStallWhenGenerationByteIsZero`.
+Dumble splits the 256 values 63 behind the highest counter accepted and the rest ahead, so a
+burst of up to 191 consecutive losses is ridden out and 63 packets of reordering are tolerated,
+with one guess covering both — never a second decrypt attempt an attacker could force. The
+asymmetry is deliberate: 63 behind is already 1.26 s of reordering at 50 packets/s, an order of
+magnitude past what networks produce, while multi-second loss bursts — a WiFi roam, a cell
+handoff — are routine, and only the behind side costs replay-tracking state. Anything
+further out rebuilds to the wrong counter and fails the tag, which is the right answer: at that
+distance a stale packet and a forged one are indistinguishable. Upstream chooses differently,
+tolerating 29 behind and jumping forward to the 128-value ambiguity boundary of the mod-256
+counter.
+
+Replays are caught before any decryption. Dumble keeps the sliding-window bitmap IPsec uses
+(RFC 6479) and SRTP requires at least 64 of (RFC 3711 §3.3.2) — the highest counter accepted plus
+one bit for each of the 63 below it — sized by the one 64-bit word that holds it, not by the wire:
+the hint only caps the late-plus-ahead split at 256.
+Upstream instead keeps a 256-slot history table, one slot per value of `iv[0]`, recording the
+"generation" (`iv[1]`) last accepted there.
+
+**Upstream's replay table has a stall defect the bitmap cannot have.** Upstream zero-fills the
+byte-valued history table, so "never visited" is indistinguishable from "visited in generation
+0x00". Nonces are random, so 1 keying in 256 starts with `iv[1] == 0` — and then the first lost
+or reordered packet lands on an untouched slot, falsely matches as a replay, and is rejected;
+since rejection restores the IV, every following packet recomputes the identical comparison and
+the receive direction wedges permanently. Upstream never noticed because the desktop client masks
+it — any failed decrypt with no success in 5 s triggers a crypt resync (below) and the symptom
+collapses to a rare few-second one-way dropout indistinguishable from network loss.
+
+A bitmap has no sentinel to confuse with a real value: a bit is set or it is not, and the seed is
+marked consumed at keying so the first packet under a new key is unambiguously seed + 1. The
+defect is structurally absent rather than patched. Either way this is receiver-local bookkeeping —
+no wire byte derives from it — so it is a divergence from upstream's code, not its protocol.
 
 **Resync.** `CryptSetup` doubles as the recovery channel: a client that decrypts nothing for 5 s
 sends an empty `CryptSetup`, and the server replies with its current encrypt IV as
@@ -146,14 +164,27 @@ sends an empty `CryptSetup`, and the server replies with its current encrypt IV 
 direction symmetrically by requesting the client's nonce. Rate-limited to one request per 5 s.
 Voice lost during the gap is simply gone — the stream is live audio, not a transcript.
 
+Dumble adopts the reply unconditionally, as upstream does. Safe because of when a request can
+fire: only after five seconds without a good decrypt, so the top has stopped moving and an honest
+reply lands at or ahead of it — in practice every resync is a forward adoption. (The one honest
+exception: a junk datagram can trip a request just as a quiet stream resumes, and adopting the
+in-flight reply then reopens at most one window of just-resumed audio — the same trade upstream
+makes on every resync.) A top somehow ahead of the
+server (a forged tag winning a 2^24 collision moves it up to 192 ahead) is exactly what adoption
+heals; refusing to rewind would let one poisoned top refuse every truthful correction. The
+restart consumes rather than clears, so the window below the adopted counter still cannot
+replay — a guarantee upstream's generation table does not give.
+
 **OCB2 is cryptographically broken** (Inoue et al. 2019, [eprint 2019/311](https://eprint.iacr.org/2019/311)):
 universal forgery and full plaintext recovery when the attacker controls plaintexts with
 near-zero blocks. It remains on the wire for compatibility — every 1.5 server speaks it and
-nothing else for UDP. Upstream's counter-cryptanalysis is ported as-is: when the second-to-last
-plaintext block is all zeros but the last byte (the attack's precondition), the encryptor flips
-one plaintext bit before encrypting (upstream: “modify the packet in a way which should not
-affect the audio”), and the decryptor treats the pattern as a detected forgery. The TCP tunnel does not use OCB2 at all;
-tunneled voice has TLS's integrity instead.
+nothing else for UDP. The two countermeasures peers expect are therefore implemented from the
+paper: when the last full plaintext block is all zeros but the last byte (the attack's
+precondition), the encryptor flips one plaintext bit before encrypting (upstream: “modify the
+packet in a way which should not affect the audio”), and the decryptor refuses a datagram whose
+recovered final block matches the current whitening mask — the shape the forgery's tail decrypts
+to — even when the tag matches. The TCP tunnel does not use OCB2 at all; tunneled voice has
+TLS's integrity instead.
 
 ## Divergences from the desktop client
 
@@ -162,6 +193,7 @@ Deliberate, documented where they live:
 - **Pre-1.5 servers refused** rather than joined without voice (`SessionStateMachine`).
 - **Legacy voice framing and CELT** not implemented — subsumed by the above.
 - **Positional audio** not implemented; voice is mono end to end (`CLAUDE.md` non-goals).
-- **Replay history sentinel** widened to fix the stall above (`net/CryptState.kt`).
+- **Sliding-window replay bitmap** rather than a generation table, avoiding the stall above, and
+  a wider reordering window (63 late, 191 consecutive losses) (`net/CryptState.kt`).
 - **Pin-before-authority trust ordering** (`docs/connection.md`).
 - **Client-side handshake deadline** — the protocol has none, dumble enforces 15 s.
