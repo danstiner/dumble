@@ -100,6 +100,10 @@ two bursts and grows it one burst per underrun, which is the AAudio guide's proc
 - **Shrink**: mid-spurt, one packet is shed per 2 s, only while the decoded audio is quiet, only
   while 20 ms over target — standing delay unwinds where it cannot be heard.
 - **Bounds**: 600 ms or 32 packets per queue; past either, the oldest is dropped and counted.
+- **Ordering**: a packet not ahead of the packet queued last is refused and counted
+  (`outOfOrder`) rather than reordered. Per spurt — a queued terminator ends the check — for the
+  senders below. A packet more than 600 ms behind the packet queued last is a restart whose
+  terminator was lost, and ends the spurt for it.
 - **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 100 ms (`kConcealSamples`),
   then the speaker goes silent; a slot retires after 100 ms of silence with its queue drained
   (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`).
@@ -115,6 +119,22 @@ slot —
 - **Realtime fills**: `setRealtime(true)`, on for the life of the session, makes every mutex
   acquisition on the fill path a `try_lock`; a fill that finds the reader inside `offer()`
   answers one burst of silence and counts it.
+
+## What senders put in `frame_number`
+
+The wire's `frame_number` counts 10 ms units, but each client keeps it differently, read at the
+source. murmur relays it, and the terminator, unchanged.
+
+| sender | counter | through a pause | terminator |
+|---|---|---|---|
+| Mumble desktop | per 10 ms frame, always | runs on (wall clock); resets after 5 s of silence | last packet, with zero-stuffed audio |
+| pymumble | 10 ms units of wall clock | runs on; resets after 5 s idle | never |
+| Humla (Mumla) | advances only while talking | stands still | padded, stamped inside the previous packet's span; omitted about half the time |
+| mumble-web | restarts at 0 every spurt | — | a bare flag; murmur forwards it with empty `opus_data` |
+
+Two rules follow. Ordering is judged per spurt, ended by a terminator, so mumble-web's restart at
+zero plays instead of being refused behind the spurt before it. And Humla's terminator, which
+overlaps the packet before it but starts later, is ahead of the tail and plays.
 
 ## What the platform grants, by route
 
