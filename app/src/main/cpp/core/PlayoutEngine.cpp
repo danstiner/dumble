@@ -93,9 +93,9 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
     }
     PacketQueue& queue = queues_[slot];
     if (verdict == kOfferAccepted) {
-        queue.offer(data, len, samples, terminator);
+        queue.offer(data, len, samples, terminator, frameNumber);
     } else {
-        queue.offer(nullptr, 0, 0, true);
+        queue.offer(nullptr, 0, 0, true, frameNumber);
     }
     return verdict;
 }

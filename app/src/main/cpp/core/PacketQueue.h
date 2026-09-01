@@ -15,11 +15,11 @@ namespace dumble::playout {
  * Knows nothing about Opus, and holds no audio of its own — only bytes, and the sample count the
  * caller measured them at. The caller parses the packet header to reject a payload libopus cannot
  * read, so nothing here needs a decoder to decide what to keep or drop. That is what makes the
- * buffering policy — gate, high-water, drop-oldest — testable on synthetic bytes, and it is where
- * a reorder buffer keyed on `frame_number` grows when UDP lands.
+ * buffering policy — gate, high-water, drop-oldest — testable on synthetic bytes.
  *
- * Arrival order is correct order today: this slice receives audio only through the TCP tunnel,
- * which delivers in order and without loss, so the pool is a plain FIFO ring.
+ * The pool is a FIFO ring by arrival. The sender's `frame_number` is kept beside each packet so
+ * that one arriving behind what is already queued can be refused rather than played out of order.
+ * Reordering is not attempted — see outOfOrderPackets().
  *
  * Not internally synchronized. PlayoutEngine holds its mutex across every method here.
  */
@@ -34,8 +34,20 @@ public:
      *  oversized `len` aborts in release as well: past one entry lies the rest of the pool.
      *
      *  A terminator with no payload is the ordinary way a spurt ends: `data` may be null when
-     *  `len` is 0, and the latch is what releases a tail below the target. */
-    void offer(const uint8_t* data, int len, int samples, bool terminator);
+     *  `len` is 0, and the latch is what releases a tail below the target.
+     *
+     *  `frameNumber` is the sender's clock in kFrameNumberMillis units. A packet not ahead of the
+     *  packet queued last is refused and counted rather than stored. The check holds within one
+     *  spurt only: a queued terminator ends ordering, so a sender whose counter restarts every
+     *  spurt is not refused. The terminator flag itself latches before the check, so a refused
+     *  terminator still ends the spurt. A packet further behind the packet queued last than the
+     *  ring can hold is taken as that restart with its terminator lost, and ends the spurt for it.
+     *
+     *  Two packets stamped alike are a duplicate to this check, so a sender whose packets are
+     *  shorter than one frame-number unit (2.5 or 5 ms) keeps only the first of each: a trade
+     *  for duplicate suppression, taken because Mumble's own client cannot send one and
+     *  JitterEstimator already declines to estimate for it. */
+    void offer(const uint8_t* data, int len, int samples, bool terminator, uint64_t frameNumber);
 
     /** Copies the next playable packet into `out`, returning its length; 0 when the queue is empty
      *  or the prebuffer gate has not opened, negative when `outCap` is too small for the packet.
@@ -107,14 +119,24 @@ public:
      *  reset(), so a retiring slot must be harvested first. */
     int droppedPackets() const { return droppedPackets_; }
 
+    /** Packets refused because they were not ahead of the packet queued last — stragglers and
+     *  duplicates. Reordering them would mean decoupling entries from their pool slots, and
+     *  reorder on one UDP path is rare enough that this counter ships first, so the decision is
+     *  made on a measurement. */
+    int outOfOrderPackets() const { return outOfOrderPackets_; }
+
 private:
-    /** Four bytes, so the whole ring is two cache lines. Both fields are bounded by constants
-     *  small enough to narrow; PacketQueue.cpp static_asserts that they still are. */
+    /** `frame` is the low 32 bits of the wire's frame number, compared by signed difference like
+     *  a TCP sequence number, so a sender's counter wrapping or restarting needs no case of its
+     *  own. `samples` is bounded by kMaxPacketSamples, which PacketQueue.cpp static_asserts still
+     *  fits its 15 bits. */
     struct Entry {
         uint16_t len = 0;
-        uint16_t samples = 0;
+        uint16_t samples : 15 = 0;
+        uint16_t terminator : 1 = 0;
+        uint32_t frame = 0;
     };
-    static_assert(sizeof(Entry) == 4, "the ring's footprint is the point");
+    static_assert(sizeof(Entry) == 8, "Entry has grown padding");
 
     /** Discards the oldest queued packet. */
     void dropOldest();
@@ -136,6 +158,7 @@ private:
     int droppedPackets_ = 0;
     int shrunkPackets_ = 0;
     int catchUpPackets_ = 0;
+    int outOfOrderPackets_ = 0;
     Entry entries_[kMaxQueuedPackets];
 };
 
