@@ -78,7 +78,7 @@ internal class RouteState(private val onRoutes: (AudioRoutes) -> Unit) {
      * with `firstOrNull`, which always finds the first. At 34+ the name comes straight from the
      * platform's own `CallEndpoint` and is the real device name: measured on a Pixel 7a at API 37,
      * where revoking BLUETOOTH_CONNECT left the row reading "OpenRun by Shokz" either way. minSdk
-     * is 30, so the old path is still live and this still earns its keep.
+     * is 31, so the old path is still live and this still earns its keep.
      */
     fun publish() {
         if (retired) return
