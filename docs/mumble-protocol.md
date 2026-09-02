@@ -1,7 +1,7 @@
 # The Mumble protocol
 
-The wire protocol as dumble speaks it: Mumble 1.5+, protobuf voice, Opus only. This is the
-reference for what crosses the network; how dumble is structured around it lives in
+The wire protocol as Dumble speaks it: Mumble 1.5+, protobuf voice, Opus only. This is the
+reference for what crosses the network; how Dumble is structured around it lives in
 `docs/architecture.md` and `docs/connection.md`. Upstream's own documentation is at
 [mumble.readthedocs.io](https://mumble.readthedocs.io/) and in the protobuf
 schemas vendored under `app/src/main/proto/` (`Mumble.proto`, `MumbleUDP.proto`), whose comments
@@ -11,7 +11,7 @@ are normative.
 
 A session is one TLS-over-TCP **control channel** plus, optionally, one encrypted UDP **voice
 channel** to the same host and port. Everything the UDP channel carries can also ride the control
-channel inside `UDPTunnel` frames, so TCP alone is a complete session — that is dumble today.
+channel inside `UDPTunnel` frames, so TCP alone is a complete session — that is Dumble today.
 The UDP transport is in flight (`docs/superpowers/specs/2026-08-27-udp-voice-transport-design.md`);
 its crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`.
 
@@ -25,7 +25,7 @@ pin-on-first-use (`docs/connection.md`). Framing is fixed:
 ```
 
 Payloads are the protobuf messages of `Mumble.proto`, except type 1 (`UDPTunnel`), whose payload
-is a raw voice datagram, not protobuf. Types dumble does not model are ignored, which is also the
+is a raw voice datagram, not protobuf. Types Dumble does not model are ignored, which is also the
 protocol's forward-compatibility story. Dumble caps inbound payloads at 8 MiB
 (`MumbleCodec.MAX_TCP_PAYLOAD`) as a hostile-length guard; the protocol itself has no cap.
 
@@ -46,7 +46,7 @@ protocol's forward-compatibility story. Dumble caps inbound payloads at 8 MiB
 | 24 | ServerConfig | limits (message length, image length…) |
 
 The rest (BanList, ACL, QueryUsers, UserList, ContextAction…, RequestBlob, SuggestConfig,
-UserStats, PluginDataTransmission) are administrative or optional; dumble ignores what it does
+UserStats, PluginDataTransmission) are administrative or optional; Dumble ignores what it does
 not use.
 
 **Version encoding.** Two encodings coexist. Legacy `version_v1` is a u32:
@@ -59,7 +59,7 @@ itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
 `Authenticate` without waiting for the server's. The server then streams `CryptSetup`,
 `CodecVersion`, every `ChannelState`, every `UserState`, and finally `ServerSync`, which is the
 "you are in" — until it arrives nothing is authoritative. Failure is a `Reject` or a closed
-socket. The protocol has no handshake timeout; dumble imposes 15 s to `ServerSync`
+socket. The protocol has no handshake timeout; Dumble imposes 15 s to `ServerSync`
 (`HANDSHAKE_DEADLINE_MS`). Servers older than 1.5 are refused at the `Version` message: a 1.4
 server parses protobuf voice as malformed legacy CELT and silently drops every frame, and voice
 is the point of connecting.
@@ -107,7 +107,7 @@ the UDP path exists.
 UDP datagrams are encrypted with OCB2 under AES-128. The cipher is `net/Ocb2.kt` and the packet
 layer around it is `net/CryptState.kt`; both are written from Rogaway's OCB2 paper and this
 protocol description rather than ported from upstream's `CryptStateOCB2.cpp`, so what follows
-describes the wire format both must produce, then where dumble's receiver differs by choice.
+describes the wire format both must produce, then where Dumble's receiver differs by choice.
 The handshake `CryptSetup` delivers the shared key and two 16-byte
 nonces — `client_nonce` seeds the client's encrypt IV and the server's decrypt IV,
 `server_nonce` the reverse. On the wire:
@@ -196,4 +196,4 @@ Deliberate, documented where they live:
 - **Sliding-window replay bitmap** rather than a generation table, avoiding the stall above, and
   a wider reordering window (63 late, 191 consecutive losses) (`net/CryptState.kt`).
 - **Pin-before-authority trust ordering** (`docs/connection.md`).
-- **Client-side handshake deadline** — the protocol has none, dumble enforces 15 s.
+- **Client-side handshake deadline** — the protocol has none, Dumble enforces 15 s.
