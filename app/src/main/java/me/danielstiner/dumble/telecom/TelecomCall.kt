@@ -1,8 +1,15 @@
 package me.danielstiner.dumble.telecom
 
+import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Process
 import android.telecom.DisconnectCause
+import android.telecom.PhoneAccount
+import android.telecom.PhoneAccountHandle
+import android.telecom.TelecomManager
 import android.util.Log
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
@@ -41,6 +48,44 @@ internal fun CallEndpointCompat.toAudioRoute() = AudioRoute(
     },
     name = name.toString(),
 )
+
+/** Transactional calls at 34+, a ConnectionService below — the fork core-telecom names its
+ *  PhoneAccount after. */
+internal fun usesTransactionalCalls() =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
+/**
+ * The account core-telecom registers for this package, rebuilt with the one extra that keeps our
+ * calls out of other apps' in-call UIs — see [TelecomCall.hideCallsFromInCallServices].
+ *
+ * Internal because nothing else may guess at the handle: `CoreTelecomAccountTest` registers the
+ * real thing and asserts this matches, which is the only thing standing between a core-telecom
+ * version bump and [TelecomCall] silently registering a second, useless account while the real one
+ * stays exposed to every dialer.
+ */
+internal fun coreTelecomPhoneAccount(context: Context): PhoneAccount {
+    val handle = PhoneAccountHandle(
+        ComponentName(
+            context.packageName,
+            if (usesTransactionalCalls()) context.packageName
+            else "androidx.core.telecom.internal.JetpackConnectionService",
+        ),
+        "Jetpack",
+        Process.myUserHandle(),
+    )
+    var capabilities = PhoneAccount.CAPABILITY_SELF_MANAGED
+    if (usesTransactionalCalls()) {
+        capabilities = capabilities or PhoneAccount.CAPABILITY_SUPPORTS_TRANSACTIONAL_OPERATIONS
+    }
+    return PhoneAccount.builder(handle, TelecomCall.DISPLAY_NAME)
+        .setCapabilities(capabilities)
+        .setExtras(
+            Bundle().apply {
+                putBoolean(PhoneAccount.EXTRA_ADD_SELF_MANAGED_CALLS_TO_INCALLSERVICE, false)
+            }
+        )
+        .build()
+}
 
 /**
  * A call's route state. Built before the addCall block runs, because the endpoint collectors live
@@ -228,6 +273,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
                 // Inside the try: registration throws too, and needs the same handling as addCall.
                 if (!registered) {
                     manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+                    hideCallsFromInCallServices()
                     registered = true
                 }
                 manager.addCall(
@@ -411,6 +457,29 @@ class TelecomCall(private val context: Context) : VoiceCall {
         l.job.cancel()
     }
 
+    /**
+     * Ask Telecom to keep our calls away from InCallServices. An InCallService that declares
+     * `INCLUDE_SELF_MANAGED_CALLS` — Android Auto, some OEM dialers — is otherwise bound for a
+     * self-managed call and draws its own full-screen call UI over ours: connecting opens a screen
+     * the user never asked for, and Back is the way out.
+     *
+     * Registering the account a second time is the only way to attach the extra: core-telecom
+     * registers it with a fixed extras bundle and offers no way in, through 1.1.0-beta01. Rebuilt
+     * rather than read back and amended, because reading an account goes through
+     * `TelecomServiceImpl.canGetPhoneAccount`, which enforces READ_PHONE_STATE — see
+     * [coreTelecomPhoneAccount] for what keeps the rebuild honest.
+     *
+     * No version guard: the extra reads as an API 34 constant, but the platform has honoured it
+     * since 31 — measured on 30, 31 and 37, where only 30 registers it and ignores it. Which is
+     * why minSdk is 31.
+     */
+    private fun hideCallsFromInCallServices() {
+        val telecom = context.getSystemService(TelecomManager::class.java) ?: return
+        // Best-effort: a call is worth more than the screen it opens behind.
+        runCatching { telecom.registerPhoneAccount(coreTelecomPhoneAccount(context)) }
+            .onFailure { Log.w(TAG, "could not hide our calls from InCallServices", it) }
+    }
+
     private fun attributesFor(endpoint: MumbleEndpoint, username: String) = CallAttributesCompat(
         displayName = DISPLAY_NAME,
         // Use Mumble's URL scheme to encode user, host, and port for call history. Never the
@@ -436,7 +505,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         }
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "TelecomCall"
         const val DISPLAY_NAME = "Dumble"
         const val PLATFORM_TIMEOUT_MS = 5_000L
