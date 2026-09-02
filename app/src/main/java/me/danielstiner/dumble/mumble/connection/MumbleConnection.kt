@@ -123,7 +123,7 @@ class MumbleConnection internal constructor(
 
     /** The transmit mode, as a setting: outlives attempts and is applied to every session this
      *  connection opens. UI thread writes it. */
-    @Volatile private var transmitMode = TransmitMode.PushToTalk
+    @Volatile private var transmitMode = TransmitMode.VoiceActivity
 
     /**
      * One connection attempt. Built by [connect]'s coroutine and published as [current] under

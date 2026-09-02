@@ -135,7 +135,7 @@ class CallControlsTest {
             CallControls(
                 talkBlock = block, deafened = false, audioRoutes = AudioRoutes(),
                 onTransmitting = { events += it }, onToggleDeafen = {}, onSelectRoute = {},
-                onHangUp = {},
+                onHangUp = {}, transmitMode = TransmitMode.PushToTalk,
             )
         }
         compose.onNodeWithContentDescription("Push to talk").performTouchInput { down(center) }
@@ -190,7 +190,7 @@ class CallControlsTest {
                 CallControls(
                     talkBlock = null, deafened = false, audioRoutes = AudioRoutes(),
                     onTransmitting = { events += it }, onToggleDeafen = {}, onSelectRoute = {},
-                    onHangUp = {},
+                    onHangUp = {}, transmitMode = TransmitMode.PushToTalk,
                 )
             }
         }
