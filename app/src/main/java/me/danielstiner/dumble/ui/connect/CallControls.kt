@@ -77,7 +77,7 @@ fun CallControls(
     onSelectRoute: (String) -> Unit,
     onHangUp: () -> Unit,
     modifier: Modifier = Modifier,
-    transmitMode: TransmitMode = TransmitMode.PushToTalk,
+    transmitMode: TransmitMode = TransmitMode.VoiceActivity,
     muted: Boolean = false,
     inaudible: Boolean = false,
     onToggleMute: () -> Unit = {},

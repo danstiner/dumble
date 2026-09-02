@@ -45,7 +45,7 @@ class ServerConfigDataStore(private val dataStore: DataStore<Preferences>) : Ser
     override suspend fun transmitMode(): TransmitMode {
         // By name, not ordinal: an ordinal silently becomes a different mode when the enum grows.
         val name = dataStore.data.first()[TRANSMIT_MODE]
-        return TransmitMode.entries.firstOrNull { it.name == name } ?: TransmitMode.PushToTalk
+        return TransmitMode.entries.firstOrNull { it.name == name } ?: TransmitMode.VoiceActivity
     }
 
     override suspend fun saveTransmitMode(mode: TransmitMode) {

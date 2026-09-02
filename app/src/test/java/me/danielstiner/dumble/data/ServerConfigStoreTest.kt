@@ -54,8 +54,8 @@ class ServerConfigStoreTest {
         }
     }
 
-    @Test fun freshStoreIsPushToTalk() = runBlocking {
-        withStore { store -> assertEquals(TransmitMode.PushToTalk, store.transmitMode()) }
+    @Test fun freshStoreIsVoiceActivity() = runBlocking {
+        withStore { store -> assertEquals(TransmitMode.VoiceActivity, store.transmitMode()) }
     }
 
     @Test fun transmitModeRoundTrips() = runBlocking {
@@ -67,14 +67,14 @@ class ServerConfigStoreTest {
         }
     }
 
-    /** A name the enum no longer has reads as push-to-talk rather than throwing. */
-    @Test fun anUnknownStoredModeFallsBackToPushToTalk() = runBlocking {
+    /** A name the enum no longer has reads as the default rather than throwing. */
+    @Test fun anUnknownStoredModeFallsBackToVoiceActivity() = runBlocking {
         val file = tmp.newFile("unknown_mode.preferences_pb").also { it.delete() }
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         try {
             val ds = PreferenceDataStoreFactory.create(scope = scope) { file }
             ds.edit { it[stringPreferencesKey("transmit_mode")] = "Telepathy" }
-            assertEquals(TransmitMode.PushToTalk, ServerConfigDataStore(ds).transmitMode())
+            assertEquals(TransmitMode.VoiceActivity, ServerConfigDataStore(ds).transmitMode())
         } finally {
             scope.coroutineContext[Job]!!.cancelAndJoin()
         }

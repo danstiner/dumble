@@ -76,7 +76,7 @@ data class ConnectUiState(
     val inaudible: Boolean = false,
     val talkBlock: TalkBlock? = null,
     // The user's setting; the connection applies it to every session.
-    val transmitMode: TransmitMode = TransmitMode.PushToTalk,
+    val transmitMode: TransmitMode = TransmitMode.VoiceActivity,
     // The platform's answer, not the last tap — same discipline as [deafened]. One round trip of
     // lag on the caption, and no second copy of the truth to drift.
     val audioRoutes: AudioRoutes = AudioRoutes(),

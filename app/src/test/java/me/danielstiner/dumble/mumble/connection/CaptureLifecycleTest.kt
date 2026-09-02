@@ -477,6 +477,7 @@ class CaptureLifecycleTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitMode(TransmitMode.PushToTalk)
         conn.requestCapture()
         awaitTrue("the first engine must open") { handles.size == 1 }
 
@@ -596,6 +597,7 @@ class CaptureLifecycleTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitMode(TransmitMode.PushToTalk)
         conn.requestCapture()
         awaitTrue("the engine must open") { handles.size == 1 }
 
@@ -646,6 +648,7 @@ class CaptureLifecycleTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitMode(TransmitMode.PushToTalk)
         conn.requestCapture()
         awaitTrue("the engine must open") { handles.size == 1 }
 
