@@ -18,7 +18,7 @@ package me.danielstiner.dumble.mumble.voice
  * `RouteState.publish` dedupes the pair to a single row rather than render a second, identical one
  * that a tap could never reach. At 34+ the name comes straight from the platform's own `CallEndpoint`
  * with no lookup of ours, so the collapse cannot happen there — measured on a Pixel 7a at API 37,
- * where revoking the permission still left the row reading its real device name. minSdk is 30, so
+ * where revoking the permission still left the row reading its real device name. minSdk is 31, so
  * the old path stays live and the dedupe earns its keep.
  *
  * Withholding that permission is not ours to do, incidentally: `core-telecom` declares it in its own

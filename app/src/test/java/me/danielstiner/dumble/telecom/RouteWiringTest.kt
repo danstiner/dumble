@@ -24,7 +24,7 @@ import java.util.UUID
  * in toggle mode.
  *
  * Robolectric, not for any UI reason, but because `CallEndpointCompat`'s constructor needs a real
- * `ParcelUuid` — `@RequiresApi(O)`, comfortably below this project's minSdk 30, same reasoning
+ * `ParcelUuid` — `@RequiresApi(O)`, comfortably below this project's minSdk 31, same reasoning
  * `CallControlsTest` already relies on for its own Robolectric run.
  */
 @RunWith(AndroidJUnit4::class)

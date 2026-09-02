@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         applicationId = "me.danielstiner.dumble"
-        minSdk = 30
+        minSdk = 31
         targetSdk = 37
         versionCode = 5
         versionName = "0.3.0"
