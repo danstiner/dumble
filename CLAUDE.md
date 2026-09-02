@@ -19,7 +19,7 @@ Out of scope by decision, not by omission. Treat a request that assumes one of t
 misunderstanding worth raising before writing code.
 
 - Positional audio. Mumble ships a speaker's coordinates beside the audio (`positional_data`), and
-  the desktop client renders 3D voice from them; dumble does not. Voice is mono end to end, which
+  the desktop client renders 3D voice from them; Dumble does not. Voice is mono end to end, which
   is why nothing on the playout path carries a channel count.
 
 ## Reasoning Process
