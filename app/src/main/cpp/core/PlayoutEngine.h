@@ -123,6 +123,11 @@ public:
         // outward; if it moves, it moves here first.
         int64_t shrunkPackets;
         int64_t catchUpPackets;
+        // Audio the network never delivered, in samples; see PlayoutStats for the lost/dropped
+        // distinction.
+        int64_t lostSamples;
+        // Packets the queue refused as out of order; see PlayoutStats.
+        int64_t outOfOrderPackets;
         // Realtime-mode fills answered with silence because the reader held mutex_ — see
         // setRealtime. Monotonic, like the totals above.
         uint64_t contendedFills;
@@ -253,6 +258,8 @@ private:
     int64_t droppedPackets_ = 0;
     int64_t shrunkPackets_ = 0;
     int64_t catchUpPackets_ = 0;
+    int64_t lostSamples_ = 0;
+    int64_t outOfOrderPackets_ = 0;
     // Fill timing since the last stats() read. Written in the commit phase and read and zeroed
     // by stats(), both under mutex_.
     uint64_t fillMicrosSum_ = 0;

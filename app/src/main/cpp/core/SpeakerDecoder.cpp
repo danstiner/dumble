@@ -34,10 +34,11 @@ std::unique_ptr<SpeakerDecoder> SpeakerDecoder::create(int sampleRate, int maxQu
 
 SpeakerDecoder::SpeakerDecoder(std::unique_ptr<AudioDecoder> decoder, int maxQuantumSamples)
     : decoder_(std::move(decoder)),
-      // One fill decodes only while below a frame and one decode adds at most one packet, so this
-      // is the fifo's exact occupancy bound. bit_ceil because PcmRing wants a power of two: it
-      // rounds up on its own in release but only asserts in debug, so rounding here keeps this
-      // bound equal to the capacity the ring actually builds.
+      // One fill decodes only while below a frame, and one iteration adds either a concealed
+      // frame or one packet, never both, so a frame plus one packet is the exact occupancy bound.
+      // bit_ceil because PcmRing wants a power of two: it rounds up on its own in release but only
+      // asserts in debug, so rounding here keeps this bound equal to the capacity the ring
+      // actually builds.
       fifo_(std::bit_ceil(uint32_t(maxQuantumSamples + kMaxPacketSamples))),
       decodeScratch_(kMaxPacketSamples) {}
 
@@ -66,12 +67,12 @@ int SpeakerDecoder::conceal(int samples) {
     const int rounded =
         (samples + kConcealGridSamples - 1) / kConcealGridSamples * kConcealGridSamples;
     // A decode with no packet is libopus's concealment call: it invents plausible audio from the
-    // decoder's history, for exactly the duration asked. The engine calls this once per starved
-    // call with that call's whole shortfall, so in practice every request is 10 ms and a hold is a
-    // run of consecutive 10 ms requests, which libopus answers with a fade lasting ~60 ms.
-    // Covering a fill with 2.5 ms grid-sized requests instead collapses to silence after the
-    // first one, so the request is never subdivided — measured, and pinned by
-    // ConcealsTheWholeGapInOneRequest.
+    // decoder's history, for exactly the duration asked. The engine asks for a starved fill's
+    // whole shortfall on a stall and for one frame per pop across a hole, so in practice every
+    // request is 10 ms and a hold is a run of consecutive 10 ms requests, which libopus answers
+    // with a fade lasting ~60 ms. Covering a fill with 2.5 ms grid-sized requests instead
+    // collapses to silence after the first one, so a request is never subdivided — measured, and
+    // pinned by ConcealsTheWholeGapInOneRequest.
     const int n = decoder_->decode(nullptr, 0, decodeScratch_.data(), rounded);
     // A negative is an error code, not a length — the same guard as decode().
     if (n <= 0) return 0;

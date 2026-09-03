@@ -24,7 +24,9 @@ constexpr int kCounterFillMicrosMean = 6;
 // The stream's own count of bursts it played as silence, see OboePlayout::underruns.
 constexpr int kCounterUnderruns = 7;
 constexpr int kCounterLatencyMicros = 8;
-constexpr int kCounterCount = 9;
+constexpr int kCounterLostSamples = 9;
+constexpr int kCounterOutOfOrderPackets = 10;
+constexpr int kCounterCount = 11;
 
 struct Session {
     // In this order: the adapter is destroyed first, closing its stream, and only then the
@@ -108,6 +110,8 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
     countersOut[kCounterFillMicrosMean] = jlong(stats.fillMicrosMean);
     countersOut[kCounterUnderruns] = jlong(s.playout->underruns());
     countersOut[kCounterLatencyMicros] = latencyMillis < 0 ? -1 : jlong(llround(latencyMillis * 1000));
+    countersOut[kCounterLostSamples] = jlong(stats.lostSamples);
+    countersOut[kCounterOutOfOrderPackets] = jlong(stats.outOfOrderPackets);
     if (stats.speakers > 0) {
         int32_t audibleOut[pl::kMaxSpeakers];
         for (int n = 0; n < stats.speakers; n++) audibleOut[n] = stats.audible[n] ? 1 : 0;

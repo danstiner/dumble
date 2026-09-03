@@ -1201,3 +1201,365 @@ TEST_P(PlayoutEngineQuantum, ADrainedSpeakerRetiresAfterAboutOneHundredMilliseco
 }
 
 INSTANTIATE_TEST_SUITE_P(Quantum, PlayoutEngineQuantum, ::testing::Values(128, 480, 1088));
+
+TEST(PlayoutEngine, LostPacketIsConcealedRatherThanCompressed) {
+    // Terminated, so the stall-conceal path cannot substitute for a hole conceal failed to fill.
+    // Without the terminator, lostSamples alone proves nothing: PacketQueue::pop tallies the
+    // loss whether or not the engine concealed it.
+    auto e = newEngine();
+    const int32_t session = 1;
+    // Fill the cold gate with a contiguous run, so playout is under way before the loss.
+    arm(*e, session);
+    const std::vector<uint8_t> p = encode(1);
+    // The sender's next 10 ms packet never arrives: skip one unit of its frame clock.
+    frameFor(session)++;
+    ASSERT_EQ(pl::kOfferAccepted,
+              e->offer(session, p.data(), int(p.size()), frameFor(session)++,
+                       /*terminator=*/true));
+    // The cold-start run, plus the concealed hole (one 10 ms unit), plus the packet behind it. If
+    // the hole were never concealed, drainSpurt stops one fill short.
+    EXPECT_EQ(kColdStartPackets + 2, drainSpurt(*e));
+    // One 10 ms unit missing, charged once, as duration rather than as a packet count.
+    EXPECT_EQ(int64_t(kFrame), e->stats().lostSamples);
+}
+
+TEST(PlayoutEngine, ARetiredSpeakersLossAndOutOfOrderCountsSurviveItsSlot) {
+    // Mirrors ARetiredSpeakersDropsSurviveItsSlot: each tally lives on the queue, which
+    // retirement resets, so both must be harvested first or a channel reports zero the moment
+    // it retires.
+    auto e = newEngine();
+    const int32_t session = 1;
+    std::vector<int16_t> pcm(kFrame);
+    arm(*e, session);
+    // A duplicate of the last packet arm() queued: still unpopped, so this lands on the
+    // already-queued check rather than the (not yet established) cursor check.
+    const std::vector<uint8_t> dup = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted,
+              e->offer(session, dup.data(), int(dup.size()), frameFor(session) - 1, false));
+    frameFor(session)++;  // one 10 ms unit lost
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted,
+              e->offer(session, p.data(), int(p.size()), frameFor(session)++, /*terminator=*/true));
+    drainSpurt(*e);
+    for (int i = 0; i < kRetireIdleFills + 1; i++) producingThisFill(*e, pcm);
+    ASSERT_EQ(0, e->stats().speakers) << "the speaker never retired";
+    EXPECT_EQ(int64_t(kFrame), e->stats().lostSamples)
+        << "retirement lost the loss tally, or counted it twice";
+    EXPECT_EQ(1, e->stats().outOfOrderPackets)
+        << "retirement lost the out-of-order tally, or counted it twice";
+}
+
+TEST(PlayoutEngine, TwoLostSixtyMillisecondPacketsStillPlayTheOneBehindThem) {
+    // The fifo is sized for one quantum plus one packet: a pop adds either a concealed frame or a
+    // packet, never both. This pins that bound from the loss side: a 60 ms packet behind a 120 ms
+    // hole must still land whole once the hole's frames have been concealed and drained.
+    //
+    // Terminated, so the stall-conceal path cannot paper over a missing decode with more invented
+    // audio — without it, fillQuantum keeps producing regardless of whether the packet landed.
+    auto e = newEngine();
+    const int32_t session = 1;
+    std::vector<int16_t> pcm(kFrame);
+    ASSERT_NO_FATAL_FAILURE(playSpurt(*e, session, pcm));
+
+    // Two consecutive 60 ms packets never arrive: 12 frames, kMaxPacketSamples of hole.
+    frameFor(session) += 12;
+    const std::vector<uint8_t> p60 = encode(6);
+    ASSERT_EQ(pl::kOfferAccepted,
+              e->offer(session, p60.data(), int(p60.size()), frameFor(session)++,
+                       /*terminator=*/true));
+
+    // The concealed hole (kMaxPacketSamples) plus the packet behind it (2880 samples), in fills of
+    // kFrame. If the packet's decode silently dropped for want of fifo room, drainSpurt stops
+    // 2880 / kFrame = 6 fills short: kMaxPacketSamples alone drains in 12.
+    constexpr int kPacketSamples = 6 * 480;
+    EXPECT_EQ((pl::kMaxPacketSamples + kPacketSamples) / kFrame, drainSpurt(*e));
+    EXPECT_EQ(int64_t(pl::kMaxPacketSamples), e->stats().lostSamples);
+}
+
+// Real loss: arrivals stop for the gap, the ring drains by it, then the sender resumes with its
+// counter run on. Below target the queue conceals to the head and every concealed frame lets a
+// frame of new audio arrive, so the depth the loss took comes back exactly.
+TEST(PlayoutEngine, AHoleUnderRealLossRestoresTheDelayBelowTarget) {
+    auto engine = newEngine();
+    // Write-ahead lifts the target the gate and the queue's budget both use, so the steady state
+    // below sits at a target deeper than the gap; the estimator alone would settle near its floor.
+    engine->setWriteAheadSamples(20 * kFrame);
+    Talker t(1);
+    std::vector<int16_t> pcm(kFrame);
+    for (int i = 0; i < 200; i++) {
+        t.sendTone(*engine);
+        producingThisFill(*engine, pcm);
+    }
+    const int before = depthOf(*engine);
+    const int gap = 15;                                  // 150 ms lost: wider than the fade
+    ASSERT_GE(before, (gap + 2) * kFrame) << "the loss must be narrower than the depth to be a hole";
+    ASSERT_LE(before, engine->stats().targets[0] + kFrame) << "steady state sits at the gate's target";
+    for (int i = 0; i < gap; i++) producingThisFill(*engine, pcm);
+    t.skip(gap);
+    for (int i = 0; i < 100; i++) {
+        t.sendTone(*engine);
+        ASSERT_EQ(1, producingThisFill(*engine, pcm)) << "fill " << i;
+    }
+    EXPECT_NEAR(before, depthOf(*engine), kFrame);
+    EXPECT_EQ(int64_t(gap) * kFrame, engine->stats().lostSamples);
+    EXPECT_EQ(0, engine->stats().concealedGaps) << "a hole is lost, not a stall";
+}
+
+// Same loss with the queue carrying excess delay: after the fade the queue is still at or above
+// target, so the cursor jumps and the spurt resumes with only the fade added to where the loss
+// left it.
+TEST(PlayoutEngine, AHoleUnderRealLossReAnchorsAfterTheFadeAtTarget) {
+    auto engine = newEngine();
+    Talker t(1);
+    std::vector<int16_t> pcm(kFrame);
+    for (int i = 0; i < 200; i++) {
+        t.sendTone(*engine);
+        producingThisFill(*engine, pcm);
+    }
+    for (int i = 0; i < 20; i++) t.sendTone(*engine);   // 200 ms of excess: tone, so shrink is gated
+    for (int i = 0; i < 20; i++) {
+        t.sendTone(*engine);
+        producingThisFill(*engine, pcm);
+    }
+    const int before = depthOf(*engine);
+    const int gap = 15;                                  // 150 ms lost: wider than the fade
+    ASSERT_GE(before, engine->stats().targets[0] + (gap + 1) * kFrame)
+        << "after the loss the queue must still be at or above target";
+    for (int i = 0; i < gap; i++) producingThisFill(*engine, pcm);
+    t.skip(gap);
+    for (int i = 0; i < 100; i++) {
+        t.sendTone(*engine);
+        ASSERT_EQ(1, producingThisFill(*engine, pcm)) << "fill " << i;
+    }
+    EXPECT_NEAR(before - gap * kFrame + pl::kConcealSamples, depthOf(*engine), kFrame);
+    EXPECT_EQ(int64_t(gap) * kFrame, engine->stats().lostSamples);
+}
+
+// A counter that jumps while packets keep arriving (no real sender does this; a hostile or buggy
+// stamp can): the queue is at target, so the fade is concealed and the rest is skipped. Sitting
+// silent to the head would add the whole jump as standing delay for the rest of the spurt.
+TEST(PlayoutEngine, AJumpWithArrivalsContinuingCostsAtMostTheFade) {
+    auto engine = newEngine();
+    Talker t(1);
+    std::vector<int16_t> pcm(kFrame);
+    for (int i = 0; i < 200; i++) {
+        t.sendTone(*engine);
+        producingThisFill(*engine, pcm);
+    }
+    const int before = depthOf(*engine);
+    ASSERT_LE(engine->stats().targets[0], before + pl::kConcealSamples)
+        << "the jump must find the queue at or above target minus the fade";
+    const int jump = 30;                                 // 300 ms
+    t.skip(jump);
+    for (int i = 0; i < 100; i++) {
+        t.sendTone(*engine);
+        ASSERT_EQ(1, producingThisFill(*engine, pcm)) << "fill " << i;
+    }
+    EXPECT_NEAR(before + pl::kConcealSamples, depthOf(*engine), kFrame);
+    EXPECT_EQ(int64_t(jump) * kFrame, engine->stats().lostSamples);
+}
+
+// One packet stamped far in the future must not hold a slot in concealment for the life of the
+// connection: below target the hole is concealed for the ring's capacity at most, the cursor
+// jumps, the packet plays, and the slot retires like any other.
+TEST(PlayoutEngine, AFarFuturePacketLetsTheSlotRetire) {
+    auto engine = newEngine();
+    Talker t(1);
+    std::vector<int16_t> pcm(kFrame);
+    for (int i = 0; i < 200; i++) {
+        t.sendTone(*engine);
+        producingThisFill(*engine, pcm);
+    }
+    t.skip(100000);                                      // 1000 s ahead
+    t.sendTone(*engine);
+    int fills = 0;
+    while (engine->stats().speakers > 0 && fills < 400) {
+        producingThisFill(*engine, pcm);
+        fills++;
+    }
+    EXPECT_EQ(0, engine->stats().speakers) << "the slot never retired";
+    EXPECT_LT(fills, 200) << "capacity of concealment, the packet, the idle window: well under 2 s";
+    EXPECT_EQ(int64_t(pl::kHighWaterSamples), engine->stats().lostSamples) << "one gap, capped";
+}
+
+// A hole wider than one packet, at every device callback size. A single conceal call could not
+// cover past kMaxPacketSamples; a frame per pop conceals it in full, and the cursor advances by
+// exactly what was concealed whatever the callback asks for.
+TEST_P(PlayoutEngineQuantum, AHoleWiderThanAPacketIsConcealedInFull) {
+    auto e = engine();
+    std::vector<int16_t> pcm(quantum());
+    // Write-ahead lifts the target above anything one packet can hold, so the queue is below
+    // target at the hole and conceals it to the head whatever the estimator has settled on.
+    e->setWriteAheadSamples(20 * kFrame);
+    const int armed = kColdStartPackets + 20;
+    arm(*e, 1, armed);
+    const int gap = pl::kMaxPacketSamples / kFrame + 3;  // 150 ms
+    frameFor(1) += uint64_t(gap);
+    const std::vector<uint8_t> p = encode(1);
+    ASSERT_EQ(pl::kOfferAccepted,
+              e->offer(1, p.data(), int(p.size()), frameFor(1)++, /*terminator=*/true));
+    // Terminated, so the stall path cannot add concealment of its own once the queue drains.
+    int produced = 0;
+    for (int i = 0; i < 400 && fill(*e, pcm) == 1; i++) produced += quantum();
+    const int expected = armed * kFrame + gap * kFrame + kFrame;
+    EXPECT_GE(produced, expected - quantum());
+    EXPECT_LE(produced, expected + quantum() + pl::kConcealGridSamples);
+    EXPECT_EQ(int64_t(gap) * kFrame, e->stats().lostSamples);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The clients that will actually send to us, each modelled from its source and run end to end
+// through the engine. They differ in exactly the two things the queue's frame logic
+// leans on -- how the counter behaves through silence, and whether a terminator arrives and what
+// it looks like -- so each is pinned as its own sender rather than as a variation on desktop.
+//
+//   Mumble desktop  counter runs on through silence (wall clock); last packet flagged, with audio
+//   pymumble        wall clock; never flags a terminator
+//   Humla (Mumla)   counter advances only while talking, so a pause is invisible in it; the
+//                   terminator is padded to a whole packet and stamped one unit behind its slot
+//   mumble-web      counter restarts at zero every spurt; the terminator is a bare flag, no audio
+//
+// 20 ms packets, two frame-number units each, because Humla's overlap needs room inside a packet
+// to be expressible. What every one of them must get: no packet of theirs refused, no pause of
+// theirs charged as loss, and both spurts played.
+
+namespace {
+
+class ClientSender {
+public:
+    ClientSender(PlayoutEngine& e, int32_t session) : e_(e), session_(session) {}
+
+    int send(uint64_t frame, bool terminator = false) {
+        const std::vector<uint8_t> p = stream_.encode(dumble::testtone::tone(2 * kFrame));
+        return e_.offer(session_, p.data(), int(p.size()), frame, terminator);
+    }
+
+    int sendEmptyTerminator(uint64_t frame) { return e_.offer(session_, nullptr, 0, frame, true); }
+
+private:
+    PlayoutEngine& e_;
+    int32_t session_;
+    dumble::testtone::Stream stream_;
+};
+
+constexpr int kSpurtPackets = 8;                 // 160 ms, clears the 80 ms cold start on its own
+constexpr int kSpurtFills = kSpurtPackets * 2;   // 10 ms fills per 20 ms packet
+constexpr uint64_t kUnitsPerPacket = 2;
+
+void expectClean(PlayoutEngine& e, const char* who) {
+    const pl::PlayoutEngine::Stats s = e.stats();
+    EXPECT_EQ(0, s.outOfOrderPackets) << who << ": a real packet was refused";
+    EXPECT_EQ(0, s.lostSamples) << who << ": a pause was charged as loss";
+}
+
+}  // namespace
+
+TEST(PlayoutEngineClients, MumbleDesktopRunsAWallClockAndTerminatesWithAudio) {
+    auto e = newEngine();
+    ClientSender desktop(*e, 1);
+    uint64_t clock = 5000;
+    for (int i = 0; i < kSpurtPackets; i++, clock += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, desktop.send(clock, i == kSpurtPackets - 1));
+    EXPECT_EQ(kSpurtFills, drainSpurt(*e)) << "terminated, so exactly the audio sent and no more";
+    // Half a second of silence the counter keeps counting through.
+    clock += 50;
+    for (int i = 0; i < kSpurtPackets; i++, clock += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, desktop.send(clock, i == kSpurtPackets - 1));
+    EXPECT_EQ(kSpurtFills, drainSpurt(*e));
+    expectClean(*e, "desktop");
+}
+
+TEST(PlayoutEngineClients, PymumbleRunsAWallClockAndNeverTerminates) {
+    auto e = newEngine();
+    ClientSender bot(*e, 1);
+    uint64_t clock = 5000;
+    for (int i = 0; i < kSpurtPackets; i++, clock += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, bot.send(clock));
+    // No terminator, so the engine's stall path fills its conceal hold after the audio ends; that
+    // is the spurt-end conceal the measurement doc records for this sender, and not loss.
+    EXPECT_GE(drainSpurt(*e), kSpurtFills);
+    clock += 50;
+    for (int i = 0; i < kSpurtPackets; i++, clock += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, bot.send(clock));
+    EXPECT_GE(drainSpurt(*e), kSpurtFills);
+    expectClean(*e, "pymumble");
+}
+
+TEST(PlayoutEngineClients, HumlaCountsOnlyWhileTalkingAndOverlapsItsTerminator) {
+    auto e = newEngine();
+    ClientSender mumla(*e, 1);
+    std::vector<int16_t> pcm(kFrame);
+    uint64_t counter = 5000;
+    for (int i = 0; i < kSpurtPackets - 1; i++, counter += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter));
+    // Everything sent so far has played -- the cursor sits at the end of the last packet -- when
+    // the padded terminator lands: a whole packet of audio stamped one unit inside the packet
+    // before it, so it starts behind playout and ends ahead of it. Judged on its start it is a
+    // straggler and the last syllable of every Mumla spurt is dropped; judged on its end it plays.
+    for (int i = 0; i < kSpurtFills - 2; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
+    ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter - 1, /*terminator=*/true));
+    counter += kUnitsPerPacket;
+    EXPECT_EQ(2, drainSpurt(*e)) << "the overlapping terminator's own audio, and no more";
+    // A pause the counter does not see: the next spurt continues from where talking stopped.
+    for (int i = 0; i < kSpurtPackets - 1; i++, counter += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter));
+    for (int i = 0; i < kSpurtFills - 2; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
+    ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter - 1, /*terminator=*/true));
+    EXPECT_EQ(2, drainSpurt(*e));
+    expectClean(*e, "Humla");
+}
+
+// Humla drops the terminator altogether when speech ends on a packet boundary -- about half its
+// spurts. Then nothing marks the end, and the next spurt reads as contiguous: it plays, and the
+// pause between is neither concealed nor counted, the same as before frame numbers were read.
+TEST(PlayoutEngineClients, HumlaWithoutATerminatorPlaysTheNextSpurtAsContiguous) {
+    auto e = newEngine();
+    ClientSender mumla(*e, 1);
+    uint64_t counter = 5000;
+    for (int i = 0; i < kSpurtPackets; i++, counter += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter));
+    EXPECT_GE(drainSpurt(*e), kSpurtFills);
+    for (int i = 0; i < kSpurtPackets; i++, counter += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, mumla.send(counter));
+    EXPECT_GE(drainSpurt(*e), kSpurtFills);
+    expectClean(*e, "Humla, unterminated");
+}
+
+// The re-key: the second spurt lands while the first is still queued behind a live cursor,
+// restarting at zero -- behind everything the queue knows. Every packet must play.
+TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroBehindALiveQueueAndTerminatesEmpty) {
+    auto e = newEngine();
+    ClientSender web(*e, 1);
+    std::vector<int16_t> pcm(kFrame);
+    uint64_t seq = 0;
+    for (int i = 0; i < kSpurtPackets; i++, seq += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, web.send(seq));
+    ASSERT_EQ(pl::kOfferAccepted, web.sendEmptyTerminator(seq));
+    // Play two packets' worth, no more: cursor live, six packets and the terminator still queued.
+    for (int i = 0; i < 4; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
+    seq = 0;
+    for (int i = 0; i < kSpurtPackets; i++, seq += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, web.send(seq));
+    ASSERT_EQ(pl::kOfferAccepted, web.sendEmptyTerminator(seq));
+    EXPECT_EQ(2 * kSpurtFills - 4, drainSpurt(*e)) << "the rest of both spurts, nothing refused";
+    expectClean(*e, "mumble-web");
+}
+
+// The same restart with the empty terminator lost on the way. Nothing marks the old spurt's end,
+// so the queue has to read the restart from its frame: it lands on the frame the old spurt began
+// on, which no late packet of that spurt could carry.
+TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroWithItsTerminatorLost) {
+    auto e = newEngine();
+    ClientSender web(*e, 1);
+    std::vector<int16_t> pcm(kFrame);
+    uint64_t seq = 0;
+    for (int i = 0; i < kSpurtPackets; i++, seq += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, web.send(seq));
+    for (int i = 0; i < 4; i++) ASSERT_EQ(1, producingThisFill(*e, pcm));
+    seq = 0;
+    for (int i = 0; i < kSpurtPackets; i++, seq += kUnitsPerPacket)
+        ASSERT_EQ(pl::kOfferAccepted, web.send(seq));
+    ASSERT_EQ(pl::kOfferAccepted, web.sendEmptyTerminator(seq));
+    EXPECT_EQ(2 * kSpurtFills - 4, drainSpurt(*e)) << "the rest of both spurts, nothing refused";
+    expectClean(*e, "mumble-web with its terminator lost");
+}
