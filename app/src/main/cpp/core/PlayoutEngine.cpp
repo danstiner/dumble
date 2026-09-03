@@ -207,7 +207,7 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
         SpeakerDecoder& decoder = *decoders_[live[n]];
         while (decoder.available() < samples) {
             int len;
-            int holeSamples = 0;
+            int concealSamples = 0;
             {
                 // Contention here costs the speakers already drained this fill their burst: the
                 // read indexes moved, the mix is discarded. One burst of silence, no splice.
@@ -215,7 +215,15 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 if (!guard.owns_lock()) return contendedFill(out, samples, liveSpeakers);
                 const JitterEstimator* est = estimatorForSlot(live[n]);
                 len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
-                                est && !est->discontinuous(), &holeSamples);
+                                est && !est->discontinuous(), &concealSamples);
+            }
+            // One frame per pop keeps the cursor and the fifo in step whatever the callback size;
+            // how far the hole is concealed is the queue's decision (see PacketQueue::pop). Not
+            // charged to the stall counters: a hole is `lost`, not `concealedGaps`. A decoder
+            // that answers with nothing would spin this loop.
+            if (concealSamples > 0) {
+                if (decoder.conceal(concealSamples) <= 0) break;
+                continue;
             }
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);
@@ -322,6 +330,8 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
     int64_t dropped = droppedPackets_;
     int64_t shrunk = shrunkPackets_;
     int64_t caughtUp = catchUpPackets_;
+    int64_t lost = lostSamples_;
+    int64_t outOfOrder = outOfOrderPackets_;
     for (int i = 0; i < kMaxSpeakers; i++) {
         if (!slots_.test(i)) continue;
         out.sessions[n] = sessions_[i];
@@ -333,6 +343,8 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
         dropped += queues_[i].droppedPackets();
         shrunk += queues_[i].shrunkPackets();
         caughtUp += queues_[i].catchUpPackets();
+        lost += queues_[i].lostSamples();
+        outOfOrder += queues_[i].outOfOrderPackets();
         n++;
     }
     out.speakers = n;
@@ -340,6 +352,8 @@ PlayoutEngine::Stats PlayoutEngine::stats() {
     out.droppedPackets = dropped;
     out.shrunkPackets = shrunk;
     out.catchUpPackets = caughtUp;
+    out.lostSamples = lost;
+    out.outOfOrderPackets = outOfOrder;
     out.contendedFills = contendedFills_.load(std::memory_order_relaxed);
     out.fillMicrosMax = fillMicrosMax_;
     out.fillMicrosMean = fillCount_ ? fillMicrosSum_ / fillCount_ : 0;
@@ -402,6 +416,8 @@ void PlayoutEngine::releaseSlot(int i) {
     droppedPackets_ += queues_[i].droppedPackets();
     shrunkPackets_ += queues_[i].shrunkPackets();
     catchUpPackets_ += queues_[i].catchUpPackets();
+    lostSamples_ += queues_[i].lostSamples();
+    outOfOrderPackets_ += queues_[i].outOfOrderPackets();
     queues_[i].reset();
     decoders_[i]->reset();
     audible_[i] = false;

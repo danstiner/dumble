@@ -110,7 +110,8 @@ two bursts and grows it one burst per underrun, which is the AAudio guide's proc
   that came up empty, at a re-arm and at reset, so a pause between spurts is never a hole. A
   pause with no terminator in flight and no empty pop is charged the same way — pymumble never
   sends one, and on UDP desktop's can be lost — because at pop a pause and a burst loss look
-  alike without it. Concealing is the engine's next change.
+  alike without it. The engine conceals each frame with the same libopus call the stall path
+  uses, so a hole and a stall fade alike.
 - **Ordering**: a packet whose audio ends behind playout is refused: played after its successor
   it is worse than the gap, and it desynchronises the decoder's prediction state. One still ahead
   of playout but not ahead of the packet queued last is refused too, rather than slotted in. The
@@ -123,8 +124,14 @@ two bursts and grows it one burst per underrun, which is the AAudio guide's proc
   began on is a restart whose terminator was lost, and ends the spurt for it; anything behind
   the start is refused however late.
 - **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 100 ms (`kConcealSamples`),
-  then the speaker goes silent; a slot retires after 100 ms of silence with its queue drained
-  (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`).
+  then the speaker goes silent; holes are concealed through the same call but counted apart
+  (`lost`, not `concealed`), and bounded by the queue's budget rather than by `kConcealSamples`;
+  a slot retires after 100 ms of silence with its queue drained
+  (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`). Measured on
+  libopus 1.6.1 in CELT mode: concealment fades per request, not per millisecond. 10 ms requests
+  are 30 dB down within 70 ms for 20 ms and 60 ms senders alike; the 20 ms requests libopus
+  splits any longer request into fall 24 dB over 100 ms for a 20 ms sender and 9 dB for a 60 ms
+  one. Hybrid mode barely fades in 100 ms at any request size.
 - **Output down**: after a stream error the poll calls `setOutputDown(true)`, which releases every
 slot —
   tallies harvested, queues and decoders reset — and keeps every estimator, so a spurt cut by
@@ -199,6 +206,13 @@ a flush. Neither is visible from the app's counters today.
   not fill them in time.
 - **audible** — which live speakers produced in the last fill, read under the same lock as the
   rest so a retire-and-reclaim cannot misattribute it; what the poll publishes as speaking.
+- **lost** (`lostSamples`) — audio the network never delivered: frame-number gaps between audio
+  played and audio played next, concealed per frame through the same libopus call so the spurt
+  keeps its timing up to the queue's budget. Distinct from **dropped**, which is audio we had and
+  shed, and from **concealed**, which is the fill running ahead of the sender. A gap longer than
+  the queue drains it and is counted there instead.
+- **outOfOrder** — packets the queue refused as behind playout or behind the packet queued last.
+  Refused rather than reordered; the count is what decides whether a reorder buffer is worth it.
 - **contended** — fills answered with silence because the reader held the engine's mutex. Each
   is one burst of silence in the output. Measured at 0.1–0.7 per spurt (below).
 - **fill** — mean/max wall time per fill since the last sample, decodes included. The host

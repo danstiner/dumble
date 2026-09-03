@@ -20,7 +20,9 @@ import kotlin.time.Duration.Companion.microseconds
  * generate it: it counts gaps in a speaker's audio, whether the fill carried real audio short of
  * its quantum — the rest zero-padded, speech spliced with silence — or nothing from a sender still
  * mid-spurt, which is the same gap at full width. Counted once per gap, not per fill. A platform
- * underrun counter cannot distinguish either from our own idling.
+ * underrun counter cannot distinguish either from our own idling. Concealment charged to
+ * [lostSamples] is excluded, so a lossy link can read `concealed=0 lost=9600`; a zero here does
+ * not mean no gap was filled.
  *
  * [droppedPackets] is the other end of the pipeline. Where [concealedGaps] counts audio that
  * arrived too late to fill its quantum, this counts audio the jitter queue threw away before it
@@ -40,6 +42,14 @@ import kotlin.time.Duration.Companion.microseconds
  * held its mutex — see `PlayoutEngine::setRealtime`; per spurt, like the other counts. The fill
  * time pair is the wall time the engine spent per fill since the last sample, decodes included:
  * a device callback's budget is one burst, and this is how much of it the engine used.
+ *
+ * [lostSamples] is audio the network never delivered — a frame-number gap between packets played,
+ * concealed a frame at a time, up to the queue's budget, rather than time-compressing the spurt.
+ * Distinct from [droppedPackets]: a drop is audio we had and shed, a loss is audio that never
+ * arrived, and merging them would make a congested uplink and a lossy downlink read identically.
+ * [outOfOrderPackets] is packets the jitter queue refused as out of order — behind the play cursor,
+ * or not ahead of the packet queued last — shipped to measure whether a reorder buffer is worth
+ * adding.
  */
 data class PlayoutStats(
     val latencyMs: Double?,
@@ -51,6 +61,8 @@ data class PlayoutStats(
     val contendedFills: Int,
     val fillMicrosMax: Long,
     val fillMicrosMean: Long,
+    val lostSamples: Int,
+    val outOfOrderPackets: Int,
     val bufferedSamples: Map<Int, Int>,
     val targetSamples: Map<Int, Int>,
 ) {
@@ -76,6 +88,7 @@ data class PlayoutStats(
         "playout: latency=${latencyMs?.let { "%.1fms".format(Locale.ROOT, it) } ?: "n/a"} " +
             "underruns=$underruns concealed=$concealedGaps dropped=$droppedPackets " +
             "shrunk=$shrunkPackets caughtUp=$catchUpPackets " +
+            "lost=$lostSamples outOfOrder=$outOfOrderPackets " +
             "depths=$bufferedSamples targets=$targetSamples " +
             "contended=$contendedFills fill=$fillMicrosMean/${fillMicrosMax}us"
 }

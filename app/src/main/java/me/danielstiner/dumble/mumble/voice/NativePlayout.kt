@@ -55,7 +55,13 @@ object NativePlayout {
     /** Audio in flight between the callback and the speaker, from the stream's timestamp; -1
      *  while the stream is not started. A reading, not a count. */
     const val COUNTER_LATENCY_MICROS = 8
-    const val COUNTER_COUNT = 9
+
+    /** Audio the network never delivered, in samples; see [PlayoutStats.lostSamples]. */
+    const val COUNTER_LOST_SAMPLES = 9
+
+    /** Packets the queue refused as out of order; see [PlayoutStats.outOfOrderPackets]. */
+    const val COUNTER_OUT_OF_ORDER_PACKETS = 10
+    const val COUNTER_COUNT = 11
 
     /** Returns 0 if native could not build an engine — libopus being unreachable is the only way
      *  that happens, and there is no degraded mode. The stream is opened but not started. */

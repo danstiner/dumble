@@ -212,6 +212,8 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
         var shrunk = 0L
         var catchUp = 0L
         var contended = 0L
+        var lost = 0L
+        var outOfOrder = 0L
 
         /** Re-armed from the reading the closing publish just took, rather than a second read:
          *  a drop landing between two reads would be published in neither spurt. */
@@ -221,6 +223,8 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
             shrunk = c[NativePlayout.COUNTER_SHRUNK_PACKETS]
             catchUp = c[NativePlayout.COUNTER_CATCH_UP_PACKETS]
             contended = c[NativePlayout.COUNTER_CONTENDED_FILLS]
+            lost = c[NativePlayout.COUNTER_LOST_SAMPLES]
+            outOfOrder = c[NativePlayout.COUNTER_OUT_OF_ORDER_PACKETS]
         }
     }
 
@@ -328,6 +332,11 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
                     (counters[NativePlayout.COUNTER_CONTENDED_FILLS] - baselines.contended).toInt(),
                 fillMicrosMax = counters[NativePlayout.COUNTER_FILL_MICROS_MAX],
                 fillMicrosMean = counters[NativePlayout.COUNTER_FILL_MICROS_MEAN],
+                lostSamples =
+                    (counters[NativePlayout.COUNTER_LOST_SAMPLES] - baselines.lost).toInt(),
+                outOfOrderPackets =
+                    (counters[NativePlayout.COUNTER_OUT_OF_ORDER_PACKETS] - baselines.outOfOrder)
+                        .toInt(),
                 bufferedSamples = buffered,
                 targetSamples = targeted,
             )
