@@ -221,9 +221,9 @@ class CryptStatePropertyTest {
                 // Up to MTU-scale, so multi-block payloads the size of real voice datagrams run too.
                 val len = rnd.nextInt(0, 1500)
                 val plain = ByteArray(len).also { rnd.nextBytes(it) }
-                val wire = ByteArray(len + CryptState.OVERHEAD)
+                val wire = ByteArray(len + CryptState.HEADER_LEN)
                 val out = ByteArray(len)
-                assertEquals(len + CryptState.OVERHEAD, sender.encrypt(plain, len, wire))
+                assertEquals(len + CryptState.HEADER_LEN, sender.encrypt(plain, len, wire))
                 assertEquals(
                     "iteration=$iteration packet=$packet len=$len",
                     len,
@@ -247,7 +247,7 @@ class CryptStatePropertyTest {
 
             val len = rnd.nextInt(0, 120)
             val plain = ByteArray(len).also { rnd.nextBytes(it) }
-            val wire = ByteArray(len + CryptState.OVERHEAD)
+            val wire = ByteArray(len + CryptState.HEADER_LEN)
             sender.encrypt(plain, len, wire)
 
             val corrupted = wire.copyOf()
@@ -261,7 +261,7 @@ class CryptStatePropertyTest {
                 receiver.decrypt(corrupted, corrupted.size, out),
             )
             // And the stream survives it: the next genuine packet still decrypts.
-            val next = ByteArray(len + CryptState.OVERHEAD)
+            val next = ByteArray(len + CryptState.HEADER_LEN)
             sender.encrypt(plain, len, next)
             assertEquals("iteration=$iteration stream broken", len, receiver.decrypt(next, next.size, out))
         }
