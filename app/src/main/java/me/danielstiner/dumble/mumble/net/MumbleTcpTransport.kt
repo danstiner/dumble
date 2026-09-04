@@ -141,6 +141,8 @@ class MumbleTcpTransport(
         }
     }
 
+    override fun remoteAddress(): InetSocketAddress? = socket?.remoteSocketAddress as? InetSocketAddress
+
     /**
      * Host name checking applies only to the authority-validated path. A pinned certificate is
      * already bound to this exact endpoint by its fingerprint, and a stock Mumble server presents
@@ -223,7 +225,7 @@ class MumbleTcpTransport(
 
     override fun sendRaw(type: TcpMessageType, payload: ByteArray): Boolean {
         if (closed) return false
-        val framed = ByteArrayOutputStream(payload.size + FRAME_HEADER_BYTES)
+        val framed = ByteArrayOutputStream(payload.size + FRAME_HEADER_LEN)
         MumbleCodec.writeFrame(DataOutputStream(framed), type.id, payload)
         return sendQueue.trySend(framed.toByteArray()).isSuccess
     }
@@ -255,6 +257,6 @@ class MumbleTcpTransport(
     }
 
     private companion object {
-        const val FRAME_HEADER_BYTES = 6
+        const val FRAME_HEADER_LEN = 6
     }
 }

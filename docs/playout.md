@@ -18,10 +18,11 @@ sized for is served as consecutive whole chunks.
 
 Two ownership rules carry the design:
 
-- `offer()`, on the reader thread, touches queues only, under the mutex; decode and mix happen on
-  the callback thread, with the mutex released around the decodes. No refusal in `offer` is
-  terminal — each is a condition a misbehaving server can produce at will, so the caller logs
-  rather than disabling receive.
+- `offer()`, on whichever transport thread delivered the packet — the TLS reader or the UDP
+  socket's, serialised by `VoiceReceiver`'s monitor — touches queues only, under the mutex;
+  decode and mix happen on the callback thread, with the mutex released around the decodes. No
+  refusal in `offer` is terminal — each is a condition a misbehaving server can produce at will,
+  so the caller logs rather than disabling receive.
 - A speaker's slot is released only by retirement, inside a fill, or by `setOutputDown` when the
   stream is gone — never in `offer`. Neither side of the seam can tell a speaker that stopped
   talking from one still filling its prebuffer, so the engine alone decides.

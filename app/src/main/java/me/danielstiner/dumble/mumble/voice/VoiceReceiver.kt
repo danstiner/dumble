@@ -83,7 +83,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
     // The poll, once start() has launched it. Guarded by the monitor.
     private var poll: Job? = null
 
-    // Latched by the parse catch in onTunneledAudio, its one setter — see the reasoning there.
+    // Latched by the parse catch in onVoicePacket, its one setter — see the reasoning there.
     @Volatile
     private var voiceUnavailable = false
 
@@ -153,21 +153,22 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
     }
 
     /**
-     * Reader-coroutine context; must not block. [payload] is the raw tunneled UDP packet:
-     * a one-byte type followed by a protobuf body.
+     * A voice packet from either transport — the TCP reader coroutine or the UDP receive thread —
+     * and must block neither. `payload[0, len)` is a one-byte type then a protobuf body; the
+     * array may be one the caller reuses, so nothing here keeps it past the call.
      */
-    fun onTunneledAudio(payload: ByteArray) {
+    fun onVoicePacket(payload: ByteArray, len: Int) {
         if (voiceUnavailable || stopped) return
         // The platform has the device: the stream is paused and the engine's speakers released
         // with it, so a packet queued now would only play stale on resume.
         if (held) return
-        if (payload.isEmpty() || payload[0].toInt() != UDP_TYPE_AUDIO) return
+        if (len <= 0 || payload[0].toInt() != UDP_TYPE_AUDIO) return
         val audio = try {
             // Parsed in place; copyOfRange here would allocate a whole packet per frame at ~100 Hz.
-            MumbleUdpProtos.Audio.parser().parseFrom(payload, 1, payload.size - 1)
+            MumbleUdpProtos.Audio.parser().parseFrom(payload, 1, len - 1)
         } catch (e: InvalidProtocolBufferException) {
             // A corrupt frame must not propagate into the transport's reader and kill the session.
-            Log.w(TAG, "dropping malformed tunneled audio", e)
+            Log.w(TAG, "dropping malformed audio packet", e)
             return
         } catch (t: Throwable) {
             // Not every parse failure is an InvalidProtocolBufferException. protobuf-lite resolves
@@ -177,7 +178,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
             // and channels would die the moment anyone spoke, in release builds only. Latched
             // because it is a build property, identical for every packet that follows.
             voiceUnavailable = true
-            Log.e(TAG, "tunneled audio unparseable, disabling receive for this session", t)
+            Log.e(TAG, "audio unparseable, disabling receive for this session", t)
             return
         }
         val session = audio.senderSession

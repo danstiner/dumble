@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.connection
 import com.google.protobuf.MessageLite
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Test transport whose connect() behaviour the test controls: block, throw, or return. */
@@ -11,6 +12,8 @@ class FakeControlTransport(
 ) : MumbleControlTransport {
     @Volatile var closed = false; private set
     @Volatile var listener: MumbleControlTransport.Listener? = null
+    /** Where the connection will aim its UDP socket; null, the default, means no socket. */
+    @Volatile var remote: InetSocketAddress? = null
     val sent = CopyOnWriteArrayList<Pair<TcpMessageType, MessageLite>>()
     val sentRaw = CopyOnWriteArrayList<Pair<TcpMessageType, ByteArray>>()
 
@@ -18,6 +21,8 @@ class FakeControlTransport(
         this.listener = listener
         onConnect(host, port)
     }
+
+    override fun remoteAddress() = remote
 
     override fun send(type: TcpMessageType, message: MessageLite): Boolean {
         if (closed) return false

@@ -4,10 +4,10 @@ How the pieces fit together, at the level of what talks to what. Detail lives in
 per-subsystem docs; sections and docs get added as each subsystem stabilises. This file describes
 what is, not the history of how it got there — that lives in the design specs and PR descriptions.
 
-Dumble is an Android Mumble client. One TLS connection to the server carries everything: protobuf
-control messages and voice as Mumble UDP-tunnel packets on the same TCP transport — there is no
-UDP socket. Voice is mono end to end; positional audio is out of scope by decision (see
-`CLAUDE.md`).
+Dumble is an Android Mumble client. One TLS connection to the server carries the protobuf control
+messages and, for now, our own voice as Mumble UDP-tunnel packets; a UDP socket beside it
+receives the other direction. Voice is mono end to end; positional audio is out of scope by
+decision (see `CLAUDE.md`).
 
 ```
  UI (Compose)                          observes flows, issues commands
@@ -16,6 +16,7 @@ UDP socket. Voice is mono end to end; positional audio is out of scope by decisi
       │
       ├─ MumbleTcpTransport            TLS (platform SSLSocket, certificate pinning)
       │    └─ SessionStateMachine      the control protocol; channel tree, chat, users as flows
+      ├─ MumbleUdpTransport            voice datagrams (DatagramChannel, OCB2 via CryptState)
       │
       ├─ VoiceSender ── CaptureEngine ── OboeCapture ── mic          docs/capture.md
       ├─ VoiceReceiver ── PlayoutEngine ── AudioTrack ── speaker     docs/playout.md

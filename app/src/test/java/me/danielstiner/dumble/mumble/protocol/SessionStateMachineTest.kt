@@ -517,10 +517,10 @@ class SessionStateMachineTest {
         assertEquals(0, ping.resync)
     }
 
-    // Each assertion advances only past a defect in the site it exercises, so dropping any one of
-    // the three call sites fails exactly one of them.
+    // Each assertion advances only past a defect in the site it exercises, so dropping either
+    // call site fails exactly one of them; a ping at ServerSync would fail the second.
     @Test
-    fun udpPingFiresAtKeyingThenServerSyncThenEachTick() = runTest {
+    fun udpPingFiresAtKeyingThenEachTick() = runTest {
         val ch = FakeChannel()
         var pings = 0
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
@@ -532,12 +532,12 @@ class SessionStateMachineTest {
         assertEquals("at keying", 1, pings)
 
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
-        assertEquals("at ServerSync, before any tick", 2, pings)
+        assertEquals("not at ServerSync: the keying ping's reply has had no time to arrive", 1, pings)
 
         advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
-        assertEquals("once per tick", 3, pings)
+        assertEquals("once per tick", 2, pings)
         advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
-        assertEquals(4, pings)
+        assertEquals(3, pings)
     }
 
     @Test
@@ -1168,14 +1168,9 @@ class SessionStateMachineTest {
     @Test
     fun tunneledAudioReachesTheListener() = runTest {
         val ch = FakeChannel()
-        // Nonzero baseline: with a zero baseline an implementation that forgot to pass
-        // the arrival timestamp would produce the same answer and the test would prove nothing.
-        val now = 1_000_000L
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clockNanos = { now })
-        val seen = mutableListOf<Pair<ByteArray, Long>>()
-        sm.audioListener = SessionStateMachine.AudioListener { payload, arrivalNanos ->
-            seen += payload to arrivalNanos
-        }
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        val seen = mutableListOf<ByteArray>()
+        sm.audioListener = SessionStateMachine.AudioListener { payload -> seen += payload }
 
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(7)
@@ -1186,8 +1181,7 @@ class SessionStateMachineTest {
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, payload))
 
         assertEquals(1, seen.size)
-        assertArrayEquals(payload, seen[0].first)
-        assertEquals(now, seen[0].second)
+        assertArrayEquals(payload, seen[0])
     }
 
     @Test
