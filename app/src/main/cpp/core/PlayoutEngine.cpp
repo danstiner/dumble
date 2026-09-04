@@ -207,6 +207,7 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
         SpeakerDecoder& decoder = *decoders_[live[n]];
         while (decoder.available() < samples) {
             int len;
+            int holeSamples = 0;
             {
                 // Contention here costs the speakers already drained this fill their burst: the
                 // read indexes moved, the mix is discarded. One burst of silence, no splice.
@@ -214,7 +215,7 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 if (!guard.owns_lock()) return contendedFill(out, samples, liveSpeakers);
                 const JitterEstimator* est = estimatorForSlot(live[n]);
                 len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
-                                est && !est->discontinuous());
+                                est && !est->discontinuous(), &holeSamples);
             }
             if (len <= 0) break;
             decoder.decode(packetScratch_, len);

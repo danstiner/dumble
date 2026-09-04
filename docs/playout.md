@@ -100,10 +100,28 @@ two bursts and grows it one burst per underrun, which is the AAudio guide's proc
 - **Shrink**: mid-spurt, one packet is shed per 2 s, only while the decoded audio is quiet, only
   while 20 ms over target — standing delay unwinds where it cannot be heard.
 - **Bounds**: 600 ms or 32 packets per queue; past either, the oldest is dropped and counted.
-- **Ordering**: a packet not ahead of the packet queued last is refused and counted
-  (`outOfOrder`) rather than reordered. Per spurt — a queued terminator ends the check — for the
-  senders below. A packet more than 600 ms behind the packet queued last is a restart whose
-  terminator was lost, and ends the spurt for it.
+- **Holes**: each entry carries the sender's `frame_number`. When the head starts later than
+  playout has reached, a pop asks the engine for one frame of concealment instead of a packet
+  and tallies it (`lost`): always for the PLC fade (100 ms), beyond that only while the queue is
+  below target, never past the ring's capacity; then the cursor jumps to the head and the rest of
+  the gap is tallied. So a hole wider than the fade resumes the spurt at max(target, depth at the
+  hole + fade): never below target, never more than the fade above where it was. A gap before a
+  packet shrink or overflow discards is tallied only. Continuity ends at the terminator, at a pop
+  that came up empty, at a re-arm and at reset, so a pause between spurts is never a hole. A
+  pause with no terminator in flight and no empty pop is charged the same way — pymumble never
+  sends one, and on UDP desktop's can be lost — because at pop a pause and a burst loss look
+  alike without it. Concealing is the engine's next change.
+- **Ordering**: a packet whose audio ends behind playout is refused: played after its successor
+  it is worse than the gap, and it desynchronises the decoder's prediction state. One still ahead
+  of playout but not ahead of the packet queued last is refused too, rather than slotted in. The
+  pool is a ring by arrival, and one path cannot reorder — it takes parallel paths skewed by more
+  than the 20 ms between packets, or a route change mid-flow — so a normal path produces none
+  over hours, and a reorder deeper than the queue is loss by another name. Both are counted
+  (`outOfOrder`); that count from the field decides whether a slot-per-frame ring earns its
+  place. Both checks are per spurt — a queued terminator ends them — for the senders in the
+  table below. A packet without the terminator flag stamped with the frame the current spurt
+  began on is a restart whose terminator was lost, and ends the spurt for it; anything behind
+  the start is refused however late.
 - **Conceal**: a mid-spurt shortfall is filled by Opus PLC for up to 100 ms (`kConcealSamples`),
   then the speaker goes silent; a slot retires after 100 ms of silence with its queue drained
   (`kRetireIdleSamples`), or 1 s stalled below its gate (`kStallIdleSamples`).
@@ -122,13 +140,13 @@ slot —
 
 ## What senders put in `frame_number`
 
-The wire's `frame_number` counts 10 ms units, but each client keeps it differently, read at the
+The wire's `frame_number` counts 10 ms frames, but each client keeps it differently, read at the
 source. murmur relays it, and the terminator, unchanged.
 
 | sender | counter | through a pause | terminator |
 |---|---|---|---|
 | Mumble desktop | per 10 ms frame, always | runs on (wall clock); resets after 5 s of silence | last packet, with zero-stuffed audio |
-| pymumble | 10 ms units of wall clock | runs on; resets after 5 s idle | never |
+| pymumble | 10 ms frames of wall clock | runs on; resets after 5 s idle | never |
 | Humla (Mumla) | advances only while talking | stands still | padded, stamped inside the previous packet's span; omitted about half the time |
 | mumble-web | restarts at 0 every spurt | — | a bare flag; murmur forwards it with empty `opus_data` |
 
