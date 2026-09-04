@@ -33,7 +33,7 @@ class CryptStateTest {
     private fun payload(seed: Int, len: Int = 12) = ByteArray(len) { (seed + it).toByte() }
 
     private fun send(sender: CryptState, plain: ByteArray): ByteArray {
-        val datagram = ByteArray(plain.size + CryptState.OVERHEAD)
+        val datagram = ByteArray(plain.size + CryptState.HEADER_LEN)
         assertEquals(datagram.size, sender.encrypt(plain, plain.size, datagram))
         return datagram
     }
@@ -51,7 +51,7 @@ class CryptStateTest {
         for (len in 0..80) {
             val plain = payload(len, len)
             val datagram = send(a, plain)
-            assertEquals(len + CryptState.OVERHEAD, datagram.size)
+            assertEquals(len + CryptState.HEADER_LEN, datagram.size)
             assertArrayEquals("length $len", plain, receive(b, datagram))
         }
         assertEquals(CryptStats(good = 81, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
@@ -60,8 +60,8 @@ class CryptStateTest {
     @Test
     fun aZeroLengthPayloadIsAFourByteDatagram() {
         val (a, b) = pair()
-        val datagram = ByteArray(CryptState.OVERHEAD)
-        assertEquals(CryptState.OVERHEAD, a.encrypt(ByteArray(0), 0, datagram))
+        val datagram = ByteArray(CryptState.HEADER_LEN)
+        assertEquals(CryptState.HEADER_LEN, a.encrypt(ByteArray(0), 0, datagram))
         assertEquals(0, b.decrypt(datagram, datagram.size, ByteArray(0)))
         assertEquals(1, b.stats().good)
     }
@@ -74,7 +74,7 @@ class CryptStateTest {
         // The seed is never a nonce: the first packet goes out under seed + 1.
         assertArrayEquals(counter(1), a.encryptNonce())
         assertEquals(1, datagram[0].toInt() and 0xFF)
-        assertFalse(plain.contentEquals(datagram.copyOfRange(CryptState.OVERHEAD, datagram.size)))
+        assertFalse(plain.contentEquals(datagram.copyOfRange(CryptState.HEADER_LEN, datagram.size)))
         assertArrayEquals(plain, receive(b, datagram))
     }
 
@@ -208,7 +208,7 @@ class CryptStateTest {
     @Test
     fun datagramsShorterThanTheHeaderAreRejected() {
         val (_, b) = pair()
-        for (len in 0 until CryptState.OVERHEAD) {
+        for (len in 0 until CryptState.HEADER_LEN) {
             assertEquals(-1, b.decrypt(ByteArray(8), len, ByteArray(8)))
         }
         assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 0), b.stats())

@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.chat.DenyReason
+import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import org.junit.Assert.assertEquals
@@ -362,36 +363,181 @@ class SessionStateMachineTest {
         assertEquals("bad password", state.detail)
     }
 
-    @Test
-    fun cryptSetupIsStoredWithoutChangingState() = runTest {
-        val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+    // ---- CryptSetup ----------------------------------------------------------------------
+    //
+    // The cipher under test is the real one: a peer CryptState keyed as the server would be —
+    // our client_nonce is its decrypt seed, its server_nonce our decrypt seed — proves the
+    // machine put each field in the right slot, which a recording fake cannot.
 
-        sm.onFrame(frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder()
-            .setKey(com.google.protobuf.ByteString.copyFrom(ByteArray(16) { 1 }))
-            .build()))
+    private val cryptKey = ByteArray(16) { 1 }
+    private val clientNonce = ByteArray(16) { 2 }
+    private val serverNonce = ByteArray(16) { 3 }
 
-        assertEquals(ConnectionState.Handshaking, sm.state.value)
-        assertEquals(16, sm.cryptKey!!.size)
+    private fun keyExchange(key: ByteArray = cryptKey, client: ByteArray = clientNonce, server: ByteArray = serverNonce) =
+        frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder()
+            .setKey(ByteString.copyFrom(key))
+            .setClientNonce(ByteString.copyFrom(client))
+            .setServerNonce(ByteString.copyFrom(server))
+            .build())
+
+    private fun serverNonceOnly(nonce: ByteArray) =
+        frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder()
+            .setServerNonce(ByteString.copyFrom(nonce)).build())
+
+    /** One datagram from a server keyed with [serverSeed] as its send counter. */
+    private fun datagramFrom(serverSeed: ByteArray, plaintext: ByteArray): ByteArray {
+        val server = CryptState().apply { setKeys(cryptKey, serverSeed, clientNonce) }
+        val out = ByteArray(plaintext.size + CryptState.HEADER_LEN)
+        server.encrypt(plaintext, plaintext.size, out)
+        return out
     }
 
-    // A resync CryptSetup carries only nonces. Without a presence check its empty key would
-    // silently clobber the negotiated one — invisible until voice reads cryptKey and decryption
-    // breaks at whatever later moment the server happens to request a resync.
+    private fun CryptState.opens(datagram: ByteArray): Boolean =
+        decrypt(datagram, datagram.size, ByteArray(datagram.size)) >= 0
+
     @Test
-    fun resyncCryptSetupDoesNotClobberTheNegotiatedKey() = runTest {
+    fun theKeyExchangeKeysTheCipherAndPingsUdp() = runTest {
+        val ch = FakeChannel()
+        var pings = 0
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+            udpPing = { pings++ }
+            start()
+        }
+
+        sm.onFrame(keyExchange())
+
+        assertEquals(ConnectionState.Handshaking, sm.state.value)
+        assertArrayEquals("our send counter seeds from client_nonce", clientNonce, sm.crypt.encryptNonce())
+        assertTrue("our decrypt counter seeds from server_nonce",
+            sm.crypt.opens(datagramFrom(serverNonce, byteArrayOf(1, 2, 3))))
+        assertEquals("keying is the first moment a ping can be answered", 1, pings)
+    }
+
+    // Upstream logs and continues on a malformed exchange (Messages.cpp, msgCryptSetup); a throw
+    // out of onFrame would instead end the session, chat and channels included, over a cipher
+    // voice can do without.
+    @Test
+    fun aMalformedKeyExchangeIsIgnoredAndTheSessionLives() = runTest {
+        val ch = FakeChannel()
+        var pings = 0
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+            udpPing = { pings++ }
+            start()
+        }
+
+        sm.onFrame(keyExchange(key = ByteArray(32) { 1 }))
+        sm.onFrame(keyExchange(client = ByteArray(8) { 2 }))
+
+        assertEquals(ConnectionState.Handshaking, sm.state.value)
+        assertFalse("nothing may key the cipher to garbage", sm.crypt.isValid())
+        assertEquals("nothing to ping with", 0, pings)
+    }
+
+    @Test
+    fun aServerNonceAloneMovesOnlyOurDecryptCounter() = runTest {
+        val ch = FakeChannel()
+        var pings = 0
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+            udpPing = { pings++ }
+            start()
+        }
+        sm.onFrame(keyExchange())
+        val moved = ByteArray(16) { 9 }
+
+        sm.onFrame(serverNonceOnly(moved))
+
+        assertTrue("a server now sending from the new counter is understood",
+            sm.crypt.opens(datagramFrom(moved, byteArrayOf(4))))
+        assertArrayEquals("our own send counter is untouched", clientNonce, sm.crypt.encryptNonce())
+        assertEquals(1, sm.crypt.stats().resync)
+        assertEquals("a resync is not a keying", 1, pings)
+    }
+
+    @Test
+    fun aShortServerNonceIsIgnored() = runTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
-        sm.onFrame(frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder()
-            .setKey(com.google.protobuf.ByteString.copyFrom(ByteArray(16) { 1 }))
-            .build()))
+        sm.onFrame(keyExchange())
 
-        // Resync: server nonce only, no key.
-        sm.onFrame(frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.newBuilder()
-            .setServerNonce(com.google.protobuf.ByteString.copyFrom(ByteArray(16) { 2 }))
-            .build()))
+        sm.onFrame(serverNonceOnly(ByteArray(8) { 9 }))
 
-        assertEquals(16, sm.cryptKey!!.size)
+        assertEquals(0, sm.crypt.stats().resync)
+        assertTrue("the old counter still stands", sm.crypt.opens(datagramFrom(serverNonce, byteArrayOf(4))))
+    }
+
+    @Test
+    fun anEmptyCryptSetupRepliesWithOurSendCounter() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        sm.onFrame(keyExchange())
+        // Two packets sealed, so the counter has moved off its seed and the reply must say so.
+        val scratch = ByteArray(32)
+        repeat(2) { sm.crypt.encrypt(byteArrayOf(0), 1, scratch) }
+
+        sm.onFrame(frame(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.getDefaultInstance()))
+
+        val reply = ch.sent.last { it.first == TcpMessageType.CryptSetup }.second as MumbleProtos.CryptSetup
+        assertArrayEquals(sm.crypt.encryptNonce(), reply.clientNonce.toByteArray())
+        assertFalse(reply.hasKey())
+        assertFalse(reply.hasServerNonce())
+    }
+
+    @Test
+    fun requestCryptResyncSendsAnEmptyCryptSetup() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.requestCryptResync()
+
+        val sent = ch.sent.last { it.first == TcpMessageType.CryptSetup }.second as MumbleProtos.CryptSetup
+        assertEquals(MumbleProtos.CryptSetup.getDefaultInstance(), sent)
+    }
+
+    // The server folds these into the UserStats other clients read; they are not read back here.
+    @Test
+    fun thePingCarriesTheCryptCounters() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        sm.onFrame(keyExchange())
+        // Three datagrams from the server, the middle one lost: good 2, lost 1.
+        val server = CryptState().apply { setKeys(cryptKey, serverNonce, clientNonce) }
+        val wire = ByteArray(8)
+        repeat(3) { i ->
+            val n = server.encrypt(byteArrayOf(0), 1, wire)
+            if (i != 1) sm.crypt.decrypt(wire, n, ByteArray(n))
+        }
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
+
+        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 100)
+
+        val ping = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        assertEquals(2, ping.good)
+        assertEquals(1, ping.lost)
+        assertEquals(0, ping.late)
+        assertEquals(0, ping.resync)
+    }
+
+    // Each assertion advances only past a defect in the site it exercises, so dropping any one of
+    // the three call sites fails exactly one of them.
+    @Test
+    fun udpPingFiresAtKeyingThenServerSyncThenEachTick() = runTest {
+        val ch = FakeChannel()
+        var pings = 0
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+            udpPing = { pings++ }
+            start()
+        }
+
+        sm.onFrame(keyExchange())
+        assertEquals("at keying", 1, pings)
+
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
+        assertEquals("at ServerSync, before any tick", 2, pings)
+
+        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        assertEquals("once per tick", 3, pings)
+        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        assertEquals(4, pings)
     }
 
     @Test

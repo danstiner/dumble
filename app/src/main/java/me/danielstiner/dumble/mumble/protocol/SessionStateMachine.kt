@@ -1,6 +1,8 @@
 package me.danielstiner.dumble.mumble.protocol
 
 import android.util.Log
+import com.google.protobuf.ByteString
+import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -72,9 +74,19 @@ class SessionStateMachine(
     private val _userStats = MutableStateFlow<UserStats?>(null)
     val userStats: StateFlow<UserStats?> = _userStats.asStateFlow()
 
-    /** CryptSetup key material, stored for the voice task. Unused here. */
-    @Volatile var cryptKey: ByteArray? = null
-        private set
+    /**
+     * The voice cipher. Owned here because CryptSetup, which keys it and resyncs it, is a
+     * control-channel message; the UDP transport borrows it to seal and open datagrams.
+     */
+    val crypt = CryptState()
+
+    /**
+     * Sends one UDP connectivity ping, if the attempt has a socket to send it on. Fired the moment
+     * CryptSetup keys [crypt], which is when the server can first match our address; again at
+     * ServerSync in case that one was lost; then once per tick beside the TCP ping, so one ticker
+     * carries both as desktop's does. Null until the connection wires it.
+     */
+    @Volatile var udpPing: (() -> Unit)? = null
 
     /**
      * Tunneled voice payloads. A callback rather than a StateFlow: this is a per-frame hot path
@@ -174,6 +186,7 @@ class SessionStateMachine(
                 ) {
                     deadlineJob?.cancel()
                     startPings()
+                    udpPing?.invoke()
                     // Over-cap packets are dropped silently, so the symptom is otherwise
                     // undiagnosable one-way audio. ACCOUNTED_BITRATE derives from the encoder's
                     // own rate so the two cannot drift.
@@ -201,10 +214,43 @@ class SessionStateMachine(
                 fail(FailReason.AUTH_REJECT, reject.reason)
             }
             TcpMessageType.CryptSetup -> {
-                // Either an initial key exchange or a mid-session resync, and a resync carries only
-                // nonces — its absent key must not overwrite the one already negotiated.
+                // Three messages share the type, told apart by which fields are present, and
+                // the lengths are checked here rather than left to CryptState's own checks: those
+                // throw, and a throw out of onFrame ends the session — chat and channels included
+                // — over a cipher voice can do without. Upstream logs and carries on too.
                 val setup = MumbleProtos.CryptSetup.parseFrom(frame.payload)
-                if (setup.hasKey()) cryptKey = setup.key.toByteArray()
+                when {
+                    // The key exchange.
+                    setup.hasKey() && setup.hasClientNonce() && setup.hasServerNonce() -> {
+                        if (setup.key.isBlock() && setup.clientNonce.isBlock() &&
+                            setup.serverNonce.isBlock()
+                        ) {
+                            crypt.setKeys(
+                                setup.key.toByteArray(),
+                                setup.clientNonce.toByteArray(),
+                                setup.serverNonce.toByteArray(),
+                            )
+                            udpPing?.invoke()
+                        } else {
+                            Log.w(TAG, "ignoring CryptSetup with malformed key material")
+                        }
+                    }
+                    // The answer to requestCryptResync: where the server's send counter really is.
+                    setup.hasServerNonce() -> {
+                        if (setup.serverNonce.isBlock()) {
+                            crypt.setDecryptNonce(setup.serverNonce.toByteArray())
+                        } else {
+                            Log.w(TAG, "ignoring CryptSetup with a malformed server_nonce")
+                        }
+                    }
+                    // Empty: the server cannot decrypt us and asks where our send counter is.
+                    else -> channel.send(
+                        TcpMessageType.CryptSetup,
+                        MumbleProtos.CryptSetup.newBuilder()
+                            .setClientNonce(ByteString.copyFrom(crypt.encryptNonce()))
+                            .build(),
+                    )
+                }
             }
             TcpMessageType.Version -> {
                 val version = ServerVersion.from(MumbleProtos.Version.parseFrom(frame.payload))
@@ -354,7 +400,16 @@ class SessionStateMachine(
     private val sessionId: Int?
         get() = (_state.value as? ConnectionState.Synchronized)?.sessionId
 
-    /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
+    /**
+     * Ask the server for its current send counter: the recovery for a decrypt direction that has
+     * drifted too far to rebuild. The UDP transport decides when, and throttles it; the reply
+     * arrives as a CryptSetup carrying only `server_nonce`.
+     */
+    fun requestCryptResync() =
+        channel.send(TcpMessageType.CryptSetup, MumbleProtos.CryptSetup.getDefaultInstance())
+
+    private fun ByteString.isBlock() = size() == CryptState.NONCE_LEN
+
     /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
     private fun startPings() {
         pingJob = scope.launch {
@@ -380,12 +435,21 @@ class SessionStateMachine(
                 }
                 // Not fatal, unlike the handshake sends: backpressure, or a death the reader
                 // already reports. Either way the ping goes unanswered and ages.
+                //
+                // The crypt counters ride along because the server folds them into the
+                // UserStats other clients read. Nothing here reads them back.
+                val stats = crypt.stats()
                 channel.send(
                     TcpMessageType.Ping,
                     MumbleProtos.Ping.newBuilder()
                         .setTimestamp((now - pingOrigin).inWholeNanoseconds)
+                        .setGood(stats.good)
+                        .setLate(stats.late)
+                        .setLost(stats.lost)
+                        .setResync(stats.resync)
                         .build(),
                 )
+                udpPing?.invoke()
             }
         }
     }

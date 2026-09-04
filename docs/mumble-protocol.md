@@ -74,7 +74,8 @@ degraded after 15 s without a reply (two unanswered pings) — display state onl
 socket or the server ends a session. The `Ping` message carries the sender's UDP crypt
 statistics (`good`, `late`, `lost`, `resync`); the server's reply carries its own reception
 numbers, which is how you learn whether the server can decrypt *your* UDP packets. The desktop
-client uses them to decide UDP health.
+client uses them to decide UDP health; Dumble sends them because the server folds them into the
+`UserStats` other clients read, and steers on nothing but the UDP ping (see the design spec).
 
 ## Voice framing
 
@@ -161,7 +162,9 @@ no wire byte derives from it — so it is a divergence from upstream's code, not
 **Resync.** `CryptSetup` doubles as the recovery channel: a client that decrypts nothing for 5 s
 sends an empty `CryptSetup`, and the server replies with its current encrypt IV as
 `server_nonce`, re-seeding the client's decrypt state. The server recovers its own decrypt
-direction symmetrically by requesting the client's nonce. Rate-limited to one request per 5 s.
+direction symmetrically: an empty `CryptSetup` from it is answered with our encrypt IV as
+`client_nonce`. Rate-limited to one request per 5 s on both ends. A malformed message of any
+of the three shapes is logged and dropped, as upstream does, rather than ending the session.
 Voice lost during the gap is simply gone — the stream is live audio, not a transcript.
 
 Dumble adopts the reply unconditionally, as upstream does. Safe because of when a request can

@@ -8,7 +8,7 @@ package me.danielstiner.dumble.mumble.net
  *     bytes 1..3  the first three bytes of the OCB2 tag
  *     bytes 4..   ciphertext, as long as the plaintext
  *
- * so it costs [OVERHEAD] bytes. Only that low byte travels, and the receiver rebuilds the other
+ * so it costs [HEADER_LEN] bytes. Only that low byte travels, and the receiver rebuilds the other
  * fifteen from the counter it already holds.
  *
  * Three threads share one instance -- control channel keying and reading stats, send path, receive
@@ -27,8 +27,8 @@ class CryptState {
     private var resync = 0
     private var replay = 0
 
-    private val nonce = ByteArray(NONCE)
-    private val tag = ByteArray(NONCE)
+    private val nonce = ByteArray(NONCE_LEN)
+    private val tag = ByteArray(NONCE_LEN)
 
     @Synchronized
     fun isValid(): Boolean = cipher != null
@@ -40,11 +40,11 @@ class CryptState {
      */
     @Synchronized
     fun setKeys(key: ByteArray, encryptNonce: ByteArray, decryptNonce: ByteArray) {
-        require(key.size == NONCE) { "key must be 16 bytes, got ${key.size}" }
-        require(encryptNonce.size == NONCE) {
+        require(key.size == NONCE_LEN) { "key must be 16 bytes, got ${key.size}" }
+        require(encryptNonce.size == NONCE_LEN) {
             "encrypt nonce must be 16 bytes, got ${encryptNonce.size}"
         }
-        require(decryptNonce.size == NONCE) {
+        require(decryptNonce.size == NONCE_LEN) {
             "decrypt nonce must be 16 bytes, got ${decryptNonce.size}"
         }
         val keyed = Ocb2(key)
@@ -61,14 +61,14 @@ class CryptState {
     /** The peer has told us where its counter really is, because we drifted too far to rebuild it. */
     @Synchronized
     fun setDecryptNonce(serverNonce: ByteArray) {
-        require(serverNonce.size == NONCE) { "server nonce must be 16 bytes, got ${serverNonce.size}" }
+        require(serverNonce.size == NONCE_LEN) { "server nonce must be 16 bytes, got ${serverNonce.size}" }
         window.restartAt(serverNonce)
         resync++
     }
 
     /** A copy of our send counter, as the last packet we sealed left it. */
     @Synchronized
-    fun encryptNonce(): ByteArray = ByteArray(NONCE).also { encryptCounter.writeTo(it) }
+    fun encryptNonce(): ByteArray = ByteArray(NONCE_LEN).also { encryptCounter.writeTo(it) }
 
     @Synchronized
     fun stats(): CryptStats =
@@ -77,7 +77,7 @@ class CryptState {
         CryptStats(good, late, advanced - good, resync, replay)
 
     /**
-     * Encrypts `src[0, len)` into [dst], which must hold `len + OVERHEAD` bytes and be a different
+     * Encrypts `src[0, len)` into [dst], which must hold `len + HEADER_LEN` bytes and be a different
      * array from [src]. Returns the datagram length. Throws if called before [setKeys]: sending
      * unkeyed is a caller bug, not something the wire can cause.
      */
@@ -88,8 +88,8 @@ class CryptState {
         // burn a counter value and desynchronise the peer.
         require(len >= 0) { "negative length $len" }
         require(len <= src.size) { "length $len exceeds ${src.size} source bytes" }
-        require(len <= dst.size - OVERHEAD) {
-            "destination holds ${dst.size}, needs ${len.toLong() + OVERHEAD}"
+        require(len <= dst.size - HEADER_LEN) {
+            "destination holds ${dst.size}, needs ${len.toLong() + HEADER_LEN}"
         }
         require(src !== dst) { "encrypt cannot work in place: the header would land on the plaintext" }
 
@@ -97,13 +97,13 @@ class CryptState {
         encryptCounter.increment()
         encryptCounter.writeTo(nonce)
         // No return to check: seal only fails with its XEX* countermeasure turned off.
-        keyed.seal(nonce, src, 0, len, dst, OVERHEAD, tag)
+        keyed.seal(nonce, src, 0, len, dst, HEADER_LEN, tag)
 
         dst[0] = encryptCounter.lowByte.toByte()
         dst[1] = tag[0]
         dst[2] = tag[1]
         dst[3] = tag[2]
-        return len + OVERHEAD
+        return len + HEADER_LEN
     }
 
     /**
@@ -115,15 +115,15 @@ class CryptState {
      * discard it.
      *
      * Throws only for caller bugs, and only before any state is read or written. [dst] must hold
-     * `len - OVERHEAD` bytes; size it from the datagram buffer, not from an expected frame size, so
+     * `len - HEADER_LEN` bytes; size it from the datagram buffer, not from an expected frame size, so
      * a peer cannot forge the length that crashes the receive loop.
      */
     @Synchronized
     fun decrypt(src: ByteArray, len: Int, dst: ByteArray): Int {
         require(len >= 0) { "negative length $len" }
         require(len <= src.size) { "length $len exceeds ${src.size} source bytes" }
-        if (len < OVERHEAD) return -1
-        val plainLen = len - OVERHEAD
+        if (len < HEADER_LEN) return -1
+        val plainLen = len - HEADER_LEN
         require(plainLen <= dst.size) { "destination holds ${dst.size}, needs $plainLen" }
         val keyed = cipher ?: return -1
 
@@ -146,7 +146,7 @@ class CryptState {
         // open() hands back unverified plaintext and a recomputed tag; only this comparison
         // authenticates. Its false return means the final block has the shape the XEX* forgery
         // produces, which counts exactly as a mismatch.
-        val unforged = keyed.open(nonce, src, OVERHEAD, plainLen, dst, 0, tag)
+        val unforged = keyed.open(nonce, src, HEADER_LEN, plainLen, dst, 0, tag)
         val diff = (tag[0].toInt() xor wire0.toInt()) or
             (tag[1].toInt() xor wire1.toInt()) or
             (tag[2].toInt() xor wire2.toInt())
@@ -159,8 +159,8 @@ class CryptState {
     }
 
     companion object {
-        const val OVERHEAD = 4
+        const val HEADER_LEN = 4
 
-        private const val NONCE = 16
+        const val NONCE_LEN = 16
     }
 }
