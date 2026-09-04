@@ -25,6 +25,7 @@ jobs:
           MUMBLE_CONFIG_autobanAttempts: 0
         ports:
           - 64738:64738/tcp
+          - 64738:64738/udp
     steps:
       - uses: actions/checkout@v7
         with:

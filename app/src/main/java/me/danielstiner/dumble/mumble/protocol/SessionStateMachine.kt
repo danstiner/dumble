@@ -39,10 +39,12 @@ class SessionStateMachine(
     private val username: String,
     private val password: String?,
     private val scope: CoroutineScope,
-    private val clockNanos: () -> Long = System::nanoTime,
     private val clock: () -> Instant = Instant::now,
-    // Counts deep sleep, unlike clockNanos. See BootTimeSource.
+    // Counts deep sleep, unlike System.nanoTime. See BootTimeSource.
     private val bootClock: TimeSource.WithComparableMarks = BootTimeSource,
+    // Seam: a connection test that watches the UDP ping cadence would otherwise wait real
+    // intervals out. Only the ticker reads it; the thresholds derived from the constant stay.
+    private val pingIntervalMs: Long = PING_INTERVAL_MS,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -82,9 +84,11 @@ class SessionStateMachine(
 
     /**
      * Sends one UDP connectivity ping, if the attempt has a socket to send it on. Fired the moment
-     * CryptSetup keys [crypt], which is when the server can first match our address; again at
-     * ServerSync in case that one was lost; then once per tick beside the TCP ping, so one ticker
-     * carries both as desktop's does. Null until the connection wires it.
+     * CryptSetup keys [crypt], which is when the server can first match our address, then once
+     * per tick beside the TCP ping, so one ticker carries both as desktop's does. Not at
+     * ServerSync as well: that follows keying within milliseconds, and a ping whose reply had no
+     * time to arrive would read as unanswered to anything judging the cadence. Null until the
+     * connection wires it.
      */
     @Volatile var udpPing: (() -> Unit)? = null
 
@@ -94,7 +98,7 @@ class SessionStateMachine(
      * transport's single reader coroutine, the same context as every other frame handler.
      */
     fun interface AudioListener {
-        fun onTunneledAudio(payload: ByteArray, arrivalNanos: Long)
+        fun onTunneledAudio(payload: ByteArray)
     }
 
     @Volatile var audioListener: AudioListener? = null
@@ -186,7 +190,6 @@ class SessionStateMachine(
                 ) {
                     deadlineJob?.cancel()
                     startPings()
-                    udpPing?.invoke()
                     // Over-cap packets are dropped silently, so the symptom is otherwise
                     // undiagnosable one-way audio. ACCOUNTED_BITRATE derives from the encoder's
                     // own rate so the two cannot drift.
@@ -294,7 +297,7 @@ class SessionStateMachine(
             }
 
             // Raw UDP packet bytes: Mumble.proto's UDPTunnel message is dead code, never sent.
-            TcpMessageType.UDPTunnel -> audioListener?.onTunneledAudio(frame.payload, clockNanos())
+            TcpMessageType.UDPTunnel -> audioListener?.onTunneledAudio(frame.payload)
 
             TcpMessageType.UserStats ->
                 _userStats.value = UserStats.from(MumbleProtos.UserStats.parseFrom(frame.payload))
@@ -417,7 +420,7 @@ class SessionStateMachine(
             var degraded = false
             _lastServerReplyAt.value = lastTick
             while (true) {
-                delay(PING_INTERVAL_MS)
+                delay(pingIntervalMs)
                 val now = bootClock.markNow()
                 val sinceLast = now - lastTick
                 if (sinceLast > PING_GAP_WARN) {

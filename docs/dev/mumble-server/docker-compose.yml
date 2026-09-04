@@ -10,5 +10,6 @@ services:
     restart: unless-stopped
     ports:
       - "64738:64738/tcp"
+      - "64738:64738/udp"
     environment:
       MUMBLE_CONFIG_WELCOMETEXT: "Dumble test server"
