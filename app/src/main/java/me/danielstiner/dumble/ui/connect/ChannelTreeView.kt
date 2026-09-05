@@ -46,8 +46,8 @@ fun ChannelTreeView(
     tree: ChannelTree,
     mySession: Int,
     speaking: Set<Int>,
-    onUserClick: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
+    onUserClick: (Int) -> Unit = {},
 ) {
     // Flatten once per (tree, mySession, speaking); the list feeds a flat LazyColumn — no recursive composables.
     val rows = remember(tree, mySession, speaking) { channelTreeRows(tree, mySession, speaking) }

@@ -20,7 +20,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.R
 
@@ -42,7 +42,7 @@ fun AboutScreen(
 ) {
     BackHandler(onBack = onBack)
 
-    val resources = LocalContext.current.resources
+    val resources = LocalResources.current
     // ~14 KB of license text; read once rather than on every recomposition.
     val texts = remember {
         License.entries.associateWith { license ->

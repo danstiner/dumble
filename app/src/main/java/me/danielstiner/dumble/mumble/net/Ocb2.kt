@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import android.annotation.SuppressLint
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -214,6 +215,8 @@ class Ocb2(key: ByteArray) {
     private companion object {
         const val BLOCK = 16
 
+        // OCB2 is defined over the raw block cipher, so ECB is the mode the construction calls for.
+        @SuppressLint("GetInstance")
         fun cipher(mode: Int, key: ByteArray): Cipher =
             Cipher.getInstance("AES/ECB/NoPadding").apply {
                 init(mode, SecretKeySpec(key, "AES"))
