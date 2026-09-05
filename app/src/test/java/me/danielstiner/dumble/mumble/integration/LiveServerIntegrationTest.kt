@@ -274,6 +274,32 @@ class LiveServerIntegrationTest {
         }
     }
 
+    /** The uplink over UDP against the real thing: a datagram the talker seals is opened by the
+     *  server and forwarded, here to a listener whose downlink is UDP. */
+    @Test
+    fun audioSentOverUdpReachesAListener() = runBlocking {
+        awaitPort(host!!, port)
+        val heard = Recorder()
+        val listener = Client("dumble-ci-udp-listener", heard)
+        val talker = Client("dumble-ci-udp-talker", Recorder())
+        val fixture = byteArrayOf(0x08)
+        try {
+            listener.connect()
+            assertTrue(heard.replies.poll(15, TimeUnit.SECONDS) != null)
+            talker.connect()
+            val audio = MumbleUdpProtos.Audio.newBuilder().setFrameNumber(0).setOpusData(ByteString.copyFrom(fixture)).build()
+            val packet = byteArrayOf(0) + audio.toByteArray()
+            assertTrue(talker.udp.send(packet, packet.size))
+
+            val received = heard.packets.poll(15, TimeUnit.SECONDS)
+            assertTrue("the talker's datagram never reached the listener", received != null)
+            assertArrayEquals(fixture, MumbleUdpProtos.Audio.parseFrom(received!!.copyOfRange(1, received.size)).opusData.toByteArray())
+        } finally {
+            talker.close()
+            listener.close()
+        }
+    }
+
     /**
      * [awaitPort] only proves the TCP port is accepting connections; the TLS listener behind it
      * can still refuse the handshake for a few seconds longer during container cold start. Retry

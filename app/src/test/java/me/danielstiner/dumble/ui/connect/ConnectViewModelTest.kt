@@ -15,6 +15,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -49,6 +50,14 @@ class ConnectViewModelTest {
         advanceUntilIdle()
         assertEquals("saved.example", vm.uiState.value.draft.host)
         assertEquals("bob", vm.uiState.value.draft.username)
+    }
+
+    @Test fun theVoicePathReachesUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.voicePath.value = VoicePath.State(onUdp = true, roundTrip = 7.milliseconds)
+        advanceUntilIdle()
+        assertEquals(VoicePath.State(onUdp = true, roundTrip = 7.milliseconds), vm.uiState.value.voicePath)
     }
 
     @Test fun invalidPortBlocksDispatchAndSetsError() = runTest(dispatcher) {

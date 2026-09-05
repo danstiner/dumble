@@ -10,7 +10,6 @@ import java.net.InetSocketAddress
 import java.net.PortUnreachableException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
-import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
@@ -18,64 +17,52 @@ import kotlin.time.TimeSource
 
 /**
  * The UDP voice channel: a connected [DatagramChannel] with [CryptState] at both edges. One
- * dedicated thread blocks in read, opens each datagram, and hands the plaintext to the listener
- * by its first byte. Sending has no thread of its own: the voice pump and the ping ticker seal
- * in line, serialised on the one send buffer, and [DatagramChannel.write] is thread-safe.
+ * thread blocks in read, opens each datagram, and hands the plaintext to the listener by its
+ * first byte. Sending has no thread of its own: callers seal in line, serialised on the one send
+ * buffer, and [DatagramChannel.write] is thread-safe.
  *
- * Built inert: [open] connects the socket and starts the reader, [close] ends both. Nothing here
- * chooses which path voice is sent on, and nothing here ends the session. A socket that cannot
- * be opened costs nothing: the server never learns an address and keeps our downlink on the
- * tunnel. One that stops reaching us after the first ping registered us is worse — the server
- * keeps sending there — so unanswered pings are reported to the owner, which has the tunnel.
+ * Built inert: [open] connects and starts the reader, [close] ends both. Nothing here chooses a
+ * path or ends the session. A socket that never opens costs nothing, since the server never
+ * learns an address. One that stops reaching us after the first ping registered us is worse,
+ * because the server keeps sending there, so unanswered pings are reported to the owner.
  */
 class MumbleUdpTransport(
     private val crypt: CryptState,
     private val listener: Listener,
     /**
-     * The clock that counts sleep, as `BootTimeSource` explains: a round trip and a quiet period
-     * are judged in real elapsed time. A ping answered after a doze must read as old, since the
-     * reply is evidence about the path before the sleep, and a decrypt failing after one must ask
-     * for a resync at once. Injected because the Android clock reads zero off-device.
+     * Counts sleep, as `BootTimeSource` explains: a reply that crossed a doze must read as old,
+     * and a decrypt failing after one must ask for a resync at once. Injected because the
+     * Android clock reads zero off-device.
      */
     private val clock: TimeSource.WithComparableMarks = BootTimeSource,
 ) {
     interface Listener {
-        /**
-         * A decrypted voice datagram, `[u8 type][protobuf]`. [buf] is reused for the next
-         * datagram the moment this returns, and [len] — not `buf.size` — is the packet length.
-         */
+        /** A decrypted voice datagram, `[u8 type][protobuf]`. [buf] is reused the moment this
+         *  returns, and [len], not `buf.size`, bounds the packet. */
         fun onVoicePacket(buf: ByteArray, len: Int)
 
-        /** The server answered a ping sent [roundTrip] ago, by its own echo of the stamp. */
+        /** The server answered a ping sent [roundTrip] ago, dated by its own echo of the stamp. */
         fun onPingReply(roundTrip: Duration)
 
-        /**
-         * Two pings in a row went unanswered, each judged when the next was sent: whatever the
-         * server is sending to our address is not arriving. Once per outage; a reply re-arms it.
-         * Not raised for a socket that never opened, since the server never learned an address.
-         */
+        /** Two pings in a row unanswered, each judged when the next went out. Once per outage,
+         *  and never for a socket that did not open. */
         fun onPingsUnanswered()
 
-        /**
-         * Datagrams have failed to open for a quiet period with none succeeding: our decrypt
-         * counter is lost, and only the server can say where it is. Once per quiet period at
-         * most — a resync storm is a self-inflicted outage.
-         */
+        /** Datagrams have failed to open for a quiet period with none succeeding: our counter is
+         *  lost, and only the server can say where it is. At most once per quiet period. */
         fun requestCryptResync()
     }
 
-    // Written under this object's monitor, against each other; read lock-free by send().
+    // Written under this object's monitor; read lock-free by send().
     @Volatile private var channel: DatagramChannel? = null
     @Volatile private var closed = false
 
     /** What the ping stamps count from: the wire wants a number and the clock gives marks. */
     private val origin = clock.markNow()
 
-    // Written by the reader when a reply lands; judged, with the two below, under the send lock
-    // when the next ping goes out, which is the earliest anything can know.
-    @Volatile private var answeredSincePing = true   // the first ping has no predecessor to judge
+    // Set by the reader when a reply lands, consumed by the next ping's judgement.
+    @Volatile private var answeredSincePing = true   // the first ping has no predecessor
     private var unanswered = 0
-    private var reported = false
 
     // Heap-backed so array() is the cipher's destination. The server checks the wire cap before
     // it strips the header, so the largest packet we can seal is four bytes under it.
@@ -83,15 +70,15 @@ class MumbleUdpTransport(
     @Volatile private var sendFailureLogged = false
 
     // Reader-confined. A failed decrypt asks for nothing before this; every good datagram and
-    // every request push it out by a quiet period, which is upstream's throttle on both ends
+    // every request push it out by a quiet period, upstream's throttle on both ends
     // (ServerHandler::udpReady, Server::checkDecrypt) in one number.
     private var quietUntil = origin + RESYNC_QUIET
 
     /**
-     * Connects to [address] and starts the reader. Throws if the socket cannot be made; after
-     * [close] it does nothing at all. [address] is already resolved — it should be the control
-     * connection's own remote, since the server holds crypt state only for the session at that
-     * address and a name can resolve differently twice.
+     * Connects to [address] and starts the reader. Throws if the socket cannot be made or on a
+     * second call; a [close] that came first wins. [address] should be the control connection's
+     * own remote: the server holds crypt state only for the session at that address, and a name
+     * can resolve differently twice.
      */
     fun open(address: InetSocketAddress) {
         check(channel == null) { "open() twice" }
@@ -116,9 +103,9 @@ class MumbleUdpTransport(
     }
 
     private fun receiveLoop(ch: DatagramChannel) {
-        // The capture pump's priority: above the app's UI and IO work, below the Oboe callback,
-        // which sets its own. A late datagram is only jitter for the queue to absorb. Applies to
-        // the calling thread, so here rather than in open(); some builds refuse it.
+        // The capture pump's priority: above UI and IO work, below the Oboe callback. A late
+        // datagram is only jitter for the queue to absorb. Set here because it applies to the
+        // calling thread.
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
         // One byte past the largest datagram the server sends, so an oversized one can be told
         // from a full one. Decrypt works in place, and the listener copies what it keeps.
@@ -129,16 +116,16 @@ class MumbleUdpTransport(
             val n = try {
                 ch.read(buf)
             } catch (e: PortUnreachableException) {
-                // An ICMP from a port with nobody behind it, or a firewall that says so; a
-                // connected socket surfaces it where desktop's unconnected one never sees it.
-                // The path may yet heal and the ping keeps probing, so keep listening.
+                // An ICMP from a port with nobody behind it, which a connected socket surfaces
+                // where desktop's unconnected one never sees it. The path may heal and the ping
+                // keeps probing, so keep listening.
                 if (!unreachableLogged) {
                     unreachableLogged = true
                     Log.w(TAG, "server port unreachable; still listening")
                 }
                 continue
             } catch (e: IOException) {
-                // Our own close() unblocking the read, or a socket that is gone for good.
+                // Our own close() unblocking the read, or a socket gone for good.
                 if (!closed) Log.w(TAG, "receive failed; UDP voice is off for this session", e)
                 close()
                 return
@@ -152,8 +139,8 @@ class MumbleUdpTransport(
 
     private fun received(datagram: ByteArray, n: Int) {
         // The header plus at least the type byte, and no more than the server sends: past that
-        // the read truncated it, and the tag would fail for no reason of the counter's. Skipped
-        // unkeyed for the same reason.
+        // the read truncated it, and the tag would fail for no fault of the counter's. Unkeyed
+        // is skipped for the same reason.
         if (n <= CryptState.HEADER_LEN || n > MAX_DATAGRAM_LEN || !crypt.isValid()) return
         val len = crypt.decrypt(datagram, n, datagram)
         val now = clock.markNow()
@@ -181,10 +168,9 @@ class MumbleUdpTransport(
     }
 
     /**
-     * Seals and sends `plaintext[0, len)`. Any thread. False when there is no open socket, the
-     * cipher is unkeyed, or the send fails — a route gone from under us is the case that matters,
-     * and the caller decides what that means. Throws only for a caller bug: a packet past what
-     * the wire cap leaves for it, which [CryptState.encrypt] refuses.
+     * Seals and sends `plaintext[0, len)` from any thread. False with no open socket, an unkeyed
+     * cipher, or a failed send; a route gone from under us is the case that matters, and the
+     * caller decides what it means. Throws only for a packet past the wire cap, a caller bug.
      */
     fun send(plaintext: ByteArray, len: Int): Boolean {
         val ch = channel ?: return false
@@ -208,11 +194,11 @@ class MumbleUdpTransport(
     }
 
     /**
-     * A connectivity ping: the timestamp and nothing else, which is the one shape Murmur answers
-     * over UDP whichever path our voice is on (`Server.cpp`, the `force` reply to a ping with
-     * neither extended-information field), so a reply proves both directions at once. The stamp
-     * comes back verbatim, so a reply dates itself. Floored at 1: a zero serialises to nothing,
-     * and the server refuses a packet that is the type byte alone.
+     * A connectivity ping: the timestamp and nothing else, the one shape Murmur answers over UDP
+     * whichever path our voice is on (`Server.cpp`, the `force` reply to a ping with neither
+     * extended-information field), so a reply proves both directions at once. The stamp comes
+     * back verbatim, so a reply dates itself. Floored at 1: a zero serialises to nothing, and
+     * the server refuses a packet of the type byte alone.
      */
     fun sendPing(): Boolean {
         if (channel != null && previousPingWentUnanswered()) listener.onPingsUnanswered()
@@ -224,24 +210,16 @@ class MumbleUdpTransport(
         return send(packet, packet.size)
     }
 
-    /** True on the second miss in a row, once per outage; pings are an interval apart, so the
-     *  reply has had its chance by the time the next ping asks. */
+    /** Pings are an interval apart, so by the time one goes out the previous one's reply has had
+     *  its chance. Exactly the second miss in a row reports, so an outage reports once. */
+    @Synchronized
     private fun previousPingWentUnanswered(): Boolean {
-        synchronized(sendBuf) {
-            if (answeredSincePing) {
-                unanswered = 0
-                reported = false
-            } else {
-                unanswered++
-            }
-            answeredSincePing = false
-            if (reported || unanswered < UNANSWERED_TO_REPORT) return false
-            reported = true
-            return true
-        }
+        unanswered = if (answeredSincePing) 0 else unanswered + 1
+        answeredSincePing = false
+        return unanswered == UNANSWERED_TO_REPORT
     }
 
-    /** Idempotent, any thread. Closing the channel is what ends the reader; nothing waits for it. */
+    /** Idempotent, any thread. Closing the channel ends the reader; nothing waits for it. */
     fun close() {
         val ch = synchronized(this) {
             if (closed) return
