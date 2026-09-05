@@ -13,6 +13,7 @@ import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
+import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
@@ -27,6 +28,11 @@ import org.junit.Test
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.cert.X509Certificate
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
@@ -105,7 +111,7 @@ class LiveServerIntegrationTest {
         val fixture = byteArrayOf(0x08)
 
         val echoed = CompletableDeferred<ByteArray>()
-        session.audioListener = SessionStateMachine.AudioListener { payload, _ ->
+        session.audioListener = SessionStateMachine.AudioListener { payload ->
             if (payload.isNotEmpty() && payload[0].toInt() == 0) {
                 val audio = MumbleUdpProtos.Audio.parseFrom(payload.copyOfRange(1, payload.size))
                 if (!audio.opusData.isEmpty) echoed.complete(audio.opusData.toByteArray())
@@ -131,6 +137,140 @@ class LiveServerIntegrationTest {
         } finally {
             transport.close()
             scope.cancel()
+        }
+    }
+
+    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them.
+     *  Pinned straight to the probed fingerprint: the same trust path as the tests above, minus
+     *  the store. */
+    private inner class Client(name: String, udpListener: MumbleUdpTransport.Listener) {
+        val transport = MumbleTcpTransport(expectedPin = probeLeafFingerprint(host!!, port))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val session = SessionStateMachine(transport, name, password, scope)
+        // The boot clock reads zero on the JVM; the round trip needs a real one.
+        val udp = MumbleUdpTransport(session.crypt, udpListener, TimeSource.Monotonic)
+
+        suspend fun connect() {
+            connectWithRetry(transport, host!!, port, session)
+            udp.open(requireNotNull(transport.remoteAddress()))
+            session.udpPing = { udp.sendPing() }
+            session.start()
+            withTimeout(20_000) { session.state.first { it is ConnectionState.Synchronized } }
+        }
+
+        fun close() {
+            udp.close()
+            transport.close()
+            scope.cancel()
+        }
+    }
+
+    private class Recorder : MumbleUdpTransport.Listener {
+        val packets = LinkedBlockingQueue<ByteArray>()
+        val replies = LinkedBlockingQueue<Duration>()
+        override fun onVoicePacket(buf: ByteArray, len: Int) { packets.add(buf.copyOf(len)) }
+        override fun onPingReply(roundTrip: Duration) { replies.add(roundTrip) }
+        override fun onPingsUnanswered() = Unit
+        override fun requestCryptResync() = Unit
+    }
+
+    /**
+     * The cipher against the real thing: a ping the server could open, answered with a datagram
+     * we could open. Written from the OCB2 paper rather than ported, so this is the check that the
+     * two implementations agree on the wire, key schedule and nonce handling included.
+     */
+    @Test
+    fun theUdpPingIsAnsweredOverUdp() = runBlocking {
+        awaitPort(host!!, port)
+        val rec = Recorder()
+        val client = Client("dumble-ci-udp", rec)
+        try {
+            client.connect()
+
+            val roundTrip = rec.replies.poll(15, TimeUnit.SECONDS)
+            assertTrue("no UDP ping reply from the server", roundTrip != null)
+            assertTrue("round trip $roundTrip", !roundTrip!!.isNegative() && roundTrip < 5.seconds)
+            assertTrue("the reply must have counted as a good decrypt", client.session.crypt.stats().good >= 1)
+        } finally {
+            client.close()
+        }
+    }
+
+    /**
+     * The sequencing the socket exists for: a client that has only ever pinged — never
+     * transmitted — gets its downlink over UDP, because the server's per-user flag starts set and
+     * the ping registered the address. A second client talks through the tunnel; the first hears
+     * it on the UDP socket, with nothing arriving through its own tunnel.
+     */
+    @Test
+    fun aListenerWhoNeverTransmittedReceivesOverUdp() = runBlocking {
+        awaitPort(host!!, port)
+        val heard = Recorder()
+        val listener = Client("dumble-ci-listener", heard)
+        val talker = Client("dumble-ci-talker", Recorder())
+        val tunneled = LinkedBlockingQueue<ByteArray>()
+        listener.session.audioListener = SessionStateMachine.AudioListener { tunneled.add(it) }
+        val fixture = byteArrayOf(0x08)
+        try {
+            listener.connect()
+            assertTrue("the listener's ping must be answered first", heard.replies.poll(15, TimeUnit.SECONDS) != null)
+            talker.connect()
+
+            val audio = MumbleUdpProtos.Audio.newBuilder()
+                .setFrameNumber(0)
+                .setOpusData(ByteString.copyFrom(fixture))
+                .build()
+            assertTrue(talker.transport.sendRaw(TcpMessageType.UDPTunnel, byteArrayOf(0) + audio.toByteArray()))
+
+            val packet = heard.packets.poll(15, TimeUnit.SECONDS)
+            assertTrue("the talker's audio never arrived over UDP", packet != null)
+            val received = MumbleUdpProtos.Audio.parseFrom(packet!!.copyOfRange(1, packet.size))
+            assertArrayEquals(fixture, received.opusData.toByteArray())
+            assertTrue("came from the talker's session", received.senderSession == (talker.session.state.value as ConnectionState.Synchronized).sessionId)
+            assertTrue("nothing came through the listener's tunnel", tunneled.isEmpty())
+        } finally {
+            talker.close()
+            listener.close()
+        }
+    }
+
+    /**
+     * The mechanism the connection's answer to unanswered pings rests on: the server moves a
+     * client's downlink back to the tunnel on any frame that client tunnels, a ping included,
+     * and does not move it out again on a further UDP ping. Same shape as the test above, then
+     * one tunneled ping from the listener before the talker speaks.
+     */
+    @Test
+    fun aTunneledPingPullsTheDownlinkBackToTheTunnel() = runBlocking {
+        awaitPort(host!!, port)
+        val heard = Recorder()
+        val listener = Client("dumble-ci-nudger", heard)
+        val talker = Client("dumble-ci-talker2", Recorder())
+        val tunneled = LinkedBlockingQueue<ByteArray>()
+        listener.session.audioListener = SessionStateMachine.AudioListener { tunneled.add(it) }
+        val fixture = byteArrayOf(0x08)
+        try {
+            listener.connect()
+            assertTrue(heard.replies.poll(15, TimeUnit.SECONDS) != null)
+            talker.connect()
+            val tunneledPing = byteArrayOf(1) + MumbleUdpProtos.Ping.newBuilder().setTimestamp(1).build().toByteArray()
+            assertTrue(listener.transport.sendRaw(TcpMessageType.UDPTunnel, tunneledPing))
+            assertTrue("UDP still answers after the nudge", listener.udp.sendPing())
+            assertTrue(heard.replies.poll(15, TimeUnit.SECONDS) != null)
+
+            val audio = MumbleUdpProtos.Audio.newBuilder()
+                .setFrameNumber(0)
+                .setOpusData(ByteString.copyFrom(fixture))
+                .build()
+            assertTrue(talker.transport.sendRaw(TcpMessageType.UDPTunnel, byteArrayOf(0) + audio.toByteArray()))
+
+            val packet = tunneled.poll(15, TimeUnit.SECONDS)
+            assertTrue("the talker's audio must now come through the tunnel", packet != null)
+            assertArrayEquals(fixture, MumbleUdpProtos.Audio.parseFrom(packet!!.copyOfRange(1, packet.size)).opusData.toByteArray())
+            assertTrue("and no longer over UDP", heard.packets.isEmpty())
+        } finally {
+            talker.close()
+            listener.close()
         }
     }
 

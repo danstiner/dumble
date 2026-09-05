@@ -1,19 +1,22 @@
 # Connection
 
-One TLS connection carries everything: protobuf control messages and tunneled voice on the same
-socket. `MumbleConnection` coordinates it — the blocking TLS connect (where trust is decided), the
-protocol session that follows, and the lifecycle of the audio pipelines and the platform call —
-unified into one `status` flow the UI observes. Its audio-capture half is in `docs/capture.md`;
-this doc covers the connection itself. Details live in the code's comments; what follows is the
-structure and the trade-offs that shaped it.
+One TLS connection carries the control protocol and, for now, everything we send; voice from the
+server arrives on a UDP socket beside it, or through the tunnel. `MumbleConnection` coordinates
+it — the blocking TLS connect (where trust is decided), the protocol session that follows, and
+the lifecycle of the audio pipelines and the platform call — unified into one `status` flow the
+UI observes. Its audio-capture half is in `docs/capture.md`; this doc covers the connection
+itself. Details live in the code's comments; what follows is the structure and the trade-offs
+that shaped it.
 
 ```
 UI ─► Connection (interface)
           │
     MumbleConnection                    one live Attempt, generation-guarded
-          ├─► MumbleTcpTransport ─► SSLSocket ─► server
-          │      trust: MumbleTrustManager + PinStore
-          ├─► SessionStateMachine       handshake, pings, channel tree, chat
+          ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
+          │      trust: MumbleTrustManager + PinStore   ├─► server
+          ├─► MumbleUdpTransport ─► DatagramChannel ───┘
+          │      crypt: CryptState, keyed by CryptSetup
+          ├─► SessionStateMachine       handshake, pings, channel tree, chat, the cipher
           └─► audio + platform call     docs/capture.md, docs/playout.md
 ```
 
@@ -30,6 +33,28 @@ instance, so no teardown state can leak between attempts. One reader coroutine d
 and its `finally` is the sole delivery point of `onClosed` — exactly once, never nested inside
 `onFrame`, so listeners need no locking. The send queue is deliberately small: this is a
 low-volume control channel, and a larger buffer would only let a stalled socket hide longer.
+
+**UDP voice** (`net/MumbleUdpTransport`). A connected `DatagramChannel` aimed at the control
+connection's own remote address, with `CryptState` sealing and opening every datagram, and one
+thread blocking in read. Opened as soon as the control connection is up and closed with the
+attempt. A socket that cannot be opened costs the session nothing: the server never learns an
+address and keeps the downlink on the tunnel. The state machine owns the cipher, because
+`CryptSetup` is a control message, and fires the UDP ping at keying and on the TCP ping's own
+ticker. Receiving is wired before sending is: the server pushes a client's downlink over UDP
+from its first ping on, whether or not that client has ever transmitted, so a socket that only
+pinged would deafen a listener (`docs/mumble-protocol.md`, Voice framing). Which path carries
+our own voice is the next change; until it lands, the UDP downlink lasts until our first
+transmission, since a tunneled voice packet moves it back and only a UDP one would move it out
+again.
+
+The server binds a client's UDP address once and never re-learns it, and keeps sending there
+until a `UDPTunnel` frame from that client clears its per-user flag — which a client that only
+listens never sends. So a NAT that rebinds our port, or a socket that dies, would leave the
+downlink dead with the control channel reading healthy. The transport judges each ping when
+the next is sent, an interval later, and reports two unanswered in a row once per outage; the
+connection answers by tunneling one ping, since the server clears the flag on any frame that
+passes its length check, before decoding it, so no peer hears a blip. A reply re-arms the
+report. Pinned against a real server in `LiveServerIntegrationTest`.
 
 **Trust** (`net/MumbleTrustManager` + `PinStore`). Pins are SHA-256 of the whole leaf certificate,
 keyed by the endpoint as the user typed it. Pin first, certificate authority second — ordered the
@@ -53,4 +78,5 @@ it is published, and a dozed device fires no tick to refresh it. Tunneled voice 
 as a callback: `StateFlow` conflates, and a dropped emission would be dropped audio.
 
 Invariants are pinned by `MumbleConnectionTest`, `TelecomLifecycleChaosTest`,
-`MumbleTcpTransportTest`, `MumbleTrustManagerTest`, and `SessionStateMachineTest`.
+`MumbleTcpTransportTest`, `MumbleUdpTransportTest`, `MumbleTrustManagerTest`, and
+`SessionStateMachineTest`.

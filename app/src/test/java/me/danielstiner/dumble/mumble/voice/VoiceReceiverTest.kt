@@ -30,6 +30,31 @@ class VoiceReceiverTest {
 
     private fun receiver(fake: FakePlayoutEngine) = VoiceReceiver({ fake })
 
+    /** A packet in an array of its own length, which is what the tunnel delivers. */
+    private fun VoiceReceiver.offer(payload: ByteArray) = onVoicePacket(payload, payload.size)
+
+    /**
+     * The UDP transport hands over one reused buffer, so `len` bounds the packet, not the
+     * array. The bytes past `len` here are a second valid `sender_session` field: a parse
+     * bounded by the array would take it as part of the packet and read session 999.
+     */
+    @Test
+    fun lenBoundsThePacketNotTheArray() {
+        val fake = FakePlayoutEngine()
+        val rx = receiver(fake)
+        rx.start()
+        try {
+            val packet = audioPayload(session = 5)
+            val past = MumbleUdpProtos.Audio.newBuilder().setSenderSession(999).build().toByteArray()
+            rx.onVoicePacket(packet + past, packet.size)
+
+            assertEquals(1, fake.offered.size)
+            assertEquals(5, fake.offered[0].session)
+        } finally {
+            rx.stop()
+        }
+    }
+
     @Test
     fun theStreamStartsWithTheReceiverNotWithTheFirstPacket() {
         val fake = FakePlayoutEngine()
@@ -105,7 +130,7 @@ class VoiceReceiverTest {
             // for the length of the hold.
             awaitTrue("a hold must end the spurt", 500) { rx.speakingSessions.value.isEmpty() }
             val offeredBeforeHold = fake.offered.size
-            rx.onTunneledAudio(audioPayload(session = 3))
+            rx.offer(audioPayload(session = 3))
             Thread.sleep(200)
             assertEquals("held: nothing may start", 1, fake.calls.count { it == "start" })
             assertEquals("held: a packet is dropped, not queued", offeredBeforeHold, fake.offered.size)
@@ -124,12 +149,12 @@ class VoiceReceiverTest {
         val rx = receiver(fake)
         rx.start()
         awaitTrue("start") { fake.started }
-        rx.onTunneledAudio(audioPayload(session = 3))
+        rx.offer(audioPayload(session = 3))
         rx.stop()
         val offeredBeforeStop = fake.offered.size
         assertEquals("destroy must be the last call", "destroy", fake.calls.last())
         assertEquals("engine must be destroyed exactly once", 1, fake.destroyCalls)
-        rx.onTunneledAudio(audioPayload(session = 3))
+        rx.offer(audioPayload(session = 3))
         assertEquals("a packet after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
         rx.stop()
         assertEquals("a second stop() must not destroy again", 1, fake.destroyCalls)
@@ -169,8 +194,8 @@ class VoiceReceiverTest {
         val rx = receiver(fake)
         rx.start()
         try {
-            rx.onTunneledAudio(audioPayload(session = 1))
-            rx.onTunneledAudio(audioPayload(session = 2, terminator = true))
+            rx.offer(audioPayload(session = 1))
+            rx.offer(audioPayload(session = 2, terminator = true))
             assertEquals("every packet must reach the engine", 2, fake.offered.size)
             assertEquals(1, fake.offered[0].session)
             assertFalse("only the second packet set the terminator flag", fake.offered[0].terminator)
@@ -192,10 +217,10 @@ class VoiceReceiverTest {
         val rx = receiver(fake)
         rx.start()
         try {
-            repeat(8) { rx.onTunneledAudio(audioPayload(session = 3)) }
+            repeat(8) { rx.offer(audioPayload(session = 3)) }
             assertEquals("a malformed payload must not stop the reader", 8, fake.offered.size)
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
-            rx.onTunneledAudio(audioPayload(session = 3))
+            rx.offer(audioPayload(session = 3))
             assertEquals("the session must still work after garbage", 9, fake.offered.size)
         } finally {
             rx.stop()
@@ -209,10 +234,10 @@ class VoiceReceiverTest {
         val rx = receiver(fake)
         rx.start()
         try {
-            repeat(8) { rx.onTunneledAudio(audioPayload(session = it)) }
+            repeat(8) { rx.offer(audioPayload(session = it)) }
             assertEquals("every packet must still reach the engine even while capped", 8, fake.offered.size)
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
-            rx.onTunneledAudio(audioPayload(session = 0))
+            rx.offer(audioPayload(session = 0))
             assertEquals("the reader must keep working after the cap trips", 9, fake.offered.size)
         } finally {
             rx.stop()
@@ -228,8 +253,8 @@ class VoiceReceiverTest {
             // The body must be a *valid* Audio message, differing from an accepted packet only in
             // the type byte; with a garbage body the malformed-protobuf path would reject it anyway.
             val wrongType = audioPayload(session = 1).also { it[0] = 99 }
-            rx.onTunneledAudio(wrongType)
-            rx.onTunneledAudio(ByteArray(0))
+            rx.offer(wrongType)
+            rx.offer(ByteArray(0))
             assertEquals("a non-audio type byte must not reach the engine", 0, fake.offered.size)
         } finally {
             rx.stop()
@@ -244,7 +269,7 @@ class VoiceReceiverTest {
         try {
             // Valid type byte, garbage body. MumbleTcpTransport's reader catches Throwable and
             // tears the whole session down, so an escaping parse failure would take chat with it.
-            rx.onTunneledAudio(byteArrayOf(0, -1, -1, -1, -1, -1))
+            rx.offer(byteArrayOf(0, -1, -1, -1, -1, -1))
             assertEquals(0, fake.offered.size)
         } finally {
             rx.stop()
@@ -492,7 +517,7 @@ class VoiceReceiverTest {
         val builds = AtomicInteger()
         val rx = VoiceReceiver({ builds.incrementAndGet(); null })
         rx.start()
-        rx.onTunneledAudio(audioPayload(session = 1))
+        rx.offer(audioPayload(session = 1))
         assertEquals(emptySet<Int>(), rx.speakingSessions.value)
         rx.start()
         assertEquals("a refused start() must not be retried", 1, builds.get())

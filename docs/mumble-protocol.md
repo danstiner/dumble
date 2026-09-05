@@ -11,9 +11,10 @@ are normative.
 
 A session is one TLS-over-TCP **control channel** plus, optionally, one encrypted UDP **voice
 channel** to the same host and port. Everything the UDP channel carries can also ride the control
-channel inside `UDPTunnel` frames, so TCP alone is a complete session — that is Dumble today.
-The UDP transport is in flight (`docs/superpowers/specs/2026-08-27-udp-voice-transport-design.md`);
-its crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`.
+channel inside `UDPTunnel` frames, so TCP alone is a complete session. Dumble opens the UDP
+channel with every session and receives on it; its own voice still goes out through the tunnel
+until the path selector lands (`docs/superpowers/specs/2026-08-27-udp-voice-transport-design.md`).
+The crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`, the socket `net/MumbleUdpTransport.kt`.
 
 ## Control channel
 
@@ -97,7 +98,21 @@ playout's jitter logic keys on. One packet carries one 20 ms mono Opus frame end
 a server-determined per-listener volume adjustment, currently ignored.
 
 `Ping` carries an opaque client timestamp the server echoes untouched — liveness proof for the
-UDP path specifically, since it round-trips the same encryption as audio.
+UDP path specifically, since it round-trips the same encryption as audio. Three facts about the
+server shape everything Dumble does with it (`src/murmur/Server.cpp`, checked at `90c2184c8`):
+it learns a client's UDP address only from a datagram it can decrypt, by trying the client's key
+against every session from that host; it sends a client's downlink over UDP while a per-user
+flag is set, and that flag starts set and is cleared only by a tunneled packet from that client;
+and it answers a ping that carries nothing but the timestamp over UDP regardless of that flag.
+So the first ping — sent the moment `CryptSetup` keys the cipher, then every 5 s beside the TCP
+ping — registers the address, keeps the NAT mapping alive, and proves both directions at once;
+and from that moment a client that has never transmitted receives over UDP, which is why the
+socket is opened for receiving before anything sends voice over it. Two more facts bound that.
+The server learns the address once: registration moves the session out of the per-host bucket
+it matches unknown peers against, so a datagram from a new port is dropped and the downlink
+keeps going to the old one. And the flag is cleared by any tunneled frame that passes the length
+check, before it is decoded, so a tunneled ping — which the server does not answer — is how a
+listener asks for its downlink back (`docs/connection.md`).
 
 **Over TCP** the same `[header byte][protobuf]` bytes travel as a `UDPTunnel` frame, unencrypted
 beyond TLS. Tunneled voice inherits TCP's ordering and its head-of-line blocking, which is why

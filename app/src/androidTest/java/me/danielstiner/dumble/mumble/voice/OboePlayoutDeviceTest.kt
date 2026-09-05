@@ -41,6 +41,8 @@ class OboePlayoutDeviceTest {
         return packets
     }
 
+    private fun VoiceReceiver.offer(packet: ByteArray) = onVoicePacket(packet, packet.size)
+
     private fun payload(session: Int, opus: ByteArray, terminator: Boolean = false): ByteArray {
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(session)
@@ -63,7 +65,7 @@ class OboePlayoutDeviceTest {
     private fun playPaced(rx: VoiceReceiver, packets: List<ByteArray>, onEach: (Int) -> Unit) {
         val t0 = SystemClock.elapsedRealtime()
         packets.forEachIndexed { i, p ->
-            rx.onTunneledAudio(payload(SESSION, p))
+            rx.offer(payload(SESSION, p))
             onEach(i)
             val next = t0 + (i + 1) * 20L
             val wait = next - SystemClock.elapsedRealtime()
@@ -101,7 +103,7 @@ class OboePlayoutDeviceTest {
             assertEquals("a paced spurt must not overflow the jitter queue", 0, mid.droppedPackets)
             assertEquals("the callback missed a burst", 0, mid.underruns)
 
-            rx.onTunneledAudio(payload(SESSION, packets[75], terminator = true))
+            rx.offer(payload(SESSION, packets[75], terminator = true))
             awaitTrue("the spurt never closed", 1_000) { rx.speakingSessions.value.isEmpty() }
             val end = rx.playoutStats.value
             assertNotNull("no closing sample", end)
@@ -126,7 +128,7 @@ class OboePlayoutDeviceTest {
         rx.start()
         try {
             playPaced(rx, packets.subList(0, 25)) {}
-            rx.onTunneledAudio(payload(SESSION, packets[25], terminator = true))
+            rx.offer(payload(SESSION, packets[25], terminator = true))
             awaitTrue("the first spurt never closed", 1_000) { rx.speakingSessions.value.isEmpty() }
             val closing = rx.playoutStats.value
             assertNotNull("no closing sample", closing)
@@ -144,7 +146,7 @@ class OboePlayoutDeviceTest {
             }
             assertTrue("the second spurt never lit up", litAfterMillis >= 0)
             assertTrue("lit after $litAfterMillis ms", litAfterMillis <= 300)
-            rx.onTunneledAudio(payload(SESSION, packets[51], terminator = true))
+            rx.offer(payload(SESSION, packets[51], terminator = true))
             awaitTrue("the second spurt never closed", 1_000) { rx.speakingSessions.value.isEmpty() }
             val end = rx.playoutStats.value!!
             assertNotNull("the stream reported no latency", end.latencyMs)
@@ -169,7 +171,7 @@ class OboePlayoutDeviceTest {
             playPaced(rx, packets.subList(0, 75)) {
                 rx.playoutStats.value?.let { if (samples.lastOrNull() !== it) samples += it }
             }
-            rx.onTunneledAudio(payload(SESSION, packets[75], terminator = true))
+            rx.offer(payload(SESSION, packets[75], terminator = true))
             awaitTrue("the spurt never closed", 1_000) { rx.speakingSessions.value.isEmpty() }
             rx.playoutStats.value?.let { if (samples.lastOrNull() !== it) samples += it }
             assertTrue("no samples", samples.isNotEmpty())

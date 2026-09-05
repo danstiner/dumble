@@ -21,14 +21,17 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
+import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
+import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
+import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
@@ -39,9 +42,11 @@ import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
 import me.danielstiner.dumble.mumble.voice.openNativePlayout
 import me.danielstiner.dumble.telecom.TelecomCall
+import me.danielstiner.dumble.time.BootTimeSource
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.time.TimeSource
 
 /**
  * Owns the whole connection: the blocking TLS connect (which throws trust exceptions before the
@@ -67,6 +72,11 @@ class MumbleConnection internal constructor(
     private val call: VoiceCall = NoVoiceCall,
     // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
     private val stuckPumpMillis: Long = 1_000L,
+    // Seams: the UDP transport's clock, so its wiring test can jump the resync throttle's quiet
+    // period rather than wait it out (it reads zero off-device, which is why the test must inject
+    // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
+    private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
+    private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -145,6 +155,9 @@ class MumbleConnection internal constructor(
         val sm: SessionStateMachine,
         val childScope: CoroutineScope,
         val receiver: VoiceReceiver,
+        /** The UDP voice socket. Opened once the control connection is up, closed with the
+         *  attempt; inert in between if it could not be opened, and voice stays tunneled. */
+        val udp: MumbleUdpTransport,
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the connect coroutine, read on caller threads. */
         @Volatile var presented: String? = null,
@@ -544,12 +557,39 @@ class MumbleConnection internal constructor(
             Log.i(TAG, "connect gen=$gen endpoint=${endpoint.address} user=$username storedPin=${pin != null}")
             val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val transport = newTransport(pin)
-            val sm = SessionStateMachine(transport, username, password, childScope)
+            val sm = SessionStateMachine(transport, username, password, childScope, pingIntervalMs = pingIntervalMs)
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), and
             // only an attempt that survives every guard below ever reaches that call. Building
             // the engine here, eagerly, is what used to leak one per superseded/failed attempt.
             val receiver = VoiceReceiver(newPlayout)
-            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver)
+            val udp = MumbleUdpTransport(sm.crypt, object : MumbleUdpTransport.Listener {
+                // Two facts about the path, each logged once: it works in both directions, and
+                // the server chose it for our downlink. Nothing chooses a path on them yet.
+                private var answered = false
+                private var heard = false
+                override fun onVoicePacket(buf: ByteArray, len: Int) {
+                    if (!heard) {
+                        heard = true
+                        Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
+                    }
+                    receiver.onVoicePacket(buf, len)
+                }
+                override fun onPingReply(roundTrip: Duration) {
+                    if (answered || roundTrip.isNegative()) return
+                    answered = true
+                    Log.i(TAG, "UDP path answered in ${roundTrip.inWholeMilliseconds} ms gen=$gen")
+                }
+                // The server keeps sending to the address it bound until a tunneled frame of
+                // ours moves the downlink back, and never re-learns the address; a client that
+                // only listens would otherwise stay deaf (docs/connection.md, UDP voice). A ping
+                // does it without a peer hearing a blip.
+                override fun onPingsUnanswered() {
+                    Log.w(TAG, "UDP pings unanswered; pulling the downlink back to the tunnel gen=$gen")
+                    transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
+                }
+                override fun requestCryptResync() { sm.requestCryptResync() }
+            }, udpClock)
+            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver, udp)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { teardown(att); return@launch }   // superseded before publish
 
@@ -577,8 +617,17 @@ class MumbleConnection internal constructor(
             }
             if (gen != attempt) { teardown(att); return@launch }   // superseded mid-handshake
 
-            sm.audioListener = SessionStateMachine.AudioListener { payload, _ ->
-                receiver.onTunneledAudio(payload)
+            // Before sm.start(): the ping that registers our address fires the instant CryptSetup
+            // keys the cipher, and from then on the server sends our downlink over UDP whether or
+            // not we ever transmit (docs/connection.md, UDP voice), so it has to land on a socket
+            // already listening. One that cannot be opened costs the session nothing but UDP.
+            att.transport.remoteAddress()?.let { remote ->
+                runCatching { att.udp.open(remote) }
+                    .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
+            }
+            sm.udpPing = { att.udp.sendPing() }
+            sm.audioListener = SessionStateMachine.AudioListener { payload ->
+                receiver.onVoicePacket(payload, payload.size)
             }
             sm.start()
             childScope.launch {
@@ -733,6 +782,9 @@ class MumbleConnection internal constructor(
         // start, and SSLSocket.close can stall writing close-notify to a dead peer. Kept off the capture
         // channel for that reason — one slow socket must not delay every other attempt's release.
         scope.launch(Dispatchers.IO) {
+            // UDP first: its close never blocks, and the TLS close below can, while datagrams
+            // would keep reaching a receiver that is about to stop.
+            runCatching { att.udp.close() }
             runCatching { att.transport.close() }
             att.receiver.stop()
         }
@@ -763,5 +815,10 @@ class MumbleConnection internal constructor(
         /** How long the speaking halo outlives the last packet: enough to bridge the pauses
          *  inside a sentence, not so long it is still lit once someone has stopped. */
         const val SPEAKING_HOLD_MILLIS = 200L
+
+        /** Tunneled for its side effect, never answered. Any frame of two bytes or more would
+         *  do; this one is honest about what it is. */
+        val TUNNEL_PING: ByteArray =
+            byteArrayOf(1) + MumbleUdpProtos.Ping.newBuilder().setTimestamp(1).build().toByteArray()
     }
 }
