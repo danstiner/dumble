@@ -39,7 +39,7 @@ class UserDetailSheetTest {
         PlayoutDelay(network = null, jitterBuffer = millis?.milliseconds, audioOutput = null)
 
     @Composable
-    private fun sheet(
+    private fun Sheet(
         delay: PlayoutDelay?,
         stats: UserStats? = null,
         name: String = "alice",
@@ -54,7 +54,7 @@ class UserDetailSheetTest {
 
     @Test fun showsEveryReadingInMillis() {
         compose.setContent {
-            sheet(buffered(120), stats(tcpPing = 23.5.milliseconds, udpPing = 18.2.milliseconds))
+            Sheet(buffered(120), stats(tcpPing = 23.5.milliseconds, udpPing = 18.2.milliseconds))
         }
         compose.onNodeWithText("alice").assertExists()
         compose.onNodeWithText("Jitter buffer").assertExists()
@@ -69,14 +69,14 @@ class UserDetailSheetTest {
      * a broken zero rather than as a fast link, so below 10 ms the tenth is what distinguishes it.
      */
     @Test fun aSubMillisecondPingKeepsItsTenth() {
-        compose.setContent { sheet(buffered(30), stats(tcpPing = 0.27.milliseconds)) }
+        compose.setContent { Sheet(buffered(30), stats(tcpPing = 0.27.milliseconds)) }
         compose.onNodeWithText("0.3 ms").assertExists()
         compose.onNodeWithText("0 ms").assertDoesNotExist()
     }
 
     /** Fixed labels for both pings; a dash under UDP is the evidence that a peer tunnels. */
     @Test fun eachPingHasItsOwnRow() {
-        compose.setContent { sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds)) }
+        compose.setContent { Sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds)) }
         compose.onNodeWithText("TCP ping").assertExists()
         compose.onNodeWithText("UDP ping").assertExists()
         compose.onNodeWithText("23 ms").assertExists()
@@ -84,7 +84,7 @@ class UserDetailSheetTest {
     }
 
     @Test fun aTunnellingPeerHasNoUdpPing() {
-        compose.setContent { sheet(buffered(30), stats(tcpPing = 23.milliseconds)) }
+        compose.setContent { Sheet(buffered(30), stats(tcpPing = 23.milliseconds)) }
         compose.onNodeWithText("UDP ping").assertExists()
         // Network, audio output, UDP ping, jitter, bandwidth.
         compose.onAllNodesWithText("—").assertCountEquals(5)
@@ -92,14 +92,14 @@ class UserDetailSheetTest {
 
     /** Each reading stands alone — a server that refuses stats must not blank the depth too. */
     @Test fun oneReadingCanBeMissingWithoutTheOther() {
-        compose.setContent { sheet(buffered(120)) }
+        compose.setContent { Sheet(buffered(120)) }
         compose.onNodeWithText("120 ms").assertExists()
         compose.onAllNodesWithText("—").assertCountEquals(6)
     }
 
     /** A retired speaker has no reading; "0 ms" would claim a drained queue, a real reading. */
     @Test fun noReadingIsADashNotAZero() {
-        compose.setContent { sheet(buffered(null)) }
+        compose.setContent { Sheet(buffered(null)) }
         compose.onAllNodesWithText("—").assertCountEquals(8)
         compose.onNodeWithText("0 ms").assertDoesNotExist()
     }
@@ -107,7 +107,7 @@ class UserDetailSheetTest {
     /** Absent readings do not blank the ones that are present. */
     @Test fun aPresentReadingSurvivesAnAbsentOne() {
         compose.setContent {
-            sheet(buffered(null), stats(tcpPing = 12.milliseconds), name = "dan")
+            Sheet(buffered(null), stats(tcpPing = 12.milliseconds), name = "dan")
         }
         compose.onNodeWithText("12 ms").assertExists()
         compose.onAllNodesWithText("—").assertCountEquals(7)
@@ -115,7 +115,7 @@ class UserDetailSheetTest {
 
     /** The sheet drives its own refresh, so composing it must already have asked once. */
     @Test fun composingAsksForTheSubjectsStats() {
-        compose.setContent { sheet(buffered(120)) }
+        compose.setContent { Sheet(buffered(120)) }
         compose.waitForIdle()
         assertEquals(listOf(9), refreshed)
     }
@@ -126,7 +126,7 @@ class UserDetailSheetTest {
      */
     @Test fun jitterFollowsThePathCarryingVoice() {
         compose.setContent {
-            sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds,
+            Sheet(buffered(30), stats(tcpPing = 23.milliseconds, udpPing = 18.milliseconds,
                             tcpJitter = 9.milliseconds, udpJitter = 2.milliseconds))
         }
         compose.onNodeWithText("2.0 ms").assertExists()
@@ -135,21 +135,21 @@ class UserDetailSheetTest {
 
     @Test fun aTunnellingPeerIsDescribedByItsTcpJitter() {
         compose.setContent {
-            sheet(buffered(30), stats(tcpPing = 23.milliseconds, tcpJitter = 9.milliseconds, udpJitter = 2.milliseconds))
+            Sheet(buffered(30), stats(tcpPing = 23.milliseconds, tcpJitter = 9.milliseconds, udpJitter = 2.milliseconds))
         }
         compose.onNodeWithText("9.0 ms").assertExists()
     }
 
     /** Kilobits: a voice stream is tens of them, and the bits are noise at this width. */
     @Test fun bandwidthReadsInKilobits() {
-        compose.setContent { sheet(buffered(30), stats(tcpPing = 1.milliseconds, bandwidthBitsPerSecond = 8060)) }
+        compose.setContent { Sheet(buffered(30), stats(tcpPing = 1.milliseconds, bandwidthBitsPerSecond = 8060)) }
         compose.onNodeWithText("8.1 kbit/s").assertExists()
     }
 
     /** Every step with a reading is in the total: 3 + 150 + 20 = 173. */
     @Test fun theTotalAddsEveryStepThatHasAReading() {
         compose.setContent {
-            sheet(PlayoutDelay(network = 3.milliseconds, jitterBuffer = 150.milliseconds,
+            Sheet(PlayoutDelay(network = 3.milliseconds, jitterBuffer = 150.milliseconds,
                                audioOutput = 20.milliseconds))
         }
         compose.onNodeWithText("> 173 ms").assertExists()
@@ -157,14 +157,14 @@ class UserDetailSheetTest {
 
     /** Their microphone-to-encoder time never arrives, so the total is a floor. */
     @Test fun theTotalIsAFloor() {
-        compose.setContent { sheet(buffered(150)) }
+        compose.setContent { Sheet(buffered(150)) }
         compose.onNodeWithText("> 150 ms").assertExists()
     }
 
     /** An absent step shrinks the estimate rather than counting as zero delay for that step. */
     @Test fun anAbsentStepIsSkippedNotZeroed() {
         compose.setContent {
-            sheet(PlayoutDelay(network = null, jitterBuffer = 150.milliseconds,
+            Sheet(PlayoutDelay(network = null, jitterBuffer = 150.milliseconds,
                                audioOutput = 20.milliseconds))
         }
         compose.onNodeWithText("> 170 ms").assertExists()
@@ -172,13 +172,13 @@ class UserDetailSheetTest {
 
     /** A drained queue is a real 0 — the audio has moved into the track — not an absence. */
     @Test fun aDrainedQueueReadsAsZero() {
-        compose.setContent { sheet(buffered(0)) }
+        compose.setContent { Sheet(buffered(0)) }
         compose.onNodeWithText("0 ms").assertExists()
     }
 
     /** A speaker the engine holds no slot for reads as absent, not as a confident zero. */
     @Test fun aRetiredSpeakerHasNoDelayRowsAtAll() {
-        compose.setContent { sheet(null) }
+        compose.setContent { Sheet(null) }
         compose.onNodeWithText("0 ms").assertDoesNotExist()
     }
 }

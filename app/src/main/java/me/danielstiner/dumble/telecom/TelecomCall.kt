@@ -3,6 +3,7 @@ package me.danielstiner.dumble.telecom
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -485,7 +486,7 @@ class TelecomCall(private val context: Context) : VoiceCall {
         // Use Mumble's URL scheme to encode user, host, and port for call history. Never the
         // password — this string lands in the platform's call record. Quirk: sdks 26 & 27 will
         // replace this with sip:packageName.
-        address = Uri.parse("mumble://${Uri.encode(username)}@${endpoint.address}"),
+        address = "mumble://${Uri.encode(username)}@${endpoint.address}".toUri(),
         direction = CallAttributesCompat.DIRECTION_OUTGOING,
         callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
     )
