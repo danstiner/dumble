@@ -37,7 +37,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(4, 5, 6), 2L, true),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }, onExit = { })
+        val sender = VoiceSender(fake, { p -> sent += p; latch.countDown(); true }, onExit = { })
         sender.start()
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -66,7 +66,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(9), 0L, false),
             FakeCaptureHandle.Step.Shutdown,
         )
-        val sender = VoiceSender(fake, { _, p -> sent += p; latch.countDown(); true }, onExit = { })
+        val sender = VoiceSender(fake, { p -> sent += p; latch.countDown(); true }, onExit = { })
         sender.start()
         assertTrue("pump exited on POLL_RETRY", latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -77,7 +77,7 @@ class VoiceSenderTest {
         val fake = FakeCaptureHandle()
         fake.script(FakeCaptureHandle.Step.Unavailable)
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        val sender = VoiceSender(fake, { true }, exits.callback)
         sender.start()
         // The pump exits on its own here; no stop() is involved, so nothing can overwrite the
         // reason it recorded.
@@ -99,7 +99,7 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Shutdown,
         )
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> latch.countDown(); false }, exits.callback)
+        val sender = VoiceSender(fake, { latch.countDown(); false }, exits.callback)
         sender.start()
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         sender.stop()
@@ -115,7 +115,7 @@ class VoiceSenderTest {
         val fake = FakeCaptureHandle()
         fake.script(FakeCaptureHandle.Step.Unknown(-99))
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        val sender = VoiceSender(fake, { true }, exits.callback)
         sender.start()
         exits.awaitFirst()
         assertEquals(VoiceSender.StopReason.UNAVAILABLE, sender.stopReason)
@@ -138,7 +138,7 @@ class VoiceSenderTest {
             override fun stats(): CaptureStats? = null
         }
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        val sender = VoiceSender(fake, { true }, exits.callback)
         sender.start()
         exits.awaitFirst()
         assertEquals(1, exits.total())
@@ -151,7 +151,7 @@ class VoiceSenderTest {
         // rather than checking a flag is what catches a second pump that started and died.
         val fake = FakeCaptureHandle()
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        val sender = VoiceSender(fake, { true }, exits.callback)
         sender.start()
         sender.stop()
         exits.awaitFirst()
@@ -168,7 +168,7 @@ class VoiceSenderTest {
     fun stopRequestsShutdownAndThePumpExits() {
         val fake = FakeCaptureHandle()
         val exits = Exits()
-        val sender = VoiceSender(fake, { _, _ -> true }, exits.callback)
+        val sender = VoiceSender(fake, { true }, exits.callback)
         sender.start()
         sender.stop()
         exits.awaitFirst()

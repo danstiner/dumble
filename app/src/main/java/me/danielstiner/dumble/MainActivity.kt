@@ -74,6 +74,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     sessionId = s.sessionId,
                     connectedSince = state.connectedSince,
                     roundTripTime = state.roundTripTime,
+                    voicePath = state.voicePath,
                     lastServerReplyAt = state.lastServerReplyAt,
                     channelTree = state.channelTree,
                     speaking = state.speakingSessions,

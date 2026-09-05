@@ -9,6 +9,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -19,6 +20,7 @@ class FakeConnection : Connection {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     override val serverVersion = MutableStateFlow<ServerVersion?>(null)
     override val roundTripTime = MutableStateFlow<Duration?>(null)
+    override val voicePath = MutableStateFlow(VoicePath.State())
     override val lastServerReplyAt = MutableStateFlow<ComparableTimeMark?>(null)
     override val channelTree = MutableStateFlow(ChannelTree())
     override val messages = MutableStateFlow<List<ChatMessage>>(emptyList())

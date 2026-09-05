@@ -6,6 +6,7 @@ import kotlin.time.ComparableTimeMark
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -17,6 +18,10 @@ interface Connection {
     val status: StateFlow<ConnectionStatus>
     val serverVersion: StateFlow<ServerVersion?>
     val roundTripTime: StateFlow<Duration?>
+
+    /** Which transport carries our own voice and, on UDP, the round trip that proved it. The
+     *  fresh state, tunneled, while disconnected. */
+    val voicePath: StateFlow<VoicePath.State>
 
     /**
      * When the server last said anything — seeded at ServerSync, then advanced by each ping reply;
