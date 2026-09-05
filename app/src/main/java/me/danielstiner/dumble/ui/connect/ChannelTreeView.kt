@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
@@ -37,6 +38,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import me.danielstiner.dumble.R
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 
 @Composable
@@ -88,6 +90,7 @@ private fun ChannelHeader(ch: ChannelTreeRow.ChannelRow) {
 
 @Composable
 private fun UserRow(u: ChannelTreeRow.UserRow, onClick: (Int) -> Unit) {
+    val speaking = stringResource(R.string.user_state_speaking)
     ListItem(
         // ListItem's own 16dp start padding equals ChannelHeader's indent at depth 0; adding
         // depth * 12dp mirrors the header's per-level step so a user sits under its own channel.
@@ -98,7 +101,7 @@ private fun UserRow(u: ChannelTreeRow.UserRow, onClick: (Int) -> Unit) {
         modifier = Modifier.padding(start = (u.depth * 12).dp)
             .clickable { onClick(u.session) }
             .then(
-                if (u.isSpeaking) Modifier.semantics { stateDescription = "speaking" }
+                if (u.isSpeaking) Modifier.semantics { stateDescription = speaking }
                 else Modifier
             ),
         leadingContent = { Avatar(u) },
@@ -172,7 +175,9 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
                     val deaf = badge.kind == UserBadge.Kind.DEAF
                     Icon(
                         if (deaf) Icons.Filled.HeadsetOff else Icons.Filled.MicOff,
-                        if (deaf) "deafened" else "muted",
+                        stringResource(
+                            if (deaf) R.string.user_state_deafened else R.string.user_state_muted,
+                        ),
                         modifier = Modifier.size(11.dp),
                         tint = if (badge.server) cs.onError else cs.onSurfaceVariant,
                     )

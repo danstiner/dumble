@@ -1,4 +1,8 @@
 <resources>
     <string name="app_name">Dumble</string>
     <string name="voice_channel_name">Voice connection</string>
+    <!-- Accessibility labels for a user's state in the channel tree. -->
+    <string name="user_state_speaking">speaking</string>
+    <string name="user_state_muted">muted</string>
+    <string name="user_state_deafened">deafened</string>
 </resources>
