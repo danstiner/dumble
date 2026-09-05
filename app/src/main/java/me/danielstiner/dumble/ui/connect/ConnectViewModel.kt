@@ -25,6 +25,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
@@ -57,6 +58,7 @@ data class ConnectUiState(
     val hostError: String? = null,
     val status: ConnectionStatus = ConnectionStatus.Idle,
     val roundTripTime: Duration? = null,
+    val voicePath: VoicePath.State = VoicePath.State(),
     val lastServerReplyAt: ComparableTimeMark? = null,
     val channelTree: ChannelTree = ChannelTree(),
     val messages: List<ChatMessage> = emptyList(),
@@ -115,6 +117,7 @@ private data class HealthSnapshot(
     val lastServerReplyAt: ComparableTimeMark?,
     val playoutStats: PlayoutStats?,
     val userStats: UserStats?,
+    val voicePath: VoicePath.State,
 )
 
 @HiltViewModel
@@ -146,8 +149,8 @@ class ConnectViewModel internal constructor(
 
     private val healthSnapshot = combine(
         connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
-        connection.userStats,
-    ) { rtt, replyAt, playout, ping -> HealthSnapshot(rtt, replyAt, playout, ping) }
+        connection.userStats, connection.voicePath,
+    ) { rtt, replyAt, playout, ping, path -> HealthSnapshot(rtt, replyAt, playout, ping, path) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
@@ -165,7 +168,7 @@ class ConnectViewModel internal constructor(
             // it with a name it cannot look up.
             val selected = f.selectedSession?.takeIf { it in c.channelTree.users }
             f.copy(
-                status = status, roundTripTime = health.roundTripTime,
+                status = status, roundTripTime = health.roundTripTime, voicePath = health.voicePath,
                 lastServerReplyAt = health.lastServerReplyAt, playoutStats = health.playoutStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,

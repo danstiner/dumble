@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
@@ -55,6 +56,7 @@ fun ConnectedScreen(
     sessionId: Int,
     connectedSince: ComparableTimeMark?,
     roundTripTime: Duration?,
+    voicePath: VoicePath.State,
     lastServerReplyAt: ComparableTimeMark?,
     channelTree: ChannelTree,
     speaking: Set<Int>,
@@ -153,7 +155,7 @@ fun ConnectedScreen(
                 },
                 subtitle = {
                     Text(
-                        statusLine(elapsedSeconds, roundTripTime, pingAge),
+                        statusLine(elapsedSeconds, roundTripTime, voicePath, pingAge),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 },

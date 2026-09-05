@@ -5,7 +5,6 @@ import android.os.Process
 import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import java.io.IOException
 
 /**
@@ -15,7 +14,8 @@ import java.io.IOException
  */
 class VoiceSender(
     private val handle: CaptureHandle,
-    private val send: (TcpMessageType, ByteArray) -> Boolean,
+    /** Hands a finished packet, type byte first, to whichever transport carries voice. */
+    private val send: (ByteArray) -> Boolean,
     /** Fired once from the pump thread after its last use of [handle]. */
     private val onExit: (VoiceSender) -> Unit,
     /** Fired on the pump thread for every packet of speech that reaches the wire — not
@@ -125,7 +125,7 @@ class VoiceSender(
         val payload = ByteArray(body.size + 1)
         payload[0] = UDP_TYPE_AUDIO
         body.copyInto(payload, 1)
-        if (!send(TcpMessageType.UDPTunnel, payload)) {
+        if (!send(payload)) {
             droppedFrames++
         } else if (!terminator) {
             onAudioSent()
