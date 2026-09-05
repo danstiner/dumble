@@ -5,9 +5,9 @@ per-subsystem docs; sections and docs get added as each subsystem stabilises. Th
 what is, not the history of how it got there — that lives in the design specs and PR descriptions.
 
 Dumble is an Android Mumble client. One TLS connection to the server carries the protobuf control
-messages and, for now, our own voice as Mumble UDP-tunnel packets; a UDP socket beside it
-receives the other direction. Voice is mono end to end; positional audio is out of scope by
-decision (see `CLAUDE.md`).
+messages and, until a UDP path proves itself, our own voice as Mumble UDP-tunnel packets; a UDP
+socket beside it carries voice both ways once one does (`docs/connection.md`). Voice is mono end
+to end; positional audio is out of scope by decision (see `CLAUDE.md`).
 
 ```
  UI (Compose)                          observes flows, issues commands

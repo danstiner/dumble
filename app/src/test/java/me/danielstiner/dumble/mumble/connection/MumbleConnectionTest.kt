@@ -14,6 +14,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
@@ -26,6 +27,7 @@ import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.time.AtomicTimeSource
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -39,6 +41,7 @@ import java.nio.channels.DatagramChannel
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HostnameVerifier
 import kotlin.concurrent.thread
@@ -830,8 +833,7 @@ class MumbleConnectionTest {
 
     /** The other half: a peer that answers keeps the report armed and nothing is ever tunneled. */
     @Test fun answeredPingsNeverTunnelAnything() = runBlocking {
-        val server = serverCrypt()
-        val peer = UdpPeer(server) { plain -> plain?.let { ByteArray(it.size + CryptState.HEADER_LEN).also { out -> server.encrypt(it, it.size, out) } } }
+        val peer = answeringPeer()
         lateinit var fake: FakeControlTransport
         val conn = MumbleConnection(InMemoryPinStore(), pingIntervalMs = 100, newTransport = fakeAimedAt(peer) { fake = it })
         connectToHandshaking(conn)
@@ -913,5 +915,95 @@ class MumbleConnectionTest {
         awaitTrue("tunneled audio still reaches the engine") { playout.offered.isNotEmpty() }
         assertEquals(9, playout.offered.first().session)
         conn.disconnect()
+    }
+
+    // ---- which transport carries our voice ------------------------------------------------
+
+    /** A peer that answers every ping it can open while [answer] is set, and records everything. */
+    private fun answeringPeer(answer: AtomicBoolean = AtomicBoolean(true)): UdpPeer {
+        val server = serverCrypt()
+        return UdpPeer(server) { plain ->
+            if (plain == null || plain[0] != 1.toByte() || !answer.get()) null
+            else ByteArray(plain.size + CryptState.HEADER_LEN).also { server.encrypt(plain, plain.size, it) }
+        }
+    }
+
+    // The boot clock reads a constant on the JVM, which floors every stamp to 1 ns and dates every
+    // reply a nanosecond before its ping; a clock the test moves off the origin gives real ones.
+    private val udpClock = AtomicTimeSource()
+
+    private fun opusOf(packet: ByteArray) =
+        MumbleUdpProtos.Audio.parser().parseFrom(packet, 1, packet.size - 1).opusData.toByteArray()
+
+    /** The first audio packet the peer opens; its pings land on the same queue. */
+    private fun awaitAudio(peer: UdpPeer): ByteArray? {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (true) {
+            val packet = peer.opened.poll(deadline - System.currentTimeMillis(), TimeUnit.MILLISECONDS) ?: return null
+            if (packet[0] == 0.toByte()) return packet
+        }
+    }
+
+    /** The path end to end: the keying ping's reply promotes, and the pump's next frame leaves on
+     *  the datagram socket, never as a tunnel frame. */
+    @Test fun anAnsweredPingPutsOurVoiceOnUdp() = runBlocking {
+        val peer = answeringPeer()
+        val handle = FakeCaptureHandle()
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(
+            InMemoryPinStore(), newCapture = { handle }, udpClock = udpClock,
+            newTransport = fakeAimedAt(peer) { fake = it },
+        )
+        connectToHandshaking(conn)
+        udpClock += 1.seconds
+        fake.listener!!.onFrame(keyExchange())
+        awaitTrue("the answered ping promotes") { conn.voicePath.value.onUdp }
+        assertNotNull("with its round trip", conn.voicePath.value.roundTrip)
+
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
+        conn.requestCapture()
+
+        val packet = awaitAudio(peer)
+        assertNotNull("the frame must reach the peer over UDP", packet)
+        assertArrayEquals(byteArrayOf(1, 2, 3), opusOf(packet!!))
+        assertTrue("and never the tunnel", fake.sentRaw.none { it.first == TcpMessageType.UDPTunnel })
+        conn.disconnect()
+        assertEquals("cleared with every other flow", VoicePath.State(), conn.voicePath.value)
+        peer.close()
+    }
+
+    /**
+     * Demotion and recovery through the real ticker on a short interval: silence demotes on the
+     * transport's report, the next frame goes through the tunnel with the label and its number
+     * cleared together, and two replies bring voice back.
+     */
+    @Test fun silenceMovesVoiceBackToTheTunnelAndRepliesBringItBack() = runBlocking {
+        val answer = AtomicBoolean(true)
+        val peer = answeringPeer(answer)
+        val handle = FakeCaptureHandle()
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(
+            InMemoryPinStore(), newCapture = { handle }, udpClock = udpClock, pingIntervalMs = 100,
+            newTransport = fakeAimedAt(peer) { fake = it },
+        )
+        connectToHandshaking(conn)
+        udpClock += 1.seconds
+        fake.listener!!.onFrame(keyExchange())
+        awaitTrue("promoted") { conn.voicePath.value.onUdp }
+        conn.requestCapture()
+        fake.listener!!.onFrame(serverSync())
+        answer.set(false)
+
+        awaitTrue("the report of two unanswered pings demotes") { !conn.voicePath.value.onUdp }
+        assertEquals(VoicePath.State(), conn.voicePath.value)
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), frameNumber = 1, terminator = false))
+        awaitTrue("the next frame goes through the tunnel") {
+            fake.sentRaw.any { it.first == TcpMessageType.UDPTunnel && it.second[0] == 0.toByte() }
+        }
+
+        answer.set(true)
+        awaitTrue("two replies re-promote") { conn.voicePath.value.onUdp }
+        conn.disconnect()
+        peer.close()
     }
 }

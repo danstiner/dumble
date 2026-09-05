@@ -69,12 +69,14 @@ the capture stream keeps the audio HAL awake regardless.
 
 ## Where the delay lives, and which part of it is margin
 
-One speaker's audio, from arrival to ear:
+One speaker's audio, from arrival to ear. Arrival is either transport — the tunnel or the UDP
+socket, whichever the speaker's own uplink last proved — and both hand the same packet to the
+same queue, so nothing downstream knows which carried it:
 
 ```
-arrival ─► PacketQueue ─► SpeakerDecoder ─► stream buffer ─► HAL / mixer ─► speaker
-           depth           ≤ one packet     write-ahead       platform
-           the only margin                  2 bursts, tuned
+tunnel or UDP ─► PacketQueue ─► SpeakerDecoder ─► stream buffer ─► HAL / mixer ─► speaker
+                 depth           ≤ one packet     write-ahead       platform
+                 the only margin                  2 bursts, tuned
 ```
 
 A packet is popped from its queue when the callback needs the next burst, and the callback

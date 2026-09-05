@@ -12,9 +12,9 @@ are normative.
 A session is one TLS-over-TCP **control channel** plus, optionally, one encrypted UDP **voice
 channel** to the same host and port. Everything the UDP channel carries can also ride the control
 channel inside `UDPTunnel` frames, so TCP alone is a complete session. Dumble opens the UDP
-channel with every session and receives on it; its own voice still goes out through the tunnel
-until the path selector lands (`docs/superpowers/specs/2026-08-27-udp-voice-transport-design.md`).
-The crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`, the socket `net/MumbleUdpTransport.kt`.
+channel with every session, receives on it from the first ping, and sends on it once a ping has
+round-tripped (`docs/connection.md`). The crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`,
+the socket `net/MumbleUdpTransport.kt`, the choice `net/VoicePath.kt`.
 
 ## Control channel
 

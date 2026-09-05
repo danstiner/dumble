@@ -25,6 +25,7 @@ import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
+import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
@@ -97,6 +98,8 @@ class MumbleConnection internal constructor(
     override val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
     private val _roundTripTime = MutableStateFlow<Duration?>(null)
     override val roundTripTime: StateFlow<Duration?> = _roundTripTime.asStateFlow()
+    private val _voicePath = MutableStateFlow(VoicePath.State())
+    override val voicePath: StateFlow<VoicePath.State> = _voicePath.asStateFlow()
     private val _lastServerReplyAt = MutableStateFlow<ComparableTimeMark?>(null)
     override val lastServerReplyAt: StateFlow<ComparableTimeMark?> = _lastServerReplyAt.asStateFlow()
     private val _channelTree = MutableStateFlow(ChannelTree())
@@ -158,6 +161,8 @@ class MumbleConnection internal constructor(
         /** The UDP voice socket. Opened once the control connection is up, closed with the
          *  attempt; inert in between if it could not be opened, and voice stays tunneled. */
         val udp: MumbleUdpTransport,
+        /** Which transport carries our voice; [sendVoice] routes by it. */
+        val path: VoicePath,
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the connect coroutine, read on caller threads. */
         @Volatile var presented: String? = null,
@@ -271,6 +276,7 @@ class MumbleConnection internal constructor(
     private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == attempt) _status.value = s }
     private fun publishVersion(gen: Int, v: ServerVersion?) = synchronized(lock) { if (gen == attempt) _serverVersion.value = v }
     private fun publishRtt(gen: Int, r: Duration?) = synchronized(lock) { if (gen == attempt) _roundTripTime.value = r }
+    private fun publishVoicePath(gen: Int, s: VoicePath.State) = synchronized(lock) { if (gen == attempt) _voicePath.value = s }
     private fun publishPingReplyAt(gen: Int, at: ComparableTimeMark?) = synchronized(lock) { if (gen == attempt) _lastServerReplyAt.value = at }
     private fun publishChannelTree(gen: Int, t: ChannelTree) = synchronized(lock) { if (gen == attempt) _channelTree.value = t }
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
@@ -420,7 +426,7 @@ class MumbleConnection internal constructor(
         // command-rate-bounded rather than a loop, and a Talk press re-asks anyway.
         val handle = newCapture() ?: return
         val sender = VoiceSender(
-            handle, att.transport::sendRaw,
+            handle, { sendVoice(att, it) },
             onExit = { s -> send(CaptureCommand.PumpExited(att, s)) },
             onAudioSent = ::onAudioSent,
         )
@@ -433,6 +439,16 @@ class MumbleConnection internal constructor(
         // Before start(), so the pump's first poll already reads the mode and the gate.
         session.apply(att)
         sender.start()
+    }
+
+    /** Whichever transport [att]'s path has voice on. A datagram the socket refuses goes through
+     *  the tunnel in the same call, and the next one already starts there. */
+    private fun sendVoice(att: Attempt, payload: ByteArray): Boolean {
+        if (att.path.state.value.onUdp) {
+            if (att.udp.send(payload, payload.size)) return true
+            att.path.onSendFailed()
+        }
+        return att.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
     }
 
     /** Start releasing [session]: close its stream synchronously, then leave the engine for the
@@ -515,6 +531,7 @@ class MumbleConnection internal constructor(
         current = null; attempt += 1
         _status.value = status
         _serverVersion.value = null; _roundTripTime.value = null; _lastServerReplyAt.value = null
+        _voicePath.value = VoicePath.State()
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
         _speakingSessions.value = emptySet()
@@ -562,11 +579,9 @@ class MumbleConnection internal constructor(
             // only an attempt that survives every guard below ever reaches that call. Building
             // the engine here, eagerly, is what used to leak one per superseded/failed attempt.
             val receiver = VoiceReceiver(newPlayout)
+            val path = VoicePath()
             val udp = MumbleUdpTransport(sm.crypt, object : MumbleUdpTransport.Listener {
-                // Two facts about the path, each logged once: it works in both directions, and
-                // the server chose it for our downlink. Nothing chooses a path on them yet.
-                private var answered = false
-                private var heard = false
+                private var heard = false   // the server chose UDP for our downlink; logged once
                 override fun onVoicePacket(buf: ByteArray, len: Int) {
                     if (!heard) {
                         heard = true
@@ -574,22 +589,19 @@ class MumbleConnection internal constructor(
                     }
                     receiver.onVoicePacket(buf, len)
                 }
-                override fun onPingReply(roundTrip: Duration) {
-                    if (answered || roundTrip.isNegative()) return
-                    answered = true
-                    Log.i(TAG, "UDP path answered in ${roundTrip.inWholeMilliseconds} ms gen=$gen")
-                }
-                // The server keeps sending to the address it bound until a tunneled frame of
-                // ours moves the downlink back, and never re-learns the address; a client that
-                // only listens would otherwise stay deaf (docs/connection.md, UDP voice). A ping
-                // does it without a peer hearing a blip.
+                override fun onPingReply(roundTrip: Duration) = path.onPingAnswered(roundTrip)
+                // Demoting brings the downlink back with our next spurt. The tunneled ping is for
+                // the client that never speaks: the server keeps sending to the address it bound
+                // until a tunneled frame of ours moves the downlink back, and never re-learns the
+                // address (docs/connection.md, UDP voice). A ping does it with no audible blip.
                 override fun onPingsUnanswered() {
                     Log.w(TAG, "UDP pings unanswered; pulling the downlink back to the tunnel gen=$gen")
+                    path.onPingsUnanswered()
                     transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
                 }
                 override fun requestCryptResync() { sm.requestCryptResync() }
             }, udpClock)
-            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver, udp)
+            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver, udp, path)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { teardown(att); return@launch }   // superseded before publish
 
@@ -640,6 +652,16 @@ class MumbleConnection internal constructor(
             }
             childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
             childScope.launch { sm.roundTripTime.collect { publishRtt(gen, it) } }
+            childScope.launch {
+                var onUdp = false
+                att.path.state.collect {
+                    if (it.onUdp != onUdp) {
+                        onUdp = it.onUdp
+                        Log.i(TAG, if (onUdp) "voice over UDP, ${it.roundTrip?.inWholeMilliseconds} ms gen=$gen" else "voice back on the tunnel gen=$gen")
+                    }
+                    publishVoicePath(gen, it)
+                }
+            }
             childScope.launch { sm.lastServerReplyAt.collect { publishPingReplyAt(gen, it) } }
             childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
             childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
