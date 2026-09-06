@@ -3,10 +3,12 @@ package me.danielstiner.dumble.mumble.voice
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 
 /**
- * The platform's notion of the call a connection represents. Registering one is what hands the
- * system ownership of audio focus, audio mode and routing — which is why nothing here talks to
- * AudioManager: doing so alongside a registered call is forbidden, and it is what left capture on
- * the built-in microphone with a headset connected.
+ * The platform's notion of the call a connection represents. Under [TelecomCall], registering one
+ * hands the system ownership of audio focus, audio mode and routing, and talking to AudioManager
+ * alongside it is forbidden — that is what left capture on the built-in microphone with a headset
+ * connected. The prohibition is on running both at once, not on AudioManager itself: an
+ * implementation that registers no call owns focus, mode and routing directly, which is what
+ * `AudioManagerCall` does on the spike branch.
  *
  * A seam, so the JVM tests can drive hold and resume without a device.
  */

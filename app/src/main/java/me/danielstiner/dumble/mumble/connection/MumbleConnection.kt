@@ -43,7 +43,7 @@ import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
 import me.danielstiner.dumble.mumble.voice.openNativePlayout
-import me.danielstiner.dumble.telecom.TelecomCall
+import me.danielstiner.dumble.telecom.AudioManagerCall
 import me.danielstiner.dumble.time.BootTimeSource
 import java.net.SocketTimeoutException
 import javax.inject.Inject
@@ -87,7 +87,9 @@ class MumbleConnection internal constructor(
     ) : this(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
-        TelecomCall(context),
+        // SPIKE (spike-audiomanager-call): revert this one line to TelecomCall(context) to
+        // A/B the two against each other on the same build.
+        AudioManagerCall(context),
         newTransport = { MumbleTcpTransport(it) },
     )
 
