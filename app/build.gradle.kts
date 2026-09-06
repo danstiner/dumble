@@ -76,6 +76,15 @@ android {
             }
         }
     }
+    lint {
+        // Every finding this project cares about is Warning severity — the Security-category
+        // GetInstance and CustomX509TrustManager checks included — so without this the gate can
+        // only fail on the errors we have never had. abortOnError is left at its default of true.
+        // The freshness checks that would otherwise fire on upstream releases are ignored in
+        // app/lint.xml.
+        warningsAsErrors = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
