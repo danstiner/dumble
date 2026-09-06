@@ -103,6 +103,12 @@ android {
     ndkVersion = "27.0.12077973"
 }
 
+// The CI log is the only record of a failed test, and Gradle's default prints the exception
+// class and line without its message, which for a loopback or chaos test is the whole diagnosis.
+tasks.withType<Test>().configureEach {
+    testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+}
+
 kotlin {
     jvmToolchain(21)
 }
