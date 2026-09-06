@@ -51,7 +51,9 @@ demotes, as does a datagram the socket refuses, which goes through the tunnel in
 After a demote it takes two replies to promote again, so a path answering half its pings settles
 on the tunnel instead of flapping, and there is no cap on demotions. The cipher's counters are
 never read, since our encrypt counter advances whether or not a datagram lands. The label and
-the round trip are one record, so a demote clears both at once.
+the round trip are one record, so a demote clears both at once. Every accepted reply also goes
+into the average our TCP ping reports, which is what other clients' sheets read about us
+(`docs/mumble-protocol.md`, Ping).
 
 **What a failure looks like.** The server binds a client's UDP address once and never re-learns
 it, and keeps sending there until a `UDPTunnel` frame from that client clears its per-user flag,

@@ -35,6 +35,7 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import javax.net.ssl.SSLContext
@@ -328,6 +329,33 @@ class LiveServerIntegrationTest {
             asking.cancel()
             // The keying ping and three datagrams, all opened; nothing missing between them.
             assertEquals(0, stats.uplink!!.lost)
+        } finally {
+            client.close()
+        }
+    }
+
+    /** What another client reads about our path, against the real thing: the UDP round trip we
+     *  report on our TCP ping comes back to whoever asks for our stats, ourselves included. */
+    @Test
+    fun ourReportedUdpPingIsEchoedInOurStats() = runBlocking {
+        awaitPort(host!!, port)
+        val rec = Recorder()
+        val client = Client("dumble-ci-udp-report", rec)
+        try {
+            client.connect()
+            val roundTrip = rec.replies.poll(15, TimeUnit.SECONDS)
+            assertTrue("no UDP ping reply from the server", roundTrip != null)
+            client.session.udpPingAnswered(roundTrip!!)
+
+            val self = (client.session.state.value as ConnectionState.Synchronized).sessionId
+            // Reported on the next TCP ping, up to an interval away; asked until it has arrived.
+            val asking = launch { while (isActive) { client.session.requestUserStats(self); delay(500) } }
+            val stats = withTimeout(20_000) {
+                client.session.userStats.first { it?.session == self && it.udpPing != null }
+            }!!
+            asking.cancel()
+            assertTrue("reported $roundTrip, echoed ${stats.udpPing}",
+                       (stats.udpPing!! - roundTrip).absoluteValue < 1.milliseconds)
         } finally {
             client.close()
         }

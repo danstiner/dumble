@@ -597,7 +597,9 @@ class MumbleConnection internal constructor(
                     }
                     receiver.onVoicePacket(buf, len)
                 }
-                override fun onPingReply(roundTrip: Duration) = path.onPingAnswered(roundTrip)
+                override fun onPingReply(roundTrip: Duration) {
+                    if (path.onPingAnswered(roundTrip)) sm.udpPingAnswered(roundTrip)
+                }
                 // Demoting brings the downlink back with our next spurt; the tunneled ping does it
                 // for a client that never speaks, since the server never re-learns an address
                 // (docs/connection.md, UDP voice).

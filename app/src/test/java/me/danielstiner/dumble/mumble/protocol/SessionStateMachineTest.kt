@@ -1429,4 +1429,36 @@ class SessionStateMachineTest {
 
         assertEquals(UserStats.PacketCounts(good = 100, late = 0, lost = 0, resync = 0), sm.userStats.value?.uplink)
     }
+
+    /**
+     * What the server folds into the UserStats other clients read: both legs' averages and reply
+     * counts, and no average at all until a reply has been counted — a zero would read as a
+     * round trip of no time.
+     */
+    @Test
+    fun thePingReportsBothLegsAverages() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        val first = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        assertEquals(0, first.tcpPackets)
+        assertEquals(0, first.udpPackets)
+        assertFalse(first.hasTcpPingAvg())
+        assertFalse(first.hasUdpPingAvg())
+
+        bootClock += 5.milliseconds
+        sm.onFrame(frame(TcpMessageType.Ping, first))
+        sm.udpPingAnswered(2.milliseconds)
+        sm.udpPingAnswered(4.milliseconds)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+
+        val next = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        assertEquals(1, next.tcpPackets)
+        assertEquals(5f, next.tcpPingAvg, 1e-6f)
+        assertEquals(0f, next.tcpPingVar, 1e-6f)
+        assertEquals(2, next.udpPackets)
+        assertEquals(3f, next.udpPingAvg, 1e-6f)
+        assertEquals(1f, next.udpPingVar, 1e-6f)
+    }
 }

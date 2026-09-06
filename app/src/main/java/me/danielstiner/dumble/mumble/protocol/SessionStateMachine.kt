@@ -76,6 +76,10 @@ class SessionStateMachine(
     private val _userStats = MutableStateFlow<UserStats?>(null)
     val userStats: StateFlow<UserStats?> = _userStats.asStateFlow()
 
+    // Both legs' replies, averaged for the ping's report; see [udpPingAnswered].
+    private val tcpPings = PingAverage()
+    private val udpPings = PingAverage()
+
     /**
      * The voice cipher. Owned here because CryptSetup, which keys it and resyncs it, is a
      * control-channel message; the UDP transport borrows it to seal and open datagrams.
@@ -210,6 +214,7 @@ class SessionStateMachine(
                 if (sent > 0 && roundTrip >= Duration.ZERO && roundTrip < PING_REPLY_MAX_AGE) {
                     _roundTripTime.value = roundTrip
                     _lastServerReplyAt.value = now
+                    tcpPings.add(roundTrip)
                 }
             }
             TcpMessageType.Reject -> {
@@ -413,6 +418,13 @@ class SessionStateMachine(
 
     private fun ByteString.isBlock() = size() == CryptState.NONCE_LEN
 
+    /**
+     * A UDP ping the path accepted. Averaged here for the report the next TCP ping carries;
+     * the path itself is decided elsewhere ([me.danielstiner.dumble.mumble.net.VoicePath]).
+     * Any thread.
+     */
+    fun udpPingAnswered(roundTrip: Duration) = udpPings.add(roundTrip)
+
     /** Mumble servers disconnect clients that stop pinging, so this keeps the session alive. */
     private fun startPings() {
         pingJob = scope.launch {
@@ -439,19 +451,24 @@ class SessionStateMachine(
                 // Not fatal, unlike the handshake sends: backpressure, or a death the reader
                 // already reports. Either way the ping goes unanswered and ages.
                 //
-                // The crypt counters ride along because the server folds them into the
-                // UserStats other clients read. Nothing here reads them back.
+                // The crypt counters and both legs' ping averages ride along because the server
+                // folds them into the UserStats other clients read. Nothing here reads them
+                // back. An average is left unset until a reply has been counted, since a zero
+                // would read as a round trip of no time.
                 val stats = crypt.stats()
-                channel.send(
-                    TcpMessageType.Ping,
-                    MumbleProtos.Ping.newBuilder()
-                        .setTimestamp((now - pingOrigin).inWholeNanoseconds)
-                        .setGood(stats.good)
-                        .setLate(stats.late)
-                        .setLost(stats.lost)
-                        .setResync(stats.resync)
-                        .build(),
-                )
+                val tcp = tcpPings.report()
+                val udp = udpPings.report()
+                val ping = MumbleProtos.Ping.newBuilder()
+                    .setTimestamp((now - pingOrigin).inWholeNanoseconds)
+                    .setGood(stats.good)
+                    .setLate(stats.late)
+                    .setLost(stats.lost)
+                    .setResync(stats.resync)
+                    .setTcpPackets(tcp.count)
+                    .setUdpPackets(udp.count)
+                if (tcp.count > 0) ping.setTcpPingAvg(tcp.meanMillis).setTcpPingVar(tcp.varianceMillis)
+                if (udp.count > 0) ping.setUdpPingAvg(udp.meanMillis).setUdpPingVar(udp.varianceMillis)
+                channel.send(TcpMessageType.Ping, ping.build())
                 udpPing?.invoke()
             }
         }

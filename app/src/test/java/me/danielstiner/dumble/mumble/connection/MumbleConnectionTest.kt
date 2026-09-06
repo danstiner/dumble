@@ -999,6 +999,28 @@ class MumbleConnectionTest {
         peer.close()
     }
 
+    /** What other clients read about our path: once a reply is accepted, the next TCP ping
+     *  reports the UDP leg. The fake clock stands still, so the round trip reads 0 and only the
+     *  count says the leg was fed. */
+    @Test fun theTcpPingReportsTheUdpLegOnceAReplyIsAccepted() = runBlocking {
+        val peer = answeringPeer()
+        lateinit var fake: FakeControlTransport
+        val conn = MumbleConnection(
+            InMemoryPinStore(), newCapture = { null }, udpClock = udpClock, pingIntervalMs = 100,
+            newTransport = fakeAimedAt(peer) { fake = it },
+        )
+        connectToHandshaking(conn)
+        udpClock += 1.seconds
+        fake.listener!!.onFrame(keyExchange())
+        awaitTrue("the answered ping promotes") { conn.voicePath.value.onUdp }
+        fake.listener!!.onFrame(serverSync())   // the ping loop starts with the session
+        awaitTrue("the next ping must report the UDP leg") {
+            fake.sent.any { (type, m) -> type == TcpMessageType.Ping && (m as MumbleProtos.Ping).udpPackets >= 1 }
+        }
+        conn.disconnect()
+        peer.close()
+    }
+
     /**
      * Demotion and recovery through the real ticker on a short interval: silence demotes on the
      * transport's report, the next frame goes through the tunnel with the label and its number
