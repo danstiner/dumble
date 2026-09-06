@@ -30,14 +30,16 @@ class VoicePath {
     private var replies = 1
 
     /** A reply dated by its own echo. Negative, or older than any ping still worth answering, is
-     *  not ours: the same guard the TCP ping uses, since the stamp is the only matching there is. */
+     *  not ours: the same guard the TCP ping uses, since the stamp is the only matching there is.
+     *  Returns whether the reply counted, so the caller can average what was accepted. */
     @Synchronized
-    fun onPingAnswered(roundTrip: Duration) {
-        if (roundTrip.isNegative() || roundTrip > MAX_PLAUSIBLE_ROUND_TRIP) return
+    fun onPingAnswered(roundTrip: Duration): Boolean {
+        if (roundTrip.isNegative() || roundTrip > MAX_PLAUSIBLE_ROUND_TRIP) return false
         replies++
         val onUdp = _state.value.onUdp || replies >= REPLIES_TO_PROMOTE
         if (onUdp && !_state.value.onUdp) Log.i(TAG, "voice over UDP, ${roundTrip.inWholeMilliseconds} ms")
         _state.value = State(onUdp, roundTrip)
+        return true
     }
 
     /** The transport reported two pings unanswered, or the socket refused a datagram: voice goes

@@ -77,6 +77,12 @@ statistics (`good`, `late`, `lost`, `resync`); the server's reply carries its ow
 numbers, which is how you learn whether the server can decrypt *your* UDP packets. The desktop
 client uses them to decide UDP health; Dumble sends them because the server folds them into the
 `UserStats` other clients read, and steers on nothing but the UDP ping (see the design spec).
+The ping also carries both legs' round-trip mean and variance over the last twenty replies,
+and the session's reply counts
+(`tcp_ping_avg`/`udp_ping_avg`, `*_ping_var`, `tcp_packets`/`udp_packets` — ping replies, not
+voice, in the desktop client too), stored by the server and echoed in our `UserStats`: that is
+how another client's sheet reads our round trip and, from the UDP average being there at all,
+which leg carries our voice (`PingAverage`).
 
 ## Voice framing
 

@@ -35,8 +35,7 @@ import kotlinx.coroutines.delay
  *
  * [stats] is what the server measures about them. Both pings get a row even though only one leg
  * carries voice: murmur exchanges UDP pings only with a peer that has a working UDP path, so a
- * UDP reading is the evidence for which — a dash for another Dumble, which does not yet report
- * its UDP ping. Our own row opens [SelfDetailSheet] instead.
+ * UDP reading is the evidence for which. Our own row opens [SelfDetailSheet] instead.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -22,8 +22,8 @@ class VoicePathTest {
     // that reads negative, or older than any ping still worth answering, is not ours.
     @Test fun anImplausibleReplyIsNotEvidence() {
         val path = VoicePath()
-        path.onPingAnswered((-1).milliseconds)
-        path.onPingAnswered(31.seconds)
+        assertFalse(path.onPingAnswered((-1).milliseconds))
+        assertFalse(path.onPingAnswered(31.seconds))
         assertEquals("neither promotes nor is published", tunneled, path.state.value)
     }
 
