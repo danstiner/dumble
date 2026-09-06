@@ -6,6 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -21,6 +24,7 @@ import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -297,6 +301,35 @@ class LiveServerIntegrationTest {
         } finally {
             talker.close()
             listener.close()
+        }
+    }
+
+    /** The server's count of our own uplink, against the real thing: the datagrams we sealed
+     *  are what it opened, and the sheet's "Lost at server" reads from this block. */
+    @Test
+    fun ourOwnStatsCarryTheServersCountOfOurDatagrams() = runBlocking {
+        awaitPort(host!!, port)
+        val rec = Recorder()
+        val client = Client("dumble-ci-udp-self", rec)
+        try {
+            client.connect()
+            assertTrue(rec.replies.poll(15, TimeUnit.SECONDS) != null)
+            val audio = MumbleUdpProtos.Audio.newBuilder().setFrameNumber(0).setOpusData(ByteString.copyFrom(byteArrayOf(0x08))).build()
+            val packet = byteArrayOf(0) + audio.toByteArray()
+            repeat(3) { assertTrue(client.udp.send(packet, packet.size)) }
+
+            val self = (client.session.state.value as ConnectionState.Synchronized).sessionId
+            // Asked repeatedly: the datagrams and the request travel different paths, so the first
+            // answer can predate the last datagram.
+            val asking = launch { while (isActive) { client.session.requestUserStats(self); delay(300) } }
+            val stats = withTimeout(15_000) {
+                client.session.userStats.first { it?.session == self && (it.uplink?.good ?: 0) >= 4 }
+            }!!
+            asking.cancel()
+            // The keying ping and three datagrams, all opened; nothing missing between them.
+            assertEquals(0, stats.uplink!!.lost)
+        } finally {
+            client.close()
         }
     }
 

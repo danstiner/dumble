@@ -16,6 +16,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.net.VoicePath
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -58,6 +59,19 @@ class ConnectViewModelTest {
         conn.voicePath.value = VoicePath.State(onUdp = true, roundTrip = 7.milliseconds)
         advanceUntilIdle()
         assertEquals(VoicePath.State(onUdp = true, roundTrip = 7.milliseconds), vm.uiState.value.voicePath)
+    }
+
+    @Test fun ourCaptureCountersReachUiState() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        val counters = CaptureStats(
+            encodedPackets = 3, encodeErrors = 0, encodeMicrosMean = 400, encodeMicrosMax = 900,
+            ringOverruns = 0, skippedSamples = 0, streamOverruns = 0, framesPerBurst = 96,
+            droppedFrames = 0, inputLatencyMillis = 12.0,
+        )
+        conn.captureStats.value = counters
+        advanceUntilIdle()
+        assertEquals(counters, vm.uiState.value.captureStats)
     }
 
     @Test fun invalidPortBlocksDispatchAndSetsError() = runTest(dispatcher) {

@@ -1399,4 +1399,34 @@ class SessionStateMachineTest {
 
         assertEquals(UserStats(11, null, null, null, null, null), sm.userStats.value)
     }
+
+    /** The block is the server's own count of our datagrams, not an echo of anything we sent. */
+    @Test
+    fun aUserStatsReplyCarriesTheUplinkAsTheServerCountedIt() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(4)
+                .setFromClient(MumbleProtos.UserStats.Stats.newBuilder().setGood(1500).setLate(2).setLost(3).setResync(1))
+                .build()))
+
+        assertEquals(UserStats.PacketCounts(good = 1500, late = 2, lost = 3, resync = 1), sm.userStats.value?.uplink)
+    }
+
+    /** A 1.5 server also sends a rolling window, and that is what a sheet open now is asking about. */
+    @Test
+    fun theRollingWindowWinsOverTheSessionTotal() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedMachine(ch, backgroundScope)
+
+        sm.onFrame(frame(TcpMessageType.UserStats,
+            MumbleProtos.UserStats.newBuilder().setSession(4)
+                .setFromClient(MumbleProtos.UserStats.Stats.newBuilder().setGood(9000).setLost(900))
+                .setRollingStats(MumbleProtos.UserStats.RollingStats.newBuilder().setTimeWindow(30)
+                    .setFromClient(MumbleProtos.UserStats.Stats.newBuilder().setGood(100)))
+                .build()))
+
+        assertEquals(UserStats.PacketCounts(good = 100, late = 0, lost = 0, resync = 0), sm.userStats.value?.uplink)
+    }
 }

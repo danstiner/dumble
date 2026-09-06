@@ -1,9 +1,9 @@
 # Audio capture
 
-Microphone to Mumble UDP-tunnel packets on the TCP transport. Three layers with a single owner for
-the lifecycle. Transmit is push-to-talk or voice activity, chosen in Settings; the detector is
-described below. Details live in the code's comments; constants and their whys in
-`CaptureConstants.h`.
+Microphone to Mumble audio packets, over UDP or the tunnel (`docs/connection.md`). Three layers
+with a single owner for the lifecycle. Transmit is push-to-talk or voice activity, chosen in
+Settings; the detector is described below. Details live in the code's comments; constants and
+their whys in `CaptureConstants.h`.
 
 ```
 mic ─► OboeCapture ─► PcmRing ─► assemble packet ─► AudioEncoder ─► pollPacket ─► VoiceSender ─► transport
@@ -23,6 +23,18 @@ the transport. Its exit callback is the only signal the pump is gone; nothing ma
 engine while the pump can still touch it. It also reports each packet of speech that reaches the
 wire — not terminators, not refused sends; `MumbleConnection` holds that ~200 ms past the last
 packet as `selfSpeaking`, which is what lights the speaking indicator under either mode.
+
+**What our own sheet shows** (`SelfDetailSheet`, from the row marked YOU; the peer sheet's rows
+are all absent for ourselves): the send-side counterpart of the playout sheet in
+`docs/playout.md`. Its latency, labelled mouth to server where the peer's is server to ear, is a
+floor in the steps we can read (`SendDelay`): the
+device's input buffer (`CaptureStats.inputLatencyMillis`, ADC to app), the packet's 20 ms plus
+the encoder's mean, and half our round trip on the leg carrying voice. "Packet loss" is the one
+reading that is not ours — Murmur's own count of our datagrams (`UserStats.from_client`; the
+rolling window on a 1.5 server): our voice while it is on UDP, and the pings either way, so a
+tunneled talker's row describes the pings. "Overruns" is both rings,
+microphone audio lost before it was encoded; "Dropped sends" is what the transport refused. The
+counters come off the pump every two seconds (`VoiceSender.onStats`), the log line every ten.
 
 **Lifecycle** (`MumbleConnection`): four producers demand transitions concurrently — the Talk
 button, telecom hold/resume, disconnect/reconnect, and the pump's own exit — so every transition

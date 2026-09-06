@@ -46,7 +46,9 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
+import me.danielstiner.dumble.mumble.voice.SendDelay
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,6 +74,8 @@ fun ConnectedScreen(
     selectedSession: Int?,
     selectedDelay: PlayoutDelay?,
     selectedStats: UserStats?,
+    selfDelay: SendDelay?,
+    captureStats: CaptureStats?,
     onUserClick: (Int) -> Unit,
     onRefreshUserStats: (Int) -> Unit,
     onDismissUserDetail: () -> Unit,
@@ -199,14 +203,25 @@ fun ConnectedScreen(
         )
     }
     selectedSession?.let { channelTree.users[it] }?.let { u ->
-        UserDetailSheet(
-            session = u.session,
-            name = u.name,
-            delay = selectedDelay,
-            stats = selectedStats,
-            onRefresh = onRefreshUserStats,
-            onDismiss = onDismissUserDetail,
-        )
+        if (u.session == sessionId) {
+            SelfDetailSheet(
+                name = u.name,
+                delay = selfDelay,
+                capture = captureStats,
+                stats = selectedStats,
+                onRefresh = { onRefreshUserStats(u.session) },
+                onDismiss = onDismissUserDetail,
+            )
+        } else {
+            UserDetailSheet(
+                session = u.session,
+                name = u.name,
+                delay = selectedDelay,
+                stats = selectedStats,
+                onRefresh = onRefreshUserStats,
+                onDismiss = onDismissUserDetail,
+            )
+        }
     }
 }
 

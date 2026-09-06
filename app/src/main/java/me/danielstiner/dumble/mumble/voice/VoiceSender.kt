@@ -6,6 +6,8 @@ import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import java.io.IOException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Pulls encoded packets off the native engine and puts them on the wire. The pump thread blocks
@@ -21,6 +23,10 @@ class VoiceSender(
     /** Fired on the pump thread for every packet of speech that reaches the wire — not
      *  terminators, not refused sends. */
     private val onAudioSent: () -> Unit = {},
+    /** Fired on the pump thread every [statsInterval] with the engine's counters, [droppedFrames]
+     *  filled in. */
+    private val onStats: (CaptureStats) -> Unit = {},
+    private val statsInterval: Duration = STATS_INTERVAL,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -76,12 +82,17 @@ class VoiceSender(
 
         val frame = ByteArray(NativeCapture.MAX_PACKET_BYTES)
         val meta = LongArray(2)
-        var nextStatsAt = System.nanoTime() + STATS_INTERVAL_NANOS
+        var nextStatsAt = System.nanoTime() + statsInterval.inWholeNanoseconds
+        var readings = 0
         while (true) {
             val n = handle.pollPacket(frame, meta)
             if (System.nanoTime() >= nextStatsAt) {
-                nextStatsAt = System.nanoTime() + STATS_INTERVAL_NANOS
-                handle.stats()?.let { Log.d(TAG, it.copy(droppedFrames = droppedFrames).summary()) }
+                nextStatsAt = System.nanoTime() + statsInterval.inWholeNanoseconds
+                handle.stats()?.let {
+                    val stats = it.copy(droppedFrames = droppedFrames)
+                    onStats(stats)
+                    if (readings++ % LOG_EVERY_READINGS == 0) Log.d(TAG, stats.summary())
+                }
             }
             if (n > 0) {
                 transmit(frame, n, meta)
@@ -136,7 +147,9 @@ class VoiceSender(
         private const val TAG = "VoiceSender"
         const val NORMAL_TALKING_TARGET = 0
         private const val UDP_TYPE_AUDIO: Byte = 0
-        private const val STATS_INTERVAL_NANOS = 10_000_000_000L
+        /** The sheet refreshes every two seconds; the log line keeps its old ten. */
+        private val STATS_INTERVAL = 2.seconds
+        private const val LOG_EVERY_READINGS = 5
         private const val STOP_JOIN_MILLIS = 1_000L
     }
 }

@@ -10,6 +10,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 
@@ -46,6 +47,10 @@ interface Connection {
 
     /** The receive path's last second of measurement; null before the first one lands. */
     val playoutStats: StateFlow<PlayoutStats?>
+
+    /** Our own send path's counters, read from the pump every two seconds; null without a
+     *  capture session, so the sheet's rows read as absent rather than as zero. */
+    val captureStats: StateFlow<CaptureStats?>
 
     /**
      * The last per-user ping the server answered with, or null before any. One slot rather than a
