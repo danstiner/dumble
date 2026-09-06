@@ -2,7 +2,9 @@ package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.runtime.Composable
 import me.danielstiner.dumble.mumble.protocol.UserStats
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
+import me.danielstiner.dumble.mumble.voice.SendDelay
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithText
@@ -152,6 +154,7 @@ class UserDetailSheetTest {
             Sheet(PlayoutDelay(network = 3.milliseconds, jitterBuffer = 150.milliseconds,
                                audioOutput = 20.milliseconds))
         }
+        compose.onNodeWithText("Latency (server to ear)").assertExists()
         compose.onNodeWithText("> 173 ms").assertExists()
     }
 
@@ -180,5 +183,74 @@ class UserDetailSheetTest {
     @Test fun aRetiredSpeakerHasNoDelayRowsAtAll() {
         compose.setContent { Sheet(null) }
         compose.onNodeWithText("0 ms").assertDoesNotExist()
+    }
+
+    // ---- our own row ----
+
+    @Composable
+    private fun SelfSheet(delay: SendDelay?, capture: CaptureStats? = null, stats: UserStats? = null) =
+        SelfDetailSheet(
+            name = "dan",
+            delay = delay,
+            capture = capture,
+            stats = stats,
+            onRefresh = { refreshed += 0 },
+            onDismiss = {},
+        )
+
+    private fun capture(streamOverruns: Long = 0, ringOverruns: Long = 0, droppedFrames: Int = 0) =
+        CaptureStats(
+            encodedPackets = 0, encodeErrors = 0, encodeMicrosMean = 0, encodeMicrosMax = 0,
+            ringOverruns = ringOverruns, skippedSamples = 0, streamOverruns = streamOverruns,
+            framesPerBurst = 0, droppedFrames = droppedFrames, inputLatencyMillis = null,
+        )
+
+    private fun uplink(good: Int, lost: Int) =
+        UserStats(9, null, null, null, null, null, UserStats.PacketCounts(good, 0, lost, 0))
+
+    /** The send side, added up and floored: 12 + 20.4 + 3 = 35.4. */
+    @Test fun ourOwnSheetAddsUpTheSendSide() {
+        compose.setContent {
+            SelfSheet(SendDelay(inputBuffer = 12.milliseconds, encode = 20.4.milliseconds, network = 3.milliseconds))
+        }
+        compose.onNodeWithText("Latency (mouth to server)").assertExists()
+        compose.onNodeWithText("Latency (server to ear)").assertDoesNotExist()
+        compose.onNodeWithText("> 35 ms").assertExists()
+        compose.onNodeWithText("12 ms").assertExists()
+        compose.onNodeWithText("20 ms").assertExists()
+        compose.onNodeWithText("3.0 ms").assertExists()
+    }
+
+    /** One in a thousand is a tenth of a percent, and must not round to a clean zero. */
+    @Test fun lossToTheServerKeepsItsTenthOfAPercent() {
+        compose.setContent { SelfSheet(null, stats = uplink(good = 999, lost = 1)) }
+        compose.onNodeWithText("Packet loss").assertExists()
+        compose.onNodeWithText("0.1 %").assertExists()
+    }
+
+    /** A talker the server has not heard from has no loss to report; "0.0 %" would claim it has. */
+    @Test fun noDatagramsCountedIsNoLossReading() {
+        compose.setContent { SelfSheet(null, stats = uplink(good = 0, lost = 0)) }
+        compose.onNodeWithText("0.0 %").assertDoesNotExist()
+    }
+
+    /** Both overruns are microphone audio lost before it was encoded, so they read as one number. */
+    @Test fun theOverrunsAreOneNumber() {
+        compose.setContent { SelfSheet(null, capture = capture(streamOverruns = 2, ringOverruns = 3, droppedFrames = 4)) }
+        compose.onNodeWithText("5").assertExists()
+        compose.onNodeWithText("4").assertExists()
+    }
+
+    /** Without a capture session every reading of ours is absent, not zero. */
+    @Test fun withoutACaptureSessionEveryOwnReadingIsAbsent() {
+        compose.setContent { SelfSheet(null) }
+        compose.onAllNodesWithText("—").assertCountEquals(8)
+        compose.onNodeWithText("0").assertDoesNotExist()
+    }
+
+    @Test fun ourOwnSheetAsksForOurStatsToo() {
+        compose.setContent { SelfSheet(null) }
+        compose.waitForIdle()
+        assertEquals(listOf(0), refreshed)
     }
 }

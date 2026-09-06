@@ -13,6 +13,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 
@@ -28,6 +29,7 @@ class FakeConnection : Connection {
     override val callHeld = MutableStateFlow(false)
     override val speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val playoutStats = MutableStateFlow<PlayoutStats?>(null)
+    override val captureStats = MutableStateFlow<CaptureStats?>(null)
     override val userStats = MutableStateFlow<UserStats?>(null)
     override val audioRoutes = MutableStateFlow(AudioRoutes())
 

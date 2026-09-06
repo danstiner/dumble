@@ -34,6 +34,7 @@ import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
@@ -119,6 +120,9 @@ class MumbleConnection internal constructor(
 
     private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
     override val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
+
+    private val _captureStats = MutableStateFlow<CaptureStats?>(null)
+    override val captureStats: StateFlow<CaptureStats?> = _captureStats.asStateFlow()
 
     private val _userStats = MutableStateFlow<UserStats?>(null)
     override val userStats: StateFlow<UserStats?> = _userStats.asStateFlow()
@@ -282,6 +286,7 @@ class MumbleConnection internal constructor(
     private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == attempt) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == attempt) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == attempt) _playoutStats.value = p }
+    private fun publishCaptureStats(gen: Int, c: CaptureStats?) = synchronized(lock) { if (gen == attempt) _captureStats.value = c }
     private fun publishUserStats(gen: Int, p: UserStats?) = synchronized(lock) { if (gen == attempt) _userStats.value = p }
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == attempt) _audioRoutes.value = r }
 
@@ -429,6 +434,7 @@ class MumbleConnection internal constructor(
             handle, { sendVoice(att, it) },
             onExit = { s -> send(CaptureCommand.PumpExited(att, s)) },
             onAudioSent = ::onAudioSent,
+            onStats = { publishCaptureStats(att.gen, it) },
         )
         // Recheck: `attempt`/`current` are still mutated on caller threads while newCapture()
         // blocks, so a disconnect landing in that window has already moved the world.
@@ -487,6 +493,7 @@ class MumbleConnection internal constructor(
         if (s != null && s.ownedBy(sender)) {
             s.destroy()
             att.capture = null
+            publishCaptureStats(att.gen, null)
         } else {
             // Unreachable — reconcile refuses to open while capture is set, so at most one exit can
             // be outstanding. Logged rather than assumed, so a wrong argument is visible.
@@ -540,6 +547,7 @@ class MumbleConnection internal constructor(
         _selfSpeaking.value = false
         _callHeld.value = false
         _playoutStats.value = null
+        _captureStats.value = null
         _userStats.value = null
         _audioRoutes.value = AudioRoutes()
         return prior

@@ -20,6 +20,12 @@ import kotlin.time.Duration.Companion.microseconds
  *
  * Jitter is a standard deviation, from a wire field the proto documents as a variance, so it is
  * the square root of what arrives. Held per leg and read beside the one carrying voice.
+ *
+ * [uplink] is the server's own count of the datagrams it received from this user, sorted by its
+ * cipher — a measurement of their voice arriving, where the pings are each client's self-report
+ * echoed back. Murmur sends it for ourselves and for a peer in our channel. A 1.5 server also
+ * sends a rolling window, which is the one kept: a bad minute an hour ago is not what a sheet
+ * open now is asking about.
  */
 data class UserStats(
     val session: Int,
@@ -28,9 +34,17 @@ data class UserStats(
     val tcpJitter: Duration?,
     val udpJitter: Duration?,
     val bandwidthBitsPerSecond: Int?,
+    val uplink: PacketCounts? = null,
 ) {
     /** Jitter on the leg actually carrying voice — see [udpPing] for how that is decided. */
     val jitter: Duration? get() = if (udpPing != null) udpJitter else tcpJitter
+
+    /** Datagrams as the server's cipher sorted them; [lost] are the sequence gaps it never filled. */
+    data class PacketCounts(val good: Int, val late: Int, val lost: Int, val resync: Int) {
+        /** [lost] as a share of everything the server expected; null before it has seen any. */
+        val lossFraction: Double?
+            get() = (good + late + lost).takeIf { it > 0 }?.let { lost.toDouble() / it }
+    }
 
     companion object {
         /** Zero is how the server reports "no reading" — a leg it has not pinged — not a round
@@ -43,6 +57,11 @@ data class UserStats(
             tcpJitter = wireMillis(sqrt(p.tcpPingVar)).takeUnless { it == ZERO },
             udpJitter = wireMillis(sqrt(p.udpPingVar)).takeUnless { it == ZERO },
             bandwidthBitsPerSecond = p.bandwidth.takeUnless { it == 0 },
+            uplink = when {
+                p.hasRollingStats() && p.rollingStats.hasFromClient() -> p.rollingStats.fromClient
+                p.hasFromClient() -> p.fromClient
+                else -> null
+            }?.let { PacketCounts(it.good, it.late, it.lost, it.resync) },
         )
 
         /**

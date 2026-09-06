@@ -28,6 +28,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import javax.inject.Inject
@@ -95,6 +96,8 @@ data class ConnectUiState(
     // the sheet cannot leave it describing the wrong person.
     val selectedSession: Int? = null,
     val playoutStats: PlayoutStats? = null,
+    // Our own send path's counters; null without a capture session.
+    val captureStats: CaptureStats? = null,
     // A cellular call has the microphone; capture is released until the user asks for it back.
     val callHeld: Boolean = false,
     // The selected user's ping, or null when the server has not answered for them. Already
@@ -111,11 +114,14 @@ private data class ConnSnapshot(
     val callHeld: Boolean,
 )
 
+/** Both audio engines' counters, paired so [HealthSnapshot] stays inside combine's arity cap. */
+private data class AudioSnapshot(val playoutStats: PlayoutStats?, val captureStats: CaptureStats?)
+
 /** How the link is carrying the session, as opposed to what is on it. */
 private data class HealthSnapshot(
     val roundTripTime: Duration?,
     val lastServerReplyAt: ComparableTimeMark?,
-    val playoutStats: PlayoutStats?,
+    val audio: AudioSnapshot,
     val userStats: UserStats?,
     val voicePath: VoicePath.State,
 )
@@ -147,10 +153,14 @@ class ConnectViewModel internal constructor(
         connection.callHeld,
     ) { status, tree, msgs, routes, held -> ConnSnapshot(status, tree, msgs, routes, held) }
 
+    private val audioSnapshot = combine(connection.playoutStats, connection.captureStats) { p, c ->
+        AudioSnapshot(p, c)
+    }
+
     private val healthSnapshot = combine(
-        connection.roundTripTime, connection.lastServerReplyAt, connection.playoutStats,
+        connection.roundTripTime, connection.lastServerReplyAt, audioSnapshot,
         connection.userStats, connection.voicePath,
-    ) { rtt, replyAt, playout, ping, path -> HealthSnapshot(rtt, replyAt, playout, ping, path) }
+    ) { rtt, replyAt, audio, ping, path -> HealthSnapshot(rtt, replyAt, audio, ping, path) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
@@ -169,7 +179,8 @@ class ConnectViewModel internal constructor(
             val selected = f.selectedSession?.takeIf { it in c.channelTree.users }
             f.copy(
                 status = status, roundTripTime = health.roundTripTime, voicePath = health.voicePath,
-                lastServerReplyAt = health.lastServerReplyAt, playoutStats = health.playoutStats,
+                lastServerReplyAt = health.lastServerReplyAt,
+                playoutStats = health.audio.playoutStats, captureStats = health.audio.captureStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 deafened = me?.selfDeaf == true,

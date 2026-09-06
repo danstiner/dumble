@@ -19,7 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.protocol.UserStats
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
+import me.danielstiner.dumble.mumble.voice.SendDelay
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
@@ -34,7 +36,7 @@ import kotlinx.coroutines.delay
  * [stats] is what the server measures about them. Both pings get a row even though only one leg
  * carries voice: murmur exchanges UDP pings only with a peer that has a working UDP path, so a
  * UDP reading is the evidence for which — a dash for another Dumble, which does not yet report
- * its UDP ping. Our own path and round trip are in the status line above the roster.
+ * its UDP ping. Our own row opens [SelfDetailSheet] instead.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,18 +58,8 @@ fun UserDetailSheet(
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AvatarCircle(name, Modifier.size(AvatarSize))
-                Text(
-                    name,
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 16.dp),
-                )
-            }
-            Spacer(Modifier.height(24.dp))
-            StatRow("Latency", delay?.total.floor())
+            SheetHeader(name)
+            StatRow("Latency (server to ear)", delay?.total.floor())
             StatRow("Network", delay?.network.label(), part = true)
             StatRow("Jitter buffer", delay?.jitterBuffer.label(), part = true)
             StatRow("Audio output", delay?.audioOutput.label(), part = true)
@@ -77,6 +69,62 @@ fun UserDetailSheet(
             StatRow("Bandwidth", stats?.bandwidthBitsPerSecond.kilobits())
         }
     }
+}
+
+/**
+ * Our own send path, for the row marked YOU: every reading on [UserDetailSheet] is absent for
+ * ourselves, since we never decode our own audio and the server measures a peer's path, not ours.
+ *
+ * [delay] is what our voice costs to reach the server, a floor like the peer's. [capture] is the
+ * engine's counters: the two overruns are microphone audio lost before it was encoded; dropped
+ * sends are packets the transport refused. [stats] is the server's view of us, the only reading
+ * here that is not ours — its loss is the datagrams it never received, its bandwidth what we
+ * cost it. Datagrams only, our pings included, so a tunneled talker's row describes the pings.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SelfDetailSheet(
+    name: String,
+    delay: SendDelay?,
+    capture: CaptureStats?,
+    stats: UserStats?,
+    onRefresh: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    LaunchedEffect(Unit) {
+        while (true) {
+            onRefresh()
+            delay(RefreshInterval)
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            SheetHeader(name)
+            StatRow("Latency (mouth to server)", delay?.total.floor())
+            StatRow("Input buffer", delay?.inputBuffer.label(), part = true)
+            StatRow("Encode", delay?.encode.label(), part = true)
+            StatRow("Network", delay?.network.label(), part = true)
+            StatRow("Packet loss", stats?.uplink?.lossFraction.percent())
+            StatRow("Bandwidth", stats?.bandwidthBitsPerSecond.kilobits())
+            StatRow("Overruns", capture?.let { it.streamOverruns + it.ringOverruns }.count())
+            StatRow("Dropped sends", capture?.droppedFrames?.toLong().count())
+        }
+    }
+}
+
+@Composable
+private fun SheetHeader(name: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AvatarCircle(name, Modifier.size(AvatarSize))
+        Text(
+            name,
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 16.dp),
+        )
+    }
+    Spacer(Modifier.height(24.dp))
 }
 
 // One token for every absent reading. Several are absent by design rather than by timing — no UDP
@@ -99,6 +147,11 @@ private fun Duration?.label(): String {
 
 /** A floor, since their capture is never in it. */
 private fun Duration?.floor(): String = this?.let { "> ${it.label()}" } ?: NoReading
+
+/** One decimal: a tenth of a percent is one packet in a thousand, twenty seconds of speech. */
+private fun Double?.percent(): String = this?.let { "%.1f %%".format(it * 100) } ?: NoReading
+
+private fun Long?.count(): String = this?.toString() ?: NoReading
 
 /** Kilobits, because a voice stream is tens of them and the bits are noise at this width. */
 private fun Int?.kilobits(): String =

@@ -13,6 +13,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
+import me.danielstiner.dumble.mumble.voice.SendDelay
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.ui.about.AboutScreen
 import me.danielstiner.dumble.ui.connect.Route
@@ -93,6 +94,8 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                                         state.roundTripTime)
                     },
                     selectedStats = state.userStats,
+                    selfDelay = SendDelay.of(state.captureStats, state.voicePath, state.roundTripTime),
+                    captureStats = state.captureStats,
                     onUserClick = vm::openUserDetail,
                     onRefreshUserStats = vm::refreshUserStats,
                     onDismissUserDetail = vm::closeUserDetail,

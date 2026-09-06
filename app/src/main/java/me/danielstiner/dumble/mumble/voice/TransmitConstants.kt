@@ -1,5 +1,8 @@
 package me.danielstiner.dumble.mumble.voice
 
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+
 /** Opus encoder bitrate, handed to [NativeCapture.create].
  *
  *  One fixed rate has to serve every network, and the client cannot yet tell a metered connection
@@ -9,9 +12,10 @@ package me.danielstiner.dumble.mumble.voice
  *  floor of the desktop client's own AUDIO-preset band. Network-aware tiers are future work. */
 const val TRANSMIT_BITRATE = 32_000
 
-/** 20 ms packets. Pinned natively by CaptureConstants.h `kTxPacketSamples`; mirrored here only for
- *  the accounting below, which is why it is private and never reaches the encoder. */
+/** 20 ms packets. Pinned natively by CaptureConstants.h `kTxPacketSamples`; mirrored here for the
+ *  accounting below and for [SendDelay], and never reaches the encoder. */
 private const val PACKETS_PER_SECOND = 50
+val TRANSMIT_PACKET_INTERVAL: Duration = 1.seconds / PACKETS_PER_SECOND
 
 /** Per-packet framing above the Opus payload: the UDP type byte, the Audio protobuf's own tags
  *  and lengths, and the tunnel's TCP message header. An estimate — it only ever feeds a warning,

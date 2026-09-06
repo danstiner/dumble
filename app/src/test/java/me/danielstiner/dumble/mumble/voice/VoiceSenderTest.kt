@@ -8,6 +8,8 @@ import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.milliseconds
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 class VoiceSenderTest {
@@ -173,5 +175,32 @@ class VoiceSenderTest {
         sender.stop()
         exits.awaitFirst()
         assertEquals(VoiceSender.StopReason.REQUESTED, sender.stopReason)
+    }
+
+    /** The sheet reads the counters through this callback, with the pump's own dropped count in. */
+    @Test
+    fun theCountersGoOutEveryIntervalWithTheDroppedSendsFilledIn() {
+        val fake = FakeCaptureHandle()
+        fake.stats = CaptureStats(
+            encodedPackets = 3, encodeErrors = 0, encodeMicrosMean = 400, encodeMicrosMax = 900,
+            ringOverruns = 0, skippedSamples = 0, streamOverruns = 1, framesPerBurst = 96,
+            droppedFrames = 0, inputLatencyMillis = 12.0,
+        )
+        val reported = LinkedBlockingQueue<CaptureStats>()
+        fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
+        val sender = VoiceSender(fake, { false }, onExit = { }, onStats = { reported.add(it) },
+                                 statsInterval = 20.milliseconds)
+        sender.start()
+        // The tick is checked after each poll returns, so keep the pump polling until it fires.
+        var got: CaptureStats? = null
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while (got == null && System.nanoTime() < deadline) {
+            fake.script(FakeCaptureHandle.Step.Retry)
+            got = reported.poll(5, TimeUnit.MILLISECONDS)
+        }
+        sender.stop()
+
+        assertEquals(1, got!!.droppedFrames)
+        assertEquals(12.0, got.inputLatencyMillis)
     }
 }

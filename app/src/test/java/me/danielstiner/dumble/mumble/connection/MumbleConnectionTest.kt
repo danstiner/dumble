@@ -22,6 +22,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
@@ -393,6 +394,32 @@ class MumbleConnectionTest {
         awaitTrue("teardown must stop the pump") { handle.stopped }
         awaitTrue("teardown must destroy the engine") { handle.destroyed }
         awaitTrue("teardown must end the call") { call.ends == 1 }
+    }
+
+    /** The counters reach the flow from the live attempt's pump and leave with the session. */
+    @Test fun theCaptureCountersFollowTheSession() = runBlocking {
+        val handle = FakeCaptureHandle()
+        handle.stats = CaptureStats(
+            encodedPackets = 0, encodeErrors = 0, encodeMicrosMean = 400, encodeMicrosMax = 900,
+            ringOverruns = 0, skippedSamples = 0, streamOverruns = 0, framesPerBurst = 96,
+            droppedFrames = 0, inputLatencyMillis = 12.0,
+        )
+        val conn = MumbleConnection(InMemoryPinStore(), newCapture = { handle }, call = FakeVoiceCall()) {
+            FakeControlTransport { _, _ -> }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.requestCapture()
+
+        // The pump reads the counters after a poll returns, two seconds apart; keep it polling.
+        awaitTrue("the counters must reach the flow", timeoutMillis = 6_000) {
+            handle.script(FakeCaptureHandle.Step.Retry)
+            conn.captureStats.value != null
+        }
+        assertEquals(12.0, conn.captureStats.value!!.inputLatencyMillis)
+
+        conn.disconnect()
+        awaitTrue("teardown must clear the counters") { conn.captureStats.value == null }
     }
 
     /**
