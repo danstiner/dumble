@@ -46,6 +46,15 @@ jobs:
         env:
           MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest --stacktrace
+      - name: Keep the test reports of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests
+            app/build/test-results
+          if-no-files-found: ignore
       - name: Build and run host C++ core tests
         # cpp/core has no Android dependency by construction, so it is tested on the runner
         # directly. This is also the only place libopus is reachable from a test at all —

@@ -43,9 +43,11 @@ class MumbleUdpTransportTest {
         val replies = LinkedBlockingQueue<Duration>()
         val resyncs = AtomicInteger()
         val silences = AtomicInteger()
+        // The buffer first: a test wakes on packets and reads buffers right after, so the
+        // other order let it read an empty queue between the two adds (four CI failures).
         override fun onVoicePacket(buf: ByteArray, len: Int) {
-            packets.add(buf.copyOf(len))
             buffers.add(buf)
+            packets.add(buf.copyOf(len))
         }
         override fun onPingReply(roundTrip: Duration) { replies.add(roundTrip) }
         override fun requestCryptResync() { resyncs.incrementAndGet() }
