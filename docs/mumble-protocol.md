@@ -65,7 +65,7 @@ socket. The protocol has no handshake timeout; Dumble imposes 15 s to `ServerSyn
 server parses protobuf voice as malformed legacy CELT and silently drops every frame, and voice
 is the point of connecting.
 The client certificate is not a protocol message: it rides the TLS handshake, and `Authenticate`
-carries only the name, password and tokens (`docs/connection.md`, Client certificate).
+never mentions it (`docs/connection.md`, Client certificate).
 
 **State stream.** After sync the server pushes deltas: `ChannelState`/`ChannelRemove`,
 `UserState`/`UserRemove` (a `UserState` is a sparse diff — only changed fields are set, keyed by
