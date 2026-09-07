@@ -9,10 +9,12 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 
 class FileClientIdentityStoreTest {
 
@@ -41,11 +43,26 @@ class FileClientIdentityStoreTest {
     }
 
     @Test fun concurrentFirstLoadsAgree() = runBlocking {
-        val store = FileClientIdentityStore(file())
+        val file = file()
+        val store = FileClientIdentityStore(file)
         val a = async { store.load() }
         val b = async { store.load() }
         assertSame(a.await(), b.await())
-        assertEquals(a.await().hash, ClientIdentity.decode(file().readBytes()).hash)
+        assertEquals(a.await().hash, ClientIdentity.decode(file.readBytes()).hash)
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
+    }
+
+    @Test fun aFileThatCannotBeReadIsNotRotated() = runBlocking {
+        // A directory where the identity file should be makes readBytes() throw, standing in
+        // for a disk read failure: that must propagate, not be mistaken for a bad file.
+        val file = folder.newFolder("identity.p12")
+        try {
+            FileClientIdentityStore(file).load()
+            fail("expected the read failure to propagate")
+        } catch (e: IOException) {
+            // expected
+        }
+        assertFalse(File(file.path + ".corrupt").exists())
     }
 
     @Test fun aCorruptFileIsMovedAsideAndReplaced() = runBlocking {

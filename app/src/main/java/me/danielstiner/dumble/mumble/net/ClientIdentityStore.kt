@@ -26,8 +26,8 @@ object NoClientIdentity : ClientIdentityStore {
  * once per process; generated the first time, which costs a few hundred milliseconds of RSA on a
  * phone and runs inside the first connect.
  *
- * The file is meant to be carried by Auto Backup to a reinstall or a new phone, and to be
- * exported one day: it must stay under `filesDir` and out of any backup exclusion.
+ * Auto Backup carries the file to a reinstall or a new phone: it must stay under `filesDir` and
+ * out of any backup exclusion.
  */
 class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
 
@@ -42,11 +42,14 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
 
     private fun readOrCreate(): ClientIdentity {
         if (file.exists()) {
+            // Read outside the try: an IOException here is a disk failure, not a bad file, and
+            // must propagate rather than get the file rotated away.
+            val bytes = file.readBytes()
             try {
-                return ClientIdentity.decode(file.readBytes())
+                return ClientIdentity.decode(bytes)
             } catch (e: Exception) {
                 // Refusing to connect would make the app unusable over a file nobody can repair;
-                // moving it aside keeps the bytes for a bug report or a future import screen.
+                // moving it aside keeps the bytes for a bug report.
                 Log.e(TAG, "client identity at $file does not decode; moving it aside and generating a new one", e)
                 Files.move(file.toPath(), File(file.path + ".corrupt").toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
