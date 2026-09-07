@@ -76,6 +76,11 @@ android {
             }
         }
     }
+    packaging {
+        // The three BouncyCastle jars each ship the same MIT text at this path; the About screen
+        // already attributes the library, so the copy in the APK is not needed.
+        resources.excludes += "META-INF/LICENSE.md"
+    }
     lint {
         // Every finding this project cares about is Warning severity — the Security-category
         // GetInstance and CustomX509TrustManager checks included — so without this the gate can
