@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -84,11 +85,12 @@ class MumbleConnection internal constructor(
     @Inject constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,
+        identityStore: ClientIdentityStore,
     ) : this(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
-        newTransport = { MumbleTcpTransport(it) },
+        newTransport = { MumbleTcpTransport(it, identity = identityStore) },
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
