@@ -28,7 +28,7 @@ import kotlin.concurrent.thread
  * name is `localhost`, so the client's host name verification passes. Exposes the certificate
  * digest so the client can pin it — no certificate authority is involved.
  */
-class TestTlsServer : AutoCloseable {
+class TestTlsServer(private val requestClientCertificate: Boolean = false) : AutoCloseable {
 
     private val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
 
@@ -61,14 +61,32 @@ class TestTlsServer : AutoCloseable {
         }
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             .apply { init(ks, PASSWORD) }
-        val ctx = SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
-        ctx.serverSocketFactory.createServerSocket(0) as SSLServerSocket
+        // A client certificate that fails validation aborts the handshake even under wantClientAuth
+        // (want only permits none), and ours are self-signed — accept whatever is presented, which
+        // is what Murmur does too.
+        val ctx = SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, arrayOf(acceptAnyClient()), null) }
+        (ctx.serverSocketFactory.createServerSocket(0) as SSLServerSocket).apply { wantClientAuth = requestClientCertificate }
     }
 
     val port: Int get() = serverSocket.localPort
 
     @Volatile private var accepted: Socket? = null
     private val ready = CountDownLatch(1)
+
+    /**
+     * The certificate the client presented on the accepted connection, or null if none. Waits
+     * for the server's half of the handshake, which finishes a moment after the client's returns.
+     * JSSE reports "none" by throwing rather than by an empty array.
+     */
+    val peerCertificate: X509Certificate?
+        get() {
+            ready.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            return try {
+                (accepted as? SSLSocket)?.session?.peerCertificates?.firstOrNull() as? X509Certificate
+            } catch (_: javax.net.ssl.SSLPeerUnverifiedException) {
+                null
+            }
+        }
 
     /**
      * Loops accept(): a trust test dials this server twice on the same port — once rejected
@@ -120,6 +138,12 @@ class TestTlsServer : AutoCloseable {
                 throw CertificateException("test: reject")
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String): Unit =
                 throw CertificateException("test: reject")
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+
+        private fun acceptAnyClient(): X509TrustManager = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
     }

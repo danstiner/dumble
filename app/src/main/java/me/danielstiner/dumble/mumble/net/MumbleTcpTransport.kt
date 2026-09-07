@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import android.util.Log
 import androidx.annotation.VisibleForTesting
 import com.google.protobuf.MessageLite
 import kotlinx.coroutines.CancellationException
@@ -22,6 +23,7 @@ import java.net.InetSocketAddress
 import java.security.cert.CertificateException
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.KeyManager
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
@@ -41,6 +43,9 @@ class MumbleTcpTransport(
      * own decision — when to verify — rather than the platform's answer.
      */
     private val hostNameVerifier: HostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier(),
+    /** The certificate offered on the handshake. Loaded here, before the socket, because the
+     *  load may generate and that must not happen inside the trust callback. */
+    private val identity: ClientIdentityStore = NoClientIdentity,
     private val connectTimeoutMs: Int = 10_000,
     private val handshakeTimeoutMs: Int = 10_000,
 ) : MumbleControlTransport {
@@ -107,8 +112,12 @@ class MumbleTcpTransport(
         this@MumbleTcpTransport.listener = listener
 
         // One trust manager per connection attempt: its outcome is per-handshake state.
+        val keyManagers = identity.load()?.let { id ->
+            Log.i(TAG, "client certificate sha1=${id.hash}")
+            arrayOf<KeyManager>(id.keyManager())
+        }
         val trust = MumbleTrustManager(expectedPin, trustDelegate)
-        val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
+        val ctx = SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), null) }
         val s = ctx.socketFactory.createSocket() as SSLSocket
 
         try {
@@ -258,5 +267,6 @@ class MumbleTcpTransport(
 
     private companion object {
         const val FRAME_HEADER_LEN = 6
+        const val TAG = "MumbleTcpTransport"
     }
 }
