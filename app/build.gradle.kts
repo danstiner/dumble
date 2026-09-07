@@ -80,6 +80,11 @@ android {
         // The three BouncyCastle jars each ship the same MIT text at this path; the About screen
         // already attributes the library, so the copy in the APK is not needed.
         resources.excludes += "META-INF/LICENSE.md"
+        // R8 drops the post-quantum and certificate-path-review classes nothing here uses, but not
+        // the 1.4 MB of lookup tables and message bundles only they read.
+        resources.excludes += "org/bouncycastle/pqc/**"
+        resources.excludes += "org/bouncycastle/x509/CertPathReviewerMessages*.properties"
+        resources.excludes += "org/bouncycastle/pkix/CertPathReviewerMessages*.properties"
     }
     lint {
         // Every finding this project cares about is Warning severity — the Security-category
