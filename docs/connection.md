@@ -80,6 +80,18 @@ self-signed) stops the handshake with the fingerprint so the UI can offer to acc
 authority-validated path — a pinned certificate is already bound to its endpoint, and stock Mumble
 certificates carry no usable subject.
 
+**Client certificate** (`net/ClientIdentity` + `ClientIdentityStore`). Every handshake offers one
+self-signed RSA-2048 certificate, generated on the first connect and kept as an unencrypted PKCS#12
+(`identity.p12` under `filesDir`, inside Auto Backup's default scope) so it follows a reinstall and
+can later be exported to desktop Mumble, which reads that format and only RSA. Murmur asks for a
+certificate, accepts any, verified or not, and keeps the SHA-1 of the leaf as the session's hash.
+Until a server registers the user that hash decides one thing: a connection under a name another
+session still holds is accepted from a new address only when the hashes match, and the old session
+is then kicked at once ("Disconnecting ghost"); without it a reconnect after a network change is
+refused until the server's 30 s timeout reaps the old session. One identity for every server, as
+the desktop has. Under TLS 1.2 it crosses the wire in the clear, as it does for every Mumble client;
+TLS 1.3 encrypts it.
+
 **Protocol** (`protocol/SessionStateMachine`). `Version` + `Authenticate`, then `ServerSync` under
 its own deadline (the transport's timeout bounds only the socket connect). Transitions settle by
 compare-and-set; first failure wins. Servers below 1.5 are refused rather than joined without
