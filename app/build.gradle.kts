@@ -145,11 +145,14 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.ktor.utils) // io.ktor.util.escapeHTML for outgoing chat text
+    // Certificate generation and PKCS#12 encoding for the client identity (net/ClientIdentity.kt).
+    // Builders only; no BouncyCastle provider is registered. Android's own copy is repackaged
+    // under com.android.org.bouncycastle, so this one is not shadowed.
+    implementation(libs.bouncycastle.pkix)
     implementation(libs.oboe)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.bouncycastle.pkix)
     // Compose gesture tests run on the JVM under Robolectric rather than as androidTest:
     // CI runs testDebugUnitTest and no instrumented suite, so an androidTest would never run.
     testImplementation(libs.robolectric)

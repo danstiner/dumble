@@ -38,6 +38,7 @@ com.squareup.okio
 io.ktor
 jakarta.inject
 javax.inject
+org.bouncycastle
 org.jetbrains
 org.jetbrains.kotlin
 org.jetbrains.kotlinx

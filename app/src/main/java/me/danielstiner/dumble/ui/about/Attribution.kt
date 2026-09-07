@@ -28,7 +28,7 @@ data class Attribution(
  * Every Maven group resolved on releaseRuntimeClasspath. Licenses were read from each group's
  * declared POM <license> element, not assumed.
  *
- * Test-only dependencies (JUnit, BouncyCastle, Espresso) are not distributed and owe no
+ * Test-only dependencies (JUnit, Robolectric, Espresso) are not distributed and owe no
  * attribution. verifyAttribution fails the build if a shipped group is missing here.
  */
 val ATTRIBUTIONS: List<Attribution> = listOf(
@@ -46,6 +46,7 @@ val ATTRIBUTIONS: List<Attribution> = listOf(
     Attribution(groupPrefix = "org.jspecify", description = "JSpecify annotations", license = License.APACHE_2_0),
     Attribution(groupPrefix = "com.google.protobuf", description = "Protocol Buffers (javalite runtime)", license = License.BSD_3_CLAUSE),
     Attribution(groupPrefix = "org.slf4j", description = "SLF4J API", license = License.MIT),
+    Attribution(groupPrefix = "org.bouncycastle", description = "Bouncy Castle — client certificate generation and PKCS#12 encoding", license = License.MIT),
     Attribution(groupPrefix = "com.google.oboe", description = "Oboe — Android audio streams (liboboe.so)", license = License.APACHE_2_0),
 )
 

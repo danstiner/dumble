@@ -140,4 +140,9 @@ class AttributionTest {
             )
         }
     }
+
+    /** BouncyCastle ships in the APK since the client certificate; its licence is MIT-worded. */
+    @Test fun bouncyCastleIsAttributedUnderMit() {
+        assertEquals(License.MIT, attributionFor("org.bouncycastle")?.license)
+    }
 }
