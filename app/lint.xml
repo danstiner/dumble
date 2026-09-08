@@ -13,4 +13,14 @@
     <issue id="NewerVersionAvailable" severity="ignore" />
     <issue id="GradleDependency" severity="ignore" />
     <issue id="AndroidGradlePluginVersion" severity="ignore" />
+
+    <!--
+      bcpkix ships an EST (enrollment over secure transport) client whose
+      org.bouncycastle.est.jcajce.JcaJceUtils$1 is a trust-all X509TrustManager. Nothing here
+      touches EST and R8 drops the class, but lint scans library bytecode and reports it against
+      the jar. Ignored for that jar only, so the check still guards our own trust managers.
+    -->
+    <issue id="TrustAllX509TrustManager">
+        <ignore regexp="bcpkix-jdk18on" />
+    </issue>
 </lint>
