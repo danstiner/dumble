@@ -69,6 +69,13 @@ class FileClientIdentityStoreTest {
         assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }
 
+    @Test fun anEmptyFileIsGeneratedOver() = runBlocking {
+        val file = file()
+        file.writeBytes(ByteArray(0))
+        val identity = FileClientIdentityStore(file).load()
+        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
+    }
+
     @Test fun aWriteThatFailsLeavesNoTempFile() {
         // A directory at the temp path makes the write's open throw; the write must clean up
         // after itself and the identity file must not appear.

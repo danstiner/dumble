@@ -61,13 +61,16 @@ class ClientIdentity(val certificate: X509Certificate, private val key: PrivateK
     /**
      * Offers [certificate] to any client-authentication request that can take an RSA key; there is
      * one to offer. A request that cannot (ECDSA only) gets none, which sends an empty certificate
-     * list and connects anonymously, rather than a key the handshake then fails on. Issuers are
-     * ignored: a self-signed leaf chains to no CA list, and Murmur sends none.
+     * list and connects anonymously, rather than a key the handshake then fails on. No key types
+     * at all (null, or empty when a TLS 1.3 stack maps none from `signature_algorithms`) is no
+     * constraint. Issuers are ignored: a self-signed leaf chains to no CA list, and Murmur sends
+     * none.
      */
     fun keyManager(): X509KeyManager = object : X509KeyManager {
         override fun chooseClientAlias(keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?) =
-            if (keyType == null || "RSA" in keyType) ALIAS else null
-        override fun getClientAliases(keyType: String?, issuers: Array<Principal>?) = arrayOf(ALIAS)
+            if (keyType.isNullOrEmpty() || "RSA" in keyType) ALIAS else null
+        override fun getClientAliases(keyType: String?, issuers: Array<Principal>?) =
+            if (keyType == null || keyType == "RSA") arrayOf(ALIAS) else null
         override fun getCertificateChain(alias: String?) = if (alias == ALIAS) arrayOf(certificate) else null
         override fun getPrivateKey(alias: String?) = if (alias == ALIAS) key else null
         override fun chooseServerAlias(keyType: String?, issuers: Array<Principal>?, socket: Socket?) = null

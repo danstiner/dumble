@@ -44,7 +44,9 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
     }
 
     private fun readOrCreate(): ClientIdentity {
-        if (file.exists()) {
+        // length() is 0 for a missing file and for an empty one, which a restore or a crash can
+        // leave behind: no identity in it to keep, so it is generated over like a missing file.
+        if (file.length() > 0L) {
             val bytes = file.readBytes()
             return try {
                 ClientIdentity.decode(bytes)

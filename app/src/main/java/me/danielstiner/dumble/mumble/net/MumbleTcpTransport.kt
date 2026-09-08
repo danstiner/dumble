@@ -111,10 +111,7 @@ class MumbleTcpTransport(
     override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) = withContext(Dispatchers.IO) {
         this@MumbleTcpTransport.listener = listener
 
-        val keyManagers = identityStore.load()?.let { id ->
-            Log.i(TAG, "client certificate sha1=${id.hash}")
-            arrayOf<KeyManager>(id.keyManager())
-        }
+        val keyManagers = identityStore.load()?.let { arrayOf<KeyManager>(it.keyManager()) }
         // One trust manager per connection attempt: its outcome is per-handshake state.
         val trust = MumbleTrustManager(expectedPin, trustDelegate)
         val ctx = SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), null) }
@@ -133,6 +130,14 @@ class MumbleTcpTransport(
             // Nothing owns this socket yet, so if we don't close it here the file descriptor leaks.
             runCatching { s.close() }
             throw t
+        }
+
+        // Read back from the session rather than the store: the key manager declines a request it
+        // cannot serve, and a server that never asks gets nothing.
+        val presented = s.session.localCertificates?.firstOrNull()
+        when {
+            presented != null -> Log.i(TAG, "client certificate sha1=${sha1Hex(presented.encoded)}")
+            keyManagers != null -> Log.w(TAG, "client certificate not presented: the server asked for none, or for a key type we lack")
         }
 
         trustOutcome = trust.outcome
