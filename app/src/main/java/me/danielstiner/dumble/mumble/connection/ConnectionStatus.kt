@@ -11,7 +11,7 @@ sealed interface ConnectionStatus {
     data class PinMismatch(val stored: String, val presented: String) : ConnectionStatus
     data object Handshaking : ConnectionStatus
     /** [gen] is this connection's own generation, one per connect(); [sessionId] is the server's,
-     *  and is what a link rebuilt under the same generation changes. */
+     *  and changes with every link. */
     data class Connected(val gen: Int, val sessionId: Int) : ConnectionStatus
     data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
 }

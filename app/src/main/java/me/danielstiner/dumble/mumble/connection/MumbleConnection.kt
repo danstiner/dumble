@@ -562,7 +562,11 @@ class MumbleConnection internal constructor(
     }
 
     /** The pieces of one TLS connect, built but not yet connected. */
-    private fun buildLink(gen: Int, pin: String?, username: String, password: String?, receiver: VoiceReceiver): Link {
+    private fun buildLink(session: Session, pin: String?): Link {
+        val gen = session.gen
+        val username = session.username
+        val password = session.password
+        val receiver = session.receiver
         val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val transport = newTransport(pin)
         val sm = SessionStateMachine(transport, username, password, childScope, pingIntervalMs = pingIntervalMs)
@@ -642,7 +646,7 @@ class MumbleConnection internal constructor(
         val gen = session.gen
         val pin = pinStore.get(session.endpoint.address)
         Log.i(TAG, "connect gen=$gen endpoint=${session.endpoint.address} user=${session.username} storedPin=${pin != null}")
-        val link = buildLink(gen, pin, session.username, session.password, session.receiver)
+        val link = buildLink(session, pin)
         // Published before the connect, so a teardown that lands during the blocking handshake
         // finds the link and closes it: the transport then closes a socket it finishes after
         // that, and never publishes it.
@@ -652,8 +656,8 @@ class MumbleConnection internal constructor(
         if (!live) { link.close(); return }   // superseded during the pin lookup
 
         val listener = object : MumbleControlTransport.Listener {
-            override fun onFrame(f: TcpFrame) = link.sm.onFrame(f)
-            override fun onClosed(cause: Throwable?) = link.sm.onClosed(cause)
+            override fun onFrame(f: TcpFrame) = link.stateMachine.onFrame(f)
+            override fun onClosed(cause: Throwable?) = link.stateMachine.onClosed(cause)
         }
         try {
             link.transport.connect(session.endpoint.host, session.endpoint.port, listener)
@@ -690,18 +694,20 @@ class MumbleConnection internal constructor(
             runCatching { link.udp.open(remote) }
                 .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
         }
-        link.sm.udpPing = { link.udp.sendPing() }
-        link.sm.audioListener = SessionStateMachine.AudioListener { payload ->
+        link.stateMachine.udpPing = { link.udp.sendPing() }
+        link.stateMachine.audioListener = SessionStateMachine.AudioListener { payload ->
             session.receiver.onVoicePacket(payload, payload.size)
         }
-        link.sm.start()
-        link.childScope.launch { link.sm.serverVersion.collect { publishFromLink(session, link, _serverVersion, it) } }
-        link.childScope.launch { link.sm.roundTripTime.collect { publishFromLink(session, link, _roundTripTime, it) } }
+        link.stateMachine.start()
+        // The wait below subscribes only after the receiver's stream open; Handshaking is due now.
+        mapState(gen, link.stateMachine.state.value)?.let { publishStatus(gen, it) }
+        link.childScope.launch { link.stateMachine.serverVersion.collect { publishFromLink(session, link, _serverVersion, it) } }
+        link.childScope.launch { link.stateMachine.roundTripTime.collect { publishFromLink(session, link, _roundTripTime, it) } }
         link.childScope.launch { link.path.state.collect { publishFromLink(session, link, _voicePath, it) } }
-        link.childScope.launch { link.sm.lastServerReplyAt.collect { publishFromLink(session, link, _lastServerReplyAt, it) } }
-        link.childScope.launch { link.sm.channelTree.collect { publishFromLink(session, link, _channelTree, it) } }
-        link.childScope.launch { link.sm.messages.collect { publishMessages(gen, it) } }
-        link.childScope.launch { link.sm.userStats.collect { publishFromLink(session, link, _userStats, it) } }
+        link.childScope.launch { link.stateMachine.lastServerReplyAt.collect { publishFromLink(session, link, _lastServerReplyAt, it) } }
+        link.childScope.launch { link.stateMachine.channelTree.collect { publishFromLink(session, link, _channelTree, it) } }
+        link.childScope.launch { link.stateMachine.messages.collect { publishMessages(gen, it) } }
+        link.childScope.launch { link.stateMachine.userStats.collect { publishFromLink(session, link, _userStats, it) } }
         // Start the receiver if this is still the live session. Both halves of isLive matter:
         // retire() clears `current` without bumping the generation. Every earlier return skips
         // this line, so a session that never gets here never calls newPlayout() — see the
@@ -717,7 +723,7 @@ class MumbleConnection internal constructor(
         // Status is the driver's own collector, not one of the link's: the terminal Error must
         // be on `status` before retire() cancels this coroutine's scope, and onEach runs before
         // first's predicate on every emission.
-        link.sm.state
+        link.stateMachine.state
             .onEach { st -> mapState(gen, st)?.let { publishStatus(gen, it) } }
             .first { it is ConnectionState.Failed }
         retire(session)
@@ -755,11 +761,11 @@ class MumbleConnection internal constructor(
         prior?.let { teardown(it) }
     }
 
-    override fun sendText(text: String): Boolean = current?.link?.sm?.sendText(text) ?: false
+    override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) { current?.link?.sm?.setSelfDeaf(on) }
+    override fun setSelfDeaf(on: Boolean) { current?.link?.stateMachine?.setSelfDeaf(on) }
 
-    override fun requestUserStats(session: Int) { current?.link?.sm?.requestUserStats(session) }
+    override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
     override fun requestAudioRoute(routeId: String) {
         // The live session supplies the generation the UI does not carry. TelecomCall re-checks it
@@ -814,7 +820,7 @@ class MumbleConnection internal constructor(
      *  transmitting. The wire half needs a link; the level is kept either way. */
     override fun setMuted(on: Boolean) {
         val session = current ?: return
-        session.link?.sm?.setSelfMute(on)
+        session.link?.stateMachine?.setSelfMute(on)
         session.muted = on
         apply(session)
     }

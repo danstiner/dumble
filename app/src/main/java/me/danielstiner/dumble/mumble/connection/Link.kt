@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class Link(
     val gen: Int,
     val transport: MumbleControlTransport,
-    val sm: SessionStateMachine,
+    val stateMachine: SessionStateMachine,
     /** Opened once the control connection is up, closed with the link; inert in between if it
      *  could not be opened, and voice stays tunneled. */
     val udp: MumbleUdpTransport,
@@ -45,8 +45,7 @@ internal class Link(
             runCatching { udp.close() }
             runCatching { transport.close() }
         }
-        // The collectors never finish on their own. Last, because a caller can reach here from
-        // inside childScope itself.
+        // The collectors never finish on their own; nothing else stops them.
         childScope.cancel()
     }
 }

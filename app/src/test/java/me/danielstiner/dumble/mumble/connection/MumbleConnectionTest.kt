@@ -2,9 +2,11 @@ package me.danielstiner.dumble.mumble.connection
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
@@ -98,14 +100,14 @@ class MumbleConnectionTest {
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> gate.await() }     // blocks mid-"handshake"
+            FakeControlTransport { _, _ -> withContext(NonCancellable) { gate.await() } }     // blocks mid-"handshake"
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
         conn.disconnect()                                     // bumps the generation
         assertEquals(ConnectionStatus.Idle, conn.status.value)
-        gate.complete(Unit)                                   // stale driver resumes and returns
-        delay(100)                                            // let the stale coroutine run to completion
+        gate.complete(Unit)   // stale driver finishes its handshake late; the live check closes what it built
+        delay(100)                                            // let the stale driver run to its live check
         assertEquals(ConnectionStatus.Idle, conn.status.value)  // guard held: no clobber
     }
 
@@ -184,13 +186,13 @@ class MumbleConnectionTest {
     @Test fun aSupersededSessionLeavesChannelTreeEmpty() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> gate.await() }   // blocks mid-handshake
+            FakeControlTransport { _, _ -> withContext(NonCancellable) { gate.await() } }   // blocks mid-handshake
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
         conn.disconnect()          // bumps the generation
-        gate.complete(Unit)        // stale driver resumes and is torn down
-        delay(100)
+        gate.complete(Unit)   // stale driver finishes its handshake late; the live check closes what it built
+        delay(100)   // let the stale driver run to its live check
         assertEquals(ChannelTree(), conn.channelTree.value)
     }
 
@@ -325,17 +327,18 @@ class MumbleConnectionTest {
 
     /**
      * connect() publishes the session synchronously, but its link is built on the driver after the
-     * pin lookup, so a disconnect() landing while that lookup is still suspended must leave nothing
-     * behind: the driver is cancelled where it waits, and one that returns anyway meets the live
-     * check before any socket exists.
+     * pin lookup, so a disconnect() landing while that lookup is still suspended must find the
+     * session already retired: the driver's live check after the lookup is the only thing that
+     * closes the transport it just built, and nothing else can reach it.
      *
      * Deterministic rather than racy: the gate holds the driver inside pinStore.get(), which is
-     * upstream of the link, so disconnect() always wins.
+     * upstream of the link, so disconnect() always wins. The wait is NonCancellable so the driver
+     * returns from the lookup instead of dying inside it, which is the case the check exists for.
      */
-    @Test fun aDisconnectDuringThePinLookupBuildsNoLink() = runBlocking {
+    @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { gate.await(); return null }
+            override suspend fun get(key: String): String? { withContext(NonCancellable) { gate.await() }; return null }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
@@ -351,10 +354,10 @@ class MumbleConnectionTest {
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         conn.disconnect()
         gate.complete(Unit)
-        delay(200)   // a driver that survived the cancel runs to its live check within this
 
-        assertTrue("a superseded session must build no transport, or close the one it built",
-            transports.all { it.closed })
+        awaitTrue("a superseded session must close the transport it built") {
+            transports.size == 1 && transports.all { it.closed }
+        }
         assertEquals("no receiver should ever start on this path", 0, engines.get())
     }
 
@@ -486,11 +489,11 @@ class MumbleConnectionTest {
         val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
         assertEquals(ErrorKind.CONNECT_FAILED, err.kind)
         awaitTrue("the failure must end the call") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
 
         conn.requestCapture()
         delay(200)
 
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
         assertTrue("no microphone may open for a retired session", handles.isEmpty())
         assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
         conn.disconnect()
