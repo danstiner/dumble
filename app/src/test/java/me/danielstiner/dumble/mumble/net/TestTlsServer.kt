@@ -16,8 +16,10 @@ import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLPeerUnverifiedException
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
@@ -28,7 +30,7 @@ import kotlin.concurrent.thread
  * name is `localhost`, so the client's host name verification passes. Exposes the certificate
  * digest so the client can pin it — no certificate authority is involved.
  */
-class TestTlsServer : AutoCloseable {
+class TestTlsServer(private val requestClientCertificate: Boolean = false) : AutoCloseable {
 
     private val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
 
@@ -61,14 +63,37 @@ class TestTlsServer : AutoCloseable {
         }
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             .apply { init(ks, PASSWORD) }
-        val ctx = SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
-        ctx.serverSocketFactory.createServerSocket(0) as SSLServerSocket
+        // A client certificate that fails validation aborts the handshake even under wantClientAuth
+        // (want only permits none), and ours are self-signed — accept whatever is presented, which
+        // is what Murmur does too.
+        val ctx = SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, arrayOf(acceptAnyClient()), null) }
+        (ctx.serverSocketFactory.createServerSocket(0) as SSLServerSocket).apply { wantClientAuth = requestClientCertificate }
     }
 
     val port: Int get() = serverSocket.localPort
 
     @Volatile private var accepted: Socket? = null
+
+    // The first connection whose handshake completed, and the latch that announces it. Later
+    // connections never replace it, so [peerCertificate] and [writeFrame] cannot read a socket
+    // still mid-handshake.
+    @Volatile private var handshaken: SSLSocket? = null
     private val ready = CountDownLatch(1)
+
+    /**
+     * The certificate the client presented on the first completed handshake, or null if none.
+     * Waits for the server's half of that handshake, which finishes a moment after the client's
+     * returns. JSSE reports "none" by throwing rather than by an empty array.
+     */
+    val peerCertificate: X509Certificate?
+        get() {
+            check(ready.await(5, TimeUnit.SECONDS)) { "server handshake did not finish" }
+            return try {
+                handshaken!!.session?.peerCertificates?.firstOrNull() as? X509Certificate
+            } catch (_: SSLPeerUnverifiedException) {
+                null
+            }
+        }
 
     /**
      * Loops accept(): a trust test dials this server twice on the same port — once rejected
@@ -88,16 +113,19 @@ class TestTlsServer : AutoCloseable {
                     // server's half of the handshake, and the client blocks in startHandshake()
                     // until its read times out.
                     s.startHandshake()
-                    ready.countDown()
+                    if (handshaken == null) {
+                        handshaken = s
+                        ready.countDown()
+                    }
                 }
             }
         }
     }
 
-    /** Blocks until a client has connected, then writes one control frame. */
+    /** Blocks until a client's handshake has completed, then writes one control frame to it. */
     fun writeFrame(type: Int, payload: ByteArray) {
         ready.await()
-        val out = DataOutputStream(accepted!!.getOutputStream())
+        val out = DataOutputStream(handshaken!!.getOutputStream())
         out.writeShort(type)
         out.writeInt(payload.size)
         out.write(payload)
@@ -120,6 +148,12 @@ class TestTlsServer : AutoCloseable {
                 throw CertificateException("test: reject")
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String): Unit =
                 throw CertificateException("test: reject")
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+
+        private fun acceptAnyClient(): X509TrustManager = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
     }

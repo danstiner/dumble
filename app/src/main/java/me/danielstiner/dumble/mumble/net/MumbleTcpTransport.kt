@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import android.util.Log
 import androidx.annotation.VisibleForTesting
 import com.google.protobuf.MessageLite
 import kotlinx.coroutines.CancellationException
@@ -22,6 +23,7 @@ import java.net.InetSocketAddress
 import java.security.cert.CertificateException
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.KeyManager
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
@@ -41,6 +43,9 @@ class MumbleTcpTransport(
      * own decision — when to verify — rather than the platform's answer.
      */
     private val hostNameVerifier: HostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier(),
+    /** The certificate offered on the handshake. Loaded before the socket exists, so a first-run
+     *  key generation is not charged to the connect or handshake timeout. */
+    private val identityStore: ClientIdentityStore = NoClientIdentity,
     private val connectTimeoutMs: Int = 10_000,
     private val handshakeTimeoutMs: Int = 10_000,
 ) : MumbleControlTransport {
@@ -106,9 +111,10 @@ class MumbleTcpTransport(
     override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) = withContext(Dispatchers.IO) {
         this@MumbleTcpTransport.listener = listener
 
+        val keyManagers = identityStore.load()?.let { arrayOf<KeyManager>(it.keyManager()) }
         // One trust manager per connection attempt: its outcome is per-handshake state.
         val trust = MumbleTrustManager(expectedPin, trustDelegate)
-        val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
+        val ctx = SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), null) }
         val s = ctx.socketFactory.createSocket() as SSLSocket
 
         try {
@@ -124,6 +130,14 @@ class MumbleTcpTransport(
             // Nothing owns this socket yet, so if we don't close it here the file descriptor leaks.
             runCatching { s.close() }
             throw t
+        }
+
+        // Read back from the session rather than the store: the key manager declines a request it
+        // cannot serve, and a server that never asks gets nothing.
+        val presented = s.session.localCertificates?.firstOrNull()
+        when {
+            presented != null -> Log.i(TAG, "client certificate sha1=${sha1Hex(presented.encoded)}")
+            keyManagers != null -> Log.w(TAG, "client certificate not presented: the server asked for none, or for a key type we lack")
         }
 
         trustOutcome = trust.outcome
@@ -258,5 +272,6 @@ class MumbleTcpTransport(
 
     private companion object {
         const val FRAME_HEADER_LEN = 6
+        const val TAG = "MumbleTcpTransport"
     }
 }

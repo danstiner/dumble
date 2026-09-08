@@ -1,0 +1,99 @@
+package me.danielstiner.dumble.mumble.net
+
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.IOException
+
+class FileClientIdentityStoreTest {
+
+    @get:Rule val folder = TemporaryFolder()
+
+    private fun file() = File(folder.root, "identity.p12")
+
+    @Test fun firstLoadGeneratesAndPersists() = runBlocking {
+        val file = file()
+        val identity = FileClientIdentityStore(file).load()
+        assertTrue(file.exists())
+        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
+        assertFalse("temp file must not survive", File(file.path + ".tmp").exists())
+    }
+
+    @Test fun aSecondStoreOnTheSameFileLoadsTheSameIdentity() = runBlocking {
+        val first = FileClientIdentityStore(file()).load()
+        val second = FileClientIdentityStore(file()).load()
+        assertEquals(first.hash, second.hash)
+        assertArrayEquals(first.certificate.encoded, second.certificate.encoded)
+    }
+
+    @Test fun loadIsMemoised() = runBlocking {
+        val store = FileClientIdentityStore(file())
+        assertSame(store.load(), store.load())
+    }
+
+    @Test fun concurrentFirstLoadsAgree() = runBlocking {
+        val file = file()
+        val store = FileClientIdentityStore(file)
+        val a = async { store.load() }
+        val b = async { store.load() }
+        assertSame(a.await(), b.await())
+        assertEquals(a.await().hash, ClientIdentity.decode(file.readBytes()).hash)
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
+    }
+
+    @Test fun aFileThatCannotBeReadFailsTheLoad() {
+        // A directory where the identity file should be makes readBytes() throw, standing in
+        // for a disk read failure.
+        val store = FileClientIdentityStore(folder.newFolder("identity.p12"))
+        assertThrows(IOException::class.java) { runBlocking { store.load() } }
+    }
+
+    @Test fun aFileThatDoesNotDecodeFailsTheLoadAndIsKept() {
+        val file = file()
+        val garbage = byteArrayOf(1, 2, 3, 4)
+        file.writeBytes(garbage)
+        val store = FileClientIdentityStore(file)
+        val failure = assertThrows(IOException::class.java) { runBlocking { store.load() } }
+        assertTrue(failure.message, failure.message!!.contains("identity.p12 does not decode"))
+        assertArrayEquals(garbage, file.readBytes())
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
+    }
+
+    @Test fun anEmptyFileIsGeneratedOver() = runBlocking {
+        val file = file()
+        file.writeBytes(ByteArray(0))
+        val identity = FileClientIdentityStore(file).load()
+        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
+    }
+
+    @Test fun aWriteThatFailsLeavesNoTempFile() {
+        // A directory at the temp path makes the write's open throw; the write must clean up
+        // after itself and the identity file must not appear.
+        val file = file()
+        folder.newFolder("identity.p12.tmp")
+        assertThrows(IOException::class.java) { runBlocking { FileClientIdentityStore(file).load() } }
+        assertEquals(emptyList<String>(), folder.root.list()!!.toList())
+    }
+
+    @Test fun aTempFileLeftByACrashIsOverwritten() = runBlocking {
+        val file = file()
+        File(file.path + ".tmp").writeBytes(byteArrayOf(1, 2, 3, 4))
+        val identity = FileClientIdentityStore(file).load()
+        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
+    }
+
+    @Test fun noIdentityStoreYieldsNull() = runBlocking {
+        assertNull(NoClientIdentity.load())
+    }
+}

@@ -76,6 +76,17 @@ android {
             }
         }
     }
+    packaging {
+        // The three BouncyCastle jars each ship the same MIT text at this path. One copy stays in
+        // the APK: it is the only place BouncyCastle's own copyright line ships, since the About
+        // screen shows one generic MIT text for every MIT library.
+        resources.pickFirsts += "META-INF/LICENSE.md"
+        // R8 drops the post-quantum and certificate-path-review classes nothing here uses, but not
+        // the 1.4 MB of lookup tables and message bundles only they read.
+        resources.excludes += "org/bouncycastle/pqc/**"
+        resources.excludes += "org/bouncycastle/x509/CertPathReviewerMessages*.properties"
+        resources.excludes += "org/bouncycastle/pkix/CertPathReviewerMessages*.properties"
+    }
     lint {
         // Every finding this project cares about is Warning severity — the Security-category
         // GetInstance and CustomX509TrustManager checks included — so without this the gate can
@@ -145,11 +156,14 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.ktor.utils) // io.ktor.util.escapeHTML for outgoing chat text
+    // Certificate generation and PKCS#12 encoding for the client identity (net/ClientIdentity.kt).
+    // Builders only; no BouncyCastle provider is registered. Android's own copy is repackaged
+    // under com.android.org.bouncycastle, so this one is not shadowed.
+    implementation(libs.bouncycastle.pkix)
     implementation(libs.oboe)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.bouncycastle.pkix)
     // Compose gesture tests run on the JVM under Robolectric rather than as androidTest:
     // CI runs testDebugUnitTest and no instrumented suite, so an androidTest would never run.
     testImplementation(libs.robolectric)

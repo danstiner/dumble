@@ -343,8 +343,8 @@ class SessionStateMachine(
      * possibly not at all — a server may refuse. Returns whether the ask was enqueued.
      *
      * `stats_only` keeps the reply to the mutable numbers. Without it the server also sends the
-     * user's certificate chain and IP address, which murmur gates on admin rights and which
-     * nothing here wants.
+     * user's certificate chain and IP address, which murmur gates on admin rights for other users
+     * and which nothing here wants.
      */
     fun requestUserStats(session: Int): Boolean {
         if (_state.value !is ConnectionState.Synchronized) return false

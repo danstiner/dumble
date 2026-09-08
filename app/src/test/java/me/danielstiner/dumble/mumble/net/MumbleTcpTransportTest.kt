@@ -36,7 +36,7 @@ class MumbleTcpTransportTest {
 
     @After fun tearDown() { server?.close() }
 
-    private fun startServer(): TestTlsServer = TestTlsServer().also { server = it; it.start() }
+    private fun startServer(requestClientCertificate: Boolean = false): TestTlsServer = TestTlsServer(requestClientCertificate).also { server = it; it.start() }
 
     private fun noopListener() = object : MumbleControlTransport.Listener {
         override fun onFrame(f: TcpFrame) = Unit
@@ -386,6 +386,31 @@ class MumbleTcpTransportTest {
         assertTrue(transport.isConnected)
         assertEquals(TrustOutcome.Pinned, transport.trustOutcome)
         assertNull("pinned path must not consult host name verification", verifier.askedFor)
+        transport.close()
+    }
+
+    @Test
+    fun presentsTheClientCertificateWhenTheServerAsks() = runBlocking {
+        val srv = startServer(requestClientCertificate = true)
+        val identity = ClientIdentity.generate()
+        val transport = MumbleTcpTransport(srv.certSha256, identityStore = FixedIdentity(identity))
+
+        transport.connect("localhost", srv.port, noopListener())
+
+        assertTrue(transport.isConnected)
+        assertArrayEquals(identity.certificate.encoded, srv.peerCertificate!!.encoded)
+        transport.close()
+    }
+
+    @Test
+    fun withoutAnIdentityPresentsNothingAndStillConnects() = runBlocking {
+        val srv = startServer(requestClientCertificate = true)
+        val transport = MumbleTcpTransport(srv.certSha256)
+
+        transport.connect("localhost", srv.port, noopListener())
+
+        assertTrue(transport.isConnected)
+        assertNull("no identity was configured", srv.peerCertificate)
         transport.close()
     }
 }

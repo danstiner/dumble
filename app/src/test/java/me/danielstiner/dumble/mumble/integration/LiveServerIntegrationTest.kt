@@ -12,12 +12,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.danielstiner.dumble.mumble.net.ClientIdentity
+import me.danielstiner.dumble.mumble.net.FixedIdentity
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
+import me.danielstiner.dumble.mumble.net.NoClientIdentity
 import me.danielstiner.dumble.mumble.net.sha256Hex
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
@@ -25,6 +29,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -145,18 +150,26 @@ class LiveServerIntegrationTest {
         }
     }
 
-    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them.
-     *  Pinned straight to the probed fingerprint: the same trust path as the tests above, minus
-     *  the store. */
-    private inner class Client(name: String, udpListener: MumbleUdpTransport.Listener) {
-        val transport = MumbleTcpTransport(expectedPin = probeLeafFingerprint(host!!, port))
+    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them:
+     *  pinned to the probed fingerprint, an optional identity, and a tap that sees every inbound
+     *  frame. */
+    private inner class Client(
+        name: String,
+        udpListener: MumbleUdpTransport.Listener,
+        identity: ClientIdentity? = null,
+        private val tap: (TcpFrame) -> Unit = {},
+    ) {
+        val transport = MumbleTcpTransport(
+            expectedPin = probeLeafFingerprint(host!!, port),
+            identityStore = identity?.let { FixedIdentity(it) } ?: NoClientIdentity,
+        )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = SessionStateMachine(transport, name, password, scope)
         // The boot clock reads zero on the JVM; the round trip needs a real one.
         val udp = MumbleUdpTransport(session.crypt, udpListener, TimeSource.Monotonic)
 
         suspend fun connect() {
-            connectWithRetry(transport, host!!, port, session)
+            connectWithRetry(transport, host!!, port, session, tap)
             udp.open(requireNotNull(transport.remoteAddress()))
             session.udpPing = { udp.sendPing() }
             session.start()
@@ -361,6 +374,51 @@ class LiveServerIntegrationTest {
         }
     }
 
+    /** The certificate the server records is the one we present: our own stats, asked without
+     *  `stats_only`, carry the chain the server saw (`Messages.cpp`, msgUserStats: details for self). */
+    @Test
+    fun theServerRecordsTheCertificateWePresent() = runBlocking {
+        awaitPort(host!!, port)
+        val identity = ClientIdentity.generate()
+        val stats = LinkedBlockingQueue<MumbleProtos.UserStats>()
+        val client = Client("dumble-ci-cert", Recorder(), identity, tap = { f ->
+            if (TcpMessageType.from(f.type) == TcpMessageType.UserStats) stats.add(MumbleProtos.UserStats.parseFrom(f.payload))
+        })
+        try {
+            client.connect()
+            val self = (client.session.state.value as ConnectionState.Synchronized).sessionId
+            assertTrue(client.transport.send(TcpMessageType.UserStats, MumbleProtos.UserStats.newBuilder().setSession(self).build()))
+            val reply = requireNotNull(stats.poll(15, TimeUnit.SECONDS)) { "no UserStats reply" }
+            assertEquals(1, reply.certificatesCount)
+            assertArrayEquals(identity.certificate.encoded, reply.getCertificates(0).toByteArray())
+            assertFalse("self-signed is not a strong certificate", reply.strongCertificate)
+        } finally {
+            client.close()
+        }
+    }
+
+    /** Both connections reach the docker server from one address, so Murmur admits the second on
+     *  its same-address branch (`Messages.cpp`) and the certificate hash is not consulted;
+     *  this proves the ghost kick and the shared identity presenting cleanly, not the new-address
+     *  rule, which cannot be exercised from one host. */
+    @Test
+    fun aSecondConnectionUnderTheSameNameKicksTheGhost() = runBlocking {
+        awaitPort(host!!, port)
+        val identity = ClientIdentity.generate()
+        val first = Client("dumble-ci-ghost", Recorder(), identity)
+        val second = Client("dumble-ci-ghost", Recorder(), identity)
+        try {
+            first.connect()
+            second.connect()
+            val ended = withTimeout(10_000) { first.session.state.first { it is ConnectionState.Failed } }
+            assertTrue("the older session must be ended by the server, was $ended", ended is ConnectionState.Failed)
+            assertTrue(second.session.state.value is ConnectionState.Synchronized)
+        } finally {
+            second.close()
+            first.close()
+        }
+    }
+
     /**
      * [awaitPort] only proves the TCP port is accepting connections; the TLS listener behind it
      * can still refuse the handshake for a few seconds longer during container cold start. Retry
@@ -371,6 +429,7 @@ class LiveServerIntegrationTest {
         host: String,
         port: Int,
         session: SessionStateMachine,
+        tap: (TcpFrame) -> Unit = {},
     ) {
         val deadline = System.currentTimeMillis() + 30_000
         var attempt = 0
@@ -378,7 +437,7 @@ class LiveServerIntegrationTest {
             attempt++
             try {
                 transport.connect(host, port, object : MumbleControlTransport.Listener {
-                    override fun onFrame(f: TcpFrame) = session.onFrame(f)
+                    override fun onFrame(f: TcpFrame) { tap(f); session.onFrame(f) }
                     override fun onClosed(cause: Throwable?) = session.onClosed(cause)
                 })
                 return
