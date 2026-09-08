@@ -56,7 +56,6 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
         }
         val started = System.nanoTime()
         val identity = ClientIdentity.generate()
-        file.parentFile?.mkdirs()
         // Synced before the rename so a power loss leaves the old file or none, never a torn
         // file at the final name — which the corrupt path above would then silently replace.
         val tmp = File(file.path + ".tmp")

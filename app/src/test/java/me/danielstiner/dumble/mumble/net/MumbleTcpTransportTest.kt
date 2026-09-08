@@ -389,15 +389,11 @@ class MumbleTcpTransportTest {
         transport.close()
     }
 
-    private class FixedIdentity(private val identity: ClientIdentity) : ClientIdentityStore {
-        override suspend fun load(): ClientIdentity = identity
-    }
-
     @Test
     fun presentsTheClientCertificateWhenTheServerAsks() = runBlocking {
         val srv = startServer(requestClientCertificate = true)
         val identity = ClientIdentity.generate()
-        val transport = MumbleTcpTransport(srv.certSha256, identity = FixedIdentity(identity))
+        val transport = MumbleTcpTransport(srv.certSha256, identityStore = FixedIdentity(identity))
 
         transport.connect("localhost", srv.port, noopListener())
 

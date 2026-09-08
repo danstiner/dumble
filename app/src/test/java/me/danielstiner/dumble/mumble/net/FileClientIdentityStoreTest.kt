@@ -8,8 +8,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -56,12 +56,8 @@ class FileClientIdentityStoreTest {
         // A directory where the identity file should be makes readBytes() throw, standing in
         // for a disk read failure: that must propagate, not be mistaken for a bad file.
         val file = folder.newFolder("identity.p12")
-        try {
-            FileClientIdentityStore(file).load()
-            fail("expected the read failure to propagate")
-        } catch (e: IOException) {
-            // expected
-        }
+        val store = FileClientIdentityStore(file)
+        assertThrows(IOException::class.java) { runBlocking { store.load() } }
         assertFalse(File(file.path + ".corrupt").exists())
     }
 

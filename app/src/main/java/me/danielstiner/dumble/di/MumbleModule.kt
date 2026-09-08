@@ -13,9 +13,9 @@ import dagger.hilt.components.SingletonComponent
 import me.danielstiner.dumble.data.PinDataStore
 import me.danielstiner.dumble.data.ServerConfigDataStore
 import me.danielstiner.dumble.data.ServerConfigStore
-import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.FileClientIdentityStore
+import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.time.BootTimeSource
 import kotlin.time.TimeSource
 import javax.inject.Singleton

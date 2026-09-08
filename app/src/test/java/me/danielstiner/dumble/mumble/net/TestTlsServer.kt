@@ -16,8 +16,10 @@ import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLPeerUnverifiedException
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
@@ -80,10 +82,10 @@ class TestTlsServer(private val requestClientCertificate: Boolean = false) : Aut
      */
     val peerCertificate: X509Certificate?
         get() {
-            ready.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            check(ready.await(5, TimeUnit.SECONDS)) { "server handshake did not finish" }
             return try {
                 (accepted as? SSLSocket)?.session?.peerCertificates?.firstOrNull() as? X509Certificate
-            } catch (_: javax.net.ssl.SSLPeerUnverifiedException) {
+            } catch (_: SSLPeerUnverifiedException) {
                 null
             }
         }

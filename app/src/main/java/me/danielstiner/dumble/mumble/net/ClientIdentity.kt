@@ -46,10 +46,8 @@ fun sha1Hex(bytes: ByteArray): String =
  * desktop Mumble's own (`SelfSignedCertificate::generate`) — RSA 2048 because the desktop's
  * PKCS#12 import assumes RSA, so an identity exported from here can be imported there.
  *
- * Murmur records the SHA-1 of the leaf as the session's hash and, until a server registers the
- * user, consults it for one thing: a connection under a name another session still holds is
- * accepted from a new address only when the hashes match, and the old session is then kicked.
- * That is what lets a reconnect after a network change through (docs/connection.md).
+ * Murmur keys "same client" on the SHA-1 of this certificate; see docs/connection.md, Client
+ * certificate.
  */
 class ClientIdentity(val certificate: X509Certificate, private val key: PrivateKey) {
 

@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.net.ClientIdentity
-import me.danielstiner.dumble.mumble.net.ClientIdentityStore
+import me.danielstiner.dumble.mumble.net.FixedIdentity
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -150,13 +150,9 @@ class LiveServerIntegrationTest {
         }
     }
 
-    private class FixedIdentity(private val identity: ClientIdentity) : ClientIdentityStore {
-        override suspend fun load(): ClientIdentity = identity
-    }
-
-    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them.
-     *  Pinned straight to the probed fingerprint: the same trust path as the tests above, minus
-     *  the store. */
+    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them:
+     *  pinned to the probed fingerprint, an optional identity, and a tap that sees every inbound
+     *  frame. */
     private inner class Client(
         name: String,
         udpListener: MumbleUdpTransport.Listener,
@@ -165,7 +161,7 @@ class LiveServerIntegrationTest {
     ) {
         val transport = MumbleTcpTransport(
             expectedPin = probeLeafFingerprint(host!!, port),
-            identity = identity?.let { FixedIdentity(it) } ?: NoClientIdentity,
+            identityStore = identity?.let { FixedIdentity(it) } ?: NoClientIdentity,
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = SessionStateMachine(transport, name, password, scope)
@@ -401,11 +397,12 @@ class LiveServerIntegrationTest {
         }
     }
 
-    /** The rule the reconnect relies on: a connection under a name another session holds is
-     *  accepted (here from the same address; from a new one only the matching hash allows it) and
-     *  the older session is kicked at once, "Disconnecting ghost" in Murmur's log. */
+    /** Both connections reach the docker server from one address, so Murmur admits the second on
+     *  its same-address branch (`Messages.cpp:256-264`) and the certificate hash is not consulted;
+     *  this proves the ghost kick and the shared identity presenting cleanly, not the new-address
+     *  rule, which cannot be exercised from one host. */
     @Test
-    fun aSecondConnectionUnderTheSameNameAndIdentityKicksTheFirst() = runBlocking {
+    fun aSecondConnectionUnderTheSameNameKicksTheGhost() = runBlocking {
         awaitPort(host!!, port)
         val identity = ClientIdentity.generate()
         val first = Client("dumble-ci-ghost", Recorder(), identity)

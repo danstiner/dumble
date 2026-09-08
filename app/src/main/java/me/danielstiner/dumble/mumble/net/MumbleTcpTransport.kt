@@ -45,7 +45,7 @@ class MumbleTcpTransport(
     private val hostNameVerifier: HostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier(),
     /** The certificate offered on the handshake. Loaded here, before the socket, because the
      *  load may generate and that must not happen inside the trust callback. */
-    private val identity: ClientIdentityStore = NoClientIdentity,
+    private val identityStore: ClientIdentityStore = NoClientIdentity,
     private val connectTimeoutMs: Int = 10_000,
     private val handshakeTimeoutMs: Int = 10_000,
 ) : MumbleControlTransport {
@@ -111,11 +111,11 @@ class MumbleTcpTransport(
     override suspend fun connect(host: String, port: Int, listener: MumbleControlTransport.Listener) = withContext(Dispatchers.IO) {
         this@MumbleTcpTransport.listener = listener
 
-        // One trust manager per connection attempt: its outcome is per-handshake state.
-        val keyManagers = identity.load()?.let { id ->
+        val keyManagers = identityStore.load()?.let { id ->
             Log.i(TAG, "client certificate sha1=${id.hash}")
             arrayOf<KeyManager>(id.keyManager())
         }
+        // One trust manager per connection attempt: its outcome is per-handshake state.
         val trust = MumbleTrustManager(expectedPin, trustDelegate)
         val ctx = SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), null) }
         val s = ctx.socketFactory.createSocket() as SSLSocket

@@ -90,7 +90,7 @@ class MumbleConnection internal constructor(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
-        newTransport = { MumbleTcpTransport(it, identity = identityStore) },
+        newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
