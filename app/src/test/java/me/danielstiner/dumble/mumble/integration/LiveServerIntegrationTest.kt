@@ -398,7 +398,7 @@ class LiveServerIntegrationTest {
     }
 
     /** Both connections reach the docker server from one address, so Murmur admits the second on
-     *  its same-address branch (`Messages.cpp:256-264`) and the certificate hash is not consulted;
+     *  its same-address branch (`Messages.cpp`) and the certificate hash is not consulted;
      *  this proves the ghost kick and the shared identity presenting cleanly, not the new-address
      *  rule, which cannot be exercised from one host. */
     @Test
