@@ -45,7 +45,7 @@ class ConnectViewModelChaosTest {
         val violations = CopyOnWriteArrayList<String>()
     }
 
-    // Disjoint ranges, not overlapping pools: OWN is the only source of Connected(sessionId) in this
+    // Disjoint ranges, not overlapping pools: OWN is the only source of Connected(gen, sessionId) in this
     // test and OTHER is the only source of the connection's (server-reported) speakingSessions, so
     // "our session id is in speakingSessions" can only ever be explained by uiState's own `me = ...`
     // merge — never by coincidence with an unrelated speaker sharing the id.
@@ -198,9 +198,9 @@ class ConnectViewModelChaosTest {
             // every round vacuously. Force the positive case once, cleanly, after the background
             // threads are already quiet so nothing is racing this specific window.
             val ownId = OWN_SESSION_IDS[0]
-            conn.status.value = ConnectionStatus.Connected(ownId)
+            conn.status.value = ConnectionStatus.Connected(gen = 1, sessionId = ownId)
             awaitTrue(c.violations, "seed=$seed: status did not settle to Connected for the deterministic tail") {
-                vm.uiState.value.status == ConnectionStatus.Connected(ownId)
+                vm.uiState.value.status == ConnectionStatus.Connected(gen = 1, sessionId = ownId)
             }
             withContext(Dispatchers.Main) { vm.onMicrophonePermissionResult(true) }
             awaitTrue(c.violations, "seed=$seed: microphoneGranted did not converge to true in the deterministic tail") {
@@ -251,7 +251,7 @@ class ConnectViewModelChaosTest {
         0 -> ConnectionStatus.Idle
         1 -> ConnectionStatus.Connecting
         2 -> ConnectionStatus.Handshaking
-        in 3..7 -> ConnectionStatus.Connected(OWN_SESSION_IDS.random(r))
+        in 3..7 -> ConnectionStatus.Connected(gen = 1, sessionId = OWN_SESSION_IDS.random(r))
         else -> ConnectionStatus.Error(ErrorKind.entries.random(r), null)
     }
 

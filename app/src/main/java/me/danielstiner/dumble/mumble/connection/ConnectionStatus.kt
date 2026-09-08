@@ -10,7 +10,9 @@ sealed interface ConnectionStatus {
     data class AwaitingTrust(val fingerprint: String) : ConnectionStatus
     data class PinMismatch(val stored: String, val presented: String) : ConnectionStatus
     data object Handshaking : ConnectionStatus
-    data class Connected(val sessionId: Int) : ConnectionStatus
+    /** [gen] is this connection's own generation, one per connect(); [sessionId] is the server's,
+     *  and is what a link rebuilt under the same generation changes. */
+    data class Connected(val gen: Int, val sessionId: Int) : ConnectionStatus
     data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
 }
 
@@ -32,11 +34,12 @@ enum class ErrorKind { CONNECT_FAILED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SER
 /**
  * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state
  * machine's start value and the coordinator, not the protocol, owns the pre-handshake phases.
+ * [gen] is stamped into [ConnectionStatus.Connected]; the protocol layer never learns it.
  */
-fun mapState(s: ConnectionState): ConnectionStatus? = when (s) {
+fun mapState(gen: Int, s: ConnectionState): ConnectionStatus? = when (s) {
     ConnectionState.Disconnected -> null
     ConnectionState.Handshaking -> ConnectionStatus.Handshaking
-    is ConnectionState.Synchronized -> ConnectionStatus.Connected(s.sessionId)
+    is ConnectionState.Synchronized -> ConnectionStatus.Connected(gen, s.sessionId)
     is ConnectionState.Failed -> when (s.reason) {
         FailReason.AUTH_REJECT -> ConnectionStatus.Error(ErrorKind.AUTH_REJECTED, s.detail)
         FailReason.TIMEOUT -> ConnectionStatus.Error(ErrorKind.TIMEOUT, s.detail)

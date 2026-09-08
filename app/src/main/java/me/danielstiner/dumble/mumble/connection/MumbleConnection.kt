@@ -655,7 +655,7 @@ class MumbleConnection internal constructor(
             sm.start()
             childScope.launch {
                 sm.state.collect { st ->
-                    mapState(st)?.let { publishStatus(gen, it) }
+                    mapState(gen, st)?.let { publishStatus(gen, it) }
                     // Retire the attempt if the session fails. Sequenced after publishStatus:
                     // retire() calls teardown(), which cancels this collector's own scope.
                     if (st is ConnectionState.Failed) retire(att)

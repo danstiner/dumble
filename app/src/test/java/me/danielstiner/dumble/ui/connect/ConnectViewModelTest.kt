@@ -281,7 +281,7 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         advanceUntilIdle()
         vm.openSettings(); advanceUntilIdle()
-        conn.status.value = ConnectionStatus.Connected(sessionId = 1)
+        conn.status.value = ConnectionStatus.Connected(gen = 1, sessionId = 1)
         advanceUntilIdle()
         assertEquals(Route.Settings, vm.uiState.value.route)
         // Backing out lands on Main, which now renders the connected screen rather than the form.
