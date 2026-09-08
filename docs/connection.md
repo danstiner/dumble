@@ -11,7 +11,7 @@ structure and the trade-offs that shaped it.
 ```
 UI ─► Connection (interface)
           │
-    MumbleConnection                    one live Attempt, generation-guarded
+    MumbleConnection                    one live Session driving one Link, generation-guarded
           ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │      trust: MumbleTrustManager + PinStore   ├─► server
           ├─► MumbleUdpTransport ─► DatagramChannel ───┘
@@ -20,16 +20,21 @@ UI ─► Connection (interface)
           └─► audio + platform call     docs/capture.md, docs/playout.md
 ```
 
-**Attempts and generations.** Only one connection is live. Each `connect()` bumps a generation and
-builds an `Attempt` — endpoint, transport, state machine, receiver, and capture state as one unit.
-The model exists because a blocking handshake cannot be preempted: a superseded attempt can
-complete late, so every flow write is generation-checked under the same lock that bumps, turning
-late writes into no-ops instead of corruption. Attempts end two deliberately different ways:
-supersede/disconnect clears every published flow atomically with the bump, while a session that
-fails on its own retires without clearing — the terminal `Error` is what the user is looking at.
+**Sessions, links and generations.** Only one session is live. Each `connect()` bumps a
+generation and builds a `Session` — endpoint, credentials, the platform call, the receiver, and
+capture state as one unit — whose driver coroutine opens one `Link`: the TLS transport, the state
+machine on it, the UDP socket keyed by that session's cipher, and the collectors that republish
+its flows. The split is what a reconnect needs: a link can be replaced under a session without
+ending the call. The generation exists because a blocking handshake cannot be preempted: a
+superseded link can complete late, so every flow write is generation-checked under the same lock
+that bumps, turning late writes into no-ops instead of corruption; a link's own flows are checked
+against the link's identity as well. Sessions end two deliberately different ways:
+supersede/disconnect clears every published flow atomically with the bump, while a link that
+fails on its own retires its session without clearing — the terminal `Error` is what the user is
+looking at.
 
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
-instance, so no teardown state can leak between attempts. One reader coroutine delivers frames,
+instance, so no teardown state can leak between links. One reader coroutine delivers frames,
 and its `finally` is the sole delivery point of `onClosed` — exactly once, never nested inside
 `onFrame`, so listeners need no locking. The send queue is deliberately small: this is a
 low-volume control channel, and a larger buffer would only let a stalled socket hide longer.
@@ -37,7 +42,7 @@ low-volume control channel, and a larger buffer would only let a stalled socket 
 **UDP voice** (`net/MumbleUdpTransport`). A connected `DatagramChannel` aimed at the control
 connection's own remote address, with `CryptState` sealing and opening every datagram, and one
 thread blocking in read. Opened as soon as the control connection is up and closed with the
-attempt. A socket that cannot be opened costs the session nothing: the server never learns an
+link. A socket that cannot be opened costs the session nothing: the server never learns an
 address and keeps the downlink on the tunnel. The state machine owns the cipher, because
 `CryptSetup` is a control message, and fires the UDP ping at keying and on the TCP ping's own
 ticker. Receiving is unconditional: the server pushes a client's downlink over UDP from its
