@@ -64,10 +64,12 @@ class ClientIdentityTest {
         assertThrows(Exception::class.java) { ClientIdentity.decode(tampered) }
     }
 
-    @Test fun keyManagerOffersTheOneCertificateForAnyRequest() {
+    @Test fun keyManagerOffersTheOneCertificateToAnyRequestThatTakesRsa() {
         val km = identity.keyManager()
         assertEquals(ClientIdentity.ALIAS, km.chooseClientAlias(arrayOf("RSA"), null, null))
-        assertEquals(ClientIdentity.ALIAS, km.chooseClientAlias(arrayOf("EC"), null, null))
+        assertEquals(ClientIdentity.ALIAS, km.chooseClientAlias(arrayOf("EC", "RSA"), null, null))
+        assertEquals(ClientIdentity.ALIAS, km.chooseClientAlias(null, null, null))
+        assertNull("an ECDSA-only request gets no certificate", km.chooseClientAlias(arrayOf("EC"), null, null))
         assertSame(identity.certificate, km.getCertificateChain(ClientIdentity.ALIAS).single())
         assertNotNull(km.getPrivateKey(ClientIdentity.ALIAS))
         assertNull(km.getCertificateChain("other"))

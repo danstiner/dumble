@@ -73,18 +73,23 @@ class TestTlsServer(private val requestClientCertificate: Boolean = false) : Aut
     val port: Int get() = serverSocket.localPort
 
     @Volatile private var accepted: Socket? = null
+
+    // The first connection whose handshake completed, and the latch that announces it. Later
+    // connections never replace it, so [peerCertificate] and [writeFrame] cannot read a socket
+    // still mid-handshake.
+    @Volatile private var handshaken: SSLSocket? = null
     private val ready = CountDownLatch(1)
 
     /**
-     * The certificate the client presented on the accepted connection, or null if none. Waits
-     * for the server's half of the handshake, which finishes a moment after the client's returns.
-     * JSSE reports "none" by throwing rather than by an empty array.
+     * The certificate the client presented on the first completed handshake, or null if none.
+     * Waits for the server's half of that handshake, which finishes a moment after the client's
+     * returns. JSSE reports "none" by throwing rather than by an empty array.
      */
     val peerCertificate: X509Certificate?
         get() {
             check(ready.await(5, TimeUnit.SECONDS)) { "server handshake did not finish" }
             return try {
-                (accepted as? SSLSocket)?.session?.peerCertificates?.firstOrNull() as? X509Certificate
+                handshaken!!.session?.peerCertificates?.firstOrNull() as? X509Certificate
             } catch (_: SSLPeerUnverifiedException) {
                 null
             }
@@ -108,16 +113,19 @@ class TestTlsServer(private val requestClientCertificate: Boolean = false) : Aut
                     // server's half of the handshake, and the client blocks in startHandshake()
                     // until its read times out.
                     s.startHandshake()
-                    ready.countDown()
+                    if (handshaken == null) {
+                        handshaken = s
+                        ready.countDown()
+                    }
                 }
             }
         }
     }
 
-    /** Blocks until a client has connected, then writes one control frame. */
+    /** Blocks until a client's handshake has completed, then writes one control frame to it. */
     fun writeFrame(type: Int, payload: ByteArray) {
         ready.await()
-        val out = DataOutputStream(accepted!!.getOutputStream())
+        val out = DataOutputStream(handshaken!!.getOutputStream())
         out.writeShort(type)
         out.writeInt(payload.size)
         out.write(payload)

@@ -58,9 +58,15 @@ class ClientIdentity(val certificate: X509Certificate, private val key: PrivateK
     /** What Murmur records for the session. */
     val hash: String = sha1Hex(certificate.encoded)
 
-    /** Offers [certificate] to any client-authentication request; there is one to offer. */
+    /**
+     * Offers [certificate] to any client-authentication request that can take an RSA key; there is
+     * one to offer. A request that cannot (ECDSA only) gets none, which sends an empty certificate
+     * list and connects anonymously, rather than a key the handshake then fails on. Issuers are
+     * ignored: a self-signed leaf chains to no CA list, and Murmur sends none.
+     */
     fun keyManager(): X509KeyManager = object : X509KeyManager {
-        override fun chooseClientAlias(keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?) = ALIAS
+        override fun chooseClientAlias(keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?) =
+            if (keyType == null || "RSA" in keyType) ALIAS else null
         override fun getClientAliases(keyType: String?, issuers: Array<Principal>?) = arrayOf(ALIAS)
         override fun getCertificateChain(alias: String?) = if (alias == ALIAS) arrayOf(certificate) else null
         override fun getPrivateKey(alias: String?) = if (alias == ALIAS) key else null

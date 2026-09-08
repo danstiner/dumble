@@ -69,6 +69,15 @@ class FileClientIdentityStoreTest {
         assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }
 
+    @Test fun aWriteThatFailsLeavesNoTempFile() {
+        // A directory at the temp path makes the write's open throw; the write must clean up
+        // after itself and the identity file must not appear.
+        val file = file()
+        folder.newFolder("identity.p12.tmp")
+        assertThrows(IOException::class.java) { runBlocking { FileClientIdentityStore(file).load() } }
+        assertEquals(emptyList<String>(), folder.root.list()!!.toList())
+    }
+
     @Test fun aTempFileLeftByACrashIsOverwritten() = runBlocking {
         val file = file()
         File(file.path + ".tmp").writeBytes(byteArrayOf(1, 2, 3, 4))

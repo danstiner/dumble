@@ -58,11 +58,15 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
         // Synced before the rename so a power loss leaves the old file or none, never a torn
         // file at the final name.
         val tmp = File(file.path + ".tmp")
-        FileOutputStream(tmp).use { out ->
-            out.write(identity.encode())
-            out.fd.sync()
+        try {
+            FileOutputStream(tmp).use { out ->
+                out.write(identity.encode())
+                out.fd.sync()
+            }
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            tmp.delete()   // a partial write; nothing is left after a completed move
         }
-        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         Log.i(TAG, "generated client identity sha1=${identity.hash} in $took")
         return identity
     }
