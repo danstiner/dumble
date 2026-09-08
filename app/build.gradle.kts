@@ -77,9 +77,10 @@ android {
         }
     }
     packaging {
-        // The three BouncyCastle jars each ship the same MIT text at this path; the About screen
-        // already attributes the library, so the copy in the APK is not needed.
-        resources.excludes += "META-INF/LICENSE.md"
+        // The three BouncyCastle jars each ship the same MIT text at this path. One copy stays in
+        // the APK: it is the only place BouncyCastle's own copyright line ships, since the About
+        // screen shows one generic MIT text for every MIT library.
+        resources.pickFirsts += "META-INF/LICENSE.md"
         // R8 drops the post-quantum and certificate-path-review classes nothing here uses, but not
         // the 1.4 MB of lookup tables and message bundles only they read.
         resources.excludes += "org/bouncycastle/pqc/**"

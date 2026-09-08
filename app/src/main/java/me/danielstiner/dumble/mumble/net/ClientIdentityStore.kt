@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.time.measureTimedValue
@@ -43,7 +44,16 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
     }
 
     private fun readOrCreate(): ClientIdentity {
-        if (file.exists()) return ClientIdentity.decode(file.readBytes())
+        if (file.exists()) {
+            val bytes = file.readBytes()
+            return try {
+                ClientIdentity.decode(bytes)
+            } catch (e: Exception) {
+                // The message is what the connect screen shows: BouncyCastle's own is anything
+                // from a MAC failure to a bare ClassCastException.
+                throw IOException("client identity ${file.name} does not decode; clearing the app's data starts a new one", e)
+            }
+        }
         val (identity, took) = measureTimedValue { ClientIdentity.generate() }
         // Synced before the rename so a power loss leaves the old file or none, never a torn
         // file at the final name.

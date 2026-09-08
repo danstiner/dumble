@@ -63,8 +63,17 @@ class FileClientIdentityStoreTest {
         val garbage = byteArrayOf(1, 2, 3, 4)
         file.writeBytes(garbage)
         val store = FileClientIdentityStore(file)
-        assertThrows(Exception::class.java) { runBlocking { store.load() } }
+        val failure = assertThrows(IOException::class.java) { runBlocking { store.load() } }
+        assertTrue(failure.message, failure.message!!.contains("identity.p12 does not decode"))
         assertArrayEquals(garbage, file.readBytes())
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
+    }
+
+    @Test fun aTempFileLeftByACrashIsOverwritten() = runBlocking {
+        val file = file()
+        File(file.path + ".tmp").writeBytes(byteArrayOf(1, 2, 3, 4))
+        val identity = FileClientIdentityStore(file).load()
+        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
         assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }
 

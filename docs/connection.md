@@ -92,6 +92,8 @@ refused until the server's 30 s timeout reaps the old session. One identity for 
 the desktop has. Under TLS 1.2 it crosses the wire in the clear, as it does for every Mumble client;
 TLS 1.3 encrypts it. In both versions the client sends its certificate only after the server's
 chain has passed the trust manager, so a server the user has not yet accepted never sees the hash.
+A file that no longer decodes fails every connect, with the reason on the connect screen, rather
+than being replaced: the bytes stay for a fix to recover, and clearing the app's data starts over.
 
 **Protocol** (`protocol/SessionStateMachine`). `Version` + `Authenticate`, then `ServerSync` under
 its own deadline (the transport's timeout bounds only the socket connect). Transitions settle by
