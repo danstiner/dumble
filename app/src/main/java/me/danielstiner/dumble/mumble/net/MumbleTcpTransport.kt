@@ -43,8 +43,8 @@ class MumbleTcpTransport(
      * own decision — when to verify — rather than the platform's answer.
      */
     private val hostNameVerifier: HostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier(),
-    /** The certificate offered on the handshake. Loaded here, before the socket, because the
-     *  load may generate and that must not happen inside the trust callback. */
+    /** The certificate offered on the handshake. Loaded before the socket exists, so a first-run
+     *  key generation is not charged to the connect or handshake timeout. */
     private val identityStore: ClientIdentityStore = NoClientIdentity,
     private val connectTimeoutMs: Int = 10_000,
     private val handshakeTimeoutMs: Int = 10_000,

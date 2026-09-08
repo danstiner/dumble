@@ -23,8 +23,8 @@ object NoClientIdentity : ClientIdentityStore {
 
 /**
  * One identity per install, kept in [file] as the PKCS#12 [ClientIdentity.encode] writes. Read
- * once per process; generated the first time, which costs a few hundred milliseconds of RSA on a
- * phone and runs inside the first connect.
+ * once per process; generated the first time, inside the first connect (3.8 s of RSA on the
+ * emulator, unmeasured on a phone).
  *
  * Auto Backup carries the file to a reinstall or a new phone: it must stay under `filesDir` and
  * out of any backup exclusion.
