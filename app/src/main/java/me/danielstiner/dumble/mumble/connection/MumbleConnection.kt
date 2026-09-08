@@ -7,7 +7,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -152,7 +151,7 @@ class MumbleConnection internal constructor(
      * off the attempt, not the connection, because a release must find the attempt that opened the
      * session rather than whichever attempt replaced it.
      *
-     * The first eight fields are immutable identity. The mutable ones are either `@Volatile`
+     * The first six fields are immutable identity. The mutable ones are either `@Volatile`
      * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
      */
     private class Attempt(
@@ -160,15 +159,9 @@ class MumbleConnection internal constructor(
         val endpoint: MumbleEndpoint,
         val username: String,
         val password: String?,
-        val transport: MumbleControlTransport,
-        val sm: SessionStateMachine,
-        val childScope: CoroutineScope,
+        /** The TLS connect and everything that lives exactly as long as it. */
+        val link: Link,
         val receiver: VoiceReceiver,
-        /** The UDP voice socket. Opened once the control connection is up, closed with the
-         *  attempt; inert in between if it could not be opened, and voice stays tunneled. */
-        val udp: MumbleUdpTransport,
-        /** Which transport carries our voice; [sendVoice] routes by it. */
-        val path: VoicePath,
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the connect coroutine, read on caller threads. */
         @Volatile var presented: String? = null,
@@ -449,14 +442,15 @@ class MumbleConnection internal constructor(
         sender.start()
     }
 
-    /** Whichever transport [att]'s path has voice on. A datagram the socket refuses goes through
+    /** Whichever transport [att]'s link has voice on. A datagram the socket refuses goes through
      *  the tunnel in the same call, and the next one already starts there. */
     private fun sendVoice(att: Attempt, payload: ByteArray): Boolean {
-        if (att.path.state.value.onUdp) {
-            if (att.udp.send(payload, payload.size)) return true
-            att.path.demote()
+        val link = att.link
+        if (link.path.state.value.onUdp) {
+            if (link.udp.send(payload, payload.size)) return true
+            link.path.demote()
         }
-        return att.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
+        return link.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
     }
 
     /** Start releasing [session]: close its stream synchronously, then leave the engine for the
@@ -555,6 +549,37 @@ class MumbleConnection internal constructor(
         return prior
     }
 
+    /** The pieces of one TLS connect, built but not yet connected. */
+    private fun buildLink(gen: Int, pin: String?, username: String, password: String?, receiver: VoiceReceiver): Link {
+        val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val transport = newTransport(pin)
+        val sm = SessionStateMachine(transport, username, password, childScope, pingIntervalMs = pingIntervalMs)
+        val path = VoicePath()
+        val udp = MumbleUdpTransport(sm.crypt, object : MumbleUdpTransport.Listener {
+            private var heard = false   // the server chose UDP for our downlink; logged once
+            override fun onVoicePacket(buf: ByteArray, len: Int) {
+                if (!heard) {
+                    heard = true
+                    Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
+                }
+                receiver.onVoicePacket(buf, len)
+            }
+            override fun onPingReply(roundTrip: Duration) {
+                if (path.onPingAnswered(roundTrip)) sm.udpPingAnswered(roundTrip)
+            }
+            // Demoting brings the downlink back with our next spurt; the tunneled ping does it
+            // for a client that never speaks, since the server never re-learns an address
+            // (docs/connection.md, UDP voice).
+            override fun onPingsUnanswered() {
+                Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
+                path.demote()
+                transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
+            }
+            override fun requestCryptResync() { sm.requestCryptResync() }
+        }, udpClock)
+        return Link(gen, transport, sm, udp, path, childScope, scope)
+    }
+
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val gen: Int
         val prior: Attempt?
@@ -582,46 +607,21 @@ class MumbleConnection internal constructor(
         scope.launch {
             val pin = pinStore.get(endpoint.address)
             Log.i(TAG, "connect gen=$gen endpoint=${endpoint.address} user=$username storedPin=${pin != null}")
-            val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-            val transport = newTransport(pin)
-            val sm = SessionStateMachine(transport, username, password, childScope, pingIntervalMs = pingIntervalMs)
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), and
             // only an attempt that survives every guard below ever reaches that call. Building
             // the engine here, eagerly, is what used to leak one per superseded/failed attempt.
             val receiver = VoiceReceiver(newPlayout)
-            val path = VoicePath()
-            val udp = MumbleUdpTransport(sm.crypt, object : MumbleUdpTransport.Listener {
-                private var heard = false   // the server chose UDP for our downlink; logged once
-                override fun onVoicePacket(buf: ByteArray, len: Int) {
-                    if (!heard) {
-                        heard = true
-                        Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
-                    }
-                    receiver.onVoicePacket(buf, len)
-                }
-                override fun onPingReply(roundTrip: Duration) {
-                    if (path.onPingAnswered(roundTrip)) sm.udpPingAnswered(roundTrip)
-                }
-                // Demoting brings the downlink back with our next spurt; the tunneled ping does it
-                // for a client that never speaks, since the server never re-learns an address
-                // (docs/connection.md, UDP voice).
-                override fun onPingsUnanswered() {
-                    Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
-                    path.demote()
-                    transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
-                }
-                override fun requestCryptResync() { sm.requestCryptResync() }
-            }, udpClock)
-            val att = Attempt(gen, endpoint, username, password, transport, sm, childScope, receiver, udp, path)
+            val link = buildLink(gen, pin, username, password, receiver)
+            val att = Attempt(gen, endpoint, username, password, link, receiver)
             val live = synchronized(lock) { if (gen == attempt) { current = att; true } else false }
             if (!live) { teardown(att); return@launch }   // superseded before publish
 
             val listener = object : MumbleControlTransport.Listener {
-                override fun onFrame(f: TcpFrame) = sm.onFrame(f)
-                override fun onClosed(cause: Throwable?) = sm.onClosed(cause)
+                override fun onFrame(f: TcpFrame) = link.sm.onFrame(f)
+                override fun onClosed(cause: Throwable?) = link.sm.onClosed(cause)
             }
             try {
-                transport.connect(endpoint.host, endpoint.port, listener)
+                link.transport.connect(endpoint.host, endpoint.port, listener)
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 val status = mapConnectError(t, att)
@@ -644,32 +644,32 @@ class MumbleConnection internal constructor(
             // keys the cipher, and from then on the server sends our downlink over UDP whether or
             // not we ever transmit (docs/connection.md, UDP voice), so it has to land on a socket
             // already listening. One that cannot be opened costs the session nothing but UDP.
-            att.transport.remoteAddress()?.let { remote ->
-                runCatching { att.udp.open(remote) }
+            link.transport.remoteAddress()?.let { remote ->
+                runCatching { link.udp.open(remote) }
                     .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
             }
-            sm.udpPing = { att.udp.sendPing() }
-            sm.audioListener = SessionStateMachine.AudioListener { payload ->
+            link.sm.udpPing = { link.udp.sendPing() }
+            link.sm.audioListener = SessionStateMachine.AudioListener { payload ->
                 receiver.onVoicePacket(payload, payload.size)
             }
-            sm.start()
-            childScope.launch {
-                sm.state.collect { st ->
+            link.sm.start()
+            link.childScope.launch {
+                link.sm.state.collect { st ->
                     mapState(gen, st)?.let { publishStatus(gen, it) }
                     // Retire the attempt if the session fails. Sequenced after publishStatus:
                     // retire() calls teardown(), which cancels this collector's own scope.
                     if (st is ConnectionState.Failed) retire(att)
                 }
             }
-            childScope.launch { sm.serverVersion.collect { publishVersion(gen, it) } }
-            childScope.launch { sm.roundTripTime.collect { publishRtt(gen, it) } }
-            childScope.launch { att.path.state.collect { publishVoicePath(gen, it) } }
-            childScope.launch { sm.lastServerReplyAt.collect { publishPingReplyAt(gen, it) } }
-            childScope.launch { sm.channelTree.collect { publishChannelTree(gen, it) } }
-            childScope.launch { sm.messages.collect { publishMessages(gen, it) } }
-            childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
-            childScope.launch { receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
-            childScope.launch { sm.userStats.collect { publishUserStats(gen, it) } }
+            link.childScope.launch { link.sm.serverVersion.collect { publishVersion(gen, it) } }
+            link.childScope.launch { link.sm.roundTripTime.collect { publishRtt(gen, it) } }
+            link.childScope.launch { link.path.state.collect { publishVoicePath(gen, it) } }
+            link.childScope.launch { link.sm.lastServerReplyAt.collect { publishPingReplyAt(gen, it) } }
+            link.childScope.launch { link.sm.channelTree.collect { publishChannelTree(gen, it) } }
+            link.childScope.launch { link.sm.messages.collect { publishMessages(gen, it) } }
+            link.childScope.launch { receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
+            link.childScope.launch { receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
+            link.childScope.launch { link.sm.userStats.collect { publishUserStats(gen, it) } }
             // Start the receiver if we are still on the current attempt. Both halves matter:
             // retire() clears `current` without bumping `attempt`. Every earlier return in this
             // function skips this line, so an attempt that never gets here never calls
@@ -717,11 +717,11 @@ class MumbleConnection internal constructor(
         prior?.let { teardown(it) }
     }
 
-    override fun sendText(text: String): Boolean = current?.sm?.sendText(text) ?: false
+    override fun sendText(text: String): Boolean = current?.link?.sm?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) { current?.sm?.setSelfDeaf(on) }
+    override fun setSelfDeaf(on: Boolean) { current?.link?.sm?.setSelfDeaf(on) }
 
-    override fun requestUserStats(session: Int) { current?.sm?.requestUserStats(session) }
+    override fun requestUserStats(session: Int) { current?.link?.sm?.requestUserStats(session) }
 
     override fun requestAudioRoute(routeId: String) {
         // The live attempt supplies the generation the UI does not carry. TelecomCall re-checks it
@@ -775,7 +775,7 @@ class MumbleConnection internal constructor(
      *  than at the server's echo, and a session rebuilt after the tap must not come up transmitting. */
     override fun setMuted(on: Boolean) {
         val att = current ?: return
-        att.sm.setSelfMute(on)
+        att.link.sm.setSelfMute(on)
         att.muted = on
         apply(att)
     }
@@ -802,20 +802,12 @@ class MumbleConnection internal constructor(
         // can produce. Queueing it inside the launch destroys that ordering. trySend never blocks,
         // so this is safe on the main thread.
         send(CaptureCommand.Release(att, reason))
-        // IO because both block: stop() joins the receiver's poll, which can be inside a stream
-        // start, and SSLSocket.close can stall writing close-notify to a dead peer. Kept off the capture
-        // channel for that reason — one slow socket must not delay every other attempt's release.
-        scope.launch(Dispatchers.IO) {
-            // UDP first: its close never blocks, and the TLS close below can, while datagrams
-            // would keep reaching a receiver that is about to stop.
-            runCatching { att.udp.close() }
-            runCatching { att.transport.close() }
-            att.receiver.stop()
-        }
-        // The collectors never finish on their own, and retire() does not bump `attempt`, so this
-        // is the only thing that stops a retired attempt still publishing. Stays last because
-        // retire() can reach here from inside childScope itself.
-        att.childScope.cancel()
+        // IO because stop() blocks: it joins the receiver's poll, which can be inside a stream
+        // start. Its own coroutine, so a stalled socket close cannot delay it. The receiver drops
+        // any datagram that reaches it after stop().
+        scope.launch(Dispatchers.IO) { att.receiver.stop() }
+        // Last: retire() reaches here from inside the link's own collector scope.
+        att.link.close()
     }
 
     private fun mapConnectError(t: Throwable, att: Attempt): ConnectionStatus {
