@@ -81,7 +81,7 @@ authority-validated path — a pinned certificate is already bound to its endpoi
 certificates carry no usable subject.
 
 **Client certificate** (`net/ClientIdentity` + `ClientIdentityStore`). Every handshake offers one
-self-signed RSA-2048 certificate, generated on the first connect and kept as an unencrypted PKCS#12
+self-signed RSA-3072 certificate, generated in the background at first launch and kept as an unencrypted PKCS#12
 (`identity.p12` under `filesDir`, inside Auto Backup's default scope) so it follows a reinstall and
 can later be exported to desktop Mumble, which reads that format and only RSA. Murmur asks for a
 certificate, accepts any, verified or not, and keeps the SHA-1 of the leaf as the session's hash.

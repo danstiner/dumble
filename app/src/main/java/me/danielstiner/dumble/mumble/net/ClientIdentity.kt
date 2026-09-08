@@ -34,6 +34,8 @@ import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.Date
 import javax.net.ssl.X509KeyManager
 
@@ -43,8 +45,10 @@ fun sha1Hex(bytes: ByteArray): String =
 
 /**
  * The certificate we present on every TLS handshake, and its key. Self-signed and shaped like
- * desktop Mumble's own (`SelfSignedCertificate::generate`) — RSA 2048 because the desktop's
- * PKCS#12 import assumes RSA, so an identity exported from here can be imported there.
+ * desktop Mumble's own (`SelfSignedCertificate::generate`) — RSA because the desktop's PKCS#12
+ * import assumes it, so an identity exported from here can be imported there; 3072 bits rather than
+ * the desktop's 2048 because the certificate is meant to outlast 2030, where NIST SP 800-57 stops
+ * accepting 2048.
  *
  * Murmur keys "same client" on the SHA-1 of this certificate; see docs/connection.md, Client
  * certificate.
@@ -65,11 +69,13 @@ class ClientIdentity(val certificate: X509Certificate, private val key: PrivateK
     }
 
     /**
-     * PKCS#12 with plain key and certificate bags and a SHA-256 MAC under an empty password.
-     * Plain rather than password-encrypted: the password is empty by design (desktop Mumble's
-     * import tries none first), so encryption would protect nothing, and the empty password is
-     * refused by Android's PBKDF2 provider anyway. The platform's own PKCS#12 store is not used
-     * because it writes 40-bit RC2, which OpenSSL 3 only reads with its legacy provider.
+     * PKCS#12, the format desktop Mumble's certificate wizard imports and exports, with plain key
+     * and certificate bags and a SHA-256 MAC under an empty password. Plain rather than
+     * password-encrypted: the password is empty by design (desktop Mumble's import tries none
+     * first), so encryption would protect nothing, and the empty password is refused by Android's
+     * PBKDF2 provider anyway. With no password the MAC is a damage check, not a secret. The
+     * platform's own PKCS#12 store is not used because it writes 40-bit RC2, which OpenSSL 3 only
+     * reads with its legacy provider.
      */
     fun encode(): ByteArray {
         val keyId = JcaX509ExtensionUtils().createSubjectKeyIdentifier(certificate.publicKey)
@@ -87,7 +93,7 @@ class ClientIdentity(val certificate: X509Certificate, private val key: PrivateK
         val mac = BcPKCS12MacCalculatorBuilder(
             SHA256Digest(),
             AlgorithmIdentifier(NISTObjectIdentifiers.id_sha256, DERNull.INSTANCE),
-        ).setIterationCount(MAC_ITERATIONS)
+        )
         return PKCS12PfxPduBuilder().addData(certBag).addData(keyBag).build(mac, NO_PASSWORD).encoded
     }
 
@@ -95,19 +101,19 @@ class ClientIdentity(val certificate: X509Certificate, private val key: PrivateK
         /** The bags' friendly name and the key manager's alias. */
         const val ALIAS = "dumble"
         private val NO_PASSWORD = CharArray(0)
-        private const val MAC_ITERATIONS = 2048
-        private const val KEY_BITS = 2048
-        private const val VALID_DAYS = 20L * 365
+        private const val KEY_BITS = 3072
+        private const val VALID_YEARS = 20L
         private val NAME = X500Name("CN=Dumble User")
 
         fun generate(): ClientIdentity {
             val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(KEY_BITS) }.generateKeyPair()
-            val now = System.currentTimeMillis()
+            val notBefore = Instant.now()
+            val notAfter = notBefore.atZone(ZoneOffset.UTC).plusYears(VALID_YEARS).toInstant()
             val builder = JcaX509v3CertificateBuilder(
                 NAME,
                 BigInteger(63, SecureRandom()).setBit(0),   // positive and never zero
-                Date(now),
-                Date(now + VALID_DAYS * 24 * 3600 * 1000),
+                Date.from(notBefore),
+                Date.from(notAfter),
                 NAME,
                 keys.public,
             )

@@ -5,7 +5,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -52,30 +51,21 @@ class FileClientIdentityStoreTest {
         assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }
 
-    @Test fun aFileThatCannotBeReadIsNotRotated() = runBlocking {
+    @Test fun aFileThatCannotBeReadFailsTheLoad() {
         // A directory where the identity file should be makes readBytes() throw, standing in
-        // for a disk read failure: that must propagate, not be mistaken for a bad file.
-        val file = folder.newFolder("identity.p12")
-        val store = FileClientIdentityStore(file)
+        // for a disk read failure.
+        val store = FileClientIdentityStore(folder.newFolder("identity.p12"))
         assertThrows(IOException::class.java) { runBlocking { store.load() } }
-        assertFalse(File(file.path + ".corrupt").exists())
     }
 
-    @Test fun aCorruptFileIsMovedAsideAndReplaced() = runBlocking {
+    @Test fun aFileThatDoesNotDecodeFailsTheLoadAndIsKept() {
         val file = file()
         val garbage = byteArrayOf(1, 2, 3, 4)
         file.writeBytes(garbage)
-        val identity = FileClientIdentityStore(file).load()
-        assertArrayEquals(garbage, File(file.path + ".corrupt").readBytes())
-        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
-    }
-
-    @Test fun aReplacedIdentityIsANewOne() = runBlocking {
-        val file = file()
-        val original = FileClientIdentityStore(file).load()
-        file.writeBytes(byteArrayOf(9))
-        val replacement = FileClientIdentityStore(file).load()
-        assertNotEquals(original.hash, replacement.hash)
+        val store = FileClientIdentityStore(file)
+        assertThrows(Exception::class.java) { runBlocking { store.load() } }
+        assertArrayEquals(garbage, file.readBytes())
+        assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }
 
     @Test fun noIdentityStoreYieldsNull() = runBlocking {

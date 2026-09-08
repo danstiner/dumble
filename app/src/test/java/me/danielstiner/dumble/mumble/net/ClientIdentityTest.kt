@@ -11,28 +11,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.Signature
 import java.security.interfaces.RSAPublicKey
+import java.time.ZoneOffset
 
 class ClientIdentityTest {
 
-    // RSA-2048 generation is a few hundred milliseconds; one identity serves every test that
-    // does not need a second.
+    // RSA-3072 generation takes up to a few seconds; one identity serves every test that does
+    // not need a second.
     private val identity by lazy { SHARED }
 
-    @Test fun generatesASelfSignedRsa2048CertificateShapedLikeTheDesktops() {
+    @Test fun generatesASelfSignedRsa3072CertificateShapedLikeTheDesktops() {
         val cert = identity.certificate
         cert.verify(cert.publicKey)
         assertEquals(cert.issuerX500Principal, cert.subjectX500Principal)
         assertEquals("CN=Dumble User", cert.subjectX500Principal.name)
         assertEquals("RSA", cert.publicKey.algorithm)
-        assertEquals(2048, (cert.publicKey as RSAPublicKey).modulus.bitLength())
+        assertEquals(3072, (cert.publicKey as RSAPublicKey).modulus.bitLength())
         assertEquals("SHA256withRSA", cert.sigAlgName)
         assertEquals(3, cert.version)
         assertEquals("CA:FALSE reads as -1", -1, cert.basicConstraints)
         assertTrue("basicConstraints must be critical", cert.criticalExtensionOIDs.contains("2.5.29.19"))
         assertEquals(listOf("1.3.6.1.5.5.7.3.2"), cert.extendedKeyUsage)
         assertNotNull("subject key identifier", cert.getExtensionValue("2.5.29.14"))
-        val days = (cert.notAfter.time - cert.notBefore.time) / (24L * 3600 * 1000)
-        assertEquals(20L * 365, days)
+        val notBefore = cert.notBefore.toInstant().atZone(ZoneOffset.UTC)
+        assertEquals(notBefore.plusYears(20).toInstant(), cert.notAfter.toInstant())
         assertTrue(cert.serialNumber.signum() > 0)
     }
 
