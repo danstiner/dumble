@@ -515,17 +515,34 @@ class ConnectViewModelTest {
     @Test fun aConflatedReconnectRestartsTheCallTimer() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
-        conn.emitConnected(sessionId = 7)
+        conn.emitConnected(sessionId = 7, gen = 1)
         runCurrent()
         val first = vm.uiState.value.connectedSince
         assertNotNull(first)
 
         // The clock has to move for a re-stamp to be distinguishable from keeping the old anchor.
         clock += 5.seconds
-        conn.emitConnected(sessionId = 8)
+        conn.emitConnected(sessionId = 8, gen = 2)
         runCurrent()
 
         assertNotEquals(first, vm.uiState.value.connectedSince)
+    }
+
+    /** A new server session under the same generation is a rebuilt link, not a new call: the
+     *  timer keeps counting from the connect the user made. */
+    @Test fun aNewSessionIdUnderTheSameGenerationKeepsTheCallTimer() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        val first = vm.uiState.value.connectedSince
+        assertNotNull(first)
+
+        clock += 5.seconds
+        conn.emitConnected(sessionId = 8, gen = 1)
+        runCurrent()
+
+        assertEquals(first, vm.uiState.value.connectedSince)
     }
 
     /**

@@ -202,8 +202,8 @@ class ConnectViewModel internal constructor(
     // SessionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = connection.messages.value.lastOrNull()
 
-    /** The session [ConnectUiState.connectedSince] was marked for; null while disconnected. */
-    private var anchoredSession: Int? = null
+    /** The generation [ConnectUiState.connectedSince] was marked for; null while disconnected. */
+    private var anchoredGen: Int? = null
 
     init {
         viewModelScope.launch {
@@ -227,14 +227,16 @@ class ConnectViewModel internal constructor(
         }
         viewModelScope.launch {
             connection.status.collect { s ->
-                // Keyed on the session, not on connected-ness: status is a StateFlow, so the
+                // Keyed on the generation, not on connected-ness: status is a StateFlow, so the
                 // disconnect between two calls can be conflated away, and a nullness comparison
-                // would then treat the second call as a continuation of the first.
-                val session = (s as? ConnectionStatus.Connected)?.sessionId
-                if (session == anchoredSession) return@collect
-                anchoredSession = session
+                // would then treat the second call as a continuation of the first. Not on the
+                // server's session id either: a link rebuilt under the same call gets a new one
+                // while the call the user is timing goes on.
+                val gen = (s as? ConnectionStatus.Connected)?.gen
+                if (gen == anchoredGen) return@collect
+                anchoredGen = gen
                 form.value = form.value.copy(
-                    connectedSince = session?.let { timeSource.markNow() },
+                    connectedSince = gen?.let { timeSource.markNow() },
                 )
             }
         }
