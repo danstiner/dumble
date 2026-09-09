@@ -363,6 +363,23 @@ class SessionStateMachineTest {
         assertEquals("bad password", state.detail)
     }
 
+    /** The driver classifies a relink's rejection on the enum, never on wording that varies
+     *  between Murmur, Grumble and uMurmur. */
+    @Test
+    fun aRejectCarriesItsTypeIntoFailed() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder()
+            .setType(MumbleProtos.Reject.RejectType.WrongServerPW)
+            .setReason("Wrong server password")
+            .build()))
+
+        val state = sm.state.value as ConnectionState.Failed
+        assertEquals(FailReason.AUTH_REJECT, state.reason)
+        assertEquals(MumbleProtos.Reject.RejectType.WrongServerPW, state.rejectType)
+    }
+
     // ---- CryptSetup ----------------------------------------------------------------------
     //
     // The cipher under test is the real one: a peer CryptState keyed as the server would be —

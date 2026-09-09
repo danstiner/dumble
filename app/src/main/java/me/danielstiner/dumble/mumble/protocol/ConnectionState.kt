@@ -1,5 +1,7 @@
 package me.danielstiner.dumble.mumble.protocol
 
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
+
 /** Why a connection ended. Only what this layer can actually report; trust failures never reach it. */
 enum class FailReason { AUTH_REJECT, TIMEOUT, IO, VERSION_TOO_OLD }
 
@@ -11,6 +13,8 @@ sealed interface ConnectionState {
         val reason: FailReason,
         val detail: String? = null,
         val cause: Throwable? = null,
+        /** The server's own reason for an [FailReason.AUTH_REJECT]; null for every other reason. */
+        val rejectType: MumbleProtos.Reject.RejectType? = null,
     ) : ConnectionState
 }
 

@@ -219,7 +219,7 @@ class SessionStateMachine(
             }
             TcpMessageType.Reject -> {
                 val reject = MumbleProtos.Reject.parseFrom(frame.payload)
-                fail(FailReason.AUTH_REJECT, reject.reason)
+                fail(FailReason.AUTH_REJECT, reject.reason, rejectType = reject.type)
             }
             TcpMessageType.CryptSetup -> {
                 // Three messages share the type, told apart by which fields are present, and
@@ -492,8 +492,13 @@ class SessionStateMachine(
      * First failure wins. The deadline coroutine mutates the same state outside the transport's
      * listener lock, so a plain check-then-write loses the race it exists to settle.
      */
-    private fun fail(reason: FailReason, detail: String?, cause: Throwable? = null) {
-        val failed = ConnectionState.Failed(reason, detail, cause = cause)
+    private fun fail(
+        reason: FailReason,
+        detail: String?,
+        cause: Throwable? = null,
+        rejectType: MumbleProtos.Reject.RejectType? = null,
+    ) {
+        val failed = ConnectionState.Failed(reason, detail, cause = cause, rejectType = rejectType)
         while (true) {
             val current = _state.value
             if (current is ConnectionState.Failed || current is ConnectionState.Synchronized) return

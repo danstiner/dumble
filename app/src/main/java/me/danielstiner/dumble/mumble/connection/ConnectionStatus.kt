@@ -13,6 +13,9 @@ sealed interface ConnectionStatus {
     /** [gen] is this connection's own generation, one per connect(); [sessionId] is the server's,
      *  and changes with every link. */
     data class Connected(val gen: Int, val sessionId: Int) : ConnectionStatus
+    /** The session's link died and a replacement is being opened under the same generation;
+     *  [lastSessionId] is the server session the UI's own row still belongs to. */
+    data class Reconnecting(val gen: Int, val lastSessionId: Int) : ConnectionStatus
     data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
 }
 
@@ -23,7 +26,8 @@ sealed interface ConnectionStatus {
  */
 val ConnectionStatus.ongoing: Boolean
     get() = when (this) {
-        ConnectionStatus.Connecting, ConnectionStatus.Handshaking, is ConnectionStatus.Connected ->
+        ConnectionStatus.Connecting, ConnectionStatus.Handshaking, is ConnectionStatus.Connected,
+        is ConnectionStatus.Reconnecting ->
             true
         ConnectionStatus.Idle, is ConnectionStatus.AwaitingTrust, is ConnectionStatus.PinMismatch,
         is ConnectionStatus.Error -> false
