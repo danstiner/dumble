@@ -859,11 +859,15 @@ class MumbleConnection internal constructor(
                 continue
             }
             next.syncedAt = udpClock.markNow()
-            synchronized(lock) {
-                session.carried = _messages.value
-                session.link = next
-                session.next = null
+            val swapped = synchronized(lock) {
+                if (gen == generation && current === session) {
+                    session.carried = _messages.value
+                    session.link = next
+                    session.next = null
+                    true
+                } else false
             }
+            if (!swapped) { next.close(); return null }
             wire(session, next)
             return next
         }
