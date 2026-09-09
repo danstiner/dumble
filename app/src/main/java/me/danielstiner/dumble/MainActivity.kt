@@ -61,8 +61,8 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
             onSelectTransmitMode = vm::onSelectTransmitMode,
             modifier = m,
         )
-        // Having a session is what puts the call screen up: it is the row the controls and the
-        // chat read, and it outlives the link that earned it, so a relink stays on this screen.
+        // Our session row is what the controls and the chat read, and it outlives the link that
+        // earned it, so a relink stays on the call screen.
         Route.Main -> when (val mySession = state.status.mySession) {
             null -> ConnectScreen(
                 state = state,

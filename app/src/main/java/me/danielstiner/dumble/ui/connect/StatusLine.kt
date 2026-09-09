@@ -19,7 +19,7 @@ internal fun statusLine(
     pingAge: Duration,
     reconnecting: Boolean = false,
 ): String = buildString {
-    // The latency is a memory of a link that is gone, and the silence is what this already says.
+    // A round trip measured on the dead link is stale, and the outage is what this line says.
     if (reconnecting) {
         append("Reconnecting…")
         if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
