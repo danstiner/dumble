@@ -31,10 +31,14 @@ internal class Link(
     private val scope: CoroutineScope,
 ) {
     /** When the link's state machine synchronized, on the driver's clock; null until then. A
-     *  link that has lived [MumbleConnection.HEALTHY_AFTER] past this was a working path. */
+     *  link that has lived past this by the connection's healthy-after threshold was a working
+     *  path. */
     @Volatile var syncedAt: ComparableTimeMark? = null
 
     private val closed = AtomicBoolean(false)
+
+    /** A collector already inside its body when the link closes must not land a write. */
+    val isClosed: Boolean get() = closed.get()
 
     /**
      * Any thread; nothing here blocks; at most once. Safe before [transport] has connected: a

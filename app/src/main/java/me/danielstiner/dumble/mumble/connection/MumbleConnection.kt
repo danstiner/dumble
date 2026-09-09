@@ -179,11 +179,12 @@ class MumbleConnection internal constructor(
         /** The link carrying this session, or null until the driver has built one. Written only
          *  under [lock], by the driver; read on the pump thread by [sendVoice]. */
         @Volatile var link: Link? = null,
-        /** A replacement link being opened; the driver's, written under [lock]. While it is set
-         *  the link it will replace is frozen: nothing it still publishes reaches the UI. */
+        /** A replacement link being opened; the driver's, written under [lock] so a teardown
+         *  during its blocking handshake finds it and closes it. */
         @Volatile var next: Link? = null,
-        /** Chat from links this session has already replaced, oldest first. Driver-only. */
-        var carried: List<ChatMessage> = emptyList(),
+        /** Chat from links this session has already replaced, oldest first. Written by the driver
+         *  at the swap, read by the new link's collector on its own scope. */
+        @Volatile var carried: List<ChatMessage> = emptyList(),
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the driver, read on caller threads. */
         @Volatile var presented: String? = null,
@@ -296,21 +297,21 @@ class MumbleConnection internal constructor(
     // superseded session's late writes are no-ops. A retired session (current cleared, generation
     // not bumped) may still land a write: its terminal values are what the user is looking at.
     private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == generation) _status.value = s }
-    private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == generation) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == generation) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == generation) _playoutStats.value = p }
     private fun publishCaptureStats(gen: Int, c: CaptureStats?) = synchronized(lock) { if (gen == generation) _captureStats.value = c }
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == generation) _audioRoutes.value = r }
 
     /**
-     * A link's own flow. Guarded on the link's identity as well as the generation: cancelling a
-     * link's collectors is no barrier for one already inside its body, and a link the session
-     * has moved on from must not land a write after the swap. Frozen the moment a replacement
-     * starts, so the kick the server gives the old session never reads as "you left".
+     * A link's own flow. Guarded on the link's identity and its close flag as well as the
+     * generation: a link the session has moved on from must not land a write after the swap, and
+     * closing a link's collectors is no barrier for one already inside its body — the flag is.
+     * So a dead link is frozen from its close, and the kick the server gives the old session
+     * never reads as "you left".
      */
     private fun <T> publishFromLink(session: Session, link: Link, flow: MutableStateFlow<T>, value: T) =
         synchronized(lock) {
-            if (session.gen == generation && session.link === link && session.next == null) flow.value = value
+            if (session.gen == generation && session.link === link && !link.isClosed) flow.value = value
         }
 
     /**
@@ -744,6 +745,8 @@ class MumbleConnection internal constructor(
             publishStatus(gen, ConnectionStatus.Reconnecting(gen, lastSessionId))
             link.close()
             link = relink(session, pin, deadline, rung) ?: return
+            // A link that synchronizes and dies again short of healthy restarts the ladder at rung
+            // 1, not where the last attempt left off: what bounds that churn is the deadline.
             rung = 0
         }
     }
@@ -781,7 +784,6 @@ class MumbleConnection internal constructor(
 
     /** Republishes [link]'s flows as the session's. The link must already be `session.link`. */
     private fun wire(session: Session, link: Link) {
-        val gen = session.gen
         // A link's flows republish under the link guard; the session's own keep the generation
         // guard alone.
         fun <T> republish(from: Flow<T>, into: MutableStateFlow<T>) =
@@ -796,7 +798,10 @@ class MumbleConnection internal constructor(
         // ahead of this link's own.
         link.childScope.launch {
             link.stateMachine.messages.collect {
-                publishMessages(gen, (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES))
+                publishFromLink(
+                    session, link, _messages,
+                    (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES),
+                )
             }
         }
         // The gate is the session's and survives the swap; the wire state is the link's and starts
@@ -870,7 +875,11 @@ class MumbleConnection internal constructor(
                     true
                 } else false
             }
-            if (!swapped) { next.close(); return null }
+            if (!swapped) {
+                next.close()
+                synchronized(lock) { session.next = null }
+                return null
+            }
             wire(session, next)
             return next
         }
@@ -1038,7 +1047,7 @@ class MumbleConnection internal constructor(
          *  inside a sentence, not so long it is still lit once someone has stopped. */
         const val SPEAKING_HOLD_MILLIS = 200L
 
-        /** A link that has answered pings this long was a working path: losing it is a new
+        /** A link that stayed synchronized this long was a working path: losing it is a new
          *  outage, not another failure of the one being retried. */
         val HEALTHY_AFTER = 30.seconds
 

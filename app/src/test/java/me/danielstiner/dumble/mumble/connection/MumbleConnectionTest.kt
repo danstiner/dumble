@@ -989,8 +989,8 @@ class MumbleConnectionTest {
         assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
     }
 
-    /** A link that lived 30 s of answered pings was a working path; its loss is a new outage,
-     *  not another failure of the one being retried, so the ladder starts over. */
+    /** A link that stayed synchronized 30 s was a working path; its loss is a new outage, not
+     *  another failure of the one being retried, so the ladder starts over. */
     @Test fun losingAHealthyLinkStartsTheLadderOver() = runBlocking {
         val clock = AtomicTimeSource()
         val waits = CopyOnWriteArrayList<Duration>()
@@ -1098,10 +1098,11 @@ class MumbleConnectionTest {
     }
 
     /**
-     * The freeze: from the moment a replacement starts, nothing the dead link still reduces may
-     * reach the UI, or the ghost kick's UserRemove would read as "you left".
+     * The freeze: from its close, nothing the dead link still reduces may reach the UI, or the
+     * ghost kick's UserRemove would read as "you left". The close is what the guard reads, and it
+     * lands before any replacement exists.
      */
-    @Test fun theDeadLinksLateTreeIsDroppedOnceAReplacementStarts() = runBlocking {
+    @Test fun aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val release = CountDownLatch(1)
         val conn = MumbleConnection(InMemoryPinStore()) {
@@ -1116,7 +1117,10 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.channelTree.first { it.channels.containsKey(1) } }
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        transportAt(transports, 1)   // the replacement has started; the old link is frozen
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Reconnecting } }
+        // The driver closes the dead link before it builds any replacement, and close() raises the
+        // flag before it hands the socket to IO, so a closed transport proves the flag is up.
+        awaitTrue("the dead link must be closed") { transports[0].closed }
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(2).setName("Late").build().toByteArray()))
         delay(200)
