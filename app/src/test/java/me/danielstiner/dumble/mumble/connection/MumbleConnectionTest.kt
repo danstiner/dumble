@@ -328,8 +328,8 @@ class MumbleConnectionTest {
     /**
      * connect() publishes the session synchronously, but its link is built on the driver after the
      * pin lookup, so a disconnect() landing while that lookup is still suspended must find the
-     * session already retired: the driver's live check after the lookup is the only thing that
-     * closes the transport it just built, and nothing else can reach it.
+     * session already retired. No teardown can reach a link that was never published, so the
+     * driver's own live check after the lookup is what closes it.
      *
      * Deterministic rather than racy: the gate holds the driver inside pinStore.get(), which is
      * upstream of the link, so disconnect() always wins. The wait is NonCancellable so the driver

@@ -150,10 +150,9 @@ class MumbleConnection internal constructor(
     /**
      * What the user asked for, and what outlives its link: one per connect(), published as
      * [current] under [lock] and unpublished by the next connect(), by disconnect(), or by
-     * [retire] when its link dies. Every publish is generation-guarded, so a superseded session's
-     * late writes are no-ops. It outlives being current: capture state hangs off the session, not
-     * the connection, because a release must find the session that opened the microphone rather
-     * than whichever session replaced it.
+     * [retire] when its link dies. Outlives being current too: capture state hangs off the
+     * session, not the connection, because a release must find the session that opened the
+     * microphone rather than whichever session replaced it.
      *
      * The first six fields are immutable identity. The mutable ones are either `@Volatile`
      * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
@@ -620,8 +619,8 @@ class MumbleConnection internal constructor(
             onEnded = { endedByPlatform(gen) },
         )
         // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which only
-        // a session whose link comes up ever reaches. Building the engine eagerly leaked one per
-        // session that was superseded or failed before that.
+        // a session whose link comes up ever reaches — building eagerly would leak one per
+        // session that fails or is superseded before that.
         val session = Session(
             gen, endpoint, username, password, VoiceReceiver(newPlayout),
             CoroutineScope(SupervisorJob() + Dispatchers.Default),
