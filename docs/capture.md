@@ -39,12 +39,12 @@ counters come off the pump every two seconds (`VoiceSender.onStats`), the log li
 **Lifecycle** (`MumbleConnection`): four producers demand transitions concurrently — the Talk
 button, telecom hold/resume, disconnect/reconnect, and the pump's own exit — so every transition
 is a command on one channel with a single consumer, and state is levels, not events: `reconcile()`
-compares them and is the only place a session opens or closes.
+compares them and is the only place the capture session opens or closes.
 
 The transmit gate is not stored: `apply` derives it from three levels — Talk held, self-muted, and
 the transmit mode — as `!muted && (pressed || voiceActivity)`, whenever one of them moves and again
-when a session opens. Wanting it open also re-asks for a session, which is what brings one back
-after a hold or a terminal failure. Mute is one of those levels rather than only a `self_mute` on
+when the capture session opens. Wanting it open also re-asks for capture, which is what brings one
+back after a hold or a terminal failure. Mute is one of those levels rather than only a `self_mute` on
 the wire, and the mode lives on the connection rather than the session, so a rebuilt engine — which
 comes up in push-to-talk — gets it back. The mirrored-write argument that keeps a press from racing
 an open is KDoc'd at `apply`.

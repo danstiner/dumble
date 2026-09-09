@@ -12,11 +12,12 @@ structure and the trade-offs that shaped it.
 UI ─► Connection (interface)
           │
     MumbleConnection                    one live Session driving one Link, generation-guarded
-          ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
-          │      trust: MumbleTrustManager + PinStore   ├─► server
-          ├─► MumbleUdpTransport ─► DatagramChannel ───┘
-          │      crypt: CryptState, keyed by CryptSetup; path: VoicePath, proven by the ping
-          ├─► SessionStateMachine       handshake, pings, channel tree, chat, the cipher
+          ├─► Link                      one TLS connect; replaced under the session on a relink
+          │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
+          │     │      trust: MumbleTrustManager + PinStore   ├─► server
+          │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
+          │     │      crypt: CryptState, keyed by CryptSetup; path: VoicePath, proven by the ping
+          │     └─► SessionStateMachine  handshake, pings, channel tree, chat, the cipher
           └─► audio + platform call     docs/capture.md, docs/playout.md
 ```
 

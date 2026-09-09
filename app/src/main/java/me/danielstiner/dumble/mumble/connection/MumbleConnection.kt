@@ -10,6 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
@@ -183,7 +184,7 @@ class MumbleConnection internal constructor(
         @Volatile var pressed: Boolean = false,
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
-        /** The app wants a capture session on this session — the level [reconcile] opens from.
+        /** The app wants capture on this session — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
         var wanted: Boolean = false,
         /** A release is in flight: stop() has returned and only the pump's own exit will free the
@@ -193,7 +194,7 @@ class MumbleConnection internal constructor(
     )
 
     private sealed interface CaptureCommand {
-        /** A capture session is wanted on this session — the microphone became ready, or Talk was
+        /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
         data class Acquire(val session: Session) : CaptureCommand
         /** The platform has taken, or returned, the input device for the call of this generation. */
@@ -428,7 +429,7 @@ class MumbleConnection internal constructor(
         }
     }
 
-    /** Build the native engine and its pump for [session] and publish them as its session.
+    /** Build the native engine and its pump for [session] and publish them as its capture.
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
      *  consumer runs on [Dispatchers.IO]. */
     private fun openCapture(session: Session) {
@@ -536,13 +537,17 @@ class MumbleConnection internal constructor(
      * a silent bug — the survivor is a flow the next screen renders with the last session's data.
      * The status is the only thing that legitimately differs, so it is the only parameter.
      *
-     * Bumping `generation` under the same lock is what makes the writes safe: every publish helper
-     * above is gen-checked, so an in-flight writer for the old generation cannot repopulate what
-     * this just cleared. Caller holds [lock].
+     * Bumping `generation` and queuing the prior's Release under the same lock is what makes the
+     * writes safe: every publish helper is gen-checked, and the release is ordered ahead of
+     * anything the successor asks. Caller holds [lock].
      */
     private fun retireAndClearLocked(status: ConnectionStatus): Session? {
         val prior = current
         current = null; generation += 1
+        // Queued here, under the lock that unpublishes [prior]: nothing the next session can ask
+        // of the capture consumer is queued before this, so the release runs first. trySend
+        // never blocks, so it is safe under the lock.
+        prior?.let { send(CaptureCommand.Release(it, VoiceCall.Reason.USER)) }
         _status.value = status
         _serverVersion.value = null; _roundTripTime.value = null; _lastServerReplyAt.value = null
         _voicePath.value = VoicePath.State()
@@ -563,24 +568,23 @@ class MumbleConnection internal constructor(
     /** The pieces of one TLS connect, built but not yet connected. */
     private fun buildLink(session: Session, pin: String?): Link {
         val gen = session.gen
-        val username = session.username
-        val password = session.password
-        val receiver = session.receiver
         val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val transport = newTransport(pin)
-        val sm = SessionStateMachine(transport, username, password, childScope, pingIntervalMs = pingIntervalMs)
+        val stateMachine = SessionStateMachine(
+            transport, session.username, session.password, childScope, pingIntervalMs = pingIntervalMs,
+        )
         val path = VoicePath()
-        val udp = MumbleUdpTransport(sm.crypt, object : MumbleUdpTransport.Listener {
+        val udp = MumbleUdpTransport(stateMachine.crypt, object : MumbleUdpTransport.Listener {
             private var heard = false   // the server chose UDP for our downlink; logged once
             override fun onVoicePacket(buf: ByteArray, len: Int) {
                 if (!heard) {
                     heard = true
                     Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
                 }
-                receiver.onVoicePacket(buf, len)
+                session.receiver.onVoicePacket(buf, len)
             }
             override fun onPingReply(roundTrip: Duration) {
-                if (path.onPingAnswered(roundTrip)) sm.udpPingAnswered(roundTrip)
+                if (path.onPingAnswered(roundTrip)) stateMachine.udpPingAnswered(roundTrip)
             }
             // Demoting brings the downlink back with our next spurt; the tunneled ping does it
             // for a client that never speaks, since the server never re-learns an address
@@ -590,9 +594,9 @@ class MumbleConnection internal constructor(
                 path.demote()
                 transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
             }
-            override fun requestCryptResync() { sm.requestCryptResync() }
+            override fun requestCryptResync() { stateMachine.requestCryptResync() }
         }, udpClock)
-        return Link(gen, transport, sm, udp, path, childScope, scope)
+        return Link(transport, stateMachine, udp, path, childScope, scope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
@@ -629,7 +633,11 @@ class MumbleConnection internal constructor(
         // the capture consumer is ordered ahead of that release; and under the lock, so a
         // disconnect() that landed since leaves it unpublished.
         val live = synchronized(lock) { if (gen == generation) { current = session; true } else false }
-        if (!live) { teardown(session); return }
+        if (!live) {
+            send(CaptureCommand.Release(session, VoiceCall.Reason.USER))
+            teardown(session)
+            return
+        }
         session.scope.launch { session.receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
         session.scope.launch { session.receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
         session.scope.launch { drive(session) }
@@ -647,8 +655,8 @@ class MumbleConnection internal constructor(
         Log.i(TAG, "connect gen=$gen endpoint=${session.endpoint.address} user=${session.username} storedPin=${pin != null}")
         val link = buildLink(session, pin)
         // Published before the connect, so a teardown that lands during the blocking handshake
-        // finds the link and closes it: the transport then closes a socket it finishes after
-        // that, and never publishes it.
+        // finds the link and closes it; see Link.close for what the transport does with a
+        // handshake that finishes around that close.
         val live = synchronized(lock) {
             if (gen == generation && current === session) { session.link = link; true } else false
         }
@@ -698,26 +706,30 @@ class MumbleConnection internal constructor(
             session.receiver.onVoicePacket(payload, payload.size)
         }
         link.stateMachine.start()
-        // The wait below subscribes only after the receiver's stream open; Handshaking is due now.
-        mapState(gen, link.stateMachine.state.value)?.let { publishStatus(gen, it) }
-        link.childScope.launch { link.stateMachine.serverVersion.collect { publishFromLink(session, link, _serverVersion, it) } }
-        link.childScope.launch { link.stateMachine.roundTripTime.collect { publishFromLink(session, link, _roundTripTime, it) } }
-        link.childScope.launch { link.path.state.collect { publishFromLink(session, link, _voicePath, it) } }
-        link.childScope.launch { link.stateMachine.lastServerReplyAt.collect { publishFromLink(session, link, _lastServerReplyAt, it) } }
-        link.childScope.launch { link.stateMachine.channelTree.collect { publishFromLink(session, link, _channelTree, it) } }
+        // A link's flows republish under the link guard; the session's own keep the generation
+        // guard alone.
+        fun <T> republish(from: Flow<T>, into: MutableStateFlow<T>) =
+            link.childScope.launch { from.collect { publishFromLink(session, link, into, it) } }
+        republish(link.stateMachine.serverVersion, _serverVersion)
+        republish(link.stateMachine.roundTripTime, _roundTripTime)
+        republish(link.path.state, _voicePath)
+        republish(link.stateMachine.lastServerReplyAt, _lastServerReplyAt)
+        republish(link.stateMachine.channelTree, _channelTree)
+        republish(link.stateMachine.userStats, _userStats)
+        // Chat is the session's, not the link's: a relink carries the log over.
         link.childScope.launch { link.stateMachine.messages.collect { publishMessages(gen, it) } }
-        link.childScope.launch { link.stateMachine.userStats.collect { publishFromLink(session, link, _userStats, it) } }
-        // Start the receiver if this is still the live session. Both halves of isLive matter:
-        // retire() clears `current` without bumping the generation. Every earlier return skips
-        // this line, so a session that never gets here never calls newPlayout() — see the
-        // comment where the receiver is built.
+        // Start the receiver if this is still the live session, on its own coroutine so the
+        // status wait below subscribes before the stream open rather than after it. Both halves
+        // of isLive matter: retire() clears `current` without bumping the generation. Every
+        // earlier return skips this, so a session that never gets here never calls newPlayout()
+        // — see the comment where the receiver is built.
         //
         // The check is under the lock; the start is not. start() opens the output stream,
         // ~100 ms of HAL on a Pixel 7a, and holding `lock` across that stalls a main-thread
         // disconnect() and every publish. A teardown landing in between is the receiver's
         // own latch to handle: its stop() before start() refuses the start, and after it
         // joins and destroys.
-        if (isLive(session)) session.receiver.start()
+        session.scope.launch { if (isLive(session)) session.receiver.start() }
 
         // Status is the driver's own collector, not one of the link's: the terminal Error must
         // be on `status` before retire() cancels this coroutine's scope, and onEach runs before
@@ -816,10 +828,11 @@ class MumbleConnection internal constructor(
 
     /** Closes the gate here, not just on the wire: the microphone goes quiet at the tap rather
      *  than at the server's echo, and a capture session rebuilt after the tap must not come up
-     *  transmitting. The wire half needs a link; the level is kept either way. */
+     *  transmitting. */
     override fun setMuted(on: Boolean) {
         val session = current ?: return
-        session.link?.stateMachine?.setSelfMute(on)
+        val stateMachine = session.link?.stateMachine ?: return
+        stateMachine.setSelfMute(on)
         session.muted = on
         apply(session)
     }
@@ -832,19 +845,19 @@ class MumbleConnection internal constructor(
      */
     private fun retire(session: Session) {
         val live = synchronized(lock) {
-            if (session.gen == generation && current === session) { current = null; true } else false
+            if (session.gen == generation && current === session) {
+                current = null
+                // Under the lock, for the same ordering retireAndClearLocked keeps.
+                send(CaptureCommand.Release(session, VoiceCall.Reason.SESSION_FAILED))
+                true
+            } else false
         }
-        if (live) teardown(session, VoiceCall.Reason.SESSION_FAILED)
+        if (live) teardown(session)
     }
 
-    /** Any thread; nothing here blocks. [session] is already out of [current] — the caller either
-     *  just removed it or never published it — so this runs at most once per session. */
-    private fun teardown(session: Session, reason: VoiceCall.Reason = VoiceCall.Reason.USER) {
-        // First, synchronously: connect() calls teardown(prior) on the caller's thread before it
-        // publishes the next session, so a synchronous send is what guarantees the prior release
-        // is queued ahead of anything the next session can produce. trySend never blocks, so
-        // this is safe on the main thread.
-        send(CaptureCommand.Release(session, reason))
+    /** Any thread; nothing here blocks. [session] is already out of [current], its Release queued
+     *  by whoever removed it, so this runs at most once per session. */
+    private fun teardown(session: Session) {
         // IO because stop() blocks: it joins the receiver's poll, which can be inside a stream
         // start. Its own coroutine, so a stalled socket close cannot delay it. The receiver drops
         // any datagram that reaches it after stop().

@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * session above it outlives it, and a replacement is a new Link.
  */
 internal class Link(
-    val gen: Int,
     val transport: MumbleControlTransport,
     val stateMachine: SessionStateMachine,
     /** Opened once the control connection is up, closed with the link; inert in between if it
@@ -33,8 +32,10 @@ internal class Link(
     private val closed = AtomicBoolean(false)
 
     /**
-     * Any thread; nothing here blocks; at most once. Safe before [transport] has connected: the
-     * transport closes a socket it finishes after this, and never publishes it.
+     * Any thread; nothing here blocks; at most once. Safe before [transport] has connected: a
+     * handshake that finishes before the deferred close lands is published and torn down a
+     * moment later, one that finishes after it is discarded unpublished, and the collectors are
+     * already cancelled either way.
      */
     fun close() {
         if (!closed.compareAndSet(false, true)) return

@@ -751,12 +751,14 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A hold delivered between call.start and the attempt publishing must still be honoured: the
-     * hold level is keyed by generation precisely because the two do not have the same lifetime.
+     * call.start() runs before connect() publishes the session, and the platform can deliver a
+     * hold from inside it. onHeld keys on the generation rather than on `current`, so that hold is
+     * recorded against the session that is about to publish, and a capture asked for afterwards
+     * stays refused until the resume.
      */
-    @Test fun aHoldBeforeTheAttemptPublishesLeavesItNotCapturing() = runBlocking {
+    @Test fun aHoldDeliveredInsideCallStartLeavesTheSessionNotCapturing() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall()
+        val call = FakeVoiceCall(holdInsideStart = true)
         val conn = MumbleConnection(
             InMemoryPinStore(),
             newCapture = { FakeCaptureHandle().also { handles += it } },
@@ -764,9 +766,6 @@ class CaptureLifecycleTest {
         ) { FakeControlTransport { _, _ -> } }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        // call.start runs synchronously inside connect(), so the closure exists immediately —
-        // before the coroutine that publishes the attempt has necessarily run.
-        call.hold()
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         conn.requestCapture()
