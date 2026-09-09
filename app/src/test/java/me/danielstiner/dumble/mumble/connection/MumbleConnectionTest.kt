@@ -14,6 +14,7 @@ import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
+import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
@@ -936,7 +937,9 @@ class MumbleConnectionTest {
     @Test fun usernameInUseRetriesAndOtherRejectsGiveUp() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(InMemoryPinStore(), call = call) {
+        // The ladder's waits are not what this pins; skipped so the rung after the retry costs no
+        // real second.
+        val conn = MumbleConnection(InMemoryPinStore(), call = call, sleep = { }) {
             FakeControlTransport { _, _ -> }.also { transports += it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1095,6 +1098,54 @@ class MumbleConnectionTest {
         awaitTrue("both links must be closed") { transports.all { it.closed } }
         awaitTrue("the call ends once, as a hang-up") { call.ends == 1 }
         assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons)
+    }
+
+    /**
+     * The server's certificate changed while we were rebuilding the link. The prompt is the one a
+     * fresh connect gives: the session is retired behind it — no microphone opens against it, and
+     * the call ends as a failure — but kept aside, so accepting the new pin reconnects.
+     */
+    @Test fun aTrustPromptOnARelinkRetiresTheSessionAndCanStillBeAccepted() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val pins = InMemoryPinStore()
+        val endpoint = MumbleEndpoint.parse("localhost")
+        pins.put(endpoint.address, "aa")
+        val conn = MumbleConnection(
+            pins,
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) {
+            // Only the replacement is refused; the third transport is the one trustAndConnect builds.
+            val replacement = transports.size == 1
+            FakeControlTransport { _, _ ->
+                if (replacement) throw PinMismatchException(stored = "aa", presented = "bb")
+            }.also { transports += it }
+        }
+        conn.connect(endpoint, "user", null)
+        transportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+
+        val prompt = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.PinMismatch } }
+        assertEquals(ConnectionStatus.PinMismatch("aa", "bb"), prompt)
+        awaitTrue("the prompt must end the call") { call.ends == 1 }
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        awaitTrue("the dead link and its refused replacement are both closed") {
+            transports.size == 2 && transports.all { it.closed }
+        }
+
+        conn.requestCapture()
+        delay(200)
+        assertTrue("no microphone may open while a prompt is up", handles.isEmpty())
+
+        conn.trustAndConnect()
+
+        awaitTrue("accepting the new certificate reconnects") { transports.size == 3 }
+        assertEquals("bb", pins.get(endpoint.address))
+        conn.disconnect()
     }
 
     /**

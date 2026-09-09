@@ -24,6 +24,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.mySession
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.UserStats
@@ -167,11 +168,7 @@ class ConnectViewModel internal constructor(
             form, connSnapshot, healthSnapshot, connection.speakingSessions, connection.selfSpeaking,
         ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
-            val session = when (status) {
-                is ConnectionStatus.Connected -> status.sessionId
-                is ConnectionStatus.Reconnecting -> status.lastSessionId
-                else -> null
-            }
+            val session = status.mySession
             val me = session?.let { c.channelTree.users[it] }
             // Talk is blocked for the whole relink: the held link is dead and the packets would
             // go nowhere.
