@@ -545,6 +545,38 @@ class ConnectViewModelTest {
         assertEquals(first, vm.uiState.value.connectedSince)
     }
 
+    /** Reconnecting is the same call: the timer keeps counting, Talk is blocked, and the row the
+     *  controls read is the one the server session we last had. */
+    @Test fun reconnectingKeepsTheTimerBlocksTalkAndReadsTheLastRow() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = true)
+        val root = Channel(id = 0, parentId = null, name = "Root", position = 0)
+        fun me(session: Int) = User(
+            session = session, name = "me", channelId = 0,
+            mute = false, deaf = false, selfMute = true, selfDeaf = false, suppress = false,
+        )
+        conn.channelTree.value = ChannelTree(channels = mapOf(0 to root), users = mapOf(7 to me(7)))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        val since = vm.uiState.value.connectedSince
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
+
+        clock += 5.seconds
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+
+        assertEquals(since, vm.uiState.value.connectedSince)
+        assertEquals(TalkBlock.RECONNECTING, vm.uiState.value.talkBlock)
+        assertTrue(vm.uiState.value.muted)
+
+        conn.emitConnected(sessionId = 9, gen = 1)
+        conn.channelTree.value = ChannelTree(channels = mapOf(0 to root), users = mapOf(9 to me(9)))
+        runCurrent()
+        assertEquals(since, vm.uiState.value.connectedSince)
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
+    }
+
     /**
      * Pins the anchor to the injected time source, and pins that the elapsed duration is read from
      * the mark rather than recomputed against some other clock. Wall clock is what this must never

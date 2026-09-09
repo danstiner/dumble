@@ -9,7 +9,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
  * one: this is the only place a user's protocol state decides whether a control works, and inside a
  * composable it would have no direct coverage.
  */
-enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED }
+enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED, RECONNECTING }
 
 /**
  * The wire half is murmur's own drop condition, copied from `Server::processMsg`

@@ -61,10 +61,17 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
             modifier = m,
         )
         Route.Main -> when (val s = state.status) {
-            is ConnectionStatus.Connected ->
+            is ConnectionStatus.Connected, is ConnectionStatus.Reconnecting -> {
+                // The row the controls and the chat read is the server session we last had; a
+                // relink hands out a new one only once it is Connected again.
+                val mySession = when (s) {
+                    is ConnectionStatus.Connected -> s.sessionId
+                    is ConnectionStatus.Reconnecting -> s.lastSessionId
+                    else -> error("unreachable")
+                }
                 if (state.showChat) ChatScreen(
                     messages = state.messages,
-                    mySession = s.sessionId,
+                    mySession = mySession,
                     draft = state.chatDraft,
                     onDraftChange = vm::onChatDraftChange,
                     onSend = vm::sendMessage,
@@ -72,7 +79,8 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     modifier = m,
                 ) else ConnectedScreen(
                     server = "${state.draft.host}:${state.draft.port}",
-                    sessionId = s.sessionId,
+                    sessionId = mySession,
+                    reconnecting = s is ConnectionStatus.Reconnecting,
                     connectedSince = state.connectedSince,
                     roundTripTime = state.roundTripTime,
                     voicePath = state.voicePath,
@@ -110,6 +118,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )
+            }
             else -> ConnectScreen(
                 state = state,
                 onHost = vm::onHostChange, onPort = vm::onPortChange,

@@ -167,9 +167,16 @@ class ConnectViewModel internal constructor(
             form, connSnapshot, healthSnapshot, connection.speakingSessions, connection.selfSpeaking,
         ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
-            val session = (status as? ConnectionStatus.Connected)?.sessionId
+            val session = when (status) {
+                is ConnectionStatus.Connected -> status.sessionId
+                is ConnectionStatus.Reconnecting -> status.lastSessionId
+                else -> null
+            }
             val me = session?.let { c.channelTree.users[it] }
-            val block = talkBlock(me, f.microphoneGranted)
+            // Talk is blocked for the whole relink: the held link is dead and the packets would
+            // go nowhere.
+            val block = if (status is ConnectionStatus.Reconnecting) TalkBlock.RECONNECTING
+                else talkBlock(me, f.microphoneGranted)
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { selfSpeaking && block == null }
@@ -232,7 +239,11 @@ class ConnectViewModel internal constructor(
                 // would then treat the second call as a continuation of the first. Not on the
                 // server's session id either: a link rebuilt under the same call gets a new one
                 // while the call the user is timing goes on.
-                val gen = (s as? ConnectionStatus.Connected)?.gen
+                val gen = when (s) {
+                    is ConnectionStatus.Connected -> s.gen
+                    is ConnectionStatus.Reconnecting -> s.gen
+                    else -> null
+                }
                 if (gen == anchoredGen) return@collect
                 anchoredGen = gen
                 form.value = form.value.copy(
