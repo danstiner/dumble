@@ -1,12 +1,12 @@
 package me.danielstiner.dumble.mumble.connection
 
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
@@ -44,12 +44,14 @@ import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HostnameVerifier
 import kotlin.concurrent.thread
+import kotlin.coroutines.resume
 import kotlin.time.Duration.Companion.seconds
 
 class MumbleConnectionTest {
@@ -98,20 +100,24 @@ class MumbleConnectionTest {
     }
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> withContext(NonCancellable) { gate.await() } }     // blocks mid-"handshake"
+            // Blocks the thread with no dispatcher change, so unlike the real handshake's
+            // withContext(IO) the return is not a cancellation point: the stale driver runs on
+            // to its own live check every time. Holds one Default worker while parked.
+            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
                 .also { transports += it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
+        withTimeout(5_000) { arrived.await() }               // the driver is inside the handshake
         conn.disconnect()                                     // bumps the generation
         assertEquals(ConnectionStatus.Idle, conn.status.value)
-        gate.complete(Unit)   // stale driver finishes its handshake late; the live check closes what it built
+        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
         delay(100)                                            // let the stale driver run to its live check
         assertEquals(ConnectionStatus.Idle, conn.status.value)  // guard held: no clobber
-        awaitTrue("the stale driver must close the link its live check refused") { transports.single().closed }
+        awaitTrue("the superseded link must be closed") { transports.single().closed }
     }
 
     @Test fun channelTreeSurfacesReducedFrames() = runBlocking {
@@ -187,14 +193,17 @@ class MumbleConnectionTest {
     }
 
     @Test fun aSupersededSessionLeavesChannelTreeEmpty() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> withContext(NonCancellable) { gate.await() } }   // blocks mid-handshake
+            // Blocks the thread with no dispatcher change, so the return is not a cancellation
+            // point and the stale driver runs on to its live check every time.
+            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
+        withTimeout(5_000) { arrived.await() }   // the driver is inside the handshake
         conn.disconnect()          // bumps the generation
-        gate.complete(Unit)   // stale driver finishes its handshake late; the live check closes what it built
+        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
         delay(100)   // let the stale driver run to its live check
         assertEquals(ChannelTree(), conn.channelTree.value)
     }
@@ -334,14 +343,16 @@ class MumbleConnectionTest {
      * session already retired. No teardown can reach a link that was never published, so the
      * driver's own live check after the lookup is what closes it.
      *
-     * Deterministic rather than racy: the gate holds the driver inside pinStore.get(), which is
-     * upstream of the link, so disconnect() always wins. The wait is NonCancellable so the driver
-     * returns from the lookup instead of dying inside it, which is the case the check exists for.
+     * Deterministic rather than racy: the lookup holds the driver on a latch that blocks the
+     * thread rather than suspending, so disconnect() always wins and the cancel cannot land at a
+     * resume; the driver returns from the lookup instead of dying inside it, which is the case
+     * the check exists for.
      */
     @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { withContext(NonCancellable) { gate.await() }; return null }
+            override suspend fun get(key: String): String? { arrived.complete(Unit); release.await(); return null }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
@@ -355,8 +366,9 @@ class MumbleConnectionTest {
         }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { arrived.await() }   // the driver is inside the lookup
         conn.disconnect()
-        gate.complete(Unit)
+        release.countDown()
 
         awaitTrue("a superseded session must close the transport it built") {
             transports.size == 1 && transports.all { it.closed }
@@ -369,9 +381,14 @@ class MumbleConnectionTest {
      * Held inside a cancellable pin lookup it dies there and never builds a transport.
      */
     @Test fun aDisconnectDuringThePinLookupCancelsTheDriver() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+        val parked = CompletableDeferred<CancellableContinuation<Unit>>()
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { gate.await(); return null }
+            // Handed out only once the driver is suspended here, so the cancel that follows lands
+            // on this very wait rather than on a driver still on its way to it.
+            override suspend fun get(key: String): String? {
+                suspendCancellableCoroutine { parked.complete(it) }
+                return null
+            }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
@@ -379,15 +396,10 @@ class MumbleConnectionTest {
         val conn = MumbleConnection(pins) { FakeControlTransport { _, _ -> }.also { transports += it } }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val wait = withTimeout(5_000) { parked.await() }
         conn.disconnect()
-        // A gap before completing the gate: cancelling session.scope and completing gate both try
-        // to resume the same suspended continuation, and without it the two races head to head —
-        // gate's normal completion sometimes wins, and a properly-cancelled driver only gets
-        // caught as such once it is actually running past the resume. Kotlin's prompt-cancellation
-        // check on that resume is what makes it lose once the cancel has had a moment to land.
-        delay(20)
-        gate.complete(Unit)
-        delay(200)   // a driver that survived the cancel would build its transport within this
+        wait.resume(Unit)   // ignored once cancelled; a driver that survived would run on and build
+        delay(200)
 
         assertTrue("the cancelled driver must build nothing", transports.isEmpty())
     }
