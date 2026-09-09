@@ -14,7 +14,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  * [autoGrant] only moves *when* the grant fires: the default grants immediately, so observable
  * counts at assertion time are unchanged.
  */
-class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
+class FakeVoiceCall(
+    private val autoGrant: Boolean = true,
+    private val holdInsideStart: Boolean = false,
+) : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
     val starts = CopyOnWriteArrayList<String>()
     /** Generation per start(), in order — so a test can address a superseded call by generation. */
@@ -70,6 +73,8 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
             this.onEnded[gen] = onEnded
         }
         if (autoGrant) grant(gen)
+        // A hold from inside the platform's own start, before connect() has published the session.
+        if (holdInsideStart) onActive(false)
     }
 
     /**
@@ -95,7 +100,7 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
         // Ordered, not lost: the real consumer handles an End queued behind a Start after that
         // Start has finished registering.
         if (gen == pendingGen) { pendingEnd = reason; return }
-        // Mirrors the real generation guard, so a test that supersedes an attempt exercises it.
+        // Mirrors the real generation guard, so a test that supersedes a session exercises it.
         if (gen != liveGen) return
         endNow(reason)
     }

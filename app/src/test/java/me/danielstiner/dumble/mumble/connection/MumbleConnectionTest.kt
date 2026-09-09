@@ -1,8 +1,10 @@
 package me.danielstiner.dumble.mumble.connection
 
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -14,6 +16,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
+import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
@@ -31,21 +34,25 @@ import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HostnameVerifier
 import kotlin.concurrent.thread
+import kotlin.coroutines.resume
 import kotlin.time.Duration.Companion.seconds
 
 class MumbleConnectionTest {
@@ -94,17 +101,24 @@ class MumbleConnectionTest {
     }
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> gate.await() }     // blocks mid-"handshake"
+            // Blocks the thread with no dispatcher change, so unlike the real handshake's
+            // withContext(IO) the return is not a cancellation point: the stale driver runs on
+            // to its own live check every time. Holds one Default worker while parked.
+            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
+                .also { transports += it }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
-        conn.disconnect()                                     // bumps the attempt generation
+        withTimeout(5_000) { arrived.await() }               // the driver is inside the handshake
+        conn.disconnect()                                     // bumps the generation
         assertEquals(ConnectionStatus.Idle, conn.status.value)
-        gate.complete(Unit)                                   // stale attempt resumes and returns
-        delay(100)                                            // let the stale coroutine run to completion
+        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
+        delay(100)                                            // let the stale driver run to its live check
         assertEquals(ConnectionStatus.Idle, conn.status.value)  // guard held: no clobber
+        awaitTrue("the superseded link must be closed") { transports.single().closed }
     }
 
     @Test fun channelTreeSurfacesReducedFrames() = runBlocking {
@@ -172,23 +186,26 @@ class MumbleConnectionTest {
 
         // Sampled, not awaited: connect() clears under the same lock that bumps the generation, so
         // it has already happened when the call returns, and every publish helper is gen-checked so
-        // the retired attempt cannot write these again.
+        // the retired session cannot write these again.
         assertEquals(ChannelTree(), conn.channelTree.value)
         assertEquals(emptyList<ChatMessage>(), conn.messages.value)
 
         conn.disconnect()
     }
 
-    @Test fun aSupersededAttemptLeavesChannelTreeEmpty() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+    @Test fun aSupersededSessionLeavesChannelTreeEmpty() = runBlocking {
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val conn = MumbleConnection(InMemoryPinStore()) {
-            FakeControlTransport { _, _ -> gate.await() }   // blocks mid-handshake
+            // Blocks the thread with no dispatcher change, so the return is not a cancellation
+            // point and the stale driver runs on to its live check every time.
+            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
         }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it == ConnectionStatus.Connecting } }
-        conn.disconnect()          // bumps the attempt generation
-        gate.complete(Unit)        // stale attempt resumes and is torn down
-        delay(100)
+        withTimeout(5_000) { arrived.await() }   // the driver is inside the handshake
+        conn.disconnect()          // bumps the generation
+        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
+        delay(100)   // let the stale driver run to its live check
         assertEquals(ChannelTree(), conn.channelTree.value)
     }
 
@@ -284,8 +301,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * A session that dies on its own reaches no disconnect() and supersedes no prior attempt, so
-     * before retire() nothing tore the attempt down and the playback thread outlived it — waking
+     * A session that dies on its own reaches no disconnect() and supersedes no prior session, so
+     * before retire() nothing tore the session down and the playback thread outlived it — waking
      * at 100 Hz with an open AudioTrack for as long as the error screen stayed up.
      */
     @Test fun aFailedSessionReleasesTheReceiver() = runBlocking {
@@ -322,19 +339,21 @@ class MumbleConnectionTest {
     }
 
     /**
-     * connect() bumps `attempt` synchronously but builds the attempt inside a coroutine, so a
-     * disconnect() landing while the pin lookup is still suspended leaves an attempt that was
-     * constructed and never published. Nothing else can reach it — it was never in `current`, so no
-     * teardown path knows about it — which makes the guard at the top of that coroutine its only
-     * exit, and releasing the transport there its own responsibility.
+     * connect() publishes the session synchronously, but its link is built on the driver after the
+     * pin lookup, so a disconnect() landing while that lookup is still suspended must find the
+     * session already retired. No teardown can reach a link that was never published, so the
+     * driver's own live check after the lookup is what closes it.
      *
-     * Deterministic rather than racy: the gate holds the coroutine inside pinStore.get(), which is
-     * upstream of the publish, so disconnect() always wins.
+     * Deterministic rather than racy: the lookup holds the driver on a latch that blocks the
+     * thread rather than suspending, so disconnect() always wins and the cancel cannot land at a
+     * resume; the driver returns from the lookup instead of dying inside it, which is the case
+     * the check exists for.
      */
-    @Test fun anAttemptSupersededBeforePublishReleasesItsTransport() = runBlocking {
-        val gate = CompletableDeferred<Unit>()
+    @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = runBlocking {
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { gate.await(); return null }
+            override suspend fun get(key: String): String? { arrived.complete(Unit); release.await(); return null }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
@@ -348,13 +367,62 @@ class MumbleConnectionTest {
         }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { arrived.await() }   // the driver is inside the lookup
         conn.disconnect()
-        gate.complete(Unit)
+        release.countDown()
 
-        awaitTrue("superseded attempt left its transport open") {
+        awaitTrue("a superseded session must close the transport it built") {
             transports.size == 1 && transports.all { it.closed }
         }
         assertEquals("no receiver should ever start on this path", 0, engines.get())
+    }
+
+    /**
+     * The driver lives on the session's scope, so a disconnect() cancels it wherever it waits.
+     * Held inside a cancellable pin lookup it dies there and never builds a transport.
+     */
+    @Test fun aDisconnectDuringThePinLookupCancelsTheDriver() = runBlocking {
+        val parked = CompletableDeferred<CancellableContinuation<Unit>>()
+        val pins = object : PinStore {
+            // Handed out only once the driver is suspended here, so the cancel that follows lands
+            // on this very wait rather than on a driver still on its way to it.
+            override suspend fun get(key: String): String? {
+                suspendCancellableCoroutine { parked.complete(it) }
+                return null
+            }
+            override suspend fun put(key: String, fingerprint: String) = Unit
+            override suspend fun remove(key: String) = Unit
+        }
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(pins) { FakeControlTransport { _, _ -> }.also { transports += it } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val wait = withTimeout(5_000) { parked.await() }
+        conn.disconnect()
+        wait.resume(Unit)   // ignored once cancelled; a driver that survived would run on and build
+        delay(200)
+
+        assertTrue("the cancelled driver must build nothing", transports.isEmpty())
+    }
+
+    /**
+     * Cancelled inside the handshake, the driver never reaches its own live check: the link it
+     * published under the lock before connecting is teardown's to close.
+     */
+    @Test fun aDisconnectDuringTheHandshakeClosesTheLink() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) {
+            FakeControlTransport { _, _ -> gate.await() }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        awaitTrue("the driver must reach the handshake") { transports.firstOrNull()?.listener != null }
+
+        conn.disconnect()
+
+        awaitTrue("teardown must close the link the driver published") { transports.single().closed }
+        gate.complete(Unit)   // inert: the wait was cancelled
+        Unit
     }
 
     /** Polls a condition a background coroutine will satisfy, rather than sleeping a fixed time. */
@@ -396,7 +464,7 @@ class MumbleConnectionTest {
         awaitTrue("teardown must end the call") { call.ends == 1 }
     }
 
-    /** The counters reach the flow from the live attempt's pump and leave with the session. */
+    /** The counters reach the flow from the live session's pump and leave with the session. */
     @Test fun theCaptureCountersFollowTheSession() = runBlocking {
         val handle = FakeCaptureHandle()
         handle.stats = CaptureStats(
@@ -465,6 +533,95 @@ class MumbleConnectionTest {
             "a handshake that never produced a session is not a hang-up",
             listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons,
         )
+    }
+
+    /**
+     * A connect that fails outright leaves nothing for the user to act on, unlike a trust prompt,
+     * so the session is retired on the spot: the microphone must not open against it, and the
+     * call ends exactly once, as a failure.
+     */
+    @Test fun aHardConnectFailureRetiresTheSession() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(),
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { FakeControlTransport { _, _ -> throw IOException("connection refused") }.also { transports += it } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
+        assertEquals(ErrorKind.CONNECT_FAILED, err.kind)
+        awaitTrue("the failure must end the call") { call.ends == 1 }
+
+        conn.requestCapture()
+        delay(200)
+
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        assertTrue("no microphone may open for a retired session", handles.isEmpty())
+        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
+        awaitTrue("retire must close the link") { transports.single().closed }
+        conn.disconnect()
+    }
+
+    /** A trust prompt retires its session the same way; the one difference is that the prompt
+     *  keeps the session aside for trustAndConnect() to reconnect from. */
+    @Test fun aTrustPromptRetiresTheSessionAndCanStillBeAccepted() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val pins = InMemoryPinStore()
+        val conn = MumbleConnection(
+            pins,
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { pin ->
+            FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("ab12") }
+                .also { transports += it }
+        }
+        val endpoint = MumbleEndpoint.parse("localhost")
+
+        conn.connect(endpoint, "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.AwaitingTrust } }
+        awaitTrue("the prompt must end the call") { call.ends == 1 }
+
+        conn.requestCapture()
+        delay(200)
+
+        assertTrue("no microphone may open while a prompt is up", handles.isEmpty())
+        awaitTrue("the stopped handshake's transport is closed") { transports.single().closed }
+        assertTrue(conn.status.value is ConnectionStatus.AwaitingTrust)
+
+        conn.trustAndConnect()
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        assertEquals("ab12", pins.get(endpoint.address))
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        conn.disconnect()
+    }
+
+    /** The generation is the UI's handle on "which call": one per connect(), whatever session id
+     *  the server hands out. */
+    @Test fun connectedCarriesTheSessionsGeneration() = runBlocking {
+        val fakes = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { fakes += it } }
+        val sync = TcpFrame(TcpMessageType.ServerSync.id,
+            MumbleProtos.ServerSync.newBuilder().setSession(5).build().toByteArray())
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fakes[0].listener!!.onFrame(sync)
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        fakes[1].listener!!.onFrame(sync)
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        assertEquals(5, first.sessionId)
+        assertEquals(5, second.sessionId)
+        assertNotEquals(first.gen, second.gen)
+        conn.disconnect()
     }
 
     /** The system ending the call (a cellular call taking over) must take the session down with it. */
@@ -539,7 +696,7 @@ class MumbleConnectionTest {
         awaitTrue("disconnect must end the call") { call.ends == 1 }
         call.resume()
         delay(200)
-        assertEquals("no engine may be built for a dead attempt", 1, handles.size)
+        assertEquals("no engine may be built for a dead session", 1, handles.size)
     }
 
     /**
@@ -899,11 +1056,11 @@ class MumbleConnectionTest {
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
 
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
-        awaitTrue("a retired attempt must not leak its socket") { readersSince(before) == 0 }
+        awaitTrue("a retired session must not leak its socket") { readersSince(before) == 0 }
         peer.close()
     }
 
-    @Test fun aSupersededAttemptClosesItsUdpSocket() = runBlocking {
+    @Test fun aSupersededSessionClosesItsUdpSocket() = runBlocking {
         val peer = UdpPeer(serverCrypt())
         val before = readers()
         val conn = MumbleConnection(InMemoryPinStore(), newTransport = fakeAimedAt(peer) {})
@@ -913,8 +1070,8 @@ class MumbleConnectionTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
-        awaitTrue("the superseded attempt's reader exits") { !first.isAlive }
-        awaitTrue("one live attempt, one socket") { readersSince(before) == 1 }
+        awaitTrue("the superseded session's reader exits") { !first.isAlive }
+        awaitTrue("one live session, one socket") { readersSince(before) == 1 }
         conn.disconnect()
         awaitTrue("and none after disconnect") { readersSince(before) == 0 }
         peer.close()

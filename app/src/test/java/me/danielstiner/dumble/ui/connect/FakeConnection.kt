@@ -68,7 +68,7 @@ class FakeConnection : Connection {
 
     override fun requestUserStats(session: Int) { userStatsRequests += session }
 
-    fun emitConnected(sessionId: Int) { status.value = ConnectionStatus.Connected(sessionId) }
+    fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = ConnectionStatus.Connected(gen, sessionId) }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
 
     /** Only [PlayoutStats.bufferedSamples] is read today; the rest of the record stays at zero. */

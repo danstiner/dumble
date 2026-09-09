@@ -166,9 +166,10 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A requestCapture during a hold must open nothing. openCapture only checked `att.sender == null`,
-     * which a hold had just made true, so a Chat/Connected remount during a cellular call opened the
-     * microphone — and could do it while the first engine was still live.
+     * A requestCapture during a hold must open nothing. reconcile only checked
+     * `session.capture == null`, which a hold had just made true, so a Chat/Connected remount
+     * during a cellular call opened the microphone — and could do it while the first engine
+     * was still live.
      */
     @Test fun requestCaptureDuringAHoldOpensNothing() = runBlocking {
         val live = AtomicInteger()
@@ -252,7 +253,7 @@ class CaptureLifecycleTest {
 
     /**
      * Hold-then-disconnect must free the engine exactly once: the hold's release destroys it via
-     * the pump's exit, and the disconnect's Release then reconciles an attempt whose `capture` is
+     * the pump's exit, and the disconnect's Release then reconciles a session whose `capture` is
      * already null. A second destroy() on the real engine is the native use-after-free, so "found
      * nothing to free" is the behaviour being pinned.
      */
@@ -294,15 +295,15 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * The one-microphone invariant across attempts, which nothing covered before. teardown queues
-     * the prior release synchronously, ahead of anything the new attempt can produce, and the
+     * The one-microphone invariant across sessions. teardown queues the prior release
+     * synchronously, ahead of anything the new session can produce, and the
      * release closes the stream before returning — so the first engine is always stopped before
      * the second is created.
      *
      * This pins ordering only loosely. Measured: this test's own setup — a full second `connect()`
      * → `Handshaking` round trip before `requestCapture()` can run — gives `e0:stop` such a head
      * start that a merely-asynchronous release still finishes first and does not flip the
-     * assertion, whether that means wrapping `stop()` in a `launch` or moving the prior attempt's
+     * assertion, whether that means wrapping `stop()` in a `launch` or moving the prior session's
      * `teardown()` send off the caller's thread. Only a release slow enough to lose that race
      * outright (an artificial `delay(400)` ahead of `stop()`, in testing) reliably does.
      */
@@ -358,7 +359,7 @@ class CaptureLifecycleTest {
      * STRESS CASE, not a proof — see below for why a single trial cannot be one.
      *
      * Pins beginRelease's synchronous, inline session.stop() (the "entire one-microphone
-     * invariant" per its own comment): the gap between the second attempt's Acquire being sent and
+     * invariant" per its own comment): the gap between the second session's Acquire being sent and
      * its engine actually opening must be at least as long as the first engine's own slow stop(),
      * because a synchronous release cannot process anything queued behind it until stop() returns.
      * reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond cannot catch an async stop()
@@ -380,7 +381,7 @@ class CaptureLifecycleTest {
      * only buys detection power, not risk: correct code blocks the consumer inline regardless of
      * this dispatcher-sharing quirk, so the gap is always the full sleep, every trial.
      */
-    @Test fun aSlowFirstStopBlocksTheSecondAttemptsOpenUntilItReturns() = runBlocking {
+    @Test fun aSlowFirstStopBlocksTheSecondSessionsOpenUntilItReturns() = runBlocking {
         repeat(20) {
             val t0 = System.nanoTime()
             fun elapsedMs() = (System.nanoTime() - t0) / 1_000_000
@@ -427,12 +428,11 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A hold callback from a superseded call must not touch the live attempt. The platform does not
-     * fence a callback already in flight, and an earlier draft keyed the hold level on the attempt
-     * rather than the generation — so a late hold latched onto the successor and killed transmit for
-     * the whole session with nothing able to clear it.
+     * A hold callback from a superseded call must not touch the live session. Without the
+     * generation check, a stale hold latched onto the successor and killed transmit with nothing
+     * able to clear it.
      */
-    @Test fun aStaleHoldDoesNotTouchTheLiveAttempt() = runBlocking {
+    @Test fun aStaleHoldDoesNotTouchTheLiveSession() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
@@ -710,9 +710,9 @@ class CaptureLifecycleTest {
 
     /**
      * A resume from a superseded call must not clear a hold that is legitimately protecting
-     * the live attempt. aStaleHoldDoesNotTouchTheLiveAttempt above only ever delivers a stale
+     * the live session. aStaleHoldDoesNotTouchTheLiveSession above only ever delivers a stale
      * *hold*, which sets heldGen to a generation that already differs from the live one — harmless
-     * by coincidence (heldGen != att.gen was already true), not because cmd.gen == attempt did
+     * by coincidence (heldGen != session.gen was already true), not because gen == generation did
      * anything. The staleness check's real job is guarding a stale *resume*: unchecked, it would
      * clear heldGen back to NO_GEN while the platform still holds the live call, reopening capture
      * against a device the platform owns.
@@ -751,12 +751,14 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A hold delivered between call.start and the attempt publishing must still be honoured: the
-     * hold level is keyed by generation precisely because the two do not have the same lifetime.
+     * call.start() runs before connect() publishes the session, and the platform can deliver a
+     * hold from inside it. onHeld keys on the generation rather than on `current`, so that hold is
+     * recorded against the session that is about to publish, and a capture asked for afterwards
+     * stays refused until the resume.
      */
-    @Test fun aHoldBeforeTheAttemptPublishesLeavesItNotCapturing() = runBlocking {
+    @Test fun aHoldDeliveredInsideCallStartLeavesTheSessionNotCapturing() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall()
+        val call = FakeVoiceCall(holdInsideStart = true)
         val conn = MumbleConnection(
             InMemoryPinStore(),
             newCapture = { FakeCaptureHandle().also { handles += it } },
@@ -764,9 +766,6 @@ class CaptureLifecycleTest {
         ) { FakeControlTransport { _, _ -> } }
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        // call.start runs synchronously inside connect(), so the closure exists immediately —
-        // before the coroutine that publishes the attempt has necessarily run.
-        call.hold()
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
 
         conn.requestCapture()
@@ -984,7 +983,7 @@ class CaptureLifecycleTest {
             val hammer = Thread { repeat(500) { i -> conn.setTransmitting(i % 2 == 0) } }
             hammer.start()
             // No wait for the engine to open first: Acquire and this hold's Held share one serial
-            // queue, so openSession() has already run by the time Held is dispatched.
+            // queue, so openCapture() has already run by the time Held is dispatched.
             call.hold()
             hammer.join(2_000)
             assertFalse("the gate reached a freed handle", handle.gateAfterDestroy)
@@ -1011,8 +1010,8 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * Pins openSession's isLive recheck after newCapture() returns. newCapture() blocks on the HAL
-     * and `attempt`/`current` are still mutated on caller threads while it does, so a disconnect
+     * Pins openCapture's isLive recheck after newCapture() returns. newCapture() blocks on the HAL
+     * and `current` is still mutated on caller threads while it does, so a disconnect
      * landing in that window has already moved the world by the time the handle comes back. Without
      * the recheck the stale handle would attach and its pump would start — a leaked engine racing
      * a `current` that no longer points at it.
@@ -1033,7 +1032,7 @@ class CaptureLifecycleTest {
         conn.requestCapture()
         awaitTrue("the consumer must be parked inside newCapture()") { handle.enteredNewCapture }
 
-        conn.disconnect()   // moves `current`/`attempt` while newCapture() is still blocked
+        conn.disconnect()   // moves `current` while newCapture() is still blocked
         gate.countDown()    // let the now-stale handle come back
 
         awaitTrue("the stale handle must be stopped") { handle.stopped }
@@ -1155,7 +1154,7 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * retire() keeps the terminal Error up and does not bump `attempt`, so a later platform
+     * retire() keeps the terminal Error up and does not bump `generation`, so a later platform
      * hangup still matches the generation — a gen-only guard let it overwrite the Error with a
      * bare Idle, losing the reason the connect screen shows.
      */
@@ -1302,7 +1301,7 @@ class CaptureLifecycleTest {
     }
 
     /** The hold already released the session, so this disconnect runs no release of its own:
-     *  retiring the attempt is what has to clear the signal. */
+     *  retiring the session is what has to clear the signal. */
     @Test fun disconnectClearsSpeaking() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
