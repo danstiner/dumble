@@ -76,7 +76,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
     val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
 
     // Null until start() builds one, and permanently null if it never does (newEngine() refused,
-    // or start() is never called at all — the ordinary case for a superseded or failed attempt).
+    // or start() is never called at all — the ordinary case for a superseded or failed session).
     // Guarded by this object's monitor.
     private var engine: PlayoutEngine? = null
 
@@ -94,7 +94,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
 
     // One-way, and the poll's exit condition. Set by stop(), and by start() when there is no
     // engine to be had. One-way because every "stop" is terminal here: the caller builds a
-    // receiver per attempt and never restarts one.
+    // receiver per session and never restarts one.
     @Volatile
     private var stopped = false
 
@@ -104,11 +104,11 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
     private var held = false
 
     /**
-     * Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per attempt.
+     * Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per session.
      *
      * [newEngine] is called from here, not from the constructor: the engine must exist if and only
      * if the poll that owns its stream is running. Building it eagerly at construction leaked one
-     * engine per attempt that was superseded, retired, or failed before ever reaching this call.
+     * engine per session that was superseded, retired, or failed before ever reaching this call.
      */
     @Synchronized
     fun start() {

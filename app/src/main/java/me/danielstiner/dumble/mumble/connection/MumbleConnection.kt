@@ -176,10 +176,9 @@ class MumbleConnection internal constructor(
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the driver, read on caller threads. */
         @Volatile var presented: String? = null,
-        /** The live capture session, or null. One field, one lifetime: the handle and its pump
-         *  used to be two fields paired by convention in three places, and a window where only one
-         *  had been cleared is how a hold could open a second microphone stream. Written only by
-         *  the lifecycle consumer; read on the UI thread by [apply]. */
+        /** The live capture session, or null. One field, one lifetime: splitting handle and pump
+         *  would leave a window where a hold could open a second microphone stream. Written only
+         *  by the lifecycle consumer; read on the UI thread by [apply]. */
         @Volatile var capture: CaptureSession? = null,
         /** Talk is held. A level, not an edge, so a capture session rebuilt under a still-held
          *  button comes up transmitting. UI thread writes it; [openCapture] reads it after
@@ -407,14 +406,10 @@ class MumbleConnection internal constructor(
      */
     private fun onRelease(session: Session, reason: VoiceCall.Reason) {
         session.wanted = false
-        // Before reconcile, not after, and needing nothing from it but the generation.
-        // reconcile blocks in capture.stop() — an unbounded HAL close — and this handler is
-        // already queued behind whatever the consumer was doing, which can be a full
-        // newCapture(). Ending afterwards left the platform call and the microphone
-        // notification registered for that whole time, with the UI already back on the
-        // connect form; and a throw anywhere in reconcile skipped the end entirely, since
-        // the consumer loop swallows it. Still not deferred to the pump's exit, which is
-        // what made a wedged pump never end the call at all.
+        // Before reconcile, needing nothing from it but the generation: reconcile blocks on
+        // the HAL close and can throw (the consumer loop swallows it), either of which
+        // would strand the call. Not deferred to the pump's exit either — a wedged pump
+        // would never end it.
         call.end(session.gen, reason)
         reconcile(session)
     }
@@ -613,15 +608,12 @@ class MumbleConnection internal constructor(
         prior?.let { teardown(it) }
         // Here rather than in requestCapture(): tying the call to the connection, not the
         // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
-        // survives backgrounding — true only since the service's mediaPlayback fallback; a
-        // `microphone`-typed start threw without the permission and that user got nothing.
-        // Foreground is no precondition either — the service starts inside addCall's block,
-        // 25–390 ms after this returns, beyond any caller's control.
+        // survives backgrounding. Foreground is no precondition — the service starts inside
+        // addCall's block, 25–390 ms after this returns, beyond any caller's control.
         call.start(
             gen, endpoint, username,
-            // The generation, not the session: onCallActive used to resolve `current` at call time
-            // with no generation check, so a hold from a superseded call could latch onto its
-            // successor and kill transmit for the session with nothing to clear it.
+            // The generation, not the session: a hold from a superseded call must not reach
+            // the live session.
             onActive = { active -> send(CaptureCommand.Held(gen, !active)) },
             onRoutes = { r -> publishRoutes(gen, r) },
             onEnded = { endedByPlatform(gen) },
@@ -676,10 +668,9 @@ class MumbleConnection internal constructor(
             if (t is CancellationException) throw t
             val status = mapConnectError(t, session)
             if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
-                // The handshake stopped on purpose to ask the user. Retired all the same: a
-                // session left current with its call ended is one a Talk press opens a
-                // microphone against. Kept before the status goes out, since trustAndConnect()
-                // can follow the prompt at once.
+                // Retired all the same: a session left current after its call ends is one a
+                // Talk press opens a microphone against. Set before the status goes out, since
+                // trustAndConnect() can follow the prompt at once.
                 Log.i(TAG, "handshake stopped for trust decision: $status")
                 synchronized(lock) { if (gen == generation) trustPrompt = session }
             } else {

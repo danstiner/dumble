@@ -100,7 +100,7 @@ class FakeVoiceCall(
         // Ordered, not lost: the real consumer handles an End queued behind a Start after that
         // Start has finished registering.
         if (gen == pendingGen) { pendingEnd = reason; return }
-        // Mirrors the real generation guard, so a test that supersedes an attempt exercises it.
+        // Mirrors the real generation guard, so a test that supersedes a session exercises it.
         if (gen != liveGen) return
         endNow(reason)
     }

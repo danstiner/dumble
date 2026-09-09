@@ -30,9 +30,10 @@ ending the call. The generation exists because a blocking handshake cannot be pr
 superseded link can complete late, so every flow write is generation-checked under the same lock
 that bumps, turning late writes into no-ops instead of corruption; a link's own flows are checked
 against the link's identity as well. Sessions end two deliberately different ways:
-supersede/disconnect clears every published flow atomically with the bump, while a link that
-fails on its own retires its session without clearing — the terminal `Error` is what the user is
-looking at.
+supersede/disconnect clears every published flow atomically with the bump, while a failed
+connect or a dying link retires the session without clearing — the terminal status is what the
+user is looking at. A trust prompt retires its session the same way but keeps it aside for
+`trustAndConnect()` to reconnect from.
 
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
 instance, so no teardown state can leak between links. One reader coroutine delivers frames,
