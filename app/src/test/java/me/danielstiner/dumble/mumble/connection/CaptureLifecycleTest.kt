@@ -381,7 +381,7 @@ class CaptureLifecycleTest {
      * only buys detection power, not risk: correct code blocks the consumer inline regardless of
      * this dispatcher-sharing quirk, so the gap is always the full sleep, every trial.
      */
-    @Test fun aSlowFirstStopBlocksTheSecondAttemptsOpenUntilItReturns() = runBlocking {
+    @Test fun aSlowFirstStopBlocksTheSecondSessionsOpenUntilItReturns() = runBlocking {
         repeat(20) {
             val t0 = System.nanoTime()
             fun elapsedMs() = (System.nanoTime() - t0) / 1_000_000
@@ -432,7 +432,7 @@ class CaptureLifecycleTest {
      * generation check, a stale hold latched onto the successor and killed transmit with nothing
      * able to clear it.
      */
-    @Test fun aStaleHoldDoesNotTouchTheLiveAttempt() = runBlocking {
+    @Test fun aStaleHoldDoesNotTouchTheLiveSession() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = MumbleConnection(
@@ -710,7 +710,7 @@ class CaptureLifecycleTest {
 
     /**
      * A resume from a superseded call must not clear a hold that is legitimately protecting
-     * the live session. aStaleHoldDoesNotTouchTheLiveAttempt above only ever delivers a stale
+     * the live session. aStaleHoldDoesNotTouchTheLiveSession above only ever delivers a stale
      * *hold*, which sets heldGen to a generation that already differs from the live one — harmless
      * by coincidence (heldGen != session.gen was already true), not because gen == generation did
      * anything. The staleness check's real job is guarding a stale *resume*: unchecked, it would
