@@ -1038,6 +1038,40 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
+    /** The self_mute flag of every UserState this transport sent, in order. */
+    private fun FakeControlTransport.selfMutes() = sent
+        .filter { it.first == TcpMessageType.UserState }
+        .map { (it.second as MumbleProtos.UserState).selfMute }
+
+    /**
+     * Mute is the session's and the gate stays shut across the swap, but the replacement's wire
+     * state starts fresh: untold, the server and the row it echoes back would show the user
+     * unmuted while nothing leaves the device.
+     */
+    @Test fun selfMuteSurvivesARelink() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        transportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        conn.setMuted(true)
+        assertEquals("the first link carries the mute", listOf(true), transports[0].selfMutes())
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        transportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+
+        awaitTrue("the replacement must be told the session is muted") {
+            transports[1].selfMutes() == listOf(true)
+        }
+        conn.setMuted(false)
+        awaitTrue("and the tap that lifts it must reach the same link") {
+            transports[1].selfMutes() == listOf(true, false)
+        }
+        conn.disconnect()
+    }
+
     /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()

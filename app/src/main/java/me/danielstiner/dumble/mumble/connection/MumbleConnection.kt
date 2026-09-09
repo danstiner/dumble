@@ -799,6 +799,9 @@ class MumbleConnection internal constructor(
                 publishMessages(gen, (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES))
             }
         }
+        // The gate is the session's and survives the swap; the wire state is the link's and starts
+        // fresh, so a replacement has to be told what the user already asked for.
+        if (session.muted) link.stateMachine.setSelfMute(true)
     }
 
     /**
