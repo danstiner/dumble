@@ -16,6 +16,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
+import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
@@ -561,6 +562,41 @@ class MumbleConnectionTest {
         assertTrue("no microphone may open for a retired session", handles.isEmpty())
         assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
         awaitTrue("retire must close the link") { transports.single().closed }
+        conn.disconnect()
+    }
+
+    /** A trust prompt retires its session the same way; the one difference is that the prompt
+     *  keeps the session aside for trustAndConnect() to reconnect from. */
+    @Test fun aTrustPromptRetiresTheSessionAndCanStillBeAccepted() = runBlocking {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val pins = InMemoryPinStore()
+        val conn = MumbleConnection(
+            pins,
+            newCapture = { FakeCaptureHandle().also { handles += it } },
+            call = call,
+        ) { pin ->
+            FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("ab12") }
+                .also { transports += it }
+        }
+        val endpoint = MumbleEndpoint.parse("localhost")
+
+        conn.connect(endpoint, "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.AwaitingTrust } }
+        awaitTrue("the prompt must end the call") { call.ends == 1 }
+
+        conn.requestCapture()
+        delay(200)
+
+        assertTrue("no microphone may open while a prompt is up", handles.isEmpty())
+        awaitTrue("the stopped handshake's transport is closed") { transports.single().closed }
+        assertTrue(conn.status.value is ConnectionStatus.AwaitingTrust)
+
+        conn.trustAndConnect()
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        assertEquals("ab12", pins.get(endpoint.address))
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
         conn.disconnect()
     }
 

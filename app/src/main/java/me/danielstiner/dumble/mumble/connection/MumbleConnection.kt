@@ -143,6 +143,9 @@ class MumbleConnection internal constructor(
     private val lock = Any()
     private var generation = 0
     @Volatile private var current: Session? = null
+    /** The session whose handshake stopped for a trust decision: retired like any failed connect,
+     *  kept aside for [trustAndConnect] to reconnect from. Under [lock]. */
+    private var trustPrompt: Session? = null
 
     /** The transmit mode, as a setting: outlives sessions and is applied to every session this
      *  connection opens. UI thread writes it. */
@@ -544,6 +547,7 @@ class MumbleConnection internal constructor(
     private fun retireAndClearLocked(status: ConnectionStatus): Session? {
         val prior = current
         current = null; generation += 1
+        trustPrompt = null
         // Queued here, under the lock that unpublishes [prior]: nothing the next session can ask
         // of the capture consumer is queued before this, so the release runs first. trySend
         // never blocks, so it is safe under the lock.
@@ -671,24 +675,19 @@ class MumbleConnection internal constructor(
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             val status = mapConnectError(t, session)
-            publishStatus(gen, status)
-            when (status) {
-                // A trust prompt is not a failure — the handshake stopped on purpose to ask the
-                // user, and the session stays current for trustAndConnect() to read. The
-                // handshake produced no session for the platform to hold a call open for;
-                // without this a prompt the user leaves sitting keeps a registered call alive
-                // with no audio behind it.
-                is ConnectionStatus.AwaitingTrust, is ConnectionStatus.PinMismatch -> {
-                    Log.i(TAG, "handshake stopped for trust decision: $status")
-                    call.end(gen, VoiceCall.Reason.SESSION_FAILED)
-                }
-                // Nothing for the user to act on: retired like a link that dies later, which
-                // ends the call as a failure and keeps the microphone from opening against it.
-                else -> {
-                    Log.w(TAG, "connect failed for ${session.endpoint.address}", t)
-                    retire(session)
-                }
+            if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
+                // The handshake stopped on purpose to ask the user. Retired all the same: a
+                // session left current with its call ended is one a Talk press opens a
+                // microphone against. Kept before the status goes out, since trustAndConnect()
+                // can follow the prompt at once.
+                Log.i(TAG, "handshake stopped for trust decision: $status")
+                synchronized(lock) { if (gen == generation) trustPrompt = session }
+            } else {
+                Log.w(TAG, "connect failed for ${session.endpoint.address}", t)
             }
+            publishStatus(gen, status)
+            // Ends the call as a failure and keeps the microphone from opening against it.
+            retire(session)
             return
         }
         if (!isLive(session)) { link.close(); return }   // superseded mid-handshake
@@ -742,7 +741,7 @@ class MumbleConnection internal constructor(
 
     /** Accept the presented certificate (first contact or a mismatch) and reconnect on the pinned path. */
     override fun trustAndConnect() {
-        val session = current ?: return
+        val session = synchronized(lock) { trustPrompt } ?: return
         val presented = session.presented ?: return
         scope.launch {
             pinStore.put(session.endpoint.address, presented)
@@ -764,8 +763,8 @@ class MumbleConnection internal constructor(
      */
     private fun endedByPlatform(gen: Int) {
         val prior = synchronized(lock) {
-            // Status, not `current != null`: a session parked on a trust prompt is still current,
-            // and a late hangup must not retire it.
+            // Status, not `current != null`: a retired session has already cleared it, and a late
+            // hangup must not replace the error or trust prompt the user is looking at.
             if (gen != generation || !_status.value.ongoing) return
             retireAndClearLocked(ConnectionStatus.Idle)
         }
