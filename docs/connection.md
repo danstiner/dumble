@@ -35,6 +35,22 @@ connect or a dying link retires the session without clearing — the terminal st
 user is looking at. A trust prompt retires its session the same way but keeps it aside for
 `trustAndConnect()` to reconnect from.
 
+**Relink.** A link that dies after it synchronized is replaced under the same session: the
+driver classifies the failure on the server's reject type (a name still held by our own ghost
+is retried, every other rejection and a too-old server are final), publishes `Reconnecting`,
+closes the dead link, and opens replacements on a ladder of 0, 1, 2, 4, 8, 16, 30, 30… seconds
+until one synchronizes or two minutes have passed since a working link was lost. A link counts
+as working once it has been synchronized for 30 s; losing one starts the ladder and the deadline
+over, losing one that never got that far continues the outage in progress, so a path that dies
+every few seconds gives up in two minutes rather than rejoining forever. The replacement's
+flows are wired only after it synchronizes, and the dead link is frozen the moment the
+replacement starts, so the kick the server gives the old session never reads as "you left".
+Chat rides across the swap; the platform call, the receiver and the capture session belong to
+the session and never notice. The first link of a session is never retried: its failure is the
+connect failing, and the connect form shows it. A trust prompt on a relink (the server's
+certificate changed) retires the session with the prompt up and keeps it aside for
+`trustAndConnect()`, as a fresh connect does.
+
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
 instance, so no teardown state can leak between links. One reader coroutine delivers frames,
 and its `finally` is the sole delivery point of `onClosed` — exactly once, never nested inside
