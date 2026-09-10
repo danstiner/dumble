@@ -382,16 +382,14 @@ class SessionStateMachine(
      * No optimistic echo, unlike [sendText]: the server broadcasts UserState back, so the reducer
      * shows what it believes. Safe off the reader thread — channel.send only enqueues.
      */
-    fun setSelfDeaf(on: Boolean): Boolean =
-        sendSelfState(if (on != sent.selfDeaf) sent.deafen(on) else sent)
+    fun setSelfDeaf(on: Boolean): Boolean = sendSelfState(sent.withSelfDeaf(on))
 
     /**
      * Mute or unmute. Same shape and repeat guard as [setSelfDeaf]. Unmuting while deafened may
      * take two taps: the first undeafens and keeps a mute the user set themselves
      * ([DeafenState.mute]), and the button still reads muted after it because it is.
      */
-    fun setSelfMute(on: Boolean): Boolean =
-        sendSelfState(if (on != sent.selfMute) sent.mute(on) else sent)
+    fun setSelfMute(on: Boolean): Boolean = sendSelfState(sent.withSelfMute(on))
 
     /**
      * Put [state] on the wire as-is, for a link taking over from one that carried it. Not derived

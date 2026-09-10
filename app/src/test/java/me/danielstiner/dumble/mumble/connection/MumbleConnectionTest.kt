@@ -1252,6 +1252,36 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
+    /**
+     * The swap publishes the replacement's own tree before the driver publishes its Connected, so
+     * the UI never reads the new session id against the dead link's tree — where our own row is
+     * missing and a mute on it would read as gone.
+     */
+    @Test fun theReplacementsTreeIsPublishedBeforeItsConnected() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        fun ourRow(session: Int) = TcpFrame(
+            TcpMessageType.UserState.id,
+            MumbleProtos.UserState.newBuilder().setSession(session).setChannelId(0).setSelfMute(true)
+                .build().toByteArray(),
+        )
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(ourRow(1))
+        transports[0].listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        // The replacement's own handshake: its rows land before its ServerSync, as murmur sends them.
+        startedTransportAt(transports, 1).listener!!.onFrame(ourRow(2))
+        transports[1].listener!!.onFrame(serverSync(2))
+
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+        val row = conn.channelTree.value.users[2]
+        assertNotNull("our row must be readable the moment Connected lands", row)
+        assertTrue("and carry what the replacement was told", row!!.selfMute)
+        conn.disconnect()
+    }
+
     /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()

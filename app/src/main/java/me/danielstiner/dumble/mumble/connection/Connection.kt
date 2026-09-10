@@ -7,6 +7,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
+import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -34,6 +35,10 @@ interface Connection {
     val lastServerReplyAt: StateFlow<ComparableTimeMark?>
     val channelTree: StateFlow<ChannelTree>
     val messages: StateFlow<List<ChatMessage>>
+
+    /** Self-mute and self-deafen as asked for, not as echoed: what the controls read while a
+     *  relink has the server's answer out of reach. */
+    val selfState: StateFlow<DeafenState>
     val speakingSessions: StateFlow<Set<Int>>
 
     /** Our own audio reaching the wire, held ~200 ms past the last packet so it does not strobe

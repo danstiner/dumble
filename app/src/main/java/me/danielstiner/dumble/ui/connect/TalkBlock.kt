@@ -18,11 +18,10 @@ enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED, RECONNECTING }
  * channel suppress reach it too, and both otherwise let the user hold Talk, watch the encoder run,
  * and be heard by nobody.
  *
- * [me] is our own row, or null in the window after Connected where the tree has not caught up —
- * status and tree are republished by separate collectors. Nothing blocks here on that absence:
- * pressing Talk is harmless, and disabling on absent data flickers the control at every connect.
- * A tree that has other users but not us is a different thing — a dead link's tree read under a
- * new link's session id — and the caller blocks on that.
+ * [me] is our own row, or null in the millisecond-scale window after Connected where the tree has
+ * not caught up — status and tree are republished by separate collectors. Talk stays available
+ * there: pressing it is harmless, and disabling on absent data flickers the control at every
+ * connect.
  *
  * [TalkBlock.DEAFENED] is tested before the mute disjunction because murmur sets `self_mute`
  * alongside `self_deaf`, so a deafened user would otherwise be told the true-but-useless "Muted".
