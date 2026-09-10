@@ -182,8 +182,13 @@ class ConnectViewModel internal constructor(
             // nowhere. Past it there is no window left to cover — the swap publishes the
             // replacement's tree before its Connected, so our row is there to read.
             val reconnecting = status is ConnectionStatus.Reconnecting
-            val block = if (reconnecting) TalkBlock.RECONNECTING
-                else talkBlock(me, f.microphoneGranted)
+            val block = when {
+                // The permission outranks the outage: without it there is nothing to unblock when
+                // the link comes back, and the Mute control keys off this one to disable itself.
+                !f.microphoneGranted -> TalkBlock.NO_MICROPHONE
+                reconnecting -> TalkBlock.RECONNECTING
+                else -> talkBlock(me, f.microphoneGranted)
+            }
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { selfSpeaking && block == null }

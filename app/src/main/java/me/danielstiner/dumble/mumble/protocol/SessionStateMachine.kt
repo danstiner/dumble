@@ -117,9 +117,6 @@ class SessionStateMachine(
      */
     @Volatile private var sent = DeafenState()
 
-    /** What this link last put on the wire, for a session that has to tell a replacement link. */
-    val selfState: DeafenState get() = sent
-
     /** What this link's synchronize was, or null until it happens. One value so its parts cannot
      *  be read torn apart. */
     data class Sync(val at: ComparableTimeMark, val sessionId: Int)

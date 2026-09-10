@@ -407,6 +407,25 @@ class ConnectViewModelTest {
     )
 
     /**
+     * A relink does not hand back a microphone the user never granted. The Mute control disables
+     * itself on this block alone, so letting the outage mask it would let that user mute themselves
+     * for every relink and stay muted after it.
+     */
+    @Test fun noMicrophoneOutranksAnOutage() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = false)
+        conn.channelTree.value = treeWith(user(7))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        assertEquals(TalkBlock.NO_MICROPHONE, vm.uiState.value.talkBlock)
+
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+        assertEquals(TalkBlock.NO_MICROPHONE, vm.uiState.value.talkBlock)
+    }
+
+    /**
      * Mute and Deafen toggle from what the control shows, and through an outage that cannot be the
      * echo: the server's answer stops with the link, and the tree it would arrive in is frozen at
      * that link's close. Read from the echo, a second tap asks for the same thing again and the

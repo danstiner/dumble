@@ -1000,7 +1000,7 @@ class MumbleConnectionTest {
 
         val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
-        assertEquals("reconnect gave up after 2 min", err.detail)
+        assertEquals("could not get back to the server", err.detail)
         // 0+1+2+4+8+16+30+30 = 91 s used; the next 30 s wait would end at 121 s, past the 120 s deadline.
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30).map { it.seconds }, waits.toList())
         awaitTrue("giving up ends the call") { call.ends == 1 }
@@ -1279,6 +1279,38 @@ class MumbleConnectionTest {
         val row = conn.channelTree.value.users[2]
         assertNotNull("our row must be readable the moment Connected lands", row)
         assertTrue("and carry what the replacement was told", row!!.selfMute)
+        conn.disconnect()
+    }
+
+    /**
+     * A mute tapped while the socket is already gone reaches no server, so the row that freezes at
+     * the link's death still reads unmuted. The gate is shut all the same, and it is the gate the
+     * replacement is told from: seeded back from that echo, the user would come back with the
+     * server, the row and the control saying unmuted while nothing left the device.
+     */
+    @Test fun aMuteTheDyingLinkNeverCarriedIsStillWhatTheReplacementIsTold() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        fun ourRow(session: Int) = TcpFrame(
+            TcpMessageType.UserState.id,
+            MumbleProtos.UserState.newBuilder().setSession(session).setChannelId(0).build().toByteArray(),
+        )
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(ourRow(1))
+        transports[0].listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        transports[0].close()                      // the socket is gone; the state machine has yet to hear
+        conn.setMuted(true)
+        assertEquals("the wire refused it", emptyList<Pair<Boolean, Boolean>>(), transports[0].selfStates())
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+
+        awaitTrue("the replacement must be told the session is muted") {
+            transports[1].selfStates() == listOf(false to true)
+        }
         conn.disconnect()
     }
 

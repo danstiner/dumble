@@ -745,8 +745,12 @@ class MumbleConnection internal constructor(
                 synchronized(lock) {
                     val row = synced?.sessionId?.let { _channelTree.value.users[it] }
                     if (row != null && session.gen == generation) {
+                        // Deafen only. The mute the session asks for is the gate's own value: a
+                        // tap the dying link never carried is still what the user asked for, and
+                        // seeding that back from the echo would leave the gate shut with the
+                        // server, the row and the control all saying otherwise.
                         session.selfState =
-                            session.selfState.copy(selfDeaf = row.selfDeaf, selfMute = row.selfMute)
+                            session.selfState.copy(selfDeaf = row.selfDeaf, selfMute = session.muted)
                         _selfState.value = session.selfState
                     }
                 }
@@ -1135,7 +1139,9 @@ class MumbleConnection internal constructor(
         /** Waits between replacement attempts; the last rung repeats. */
         val RELINK_LADDER = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
 
-        const val GAVE_UP_DETAIL = "reconnect gave up after 2 min"
+        /** No number: the deadline bounds when an attempt may start, so the ladder gives up
+         *  anywhere from a rung early to an attempt's own length late. */
+        const val GAVE_UP_DETAIL = "could not get back to the server"
 
         /** Tunneled for its side effect, never answered. Any frame of two bytes or more would
          *  do; this one is honest about what it is. */
