@@ -33,6 +33,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
@@ -198,6 +199,9 @@ class MumbleConnection internal constructor(
         @Volatile var pressed: Boolean = false,
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
+        /** Self-mute and self-deafen as last asked of the server. The link's own copy dies with
+         *  it, and deafen has no other half here, so a replacement is told from this. */
+        @Volatile var selfState: DeafenState = DeafenState(),
         /** The app wants capture on this session — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
         var wanted: Boolean = false,
@@ -789,8 +793,13 @@ class MumbleConnection internal constructor(
             }
         }
         // The gate is the session's and survives the swap; the wire state is the link's and starts
-        // fresh, so a replacement has to be told what the user already asked for.
-        if (session.muted) link.stateMachine.setSelfMute(true)
+        // fresh, so a replacement has to be told what the user already asked for — deafen included,
+        // or a deafened user comes back with the server carrying a microphone the gate never shut.
+        // A mute taken while no link could carry it lives only in the gate, so it is folded in.
+        val self = session.selfState.let { if (session.muted && !it.selfMute) it.mute(true) else it }
+        if ((self.selfDeaf || self.selfMute) && link.stateMachine.adoptSelfState(self)) {
+            session.selfState = self
+        }
     }
 
     /**
@@ -925,7 +934,11 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) { current?.link?.stateMachine?.setSelfDeaf(on) }
+    override fun setSelfDeaf(on: Boolean) {
+        val stateMachine = current?.link?.stateMachine ?: return
+        stateMachine.setSelfDeaf(on)
+        current?.selfState = stateMachine.selfState
+    }
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
@@ -984,6 +997,7 @@ class MumbleConnection internal constructor(
         val session = current ?: return
         val stateMachine = session.link?.stateMachine ?: return
         stateMachine.setSelfMute(on)
+        session.selfState = stateMachine.selfState
         session.muted = on
         apply(session)
     }

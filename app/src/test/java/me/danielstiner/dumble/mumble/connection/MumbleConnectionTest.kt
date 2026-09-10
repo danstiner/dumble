@@ -1089,6 +1089,63 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
+    /** The self_deaf/self_mute pair of every UserState this transport sent, in order. */
+    private fun FakeControlTransport.selfStates() = sent
+        .filter { it.first == TcpMessageType.UserState }
+        .map { (it.second as MumbleProtos.UserState).let { state -> state.selfDeaf to state.selfMute } }
+
+    /**
+     * Deafen has no half outside the link the way mute has its gate, so a replacement told nothing
+     * comes up with the server carrying a microphone the user believes is off — live, under voice
+     * activity, with the Deafen control quietly reading undeafened from the new link's own row.
+     */
+    @Test fun selfDeafSurvivesARelink() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        conn.setSelfDeaf(true)
+        assertEquals("the first link carries the deafen", listOf(true to true), transports[0].selfStates())
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+
+        awaitTrue("the replacement must be told the session is deafened") {
+            transports[1].selfStates() == listOf(true to true)
+        }
+        conn.disconnect()
+    }
+
+    /**
+     * The carried state is the one the link held, not a deafen re-derived on the replacement:
+     * `unmuteOnUndeaf` is what tells deafen's own mute apart from one the user set, and re-deriving
+     * it would open the microphone on the next undeafen.
+     */
+    @Test fun aMuteTheUserSetOutlivesADeafenAcrossARelink() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        conn.setMuted(true)
+        conn.setSelfDeaf(true)
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+        awaitTrue("the replacement must be told both") { transports[1].selfStates() == listOf(true to true) }
+
+        conn.setSelfDeaf(false)
+        awaitTrue("undeafening keeps the mute the user set") {
+            transports[1].selfStates() == listOf(true to true, false to true)
+        }
+        conn.disconnect()
+    }
+
     /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()

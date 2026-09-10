@@ -117,6 +117,9 @@ class SessionStateMachine(
      */
     @Volatile private var sent = DeafenState()
 
+    /** What this link last put on the wire, for a session that has to tell a replacement link. */
+    val selfState: DeafenState get() = sent
+
     /** The wire wants a number and Duration arithmetic wants a mark; this bridges them. */
     private val pingOrigin = bootClock.markNow()
 
@@ -376,6 +379,14 @@ class SessionStateMachine(
      */
     fun setSelfMute(on: Boolean): Boolean =
         sendSelfState(if (on != sent.selfMute) sent.mute(on) else sent)
+
+    /**
+     * Put [state] on the wire as-is, for a link taking over from one that carried it. Not derived
+     * from [setSelfDeaf]/[setSelfMute] on a fresh [sent]: `unmuteOnUndeaf` is the only thing that
+     * tells deafen's mute apart from one the user set, and re-deriving loses it — the next
+     * undeafen would then clear a mute the user meant to keep.
+     */
+    fun adoptSelfState(state: DeafenState): Boolean = sendSelfState(state)
 
     /** Ship [next] as our own UserState. Both fields ride together: murmur forces mute on with
      *  deaf (`Server::msgUserState`) and never takes it back off, so a frame carrying one alone
