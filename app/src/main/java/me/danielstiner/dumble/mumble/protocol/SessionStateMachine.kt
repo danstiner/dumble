@@ -30,7 +30,7 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
  *
  * Threading: [onFrame] and [onClosed] arrive on the transport's single reader coroutine, one at a
  * time and never nested, so fields only they touch need no synchronization. Anything shared with
- * the ping ticker or with `start()`/`setSelfDeaf` (a third, caller thread) is volatile or a
+ * the ping ticker or with `start()`/`sendSelfState` (a third, caller thread) is volatile or a
  * [MutableStateFlow]. [sent] is one immutable value rather than three booleans so its parts cannot
  * be read torn apart.
  */
@@ -109,13 +109,6 @@ class SessionStateMachine(
 
     @Volatile private var deadlineJob: Job? = null
     @Volatile private var pingJob: Job? = null
-
-    /**
-     * What [setSelfDeaf] last put on the wire. Distinct from [channelTree], which is what the server
-     * believes and what the UI renders — see [DeafenState.deafen] for why advancing from the echo
-     * instead of from this strands the user muted.
-     */
-    @Volatile private var sent = DeafenState()
 
     /** What this link's synchronize was, or null until it happens. One value so its parts cannot
      *  be read torn apart. */
@@ -368,38 +361,16 @@ class SessionStateMachine(
     }
 
     /**
-     * Deafen or undeafen. Returns whether it was enqueued; a no-op until Synchronized.
-     * [DeafenState.deafen] owns the coupling to `self_mute`.
+     * Ship [next] as our own UserState, verbatim. Returns whether it was enqueued; a no-op until
+     * Synchronized, and no optimistic echo, unlike [sendText] — the server broadcasts UserState
+     * back, so the reducer shows what it believes. Safe off the reader thread: channel.send only
+     * enqueues.
      *
-     * A repeat ask — a double-tap, before the server has answered — re-sends [sent] verbatim.
-     * Advancing again would run [DeafenState.deafen] against state it just moved; returning early
-     * would deaden the button, since murmur silently rate-limits UserState aimed at the sender and
-     * every later tap would then match [sent] too.
-     *
-     * No optimistic echo, unlike [sendText]: the server broadcasts UserState back, so the reducer
-     * shows what it believes. Safe off the reader thread — channel.send only enqueues.
+     * The state itself belongs to the session, which outlives this link and every repeat ask; both
+     * fields ride together because murmur forces mute on with deaf (`Server::msgUserState`) and
+     * never takes it back off, so a frame carrying one alone would let the two drift apart.
      */
-    fun setSelfDeaf(on: Boolean): Boolean = sendSelfState(sent.withSelfDeaf(on))
-
-    /**
-     * Mute or unmute. Same shape and repeat guard as [setSelfDeaf]. Unmuting while deafened may
-     * take two taps: the first undeafens and keeps a mute the user set themselves
-     * ([DeafenState.mute]), and the button still reads muted after it because it is.
-     */
-    fun setSelfMute(on: Boolean): Boolean = sendSelfState(sent.withSelfMute(on))
-
-    /**
-     * Put [state] on the wire as-is, for a link taking over from one that carried it. Not derived
-     * from [setSelfDeaf]/[setSelfMute] on a fresh [sent]: `unmuteOnUndeaf` is the only thing that
-     * tells deafen's mute apart from one the user set, and re-deriving loses it — the next
-     * undeafen would then clear a mute the user meant to keep.
-     */
-    fun adoptSelfState(state: DeafenState): Boolean = sendSelfState(state)
-
-    /** Ship [next] as our own UserState. Both fields ride together: murmur forces mute on with
-     *  deaf (`Server::msgUserState`) and never takes it back off, so a frame carrying one alone
-     *  would let the server's view and [sent] drift apart. */
-    private fun sendSelfState(next: DeafenState): Boolean {
+    fun sendSelfState(next: DeafenState): Boolean {
         val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false
         val ok = channel.send(
             TcpMessageType.UserState,
@@ -409,9 +380,6 @@ class SessionStateMachine(
                 .setSelfMute(next.selfMute)
                 .build(),
         )
-        // Advanced only on a successful enqueue: a refused send must not leave this claiming
-        // something the wire never carried, or the retry advances from a state that never existed.
-        if (ok) sent = next
         return ok
     }
 

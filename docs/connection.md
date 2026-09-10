@@ -48,8 +48,8 @@ not spent reconnecting — so a path that dies every few seconds gives up in two
 outage rather than rejoining forever. Whether a link ever synchronized is the state machine's
 own stamp, taken where the transition happens rather than read from a collector on a conflating
 flow, so a link that synchronized and died at once is still replaced. The replacement's
-flows are wired only after it synchronizes, and the dead link's flows are frozen the moment it
-is closed, so the kick the server gives the old session never reads as "you left". The deadline
+flows are wired only after it synchronizes, and the dead link's flows are frozen at its close, so
+a late reduction on it cannot land under the replacement's session. The deadline
 bounds when an attempt may start, not how long one may run, so a connect that hangs until its
 socket timeout can finish past it. Both the waits and the deadline are measured on the boot
 clock: `delay` stops with the CPU, so a device that dozed inside a rung would come back with

@@ -31,7 +31,9 @@ internal class Link(
 ) {
     private val closed = AtomicBoolean(false)
 
-    /** A collector already inside its body when the link closes must not land a write. */
+    /** A collector already inside its body when this link's scope is cancelled must not land a
+     *  write under the session that has moved on. Best effort: the flag is raised outside the
+     *  connection's lock, so a check-then-write can still lose the race. */
     val isClosed: Boolean get() = closed.get()
 
     /**

@@ -314,9 +314,11 @@ class MumbleConnection internal constructor(
     /**
      * A link's own flow. Guarded on the link's identity and its close flag as well as the
      * generation: a link the session has moved on from must not land a write after the swap, and
-     * closing a link's collectors is no barrier for one already inside its body — the flag is.
-     * So a dead link is frozen from its close, and the kick the server gives the old session
-     * never reads as "you left".
+     * cancelling a link's collectors is no barrier for one already inside its body — the flag is
+     * what stops that last write. Best effort, not a barrier: the flag is raised outside this
+     * lock. A kick is not what it covers — the server's UserRemove arrives before the close, so
+     * that tree is published while the link is still live, and what keeps it from reading as "you
+     * left" is the UI blocking on Reconnecting.
      */
     private fun <T> publishFromLink(session: Session, link: Link, flow: MutableStateFlow<T>, value: T) =
         synchronized(lock) {
@@ -714,19 +716,21 @@ class MumbleConnection internal constructor(
                 // The link's own record of its sync, not what a collector on a conflating flow
                 // happened to see: both the retry decision and the id the UI reads its row by.
                 val synced = link.stateMachine.sync
-                val syncedAt = synced?.at
-                // The first link dying before it synchronized is the connect failing; never retried.
-                if (syncedAt == null && deadline == null) {
+                // The first link dying before it synchronized is the connect failing; never
+                // retried. Every later link came from relink, which returns only synchronized
+                // ones, so this is also the only way `synced` is ever null here.
+                if (synced == null) {
                     fail(session, mapState(gen, failed)!!)
                     return
                 }
+                // No classify: past Synchronized a link can only end through onClosed, which ends
+                // it as IO — SessionStateMachine.fail refuses to overwrite Synchronized at all.
                 val now = udpClock.markNow()
-                classify(gen, failed, since = now)?.let { fail(session, it); return }
                 // Losing a healthy link is a new outage: fresh deadline, ladder from the bottom.
                 // Losing one that never got healthy continues the outage in progress, one rung up
                 // and against the same deadline, which is what bounds a path that dies every few
                 // seconds.
-                val healthy = syncedAt != null && now - syncedAt >= HEALTHY_AFTER
+                val healthy = now - synced.at >= HEALTHY_AFTER
                 val rung: Int
                 if (healthy || deadline == null) {
                     deadline = now + RELINK_DEADLINE
@@ -735,26 +739,11 @@ class MumbleConnection internal constructor(
                     // What a replacement spent synchronized was not spent reconnecting: give it
                     // back, or a path that comes up for twenty seconds at a time spends the budget
                     // while the user is talking and then reports two minutes of reconnecting.
-                    if (syncedAt != null) deadline += now - syncedAt
+                    deadline += now - synced.at
                     rung = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy rung=$rung")
-                // The echo the controls read stops here, and the tree it arrives in freezes with
-                // the link. Take what it last said as the session's own ask, so a tap during the
-                // outage moves from the state the user is looking at.
-                synchronized(lock) {
-                    val row = synced?.sessionId?.let { _channelTree.value.users[it] }
-                    if (row != null && session.gen == generation) {
-                        // Deafen only. The mute the session asks for is the gate's own value: a
-                        // tap the dying link never carried is still what the user asked for, and
-                        // seeding that back from the echo would leave the gate shut with the
-                        // server, the row and the control all saying otherwise.
-                        session.selfState =
-                            session.selfState.copy(selfDeaf = row.selfDeaf, selfMute = session.muted)
-                        _selfState.value = session.selfState
-                    }
-                }
-                publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced?.sessionId ?: 0))
+                publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
                 link = relink(session, pin, deadline, diedAt = now, firstRung = rung) ?: return
             }
@@ -830,8 +819,8 @@ class MumbleConnection internal constructor(
         // is where they take effect, unmutes as much as mutes. Under the lock a tap racing the
         // swap either precedes this read or follows the whole thing.
         synchronized(lock) {
-            session.selfState.takeIf { it.selfDeaf || it.selfMute }
-                ?.let { link.stateMachine.adoptSelfState(it) }
+                session.selfState.takeIf { it != DeafenState() }
+                ?.let { link.stateMachine.sendSelfState(it) }
         }
     }
 
@@ -1064,8 +1053,8 @@ class MumbleConnection internal constructor(
      */
     private fun ask(session: Session, next: (DeafenState) -> DeafenState) {
         session.selfState = next(session.selfState)
-        if (session.gen == generation) _selfState.value = session.selfState
-        session.link?.stateMachine?.adoptSelfState(session.selfState)
+        _selfState.value = session.selfState
+        session.link?.stateMachine?.sendSelfState(session.selfState)
     }
 
     /**
@@ -1169,9 +1158,5 @@ internal suspend fun sleepOnBootClock(
     slice: Duration = WAIT_SLICE,
 ) {
     val until = clock.markNow() + duration
-    var left = duration
-    do {
-        delay(minOf(left, slice))
-        left = until - clock.markNow()
-    } while (left > Duration.ZERO)
+    while (clock.markNow() < until) delay(slice)
 }

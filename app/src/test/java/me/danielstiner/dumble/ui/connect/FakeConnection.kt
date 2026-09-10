@@ -78,11 +78,7 @@ class FakeConnection : Connection {
     override fun requestUserStats(session: Int) { userStatsRequests += session }
 
     fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = ConnectionStatus.Connected(gen, sessionId) }
-    /** Seeds [selfState] from the row about to freeze, as the connection does at the link's death. */
     fun emitReconnecting(gen: Int, lastSessionId: Int) {
-        channelTree.value.users[lastSessionId]?.let { row ->
-            selfState.value = selfState.value.copy(selfDeaf = row.selfDeaf, selfMute = row.selfMute)
-        }
         status.value = ConnectionStatus.Reconnecting(gen, lastSessionId)
     }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }

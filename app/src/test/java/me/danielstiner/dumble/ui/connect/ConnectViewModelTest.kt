@@ -608,6 +608,9 @@ class ConnectViewModelTest {
         )
         conn.channelTree.value = ChannelTree(channels = mapOf(0 to root), users = mapOf(7 to me(7)))
         conn.emitConnected(sessionId = 7, gen = 1)
+        // The mute on that row is one this session asked for: self_mute is ours to set, so the
+        // echo can only ever be a copy of the ask, and through the outage the ask is what is left.
+        vm.onToggleMute()
         runCurrent()
         val since = vm.uiState.value.connectedSince
         assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)

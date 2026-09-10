@@ -1314,6 +1314,81 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
+    /**
+     * The stranding regression, now that the session holds the state the state machine used to.
+     * A double-tap lands inside one round trip, so the second ask arrives with the tree — and the
+     * control's idea of `deafened` — unchanged, and reaches this as a repeat. Advancing again would
+     * run [DeafenState.deafen] against state the first ask already moved, which is what used to
+     * emit `self_mute=true` on an undeafen and leave the user muted with no control to clear it.
+     *
+     * Asserts every frame, not just the last: the bug was a differing *second* message.
+     */
+    @Test fun undeafenTappedTwiceSendsTheSameMessageTwice() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        conn.setSelfDeaf(true)
+        conn.setSelfDeaf(false)
+        conn.setSelfDeaf(false)
+
+        val undeafens = transports[0].selfStates().drop(1)
+        assertEquals(2, undeafens.size)
+        undeafens.forEach { assertEquals("every undeafen clears both", false to false, it) }
+        conn.disconnect()
+    }
+
+    /** The same break from the other side: a repeated deafen must not recompute its unmute debt
+     *  against its own first ask, or the undeafen keeps a mute the user never set. */
+    @Test fun deafenTappedTwiceKeepsTheUnmuteDebt() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        conn.setSelfDeaf(true)
+        conn.setSelfDeaf(true)
+        conn.setSelfDeaf(false)
+
+        assertEquals(
+            "the debt survived, so the undeafen unmutes",
+            false to false,
+            transports[0].selfStates().last(),
+        )
+        conn.disconnect()
+    }
+
+    /**
+     * A whole sequence the wire refused — the socket is gone, the state machine has yet to hear —
+     * is still the session's, and the replacement is told the end of it. The mute is the user's own
+     * here, so the deafen that follows owes it no unmute and the undeafen leaves it standing.
+     */
+    @Test fun asksTheWireRefusedStillCompose() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        transports[0].close()
+        conn.setMuted(true)
+        conn.setSelfDeaf(true)
+        conn.setSelfDeaf(false)
+        assertEquals("nothing reached the wire", emptyList<Pair<Boolean, Boolean>>(), transports[0].selfStates())
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+
+        awaitTrue("the replacement is told the mute, and only the mute") {
+            transports[1].selfStates() == listOf(false to true)
+        }
+        conn.disconnect()
+    }
+
     /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
