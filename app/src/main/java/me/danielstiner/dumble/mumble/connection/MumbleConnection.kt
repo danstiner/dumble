@@ -199,8 +199,9 @@ class MumbleConnection internal constructor(
         @Volatile var pressed: Boolean = false,
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
-        /** Self-mute and self-deafen as last asked of the server. The link's own copy dies with
-         *  it, and deafen has no other half here, so a replacement is told from this. */
+        /** Self-mute and self-deafen as the user last asked for them. The intent, not what a link
+         *  managed to send: a tap during a relink reaches no live link at all, and it is this that
+         *  the replacement is told. */
         @Volatile var selfState: DeafenState = DeafenState(),
         /** The app wants capture on this session — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
@@ -697,18 +698,19 @@ class MumbleConnection internal constructor(
 
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
             var outageSince: ComparableTimeMark? = null   // when that incident began
-            var lastSessionId = 0
             while (true) {
                 // Status is the driver's own collector, not one of the link's: the terminal Error
                 // must be on `status` before retire() cancels this coroutine's scope, and a Failed
                 // is never published before it is classified.
                 val failed = link.stateMachine.state
                     .onEach { st ->
-                        if (st is ConnectionState.Synchronized) lastSessionId = st.sessionId
                         if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
-                val syncedAt = link.stateMachine.synchronizedAt
+                // The link's own record of its sync, not what a collector on a conflating flow
+                // happened to see: both the retry decision and the id the UI reads its row by.
+                val synced = link.stateMachine.sync
+                val syncedAt = synced?.at
                 // The first link dying before it synchronized is the connect failing; never retried.
                 if (syncedAt == null && deadline == null) {
                     fail(session, mapState(gen, failed)!!)
@@ -734,7 +736,7 @@ class MumbleConnection internal constructor(
                     rung = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy rung=$rung")
-                publishStatus(gen, ConnectionStatus.Reconnecting(gen, lastSessionId))
+                publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced?.sessionId ?: 0))
                 link.close()
                 link = relink(session, pin, deadline, outageSince, rung) ?: return
             }
@@ -800,14 +802,12 @@ class MumbleConnection internal constructor(
                 )
             }
         }
-        // The gate is the session's and survives the swap; the wire state is the link's and starts
-        // fresh, so a replacement has to be told what the user already asked for — deafen included,
-        // or a deafened user comes back with the server carrying a microphone the gate never shut.
-        // A mute taken while no link could carry it lives only in the gate, so it is folded in.
-        val self = session.selfState.let { if (session.muted && !it.selfMute) it.mute(true) else it }
-        if ((self.selfDeaf || self.selfMute) && link.stateMachine.adoptSelfState(self)) {
-            session.selfState = self
-        }
+        // The wire state is the link's and starts fresh, so a replacement is told what the session
+        // last asked for — deafen included, or a deafened user comes back with the server carrying
+        // a microphone they had switched off. Taps during the outage reached no live link, so this
+        // is where they take effect, unmutes as much as mutes.
+        session.selfState.takeIf { it.selfDeaf || it.selfMute }
+            ?.let { link.stateMachine.adoptSelfState(it) }
     }
 
     /**
@@ -962,9 +962,9 @@ class MumbleConnection internal constructor(
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
     override fun setSelfDeaf(on: Boolean) {
-        val stateMachine = current?.link?.stateMachine ?: return
-        stateMachine.setSelfDeaf(on)
-        current?.selfState = stateMachine.selfState
+        val session = current ?: return
+        session.selfState = session.selfState.let { if (on == it.selfDeaf) it else it.deafen(on) }
+        session.link?.stateMachine?.adoptSelfState(session.selfState)
     }
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
@@ -1022,10 +1022,9 @@ class MumbleConnection internal constructor(
      *  transmitting. */
     override fun setMuted(on: Boolean) {
         val session = current ?: return
-        val stateMachine = session.link?.stateMachine ?: return
-        stateMachine.setSelfMute(on)
-        session.selfState = stateMachine.selfState
+        session.selfState = session.selfState.let { if (on == it.selfMute) it else it.mute(on) }
         session.muted = on
+        session.link?.stateMachine?.adoptSelfState(session.selfState)
         apply(session)
     }
 

@@ -1206,6 +1206,52 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
+    /**
+     * A tap inside the outage reaches no live link at all: the dead link's machine refuses to send
+     * and keeps its old state. The session is what remembers the ask, so the replacement is told
+     * what the user last wanted — an unmute as much as a mute, or the swap would quietly put the
+     * microphone back where the user had just taken it from.
+     */
+    @Test fun anUnmuteDuringTheOutageIsCarriedNotReverted() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        conn.setMuted(true)
+        assertEquals(listOf(false to true), transports[0].selfStates())
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Reconnecting } }
+        conn.setMuted(false)                       // nothing live to carry it
+
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+        delay(200)
+        assertEquals("the replacement must not be muted again", emptyList<Pair<Boolean, Boolean>>(), transports[1].selfStates())
+        conn.disconnect()
+    }
+
+    /** The same the other way: a deafen taken during the outage reaches the replacement. */
+    @Test fun aDeafenDuringTheOutageReachesTheReplacement() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Reconnecting } }
+        conn.setSelfDeaf(true)
+
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+        awaitTrue("the replacement must be told the session is deafened") {
+            transports[1].selfStates() == listOf(true to true)
+        }
+        conn.disconnect()
+    }
+
     /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()

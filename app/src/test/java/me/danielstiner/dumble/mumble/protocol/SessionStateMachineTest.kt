@@ -335,7 +335,8 @@ class SessionStateMachineTest {
         sm.onClosed(java.io.IOException("server went away"))
 
         assertTrue(sm.state.value is ConnectionState.Failed)
-        assertNotNull("the link did reach the server", sm.synchronizedAt)
+        assertEquals(42, sm.sync?.sessionId)
+        assertNotNull("the link did reach the server", sm.sync?.at)
     }
 
     // A dropped connection must not keep reading as connected. Synchronized is not terminal against a

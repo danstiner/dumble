@@ -120,8 +120,12 @@ class SessionStateMachine(
     /** What this link last put on the wire, for a session that has to tell a replacement link. */
     val selfState: DeafenState get() = sent
 
-    /** When this link reached [ConnectionState.Synchronized], on [bootClock]; null until it does. */
-    @Volatile var synchronizedAt: ComparableTimeMark? = null
+    /** What this link's synchronize was, or null until it happens. One value so its parts cannot
+     *  be read torn apart. */
+    data class Sync(val at: ComparableTimeMark, val sessionId: Int)
+
+    /** Set once, where the transition happens; never cleared. */
+    @Volatile var sync: Sync? = null
         private set
 
     /** The wire wants a number and Duration arithmetic wants a mark; this bridges them. */
@@ -201,8 +205,9 @@ class SessionStateMachine(
                 ) {
                     // Stamped where the transition happens, not where a collector observes it:
                     // state is a conflating flow, so a link that synchronized and died inside one
-                    // emission would otherwise look like one that never got on the server at all.
-                    synchronizedAt = bootClock.markNow()
+                    // emission would otherwise look like one that never got on the server at all,
+                    // and the id the UI keeps reading its own row by would be a link out of date.
+                    this.sync = Sync(bootClock.markNow(), sync.session)
                     deadlineJob?.cancel()
                     startPings()
                     // Over-cap packets are dropped silently, so the symptom is otherwise
