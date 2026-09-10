@@ -46,7 +46,10 @@ every few seconds gives up in two minutes rather than rejoining forever. The rep
 flows are wired only after it synchronizes, and the dead link's flows are frozen the moment it
 is closed, so the kick the server gives the old session never reads as "you left". The deadline
 bounds when an attempt may start, not how long one may run, so a connect that hangs until its
-socket timeout can finish past it. Chat rides across the swap; the platform call, the receiver
+socket timeout can finish past it. Both the waits and the deadline are measured on the boot
+clock: `delay` stops with the CPU, so a device that dozed inside a rung would come back with
+that rung still to run and the deadline already spent, and would give up without trying the
+network that had just returned. Chat rides across the swap; the platform call, the receiver
 and the capture session belong to the session and never notice. The first link of a session is
 never retried: its failure is the connect failing, and the connect form shows it. A trust prompt
 on a relink (the server's certificate changed) retires the session with the prompt up and keeps
