@@ -9,7 +9,6 @@ import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.time.ComparableTimeMark
 
 /**
  * One TLS connect and what lives exactly as long as it: the protocol session on it, the UDP
@@ -30,11 +29,6 @@ internal class Link(
     /** Never cancelled; where the blocking closes run. */
     private val scope: CoroutineScope,
 ) {
-    /** When the link's state machine synchronized, on the driver's clock; null until then. A
-     *  link that has lived past this by the connection's healthy-after threshold was a working
-     *  path. */
-    @Volatile var syncedAt: ComparableTimeMark? = null
-
     private val closed = AtomicBoolean(false)
 
     /** A collector already inside its body when the link closes must not land a write. */

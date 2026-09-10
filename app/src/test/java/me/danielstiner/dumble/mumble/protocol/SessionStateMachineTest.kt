@@ -19,6 +19,7 @@ import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.time.TestTimeSource
@@ -317,6 +318,24 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(42).build()))
 
         assertEquals(ConnectionState.Synchronized(42), sm.state.value)
+    }
+
+    /**
+     * The stamp is the driver's evidence that this link ever reached the server, and what it
+     * decides to replace a link on. Taken here rather than from a collector on [state], which
+     * conflates: a link that synchronized and died inside one emission would otherwise read as one
+     * that never got on at all, and the connect would be reported as having failed.
+     */
+    @Test
+    fun theSyncStampOutlivesAFailureThatFollowsAtOnce() = runTest {
+        val ch = FakeChannel()
+        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+
+        sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(42).build()))
+        sm.onClosed(java.io.IOException("server went away"))
+
+        assertTrue(sm.state.value is ConnectionState.Failed)
+        assertNotNull("the link did reach the server", sm.synchronizedAt)
     }
 
     // A dropped connection must not keep reading as connected. Synchronized is not terminal against a

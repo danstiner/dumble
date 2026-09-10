@@ -36,13 +36,18 @@ user is looking at. A trust prompt retires its session the same way but keeps it
 `trustAndConnect()` to reconnect from.
 
 **Relink.** A link that dies after it synchronized is replaced under the same session: the
-driver classifies the failure on the server's reject type (a name still held by our own ghost
-is retried, every other rejection and a too-old server are final), publishes `Reconnecting`,
-closes the dead link, and opens replacements on a ladder of 0, 1, 2, 4, 8, 16, 30, 30… seconds
-until one synchronizes or two minutes have passed since a working link was lost. A link counts
-as working once it has been synchronized for 30 s; losing one starts the ladder and the deadline
-over, losing one that never got that far continues the outage in progress, so a path that dies
-every few seconds gives up in two minutes rather than rejoining forever. The replacement's
+driver classifies the failure on the server's reject type (a name still held by our own ghost is
+retried for the 45 s murmur takes to reap one, after which the name is someone else's and the
+rejection is reported as it stands; every other rejection and a too-old server are final at
+once), publishes `Reconnecting`, closes the dead link, and opens replacements on a ladder of 0,
+1, 2, 4, 8, 16, 30, 30… seconds until one synchronizes or two minutes of reconnecting have
+passed. A link counts as working once it has been synchronized for 30 s; losing one starts the
+ladder and the deadline over, losing one that never got that far continues the outage in
+progress — with the time that link spent synchronized handed back to the deadline, since it was
+not spent reconnecting — so a path that dies every few seconds gives up in two minutes of
+outage rather than rejoining forever. Whether a link ever synchronized is the state machine's
+own stamp, taken where the transition happens rather than read from a collector on a conflating
+flow, so a link that synchronized and died at once is still replaced. The replacement's
 flows are wired only after it synchronizes, and the dead link's flows are frozen the moment it
 is closed, so the kick the server gives the old session never reads as "you left". The deadline
 bounds when an attempt may start, not how long one may run, so a connect that hangs until its

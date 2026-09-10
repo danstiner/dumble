@@ -589,7 +589,11 @@ class MumbleConnection internal constructor(
         val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val transport = newTransport(pin)
         val stateMachine = SessionStateMachine(
-            transport, session.username, session.password, childScope, pingIntervalMs = pingIntervalMs,
+            transport, session.username, session.password, childScope,
+            // The driver compares this machine's sync stamp against its own clock, and marks from
+            // two sources cannot be compared at all.
+            bootClock = udpClock,
+            pingIntervalMs = pingIntervalMs,
         )
         val path = VoicePath()
         val udp = MumbleUdpTransport(stateMachine.crypt, object : MumbleUdpTransport.Listener {
@@ -692,6 +696,7 @@ class MumbleConnection internal constructor(
             session.scope.launch { if (isLive(session)) session.receiver.start() }
 
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
+            var outageSince: ComparableTimeMark? = null   // when that incident began
             var lastSessionId = 0
             while (true) {
                 // Status is the driver's own collector, not one of the link's: the terminal Error
@@ -699,36 +704,39 @@ class MumbleConnection internal constructor(
                 // is never published before it is classified.
                 val failed = link.stateMachine.state
                     .onEach { st ->
-                        if (st is ConnectionState.Synchronized) {
-                            if (link.syncedAt == null) link.syncedAt = udpClock.markNow()
-                            lastSessionId = st.sessionId
-                        }
+                        if (st is ConnectionState.Synchronized) lastSessionId = st.sessionId
                         if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
-                val syncedAt = link.syncedAt
+                val syncedAt = link.stateMachine.synchronizedAt
                 // The first link dying before it synchronized is the connect failing; never retried.
                 if (syncedAt == null && deadline == null) {
                     fail(session, mapState(gen, failed)!!)
                     return
                 }
-                classify(gen, failed)?.let { fail(session, it); return }
+                classify(gen, failed, outageSince)?.let { fail(session, it); return }
                 // Losing a healthy link is a new outage: fresh deadline, ladder from the bottom.
                 // Losing one that never got healthy continues the outage in progress, one rung up
                 // and against the same deadline, which is what bounds a path that dies every few
                 // seconds.
-                val healthy = syncedAt != null && udpClock.markNow() - syncedAt >= HEALTHY_AFTER
+                val now = udpClock.markNow()
+                val healthy = syncedAt != null && now - syncedAt >= HEALTHY_AFTER
                 val rung: Int
                 if (healthy || deadline == null) {
-                    deadline = udpClock.markNow() + RELINK_DEADLINE
+                    deadline = now + RELINK_DEADLINE
+                    outageSince = now
                     rung = 0
                 } else {
+                    // What a replacement spent synchronized was not spent reconnecting: give it
+                    // back, or a path that comes up for twenty seconds at a time spends the budget
+                    // while the user is talking and then reports two minutes of reconnecting.
+                    if (syncedAt != null) deadline += now - syncedAt
                     rung = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy rung=$rung")
                 publishStatus(gen, ConnectionStatus.Reconnecting(gen, lastSessionId))
                 link.close()
-                link = relink(session, pin, deadline, rung) ?: return
+                link = relink(session, pin, deadline, outageSince, rung) ?: return
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -807,7 +815,13 @@ class MumbleConnection internal constructor(
      * the deadline passes. Returns the synchronized link, swapped in and wired; null once the
      * session has been ended or parked here.
      */
-    private suspend fun relink(session: Session, pin: String?, deadline: ComparableTimeMark, firstRung: Int): Link? {
+    private suspend fun relink(
+        session: Session,
+        pin: String?,
+        deadline: ComparableTimeMark,
+        outageSince: ComparableTimeMark?,
+        firstRung: Int,
+    ): Link? {
         val gen = session.gen
         var rung = firstRung
         while (true) {
@@ -846,7 +860,7 @@ class MumbleConnection internal constructor(
             }
             if (outcome is ConnectionState.Failed) {
                 drop(session, next)
-                classify(gen, outcome)?.let { fail(session, it); return null }
+                classify(gen, outcome, outageSince)?.let { fail(session, it); return null }
                 Log.w(
                     TAG,
                     "relink handshake failed gen=$gen rung=$rung reason=${outcome.reason} " +
@@ -855,7 +869,6 @@ class MumbleConnection internal constructor(
                 rung += 1
                 continue
             }
-            next.syncedAt = udpClock.markNow()
             val swapped = synchronized(lock) {
                 if (gen == generation && current === session) {
                     session.carried = _messages.value
@@ -890,13 +903,27 @@ class MumbleConnection internal constructor(
         synchronized(lock) { if (session.next === link) session.next = null }
     }
 
-    /** The status a dead link ends the session with, or null when a replacement is worth trying. */
-    private fun classify(gen: Int, failed: ConnectionState.Failed): ConnectionStatus? = when (failed.reason) {
+    /**
+     * The status a dead link ends the session with, or null when a replacement is worth trying.
+     * [outageSince] is when the outage being retried began, null before one is open.
+     */
+    private fun classify(
+        gen: Int,
+        failed: ConnectionState.Failed,
+        outageSince: ComparableTimeMark?,
+    ): ConnectionStatus? = when (failed.reason) {
         FailReason.IO, FailReason.TIMEOUT -> null
-        // A ghost of ourselves left by a build without a certificate is reaped within 45 s,
-        // inside the deadline; every other rejection is final.
+        // A ghost of ourselves is reaped within GHOST_REAP of the link it held dying, so past that
+        // the name is someone else's and retrying only ends the session on a timeout that says
+        // nothing about why. Every other rejection is final at once.
         FailReason.AUTH_REJECT ->
-            if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse) null else mapState(gen, failed)
+            if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse &&
+                (outageSince == null || udpClock.markNow() - outageSince < GHOST_REAP)
+            ) {
+                null
+            } else {
+                mapState(gen, failed)
+            }
         FailReason.VERSION_TOO_OLD -> mapState(gen, failed)
     }
 
@@ -1065,6 +1092,10 @@ class MumbleConnection internal constructor(
          *  enough for an elevator or a tunnel; short enough that a dead server does not hold a
          *  platform call for minutes. */
         val RELINK_DEADLINE = 2.minutes
+
+        /** How long murmur takes to reap a ghost of ourselves still holding the name — its
+         *  own idle timeout, and the only rejection a retry can outlast. */
+        val GHOST_REAP = 45.seconds
 
         /** Waits between replacement attempts; the last rung repeats. */
         val RELINK_LADDER = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }

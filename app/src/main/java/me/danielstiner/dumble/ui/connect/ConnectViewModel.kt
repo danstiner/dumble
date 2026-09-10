@@ -171,9 +171,15 @@ class ConnectViewModel internal constructor(
             val session = status.mySession
             val me = session?.let { c.channelTree.users[it] }
             // Talk is blocked for the whole relink: the held link is dead and the packets would
-            // go nowhere.
-            val block = if (status is ConnectionStatus.Reconnecting) TalkBlock.RECONNECTING
-                else talkBlock(me, f.microphoneGranted)
+            // go nowhere. It stays blocked for the swap's own window, where the id is already the
+            // new link's and the tree is still the dead one's — a tree with users but not us is a
+            // stale tree, not proof the user is free to talk, and they may have been muted.
+            val block = if (status is ConnectionStatus.Reconnecting) {
+                TalkBlock.RECONNECTING
+            } else {
+                talkBlock(me, f.microphoneGranted)
+                    ?: TalkBlock.RECONNECTING.takeIf { me == null && c.channelTree.users.isNotEmpty() }
+            }
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { selfSpeaking && block == null }

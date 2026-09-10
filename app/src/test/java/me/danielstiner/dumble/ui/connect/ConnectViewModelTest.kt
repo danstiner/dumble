@@ -407,6 +407,31 @@ class ConnectViewModelTest {
     )
 
     /**
+     * The swap's own window: the id is already the replacement's while the tree is still the dead
+     * link's. A row missing from a tree that has other users in it says the tree is stale, not that
+     * the user is free to talk — and this one is muted.
+     */
+    @Test fun talkStaysBlockedUntilOurRowCatchesUpAfterASwap() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = true)
+        conn.channelTree.value = treeWith(user(7, selfMute = true))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
+
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+        conn.emitConnected(sessionId = 9, gen = 1)      // the swap; the tree is still link one's
+        runCurrent()
+        assertEquals(TalkBlock.RECONNECTING, vm.uiState.value.talkBlock)
+
+        conn.channelTree.value = treeWith(user(9, selfMute = true))
+        runCurrent()
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
+    }
+
+    /**
      * Deafen is the server's answer, read off our own row, not a local flag set by the tap. The tap
      * only sends; an admin or another client moving it is picked up for free.
      */

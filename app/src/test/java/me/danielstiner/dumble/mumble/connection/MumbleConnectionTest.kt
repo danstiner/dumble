@@ -55,6 +55,7 @@ import javax.net.ssl.HostnameVerifier
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 class MumbleConnectionTest {
@@ -1004,6 +1005,65 @@ class MumbleConnectionTest {
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30).map { it.seconds }, waits.toList())
         awaitTrue("giving up ends the call") { call.ends == 1 }
         assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+    }
+
+    /**
+     * The budget is two minutes of reconnecting, not two minutes of wall clock: a path that comes
+     * up for a while and dies again short of healthy would otherwise spend the deadline while the
+     * user was connected and talking, and then be told it had been reconnecting for two minutes.
+     */
+    @Test fun timeSpentConnectedIsGivenBackToTheDeadline() = runBlocking {
+        val clock = AtomicTimeSource()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, sleep = { d -> clock += d },
+        ) {
+            // Two replacements come up and die again short of healthy; everything after is refused.
+            val refuse = transports.size >= 3
+            FakeControlTransport { _, _ -> if (refuse) throw IOException("refused") }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        val outageOpened = clock.markNow()
+        transports[0].listener!!.onClosed(IOException("reset"))
+        for (session in 2..3) {
+            startedTransportAt(transports, session - 1).listener!!.onFrame(serverSync(session))
+            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == session } }
+            clock += 29.seconds                   // connected, and short of healthy either way
+            transports[session - 1].listener!!.onClosed(IOException("reset"))
+        }
+
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
+        val spent = clock.markNow() - outageOpened
+        assertTrue("gave up after $spent, charging the 58 s spent connected", spent > 2.minutes + 20.seconds)
+    }
+
+    /**
+     * Our own ghost is reaped inside the window; past it the name belongs to someone else, and the
+     * server's reason is the one thing worth telling the user — not a timeout two minutes later.
+     */
+    @Test fun aNameStillHeldPastTheGhostWindowIsFinal() = runBlocking {
+        val clock = AtomicTimeSource()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, sleep = { d -> clock += d },
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        transports[0].listener!!.onClosed(IOException("reset"))
+
+        startedTransportAt(transports, 1).listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
+        startedTransportAt(transports, 2)         // inside the window: retried
+        clock += 60.seconds                       // the ghost would have been reaped by now
+        transports[2].listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
+
+        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
+        assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
+        delay(200)
+        assertEquals("no attempt after the name proved to be someone else's", 3, transports.size)
     }
 
     /** A link that stayed synchronized 30 s was a working path; its loss is a new outage, not
