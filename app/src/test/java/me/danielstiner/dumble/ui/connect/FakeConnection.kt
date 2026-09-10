@@ -10,6 +10,7 @@ import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
+import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -55,12 +56,20 @@ class FakeConnection : Connection {
     override fun cancelTrust() { cancelCalls++ }
     override fun disconnect() { disconnectCalls++ }
     override fun sendText(text: String): Boolean { sentTexts += text; return sendResult }
+
+    override val selfState = MutableStateFlow(DeafenState())
     override fun requestCapture() { requestCaptureCalls++ }
     override fun setTransmitting(on: Boolean) { transmitting += on }
 
-    override fun setSelfDeaf(on: Boolean) { selfDeaf += on }
+    override fun setSelfDeaf(on: Boolean) {
+        selfDeaf += on
+        selfState.value = selfState.value.withSelfDeaf(on)
+    }
 
-    override fun setMuted(on: Boolean) { muted += on }
+    override fun setMuted(on: Boolean) {
+        muted += on
+        selfState.value = selfState.value.withSelfMute(on)
+    }
 
     override fun setTransmitMode(mode: TransmitMode) { transmitModes += mode }
 
@@ -69,6 +78,9 @@ class FakeConnection : Connection {
     override fun requestUserStats(session: Int) { userStatsRequests += session }
 
     fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = ConnectionStatus.Connected(gen, sessionId) }
+    fun emitReconnecting(gen: Int, lastSessionId: Int) {
+        status.value = ConnectionStatus.Reconnecting(gen, lastSessionId)
+    }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
 
     /** Only [PlayoutStats.bufferedSamples] is read today; the rest of the record stays at zero. */

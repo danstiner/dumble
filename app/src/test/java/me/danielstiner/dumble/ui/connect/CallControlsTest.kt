@@ -94,6 +94,14 @@ class CallControlsTest {
         ).assertIsNotEnabled()
     }
 
+    @Test fun reconnectingDisablesTalkWithoutBlamingTheCause() {
+        controls(talkBlock = TalkBlock.RECONNECTING)
+        compose.onNodeWithText("Reconnecting").assertExists()
+        compose.onNodeWithContentDescription(
+            "Reconnecting — Talk comes back with the link",
+        ).assertIsNotEnabled()
+    }
+
     /** Mute must not come back as a separate slot — it is Talk's alternative, not an addition. */
     @Test fun thereIsNoSeparateMuteControl() {
         controls()

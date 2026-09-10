@@ -24,8 +24,10 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.mySession
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
+import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -111,8 +113,11 @@ private data class ConnSnapshot(
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
     val audioRoutes: AudioRoutes,
-    val callHeld: Boolean,
+    val self: SelfSnapshot,
 )
+
+/** The call's own two, paired so [ConnSnapshot] stays inside combine's arity cap. */
+private data class SelfSnapshot(val callHeld: Boolean, val selfState: DeafenState)
 
 /** Both audio engines' counters, paired so [HealthSnapshot] stays inside combine's arity cap. */
 private data class AudioSnapshot(val playoutStats: PlayoutStats?, val captureStats: CaptureStats?)
@@ -148,10 +153,14 @@ class ConnectViewModel internal constructor(
 
     // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
     // keep the top-level inside it too. Split by what they describe rather than by arity.
+    private val selfSnapshot = combine(connection.callHeld, connection.selfState) { held, self ->
+        SelfSnapshot(held, self)
+    }
+
     private val connSnapshot = combine(
         connection.status, connection.channelTree, connection.messages, connection.audioRoutes,
-        connection.callHeld,
-    ) { status, tree, msgs, routes, held -> ConnSnapshot(status, tree, msgs, routes, held) }
+        selfSnapshot,
+    ) { status, tree, msgs, routes, self -> ConnSnapshot(status, tree, msgs, routes, self) }
 
     private val audioSnapshot = combine(connection.playoutStats, connection.captureStats) { p, c ->
         AudioSnapshot(p, c)
@@ -167,9 +176,13 @@ class ConnectViewModel internal constructor(
             form, connSnapshot, healthSnapshot, connection.speakingSessions, connection.selfSpeaking,
         ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
-            val session = (status as? ConnectionStatus.Connected)?.sessionId
+            val session = status.mySession
             val me = session?.let { c.channelTree.users[it] }
-            val block = talkBlock(me, f.microphoneGranted)
+            // Talk is blocked for the whole reconnect: the held link is dead and the packets would go
+            // nowhere. Past it there is no window left to cover — the swap publishes the
+            // replacement's tree before its Connected, so our row is there to read.
+            val reconnecting = status is ConnectionStatus.Reconnecting
+            val block = talkBlock(me, f.microphoneGranted, reconnecting)
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { selfSpeaking && block == null }
@@ -183,14 +196,18 @@ class ConnectViewModel internal constructor(
                 playoutStats = health.audio.playoutStats, captureStats = health.audio.captureStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
-                deafened = me?.selfDeaf == true,
-                muted = me?.selfMute == true,
+                // Through a reconnect there is no echo to read: the server's answer stops with the
+                // link and the tree it would arrive in is frozen at that link's close. The
+                // controls read what the session asked for, which is the state the replacement
+                // will be put into, so a tap during the outage toggles from what the user sees.
+                deafened = if (reconnecting) c.self.selfState.selfDeaf else me?.selfDeaf == true,
+                muted = if (reconnecting) c.self.selfState.selfMute else me?.selfMute == true,
                 inaudible = me?.mute == true || me?.suppress == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
                 selectedSession = selected,
                 userStats = health.userStats?.takeIf { it.session == selected },
-                callHeld = c.callHeld,
+                callHeld = c.self.callHeld,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectUiState())
 
@@ -232,7 +249,11 @@ class ConnectViewModel internal constructor(
                 // would then treat the second call as a continuation of the first. Not on the
                 // server's session id either: a link rebuilt under the same call gets a new one
                 // while the call the user is timing goes on.
-                val gen = (s as? ConnectionStatus.Connected)?.gen
+                val gen = when (s) {
+                    is ConnectionStatus.Connected -> s.gen
+                    is ConnectionStatus.Reconnecting -> s.gen
+                    else -> null
+                }
                 if (gen == anchoredGen) return@collect
                 anchoredGen = gen
                 form.value = form.value.copy(

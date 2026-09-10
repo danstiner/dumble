@@ -9,7 +9,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
  * one: this is the only place a user's protocol state decides whether a control works, and inside a
  * composable it would have no direct coverage.
  */
-enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED }
+enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED, RECONNECTING }
 
 /**
  * The wire half is murmur's own drop condition, copied from `Server::processMsg`
@@ -26,8 +26,12 @@ enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED }
  * [TalkBlock.DEAFENED] is tested before the mute disjunction because murmur sets `self_mute`
  * alongside `self_deaf`, so a deafened user would otherwise be told the true-but-useless "Muted".
  */
-fun talkBlock(me: User?, microphoneGranted: Boolean): TalkBlock? = when {
+fun talkBlock(me: User?, microphoneGranted: Boolean, reconnecting: Boolean = false): TalkBlock? = when {
+    // The permission first: without it there is nothing for a link coming back to unblock, and it
+    // is this value the Mute control keys off to disable itself.
     !microphoneGranted -> TalkBlock.NO_MICROPHONE
+    // The held link is dead, so the packets would go nowhere, and our own row is a link out of date.
+    reconnecting -> TalkBlock.RECONNECTING
     me == null -> null
     me.selfDeaf -> TalkBlock.DEAFENED
     me.mute || me.suppress || me.selfMute -> TalkBlock.MUTED

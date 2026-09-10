@@ -12,7 +12,7 @@ structure and the trade-offs that shaped it.
 UI ─► Connection (interface)
           │
     MumbleConnection                    one live Session driving one Link, generation-guarded
-          ├─► Link                      one TLS connect; replaced under the session on a relink
+          ├─► Link                      one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
@@ -34,6 +34,32 @@ supersede/disconnect clears every published flow atomically with the bump, while
 connect or a dying link retires the session without clearing — the terminal status is what the
 user is looking at. A trust prompt retires its session the same way but keeps it aside for
 `trustAndConnect()` to reconnect from.
+
+**Reconnect.** A link that dies after it synchronized is replaced under the same session: the
+driver classifies the failure on the server's reject type (a name still held by our own ghost is
+retried for the 45 s murmur takes to reap one, after which the name is someone else's and the
+rejection is reported as it stands; every other rejection and a too-old server are final at
+once), publishes `Reconnecting`, closes the dead link, and opens replacements on a ladder of 0,
+1, 2, 4, 8, 16, 30, 30… seconds until one synchronizes or two minutes of reconnecting have
+passed. A link counts as working once it has been synchronized for 30 s; losing one starts the
+ladder and the deadline over, losing one that never got that far continues the outage in
+progress — with the time that link spent synchronized handed back to the deadline, since it was
+not spent reconnecting — so a path that dies every few seconds gives up in two minutes of
+outage rather than rejoining forever. Whether a link ever synchronized is the state machine's
+own stamp, taken where the transition happens rather than read from a collector on a conflating
+flow, so a link that synchronized and died at once is still replaced. The replacement's
+flows are wired only after it synchronizes, and the dead link's flows are frozen at its close, so
+a late reduction on it cannot land under the replacement's session. The deadline
+bounds when an attempt may start, not how long one may run, so a connect that hangs until its
+socket timeout can finish past it. The deadline is measured on the boot clock while the rungs
+wait on `delay`, which stops with the CPU; the two disagree only over time spent suspended, and
+the ladder cannot be suspended through. Chat rides across the swap; the platform call, the
+receiver and the capture session belong to the session and never notice — which is also what
+rules the suspend out, since audioserver holds a partial wakelock for as long as those streams
+are open, the outage included. The first link of a session is
+never retried: its failure is the connect failing, and the connect form shows it. A trust prompt
+on a reconnect (the server's certificate changed) retires the session with the prompt up and keeps
+it aside for `trustAndConnect()`, as a fresh connect does.
 
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
 instance, so no teardown state can leak between links. One reader coroutine delivers frames,
