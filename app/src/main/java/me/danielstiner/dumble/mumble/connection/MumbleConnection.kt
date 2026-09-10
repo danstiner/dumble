@@ -90,7 +90,7 @@ class MumbleConnection internal constructor(
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
     // Seam: the relink ladder's waits, so its tests drive a clock instead of sleeping.
-    private val sleep: suspend (Duration) -> Unit = { sleepOnBootClock(it, udpClock) },
+    private val sleep: suspend (Duration) -> Unit = { delay(it) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -840,6 +840,13 @@ class MumbleConnection internal constructor(
         var rung = firstRung
         while (true) {
             val wait = RELINK_LADDER[minOf(rung, RELINK_LADDER.lastIndex)]
+            // The wait runs on delay's clock and the deadline on the boot clock, which disagree by
+            // whatever time the CPU spends suspended. It cannot suspend mid-ladder: playout and
+            // capture belong to the session, so they stay open across the swap, and audioserver
+            // holds AudioMix and AudioIn partial wakelocks for as long as they are (measured across
+            // an outage: both held, start to finish). Were that to change, a doze would run the
+            // rungs slow against a deadline already spent and give up on a network that had just
+            // returned; only AlarmManager can beat suspend, and in doze there is no radio to reach.
             if (udpClock.markNow() + wait > deadline) {
                 Log.w(TAG, "relink gave up gen=$gen")
                 fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
@@ -1139,24 +1146,3 @@ class MumbleConnection internal constructor(
     }
 }
 
-/** One rung's wait is re-read against the boot clock this often; the overshoot after a wake-up. */
-private val WAIT_SLICE = 1.seconds
-
-/**
- * Sleep [duration] of real time, deep sleep included.
- *
- * `delay` runs on a clock that stops with the CPU, and the relink deadline is measured on the boot
- * clock (see BootTimeSource), so the two disagree by exactly the time a device spends suspended.
- * A doze inside a 30 s rung would leave `delay` with its 30 s still to run when the device comes
- * back, holding the ladder for another half minute of waking time while the deadline had already
- * passed — the session then ends on the next check without one attempt against the network that
- * had just returned. Slicing the wait and re-reading [clock] bounds that to one slice.
- */
-internal suspend fun sleepOnBootClock(
-    duration: Duration,
-    clock: TimeSource.WithComparableMarks,
-    slice: Duration = WAIT_SLICE,
-) {
-    val until = clock.markNow() + duration
-    while (clock.markNow() < until) delay(slice)
-}

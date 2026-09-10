@@ -51,11 +51,12 @@ flow, so a link that synchronized and died at once is still replaced. The replac
 flows are wired only after it synchronizes, and the dead link's flows are frozen at its close, so
 a late reduction on it cannot land under the replacement's session. The deadline
 bounds when an attempt may start, not how long one may run, so a connect that hangs until its
-socket timeout can finish past it. Both the waits and the deadline are measured on the boot
-clock: `delay` stops with the CPU, so a device that dozed inside a rung would come back with
-that rung still to run and the deadline already spent, and would give up without trying the
-network that had just returned. Chat rides across the swap; the platform call, the receiver
-and the capture session belong to the session and never notice. The first link of a session is
+socket timeout can finish past it. The deadline is measured on the boot clock while the rungs
+wait on `delay`, which stops with the CPU; the two disagree only over time spent suspended, and
+the ladder cannot be suspended through. Chat rides across the swap; the platform call, the
+receiver and the capture session belong to the session and never notice — which is also what
+rules the suspend out, since audioserver holds a partial wakelock for as long as those streams
+are open, the outage included. The first link of a session is
 never retried: its failure is the connect failing, and the connect form shows it. A trust prompt
 on a relink (the server's certificate changed) retires the session with the prompt up and keeps
 it aside for `trustAndConnect()`, as a fresh connect does.
