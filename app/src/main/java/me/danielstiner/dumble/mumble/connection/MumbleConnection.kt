@@ -89,7 +89,7 @@ class MumbleConnection internal constructor(
     // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
-    // Seam: the relink ladder's waits, so its tests drive a clock instead of sleeping.
+    // Seam: the ladder's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
@@ -204,7 +204,7 @@ class MumbleConnection internal constructor(
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
         /** Self-mute and self-deafen as the user last asked for them. The intent, not what a link
-         *  managed to send: a tap during a relink reaches no live link at all, and it is this that
+         *  managed to send: a tap during a reconnect reaches no live link at all, and it is this that
          *  the replacement is told. */
         @Volatile var selfState: DeafenState = DeafenState(),
         /** The app wants capture on this session — the level [reconcile] opens from.
@@ -717,7 +717,7 @@ class MumbleConnection internal constructor(
                 // happened to see: both the retry decision and the id the UI reads its row by.
                 val synced = link.stateMachine.sync
                 // The first link dying before it synchronized is the connect failing; never
-                // retried. Every later link came from relink, which returns only synchronized
+                // retried. Every later link came from replaceLink, which returns only synchronized
                 // ones, so this is also the only way `synced` is ever null here.
                 if (synced == null) {
                     fail(session, mapState(gen, failed)!!)
@@ -733,7 +733,7 @@ class MumbleConnection internal constructor(
                 val healthy = now - synced.at >= HEALTHY_AFTER
                 val rung: Int
                 if (healthy || deadline == null) {
-                    deadline = now + RELINK_DEADLINE
+                    deadline = now + GIVE_UP_AFTER
                     rung = 0
                 } else {
                     // What a replacement spent synchronized was not spent reconnecting: give it
@@ -745,7 +745,7 @@ class MumbleConnection internal constructor(
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy rung=$rung")
                 publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
-                link = relink(session, pin, deadline, diedAt = now, firstRung = rung) ?: return
+                link = replaceLink(session, pin, deadline, diedAt = now, firstRung = rung) ?: return
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -829,7 +829,7 @@ class MumbleConnection internal constructor(
      * the deadline passes. Returns the synchronized link, swapped in and wired; null once the
      * session has been ended or parked here.
      */
-    private suspend fun relink(
+    private suspend fun replaceLink(
         session: Session,
         pin: String?,
         deadline: ComparableTimeMark,
@@ -839,7 +839,7 @@ class MumbleConnection internal constructor(
         val gen = session.gen
         var rung = firstRung
         while (true) {
-            val wait = RELINK_LADDER[minOf(rung, RELINK_LADDER.lastIndex)]
+            val wait = RUNGS[minOf(rung, RUNGS.lastIndex)]
             // The wait runs on delay's clock and the deadline on the boot clock, which disagree by
             // whatever time the CPU spends suspended. It cannot suspend mid-ladder: playout and
             // capture belong to the session, so they stay open across the swap, and audioserver
@@ -848,7 +848,7 @@ class MumbleConnection internal constructor(
             // rungs slow against a deadline already spent and give up on a network that had just
             // returned; only AlarmManager can beat suspend, and in doze there is no radio to reach.
             if (udpClock.markNow() + wait > deadline) {
-                Log.w(TAG, "relink gave up gen=$gen")
+                Log.w(TAG, "gave up gen=$gen")
                 fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
                 return null
             }
@@ -860,7 +860,7 @@ class MumbleConnection internal constructor(
                 if (gen == generation && current === session) { session.next = next; true } else false
             }
             if (!live) { next.close(); return null }
-            Log.i(TAG, "relink gen=$gen rung=$rung")
+            Log.i(TAG, "replacement gen=$gen rung=$rung")
             val failure = open(session, next)
             if (failure != null) {
                 drop(session, next)
@@ -870,7 +870,7 @@ class MumbleConnection internal constructor(
                     fail(session, failure)
                     return null
                 }
-                Log.w(TAG, "relink attempt failed gen=$gen rung=$rung status=$failure")
+                Log.w(TAG, "replacement failed gen=$gen rung=$rung status=$failure")
                 rung += 1
                 continue
             }
@@ -884,7 +884,7 @@ class MumbleConnection internal constructor(
                 classify(gen, outcome, diedAt)?.let { fail(session, it); return null }
                 Log.w(
                     TAG,
-                    "relink handshake failed gen=$gen rung=$rung reason=${outcome.reason} " +
+                    "replacement handshake failed gen=$gen rung=$rung reason=${outcome.reason} " +
                         "detail=${outcome.detail}",
                 )
                 rung += 1
@@ -926,13 +926,13 @@ class MumbleConnection internal constructor(
 
     /**
      * The status a dead link ends the session with, or null when a replacement is worth trying.
-     * [since] is when the link whose ghost might still hold the name died — the ladder's own
+     * [diedAt] is when the link whose ghost might still hold the name died — the ladder's own
      * start, not the outage's, since every replacement that synchronizes leaves a fresh ghost.
      */
     private fun classify(
         gen: Int,
         failed: ConnectionState.Failed,
-        since: ComparableTimeMark,
+        diedAt: ComparableTimeMark,
     ): ConnectionStatus? = when (failed.reason) {
         FailReason.IO, FailReason.TIMEOUT -> null
         // A ghost of ourselves is reaped within GHOST_REAP of the link it held dying, so past that
@@ -940,7 +940,7 @@ class MumbleConnection internal constructor(
         // nothing about why. Every other rejection is final at once.
         FailReason.AUTH_REJECT ->
             if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse &&
-                udpClock.markNow() - since < GHOST_REAP
+                udpClock.markNow() - diedAt < GHOST_REAP
             ) {
                 null
             } else {
@@ -1126,14 +1126,14 @@ class MumbleConnection internal constructor(
         /** How long after losing a healthy link the session keeps trying before it ends. Long
          *  enough for an elevator or a tunnel; short enough that a dead server does not hold a
          *  platform call for minutes. */
-        val RELINK_DEADLINE = 2.minutes
+        val GIVE_UP_AFTER = 2.minutes
 
         /** How long murmur takes to reap a ghost of ourselves still holding the name — its
          *  own idle timeout, and the only rejection a retry can outlast. */
         val GHOST_REAP = 45.seconds
 
         /** Waits between replacement attempts; the last rung repeats. */
-        val RELINK_LADDER = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
+        val RUNGS = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
 
         /** No number: the deadline bounds when an attempt may start, so the ladder gives up
          *  anywhere from a rung early to an attempt's own length late. */

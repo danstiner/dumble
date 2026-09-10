@@ -383,7 +383,7 @@ class SessionStateMachineTest {
         assertEquals("bad password", state.detail)
     }
 
-    /** The driver classifies a relink's rejection on the enum, never on wording that varies
+    /** The driver classifies a replacement's rejection on the enum, never on wording that varies
      *  between Murmur, Grumble and uMurmur. */
     @Test
     fun aRejectCarriesItsTypeIntoFailed() = runTest {

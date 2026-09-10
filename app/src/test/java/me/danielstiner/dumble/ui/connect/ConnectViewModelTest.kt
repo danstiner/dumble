@@ -407,9 +407,9 @@ class ConnectViewModelTest {
     )
 
     /**
-     * A relink does not hand back a microphone the user never granted. The Mute control disables
+     * A reconnect does not hand back a microphone the user never granted. The Mute control disables
      * itself on this block alone, so letting the outage mask it would let that user mute themselves
-     * for every relink and stay muted after it.
+     * for every reconnect and stay muted after it.
      */
     @Test fun noMicrophoneOutranksAnOutage() = runTest(dispatcher) {
         val conn = FakeConnection()

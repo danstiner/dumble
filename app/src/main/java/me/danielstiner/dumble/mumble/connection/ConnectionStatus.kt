@@ -33,7 +33,7 @@ val ConnectionStatus.ongoing: Boolean
         is ConnectionStatus.Error -> false
     }
 
-/** Our own server session, or null when there is none: through a relink the UI keeps reading the
+/** Our own server session, or null when there is none: through a reconnect the UI keeps reading the
  *  row of the session the dead link had. */
 val ConnectionStatus.mySession: Int?
     get() = when (this) {

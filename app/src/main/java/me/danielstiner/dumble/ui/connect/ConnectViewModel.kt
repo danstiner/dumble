@@ -178,7 +178,7 @@ class ConnectViewModel internal constructor(
             val status = c.status
             val session = status.mySession
             val me = session?.let { c.channelTree.users[it] }
-            // Talk is blocked for the whole relink: the held link is dead and the packets would go
+            // Talk is blocked for the whole reconnect: the held link is dead and the packets would go
             // nowhere. Past it there is no window left to cover — the swap publishes the
             // replacement's tree before its Connected, so our row is there to read.
             val reconnecting = status is ConnectionStatus.Reconnecting
@@ -196,7 +196,7 @@ class ConnectViewModel internal constructor(
                 playoutStats = health.audio.playoutStats, captureStats = health.audio.captureStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
-                // Through a relink there is no echo to read: the server's answer stops with the
+                // Through a reconnect there is no echo to read: the server's answer stops with the
                 // link and the tree it would arrive in is frozen at that link's close. The
                 // controls read what the session asked for, which is the state the replacement
                 // will be put into, so a tap during the outage toggles from what the user sees.

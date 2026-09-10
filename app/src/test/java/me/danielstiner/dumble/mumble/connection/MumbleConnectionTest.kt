@@ -896,7 +896,7 @@ class MumbleConnectionTest {
 
     /**
      * The point of the split: the platform call, the receiver and the capture session all belong
-     * to the session and ride through a relink; only the link is rebuilt.
+     * to the session and ride through a reconnect; only the link is rebuilt.
      */
     @Test fun aDeadLinkIsReplacedUnderTheSameSession() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -924,9 +924,9 @@ class MumbleConnectionTest {
         assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
 
         assertEquals("one platform call for the whole session", 1, call.starts.size)
-        assertEquals("the call must not end across a relink", 0, call.ends)
-        assertFalse("the receiver must ride through the relink", playout.destroyed)
-        assertFalse("the capture session must ride through the relink", handles.single().stopped)
+        assertEquals("the call must not end across a reconnect", 0, call.ends)
+        assertFalse("the receiver must ride through the reconnect", playout.destroyed)
+        assertFalse("the capture session must ride through the reconnect", handles.single().stopped)
         assertEquals("one engine for the whole session", 1, handles.size)
         assertTrue("the dead link must be closed", transports[0].closed)
         conn.disconnect()
@@ -1389,7 +1389,7 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
-    /** Hanging up mid-relink is a hang-up: the replacement in flight goes with the session. */
+    /** Hanging up mid-reconnect is a hang-up: the replacement in flight goes with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val release = CountDownLatch(1)

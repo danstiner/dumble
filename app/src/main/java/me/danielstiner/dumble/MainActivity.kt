@@ -62,7 +62,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
             modifier = m,
         )
         // Our session row is what the controls and the chat read, and it outlives the link that
-        // earned it, so a relink stays on the call screen.
+        // earned it, so a reconnect stays on the call screen.
         Route.Main -> when (val mySession = state.status.mySession) {
             null -> ConnectScreen(
                 state = state,

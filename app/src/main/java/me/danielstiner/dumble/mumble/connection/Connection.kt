@@ -37,7 +37,7 @@ interface Connection {
     val messages: StateFlow<List<ChatMessage>>
 
     /** Self-mute and self-deafen as asked for, not as echoed: what the controls read while a
-     *  relink has the server's answer out of reach. */
+     *  reconnect has the server's answer out of reach. */
     val selfState: StateFlow<DeafenState>
     val speakingSessions: StateFlow<Set<Int>>
 

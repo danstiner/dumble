@@ -12,7 +12,7 @@ structure and the trade-offs that shaped it.
 UI ─► Connection (interface)
           │
     MumbleConnection                    one live Session driving one Link, generation-guarded
-          ├─► Link                      one TLS connect; replaced under the session on a relink
+          ├─► Link                      one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
@@ -35,7 +35,7 @@ connect or a dying link retires the session without clearing — the terminal st
 user is looking at. A trust prompt retires its session the same way but keeps it aside for
 `trustAndConnect()` to reconnect from.
 
-**Relink.** A link that dies after it synchronized is replaced under the same session: the
+**Reconnect.** A link that dies after it synchronized is replaced under the same session: the
 driver classifies the failure on the server's reject type (a name still held by our own ghost is
 retried for the 45 s murmur takes to reap one, after which the name is someone else's and the
 rejection is reported as it stands; every other rejection and a too-old server are final at
@@ -58,7 +58,7 @@ receiver and the capture session belong to the session and never notice — whic
 rules the suspend out, since audioserver holds a partial wakelock for as long as those streams
 are open, the outage included. The first link of a session is
 never retried: its failure is the connect failing, and the connect form shows it. A trust prompt
-on a relink (the server's certificate changed) retires the session with the prompt up and keeps
+on a reconnect (the server's certificate changed) retires the session with the prompt up and keeps
 it aside for `trustAndConnect()`, as a fresh connect does.
 
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
