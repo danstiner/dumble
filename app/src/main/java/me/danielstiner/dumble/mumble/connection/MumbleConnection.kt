@@ -839,20 +839,23 @@ class MumbleConnection internal constructor(
         val gen = session.gen
         var rung = firstRung
         while (true) {
-            val wait = RUNGS[minOf(rung, RUNGS.lastIndex)]
-            // The wait runs on delay's clock and the deadline on the boot clock, which disagree by
-            // whatever time the CPU spends suspended. It cannot suspend mid-ladder: playout and
-            // capture belong to the session, so they stay open across the swap, and audioserver
-            // holds AudioMix and AudioIn partial wakelocks for as long as they are (measured across
-            // an outage: both held, start to finish). Were that to change, a doze would run the
-            // rungs slow against a deadline already spent and give up on a network that had just
-            // returned; only AlarmManager can beat suspend, and in doze there is no radio to reach.
-            if (udpClock.markNow() + wait > deadline) {
+            // Clamped, not skipped: a rung that overruns the deadline used to end the session with
+            // budget still on the clock, and the network is often back inside exactly that gap —
+            // measured on a Pixel 7a, WiFi returned 8.3 s before a give-up that left 28.8 s unspent,
+            // because an in-flight connect bound to the dead interface ran out its own timeout and
+            // the next rung was 30 s. One last attempt at the deadline costs one connect.
+            val remaining = deadline - udpClock.markNow()
+            if (remaining <= Duration.ZERO) {
                 Log.w(TAG, "gave up gen=$gen")
                 fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
                 return null
             }
-            sleep(wait)
+            // The wait runs on delay's clock and the deadline on the boot clock, which disagree by
+            // whatever time the CPU spends suspended. It cannot suspend mid-ladder: playout and
+            // capture belong to the session, so they stay open across the swap, and audioserver
+            // holds AudioMix and AudioIn partial wakelocks for as long as they are (measured across
+            // an outage: both held, start to finish).
+            sleep(minOf(RUNGS[minOf(rung, RUNGS.lastIndex)], remaining))
             val next = buildLink(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.

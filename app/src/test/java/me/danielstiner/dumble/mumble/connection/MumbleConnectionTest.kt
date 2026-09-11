@@ -1001,10 +1001,50 @@ class MumbleConnectionTest {
         val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("could not get back to the server", err.detail)
-        // 0+1+2+4+8+16+30+30 = 91 s used; the next 30 s wait would end at 121 s, past the 120 s deadline.
-        assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30).map { it.seconds }, waits.toList())
+        // 0+1+2+4+8+16+30+30 = 91 s used; a ninth 30 s rung would overrun, so it is clamped to the
+        // 29 s left and spent on one last attempt, which lands exactly on the deadline.
+        assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30, 29).map { it.seconds }, waits.toList())
         awaitTrue("giving up ends the call") { call.ends == 1 }
         assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+    }
+
+    /**
+     * The budget left over is spent, not thrown away. A rung longer than what remains used to end
+     * the session while the clock still had time on it, so a network that came back inside that gap
+     * never got an attempt: measured on a Pixel 7a, WiFi returned 8.3 s before a give-up that left
+     * 28.8 s unspent, because the in-flight connect was bound to the interface that had just died
+     * and the rung behind it was 30 s.
+     */
+    @Test fun theBudgetLeftOverIsSpentOnOneLastAttempt() = runBlocking {
+        val clock = AtomicTimeSource()
+        val waits = CopyOnWriteArrayList<Duration>()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val call = FakeVoiceCall()
+        // Refused until the clock reaches the deadline itself, so only the clamped last attempt
+        // can get through — the old rule never made one.
+        val spent = { waits.sumOf { it.inWholeSeconds }.seconds }
+        val conn = MumbleConnection(
+            InMemoryPinStore(), call = call, udpClock = clock,
+            sleep = { d -> waits += d; clock += d },
+        ) {
+            val reachable = transports.isEmpty() || spent() >= 120.seconds
+            FakeControlTransport { _, _ -> if (!reachable) throw IOException("refused") }
+                .also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        transports[0].listener!!.onClosed(IOException("reset"))
+
+        awaitTrue("an attempt is made after the ladder would have given up") {
+            spent() >= 120.seconds && transports.size >= 9
+        }
+        startedTransportAt(transports, transports.lastIndex).listener!!.onFrame(serverSync(2))
+        val back = withTimeout(5_000) {
+            conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 }
+        }
+        assertEquals(2, (back as ConnectionStatus.Connected).sessionId)
+        assertEquals("the call must survive the whole outage", 0, call.ends)
     }
 
     /**
