@@ -59,4 +59,11 @@ class StatusLineTest {
 
     @Test fun degradedShowsWithNoRoundTripEverRecorded() =
         assertEquals("Connected · 12:34 · no response", statusLine(754, null, tunneled, SessionStateMachine.DEGRADED_PING_AGE))
+
+    /** Reconnecting drops both the latency and "no response"; only elapsed time survives. */
+    @Test fun reconnectingShowsOnlyTheElapsedTime() {
+        assertEquals("Reconnecting… · 12:34", statusLine(754, 4.1.milliseconds, onUdp, 0.seconds, reconnecting = true))
+        assertEquals("Reconnecting… · 12:34", statusLine(754, 4.1.milliseconds, onUdp, 20.seconds, reconnecting = true))
+        assertEquals("Reconnecting…", statusLine(null, null, tunneled, 0.seconds, reconnecting = true))
+    }
 }

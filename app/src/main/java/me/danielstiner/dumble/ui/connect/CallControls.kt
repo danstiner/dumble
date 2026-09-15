@@ -287,6 +287,7 @@ private fun talkCaption(block: TalkBlock?) = when (block) {
     TalkBlock.NO_MICROPHONE -> "No mic"
     TalkBlock.DEAFENED -> "Deafened"
     TalkBlock.MUTED -> "Muted"
+    TalkBlock.RECONNECTING -> "Reconnecting"
 }
 
 private fun talkDescription(block: TalkBlock?) = when (block) {
@@ -296,6 +297,7 @@ private fun talkDescription(block: TalkBlock?) = when (block) {
     // Deliberately not "the server has muted you": the cause can be our own self_mute, and will be
     // routinely once a mute control exists. States the consequence, which is true for all three.
     TalkBlock.MUTED -> "Muted — the server will not carry your audio"
+    TalkBlock.RECONNECTING -> "Reconnecting — Talk comes back with the link"
 }
 
 /**

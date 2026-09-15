@@ -17,7 +17,14 @@ internal fun statusLine(
     roundTripTime: Duration?,
     voicePath: VoicePath.State,
     pingAge: Duration,
+    reconnecting: Boolean = false,
 ): String = buildString {
+    // A round trip measured on the dead link is stale, and the outage is what this line says.
+    if (reconnecting) {
+        append("Reconnecting…")
+        if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
+        return@buildString
+    }
     append("Connected")
     if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
     // Either the latency or the outage, never both: a round trip measured before the replies

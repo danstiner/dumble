@@ -30,8 +30,11 @@ import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import me.danielstiner.dumble.mumble.protocol.DeafenState
+import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
@@ -52,6 +55,8 @@ import me.danielstiner.dumble.time.BootTimeSource
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
@@ -84,6 +89,8 @@ class MumbleConnection internal constructor(
     // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
+    // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
+    private val sleep: suspend (Duration) -> Unit = { delay(it) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -113,6 +120,10 @@ class MumbleConnection internal constructor(
     override val channelTree: StateFlow<ChannelTree> = _channelTree.asStateFlow()
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+    private val _selfState = MutableStateFlow(DeafenState())
+    /** What this session asked of the server: the only self-state there is through an outage,
+     *  since the echo stops with the link. */
+    override val selfState: StateFlow<DeafenState> = _selfState.asStateFlow()
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
 
@@ -173,6 +184,12 @@ class MumbleConnection internal constructor(
         /** The link carrying this session, or null until the driver has built one. Written only
          *  under [lock], by the driver; read on the pump thread by [sendVoice]. */
         @Volatile var link: Link? = null,
+        /** A replacement link being opened; the driver's, written under [lock] so a teardown
+         *  during its blocking handshake finds it and closes it. */
+        @Volatile var next: Link? = null,
+        /** Chat from links this session has already replaced, oldest first. Written by the driver
+         *  at the swap, read by the new link's collector on its own scope. */
+        @Volatile var carried: List<ChatMessage> = emptyList(),
         /** Fingerprint the server presented when the handshake stopped for a trust decision;
          *  what [trustAndConnect] pins. Written by the driver, read on caller threads. */
         @Volatile var presented: String? = null,
@@ -186,6 +203,9 @@ class MumbleConnection internal constructor(
         @Volatile var pressed: Boolean = false,
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
+        /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
+         *  reaches no link, and this is what the replacement is told. */
+        @Volatile var selfState: DeafenState = DeafenState(),
         /** The app wants capture on this session — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
         var wanted: Boolean = false,
@@ -285,19 +305,22 @@ class MumbleConnection internal constructor(
     // superseded session's late writes are no-ops. A retired session (current cleared, generation
     // not bumped) may still land a write: its terminal values are what the user is looking at.
     private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == generation) _status.value = s }
-    private fun publishMessages(gen: Int, m: List<ChatMessage>) = synchronized(lock) { if (gen == generation) _messages.value = m }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == generation) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == generation) _playoutStats.value = p }
     private fun publishCaptureStats(gen: Int, c: CaptureStats?) = synchronized(lock) { if (gen == generation) _captureStats.value = c }
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == generation) _audioRoutes.value = r }
 
     /**
-     * A link's own flow. Guarded on the link's identity as well as the generation: cancelling a
-     * link's collectors is no barrier for one already inside its body, and a link the session
-     * has moved on from must not land a write after the swap.
+     * A link's own flow, guarded on the link's identity and its close flag as well as the
+     * generation: cancelling a link's collectors is no barrier for one already inside its body.
+     * Best effort, since the flag is raised outside this lock. A kick's UserRemove lands before
+     * the close, on a live link; the UI blocking on Reconnecting is what keeps it from reading as
+     * "you left".
      */
     private fun <T> publishFromLink(session: Session, link: Link, flow: MutableStateFlow<T>, value: T) =
-        synchronized(lock) { if (session.gen == generation && session.link === link) flow.value = value }
+        synchronized(lock) {
+            if (session.gen == generation && session.link === link && !link.isClosed) flow.value = value
+        }
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
@@ -552,6 +575,7 @@ class MumbleConnection internal constructor(
         _voicePath.value = VoicePath.State()
         _channelTree.value = ChannelTree()
         _messages.value = emptyList()
+        _selfState.value = DeafenState()
         _speakingSessions.value = emptySet()
         // Speaking and held belong to the session being retired. A draining pump can raise
         // speaking again — bounded and invisible, see onAudioSent.
@@ -570,7 +594,11 @@ class MumbleConnection internal constructor(
         val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val transport = newTransport(pin)
         val stateMachine = SessionStateMachine(
-            transport, session.username, session.password, childScope, pingIntervalMs = pingIntervalMs,
+            transport, session.username, session.password, childScope,
+            // The driver compares the sync stamp against its own clock, and marks from two
+            // sources cannot be compared.
+            bootClock = udpClock,
+            pingIntervalMs = pingIntervalMs,
         )
         val path = VoicePath()
         val udp = MumbleUdpTransport(stateMachine.crypt, object : MumbleUdpTransport.Listener {
@@ -640,24 +668,91 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * The session's driver: builds its link, connects it, and holds it until its state machine
-     * fails, then retires the session. One coroutine per session, on the session's own scope, so
-     * a teardown cancels it wherever it waits; the link it built is closed by that teardown, not
-     * by the cancellation.
+     * The session's driver: opens its first link and holds it until the state machine fails,
+     * then replaces the link under the same session until one synchronizes or the deadline
+     * passes. One coroutine per session, on the session's own scope, so a teardown cancels it
+     * wherever it waits; the links it built are closed by that teardown, not by the cancellation.
      */
     private suspend fun drive(session: Session) {
         val gen = session.gen
         val pin = pinStore.get(session.endpoint.address)
         Log.i(TAG, "connect gen=$gen endpoint=${session.endpoint.address} user=${session.username} storedPin=${pin != null}")
-        val link = buildLink(session, pin)
-        // Published before the connect, so a teardown that lands during the blocking handshake
-        // finds the link and closes it; see Link.close for what the transport does with a
-        // handshake that finishes around that close.
-        val live = synchronized(lock) {
-            if (gen == generation && current === session) { session.link = link; true } else false
-        }
-        if (!live) { link.close(); return }   // superseded during the pin lookup
+        // The loop below runs for minutes beside a live platform call: an escape would leave
+        // the call up with nothing driving it.
+        try {
+            var link = buildLink(session, pin)
+            // Published before the connect, so a teardown that lands during the blocking handshake
+            // finds the link and closes it; see Link.close for what the transport does with a
+            // handshake that finishes around that close.
+            val live = synchronized(lock) {
+                if (gen == generation && current === session) { session.link = link; true } else false
+            }
+            if (!live) { link.close(); return }   // superseded during the pin lookup
 
+            open(session, link)?.let { fail(session, it); return }
+            if (!isLive(session)) { link.close(); return }   // superseded mid-handshake
+            wire(session, link)
+            // Its own coroutine so the state collector below subscribes before start() opens the
+            // output stream, ~100 ms of HAL on a Pixel 7a, which is also why the lock is not held
+            // across it — a teardown landing in between is the receiver's own latch to handle.
+            // Every earlier return skips this, so a session that never gets here never calls
+            // newPlayout().
+            session.scope.launch { if (isLive(session)) session.receiver.start() }
+
+            var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
+            while (true) {
+                // Status is the driver's own collector, not one of the link's: the terminal Error
+                // must be on `status` before retire() cancels this coroutine's scope, and a Failed
+                // is never published before it is classified.
+                val failed = link.stateMachine.state
+                    .onEach { st ->
+                        if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
+                    }
+                    .first { it is ConnectionState.Failed } as ConnectionState.Failed
+                // The link's own stamp, not what a collector on a conflating flow saw: it decides
+                // the retry and names the row the UI reads.
+                val synced = link.stateMachine.sync
+                // The first link dying before it synchronized is the connect failing, never
+                // retried; every later link came out of replaceLink synchronized.
+                if (synced == null) {
+                    fail(session, mapState(gen, failed)!!)
+                    return
+                }
+                // No classify: past Synchronized the only end is onClosed, which is IO.
+                val now = udpClock.markNow()
+                // Losing a healthy link is a new outage: fresh deadline, backoff from the start.
+                // Losing one that never got healthy continues the outage, one attempt in, against the
+                // same deadline, which is what bounds a path that dies every few seconds.
+                val healthy = now - synced.at >= HEALTHY_AFTER
+                val attempt: Int
+                if (healthy || deadline == null) {
+                    deadline = now + GIVE_UP_AFTER
+                    attempt = 0
+                } else {
+                    // Time spent synchronized was not spent reconnecting: given back, or a path
+                    // that comes up for twenty seconds at a time spends the budget while the user
+                    // is talking.
+                    deadline += now - synced.at
+                    attempt = 1
+                }
+                Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
+                publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
+                link.close()
+                link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt) ?: return
+            }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            Log.e(TAG, "driver failed gen=$gen", t)
+            fail(session, ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, t.message))
+        }
+    }
+
+    /**
+     * Connects [link] and starts its protocol. Null on success; otherwise the status the failure
+     * maps to, with the link still open: the caller either drops it or retires the session it
+     * belongs to, which closes it.
+     */
+    private suspend fun open(session: Session, link: Link): ConnectionStatus? {
         val listener = object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = link.stateMachine.onFrame(f)
             override fun onClosed(cause: Throwable?) = link.stateMachine.onClosed(cause)
@@ -666,27 +761,13 @@ class MumbleConnection internal constructor(
             link.transport.connect(session.endpoint.host, session.endpoint.port, listener)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            val status = mapConnectError(t, session)
-            if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
-                // Retired all the same: a session left current after its call ends is one a
-                // Talk press opens a microphone against. Set before the status goes out, since
-                // trustAndConnect() can follow the prompt at once.
-                Log.i(TAG, "handshake stopped for trust decision: $status")
-                synchronized(lock) { if (gen == generation) trustPrompt = session }
-            } else {
-                Log.w(TAG, "connect failed for ${session.endpoint.address}", t)
-            }
-            publishStatus(gen, status)
-            // Ends the call as a failure and keeps the microphone from opening against it.
-            retire(session)
-            return
+            Log.w(TAG, "connect failed gen=${session.gen} for ${session.endpoint.address}", t)
+            return mapConnectError(t, session)
         }
-        if (!isLive(session)) { link.close(); return }   // superseded mid-handshake
-
-        // Before sm.start(): the ping that registers our address fires the instant CryptSetup
-        // keys the cipher, and from then on the server sends our downlink over UDP whether or
-        // not we ever transmit (docs/connection.md, UDP voice), so it has to land on a socket
-        // already listening. One that cannot be opened costs the session nothing but UDP.
+        // Before start(): the ping that registers our address fires the instant CryptSetup keys
+        // the cipher, and from then on the server sends our downlink over UDP whether or not we
+        // ever transmit (docs/connection.md, UDP voice), so it has to land on a socket already
+        // listening. One that cannot be opened costs the session nothing but UDP.
         link.transport.remoteAddress()?.let { remote ->
             runCatching { link.udp.open(remote) }
                 .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
@@ -696,38 +777,165 @@ class MumbleConnection internal constructor(
             session.receiver.onVoicePacket(payload, payload.size)
         }
         link.stateMachine.start()
-        // A link's flows republish under the link guard; the session's own keep the generation
-        // guard alone.
-        fun <T> republish(from: Flow<T>, into: MutableStateFlow<T>) =
+        return null
+    }
+
+    /** Republishes [link]'s flows as the session's. The link must already be `session.link`. */
+    private fun wire(session: Session, link: Link) {
+        // Seeded here, before the driver publishes this link's Connected: a collector on its own
+        // coroutine would leave the dead link's tree published under the new session id, one
+        // without our own row in it.
+        fun <T> republish(from: StateFlow<T>, into: MutableStateFlow<T>) {
+            publishFromLink(session, link, into, from.value)
             link.childScope.launch { from.collect { publishFromLink(session, link, into, it) } }
+        }
         republish(link.stateMachine.serverVersion, _serverVersion)
         republish(link.stateMachine.roundTripTime, _roundTripTime)
         republish(link.path.state, _voicePath)
         republish(link.stateMachine.lastServerReplyAt, _lastServerReplyAt)
         republish(link.stateMachine.channelTree, _channelTree)
         republish(link.stateMachine.userStats, _userStats)
-        // Chat is the session's, not the link's: a relink carries the log over.
-        link.childScope.launch { link.stateMachine.messages.collect { publishMessages(gen, it) } }
-        // Start the receiver if this is still the live session, on its own coroutine so the
-        // status wait below subscribes before the stream open rather than after it. Both halves
-        // of isLive matter: retire() clears `current` without bumping the generation. Every
-        // earlier return skips this, so a session that never gets here never calls newPlayout()
-        // — see the comment where the receiver is built.
-        //
-        // The check is under the lock; the start is not. start() opens the output stream,
-        // ~100 ms of HAL on a Pixel 7a, and holding `lock` across that stalls a main-thread
-        // disconnect() and every publish. A teardown landing in between is the receiver's
-        // own latch to handle: its stop() before start() refuses the start, and after it
-        // joins and destroys.
-        session.scope.launch { if (isLive(session)) session.receiver.start() }
+        // Chat is the session's: what earlier links received stays ahead of this link's own.
+        link.childScope.launch {
+            link.stateMachine.messages.collect {
+                publishFromLink(
+                    session, link, _messages,
+                    (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES),
+                )
+            }
+        }
+        // The wire state starts fresh per link, so the replacement is told what the session last
+        // asked for, deafen included; taps during the outage reached no link, so this is where
+        // they take effect. Under the lock, a tap racing the swap either precedes this read or
+        // follows the send.
+        synchronized(lock) {
+            session.selfState.takeIf { it != DeafenState() }
+                ?.let { link.stateMachine.sendSelfState(it) }
+        }
+    }
 
-        // Status is the driver's own collector, not one of the link's: the terminal Error must
-        // be on `status` before retire() cancels this coroutine's scope, and onEach runs before
-        // first's predicate on every emission.
-        link.stateMachine.state
-            .onEach { st -> mapState(gen, st)?.let { publishStatus(gen, it) } }
-            .first { it is ConnectionState.Failed }
+    /**
+     * Opens replacement links until one synchronizes, backing off further on each failure, or
+     * the deadline passes. Returns the synchronized link, swapped in and wired; null once the
+     * session has been ended or parked here.
+     */
+    private suspend fun replaceLink(
+        session: Session,
+        pin: String?,
+        deadline: ComparableTimeMark,
+        diedAt: ComparableTimeMark,
+        firstAttempt: Int,
+    ): Link? {
+        val gen = session.gen
+        var attempt = firstAttempt
+        while (true) {
+            // Clamped, not skipped: the network is often back inside the last, clamped wait.
+            // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s wait
+            // next, while the in-flight connect, bound to the dead interface, ran out its own
+            // timeout. One last attempt at the deadline costs one connect.
+            val remaining = deadline - udpClock.markNow()
+            if (remaining <= Duration.ZERO) {
+                Log.w(TAG, "gave up gen=$gen")
+                fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
+                return null
+            }
+            // delay's clock and the deadline's boot clock disagree only across a suspend, and the
+            // backoff cannot be suspended through: playout and capture stay open across the swap,
+            // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
+            // measured held across a whole outage.
+            sleep(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))
+            val next = buildLink(session, pin)
+            // Published before the connect for the same reason the first link is: a teardown
+            // mid-handshake has to find it.
+            val live = synchronized(lock) {
+                if (gen == generation && current === session) { session.next = next; true } else false
+            }
+            if (!live) { next.close(); return null }
+            Log.i(TAG, "replacement gen=$gen attempt=$attempt")
+            val failure = open(session, next)
+            if (failure != null) {
+                drop(session, next)
+                // The server's certificate changed: the prompt, as a fresh connect would give it.
+                if (failure is ConnectionStatus.AwaitingTrust || failure is ConnectionStatus.PinMismatch) {
+                    fail(session, failure)
+                    return null
+                }
+                Log.w(TAG, "replacement failed gen=$gen attempt=$attempt status=$failure")
+                attempt += 1
+                continue
+            }
+            // Only the state is watched before the swap: a half-built channel tree from the
+            // handshake never reaches the UI.
+            val outcome = next.stateMachine.state.first {
+                it is ConnectionState.Synchronized || it is ConnectionState.Failed
+            }
+            if (outcome is ConnectionState.Failed) {
+                drop(session, next)
+                classify(gen, outcome, diedAt)?.let { fail(session, it); return null }
+                Log.w(
+                    TAG,
+                    "replacement handshake failed gen=$gen attempt=$attempt reason=${outcome.reason} " +
+                        "detail=${outcome.detail}",
+                )
+                attempt += 1
+                continue
+            }
+            val swapped = synchronized(lock) {
+                if (gen == generation && current === session) {
+                    session.carried = _messages.value
+                    session.link = next
+                    session.next = null
+                    true
+                } else false
+            }
+            if (!swapped) { drop(session, next); return null }
+            wire(session, next)
+            return next
+        }
+    }
+
+    /**
+     * Ends the session on [status]: published before [retire], which cancels the scope this runs
+     * on, and retiring keeps a Talk press from opening a microphone against a finished call. A
+     * trust prompt is kept aside for [trustAndConnect] first, since it can follow at once.
+     */
+    private fun fail(session: Session, status: ConnectionStatus) {
+        if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
+            Log.i(TAG, "handshake stopped for trust decision: $status")
+            synchronized(lock) { if (session.gen == generation) trustPrompt = session }
+        }
+        publishStatus(session.gen, status)
         retire(session)
+    }
+
+    /** Closes a replacement that will not be swapped in, and unpublishes it. */
+    private fun drop(session: Session, link: Link) {
+        link.close()
+        synchronized(lock) { if (session.next === link) session.next = null }
+    }
+
+    /**
+     * The status a dead link ends the session with, or null when a replacement is worth trying.
+     * [diedAt] is when the link whose ghost might still hold the name died — the backoff's own
+     * start, not the outage's, since every replacement that synchronizes leaves a fresh ghost.
+     */
+    private fun classify(
+        gen: Int,
+        failed: ConnectionState.Failed,
+        diedAt: ComparableTimeMark,
+    ): ConnectionStatus? = when (failed.reason) {
+        FailReason.IO, FailReason.TIMEOUT -> null
+        // Past GHOST_REAP the name is someone else's, and retrying would only end on a timeout
+        // that says nothing about why. Every other rejection is final at once.
+        FailReason.AUTH_REJECT ->
+            if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse &&
+                udpClock.markNow() - diedAt < GHOST_REAP
+            ) {
+                null
+            } else {
+                mapState(gen, failed)
+            }
+        FailReason.VERSION_TOO_OLD -> mapState(gen, failed)
     }
 
     /** Accept the presented certificate (first contact or a mismatch) and reconnect on the pinned path. */
@@ -764,7 +972,12 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) { current?.link?.stateMachine?.setSelfDeaf(on) }
+    override fun setSelfDeaf(on: Boolean) {
+        synchronized(lock) {
+            val session = current ?: return
+            ask(session) { it.withSelfDeaf(on) }
+        }
+    }
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
@@ -820,11 +1033,24 @@ class MumbleConnection internal constructor(
      *  than at the server's echo, and a capture session rebuilt after the tap must not come up
      *  transmitting. */
     override fun setMuted(on: Boolean) {
-        val session = current ?: return
-        val stateMachine = session.link?.stateMachine ?: return
-        stateMachine.setSelfMute(on)
-        session.muted = on
-        apply(session)
+        val session = synchronized(lock) {
+            val session = current ?: return
+            session.muted = on
+            ask(session) { it.withSelfMute(on) }
+            session
+        }
+        apply(session)   // opens or closes a capture engine; never under the lock
+    }
+
+    /**
+     * Advance what the session asks, publish it, and send it to whatever link is there, all under
+     * [lock] so a swap's wire() cannot slip between a tap's write and its send and leave the server
+     * on the older of the two. During an outage the send reaches no link; the swap makes it.
+     */
+    private fun ask(session: Session, next: (DeafenState) -> DeafenState) {
+        session.selfState = next(session.selfState)
+        _selfState.value = session.selfState
+        session.link?.stateMachine?.sendSelfState(session.selfState)
     }
 
     /**
@@ -855,6 +1081,7 @@ class MumbleConnection internal constructor(
         // Either the driver published the link under the lock before `current` was cleared, and
         // this closes it, or it will see the session is no longer current and close it itself.
         session.link?.close()
+        session.next?.close()
         // Last: retire() reaches here from the driver, which runs on this scope.
         session.scope.cancel()
     }
@@ -881,9 +1108,29 @@ class MumbleConnection internal constructor(
          *  inside a sentence, not so long it is still lit once someone has stopped. */
         const val SPEAKING_HOLD_MILLIS = 200L
 
+        /** A link that stayed synchronized this long was a working path: losing it is a new
+         *  outage, not another failure of the one being retried. */
+        val HEALTHY_AFTER = 30.seconds
+
+        /** How long after losing a healthy link the session keeps trying before it ends. Long
+         *  enough for an elevator or a tunnel; short enough that a dead server does not hold a
+         *  platform call for minutes. */
+        val GIVE_UP_AFTER = 2.minutes
+
+        /** How long murmur takes to reap a ghost of ourselves still holding the name — its
+         *  own idle timeout, and the only rejection a retry can outlast. */
+        val GHOST_REAP = 45.seconds
+
+        /** The wait before each replacement attempt, exponential; the last repeats. */
+        val BACKOFF = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
+
+        /** No number: an attempt that hangs can finish past the deadline. */
+        const val GAVE_UP_DETAIL = "could not get back to the server"
+
         /** Tunneled for its side effect, never answered. Any frame of two bytes or more would
          *  do; this one is honest about what it is. */
         val TUNNEL_PING: ByteArray =
             byteArrayOf(1) + MumbleUdpProtos.Ping.newBuilder().setTimestamp(1).build().toByteArray()
     }
 }
+

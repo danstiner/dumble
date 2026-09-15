@@ -15,6 +15,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
 import me.danielstiner.dumble.mumble.voice.SendDelay
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.mySession
 import me.danielstiner.dumble.ui.about.AboutScreen
 import me.danielstiner.dumble.ui.connect.Route
 import me.danielstiner.dumble.ui.settings.SettingsScreen
@@ -60,11 +61,23 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
             onSelectTransmitMode = vm::onSelectTransmitMode,
             modifier = m,
         )
-        Route.Main -> when (val s = state.status) {
-            is ConnectionStatus.Connected ->
+        // Our session row is what the controls and the chat read, and it outlives the link that
+        // earned it, so a reconnect stays on the call screen.
+        Route.Main -> when (val mySession = state.status.mySession) {
+            null -> ConnectScreen(
+                state = state,
+                onHost = vm::onHostChange, onPort = vm::onPortChange,
+                onUsername = vm::onUsernameChange, onPassword = vm::onPasswordChange,
+                onConnect = vm::onConnect,
+                onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
+                onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
+                onSettings = vm::openSettings,
+                modifier = m,
+            )
+            else -> {
                 if (state.showChat) ChatScreen(
                     messages = state.messages,
-                    mySession = s.sessionId,
+                    mySession = mySession,
                     draft = state.chatDraft,
                     onDraftChange = vm::onChatDraftChange,
                     onSend = vm::sendMessage,
@@ -72,7 +85,8 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     modifier = m,
                 ) else ConnectedScreen(
                     server = "${state.draft.host}:${state.draft.port}",
-                    sessionId = s.sessionId,
+                    sessionId = mySession,
+                    reconnecting = state.status is ConnectionStatus.Reconnecting,
                     connectedSince = state.connectedSince,
                     roundTripTime = state.roundTripTime,
                     voicePath = state.voicePath,
@@ -110,16 +124,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )
-            else -> ConnectScreen(
-                state = state,
-                onHost = vm::onHostChange, onPort = vm::onPortChange,
-                onUsername = vm::onUsernameChange, onPassword = vm::onPasswordChange,
-                onConnect = vm::onConnect,
-                onMicrophonePermissionResult = vm::onMicrophonePermissionResult,
-                onTrust = vm::onTrust, onCancelTrust = vm::onCancelTrust,
-                onSettings = vm::openSettings,
-                modifier = m,
-            )
+            }
         }
     }
 }

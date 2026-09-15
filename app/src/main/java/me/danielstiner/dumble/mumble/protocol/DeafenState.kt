@@ -34,4 +34,14 @@ data class DeafenState(
      *  the two together — and its `unmuteOnUndeaf` rule decides whether the mute stays. */
     fun mute(on: Boolean): DeafenState =
         if (!on && selfDeaf) deafen(false) else copy(selfMute = on)
+
+    /**
+     * The state after asking for [on]. A repeat ask, a second tap inside one round trip, is this
+     * state unchanged and sent again verbatim: advancing twice would run [deafen] against state
+     * the first ask already moved and strand the user muted.
+     */
+    fun withSelfDeaf(on: Boolean): DeafenState = if (on == selfDeaf) this else deafen(on)
+
+    /** As [withSelfDeaf], for mute. */
+    fun withSelfMute(on: Boolean): DeafenState = if (on == selfMute) this else mute(on)
 }

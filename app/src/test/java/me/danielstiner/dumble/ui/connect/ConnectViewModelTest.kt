@@ -407,6 +407,56 @@ class ConnectViewModelTest {
     )
 
     /**
+     * A reconnect does not hand back a microphone the user never granted. The Mute control disables
+     * itself on this block alone, so letting the outage mask it would let that user mute themselves
+     * for every reconnect and stay muted after it.
+     */
+    @Test fun noMicrophoneOutranksAnOutage() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = false)
+        conn.channelTree.value = treeWith(user(7))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        assertEquals(TalkBlock.NO_MICROPHONE, vm.uiState.value.talkBlock)
+
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+        assertEquals(TalkBlock.NO_MICROPHONE, vm.uiState.value.talkBlock)
+    }
+
+    /**
+     * Mute and Deafen toggle from what the control shows, and through an outage that cannot be the
+     * echo: the server's answer stops with the link, and the tree it would arrive in is frozen at
+     * that link's close. Read from the echo, a second tap asks for the same thing again and the
+     * control never moves.
+     */
+    @Test fun aMuteTakenDuringTheOutageCanBeTakenBack() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = true)
+        conn.channelTree.value = treeWith(user(7))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        runCurrent()
+        assertFalse(vm.uiState.value.muted)
+
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+        vm.onToggleMute()
+        runCurrent()
+        assertTrue("the control reads the ask", vm.uiState.value.muted)
+        vm.onToggleMute()
+        runCurrent()
+        assertFalse("and a second tap takes it back", vm.uiState.value.muted)
+        assertEquals(listOf(true, false), conn.muted)
+
+        vm.onToggleDeafen()
+        runCurrent()
+        assertTrue("deafen has no echo here at all", vm.uiState.value.deafened)
+        assertEquals(listOf(true), conn.selfDeaf)
+    }
+
+    /**
      * Deafen is the server's answer, read off our own row, not a local flag set by the tap. The tap
      * only sends; an admin or another client moving it is picked up for free.
      */
@@ -543,6 +593,41 @@ class ConnectViewModelTest {
         runCurrent()
 
         assertEquals(first, vm.uiState.value.connectedSince)
+    }
+
+    /** Reconnecting is the same call: the timer keeps counting, Talk is blocked, and the row the
+     *  controls read is the one the server session we last had. */
+    @Test fun reconnectingKeepsTheTimerBlocksTalkAndReadsTheLastRow() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onMicrophonePermissionResult(granted = true)
+        val root = Channel(id = 0, parentId = null, name = "Root", position = 0)
+        fun me(session: Int) = User(
+            session = session, name = "me", channelId = 0,
+            mute = false, deaf = false, selfMute = true, selfDeaf = false, suppress = false,
+        )
+        conn.channelTree.value = ChannelTree(channels = mapOf(0 to root), users = mapOf(7 to me(7)))
+        conn.emitConnected(sessionId = 7, gen = 1)
+        // The mute on that row is one this session asked for: self_mute is ours to set, so the
+        // echo can only ever be a copy of the ask, and through the outage the ask is what is left.
+        vm.onToggleMute()
+        runCurrent()
+        val since = vm.uiState.value.connectedSince
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
+
+        clock += 5.seconds
+        conn.emitReconnecting(gen = 1, lastSessionId = 7)
+        runCurrent()
+
+        assertEquals(since, vm.uiState.value.connectedSince)
+        assertEquals(TalkBlock.RECONNECTING, vm.uiState.value.talkBlock)
+        assertTrue(vm.uiState.value.muted)
+
+        conn.emitConnected(sessionId = 9, gen = 1)
+        conn.channelTree.value = ChannelTree(channels = mapOf(0 to root), users = mapOf(9 to me(9)))
+        runCurrent()
+        assertEquals(since, vm.uiState.value.connectedSince)
+        assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
     }
 
     /**

@@ -31,6 +31,10 @@ internal class Link(
 ) {
     private val closed = AtomicBoolean(false)
 
+    /** Raised outside the connection's lock, so a check-then-write against it can still lose
+     *  the race; see MumbleConnection.publishFromLink. */
+    val isClosed: Boolean get() = closed.get()
+
     /**
      * Any thread; nothing here blocks; at most once. Safe before [transport] has connected: a
      * handshake that finishes before the deferred close lands is published and torn down a

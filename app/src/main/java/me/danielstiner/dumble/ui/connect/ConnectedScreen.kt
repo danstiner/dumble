@@ -56,6 +56,7 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 fun ConnectedScreen(
     server: String,
     sessionId: Int,
+    reconnecting: Boolean,
     connectedSince: ComparableTimeMark?,
     roundTripTime: Duration?,
     voicePath: VoicePath.State,
@@ -159,7 +160,7 @@ fun ConnectedScreen(
                 },
                 subtitle = {
                     Text(
-                        statusLine(elapsedSeconds, roundTripTime, voicePath, pingAge),
+                        statusLine(elapsedSeconds, roundTripTime, voicePath, pingAge, reconnecting),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 },
