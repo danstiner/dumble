@@ -1001,7 +1001,7 @@ class MumbleConnectionTest {
         val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("could not get back to the server", err.detail)
-        // 0+1+2+4+8+16+30+30 = 91 s used; a ninth 30 s rung would overrun, so it is clamped to the
+        // 0+1+2+4+8+16+30+30 = 91 s used; a ninth 30 s wait would overrun, so it is clamped to the
         // 29 s left and spent on one last attempt, which lands exactly on the deadline.
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30, 29).map { it.seconds }, waits.toList())
         awaitTrue("giving up ends the call") { call.ends == 1 }
@@ -1010,7 +1010,7 @@ class MumbleConnectionTest {
 
     /**
      * The budget left over is spent, not thrown away: measured on a Pixel 7a, WiFi returned with
-     * 28.8 s of budget left and a 30 s rung next, because the in-flight connect was bound to the
+     * 28.8 s of budget left and a 30 s wait next, because the in-flight connect was bound to the
      * interface that had just died and ran out its own timeout.
      */
     @Test fun theBudgetLeftOverIsSpentOnOneLastAttempt() = runBlocking {

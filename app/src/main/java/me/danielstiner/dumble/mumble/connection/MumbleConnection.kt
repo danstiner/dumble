@@ -89,7 +89,7 @@ class MumbleConnection internal constructor(
     // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
-    // Seam: the ladder's waits, so its tests drive a clock instead of sleeping.
+    // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
@@ -720,25 +720,25 @@ class MumbleConnection internal constructor(
                 }
                 // No classify: past Synchronized the only end is onClosed, which is IO.
                 val now = udpClock.markNow()
-                // Losing a healthy link is a new outage: fresh deadline, ladder from the bottom.
-                // Losing one that never got healthy continues the outage, one rung up, against the
+                // Losing a healthy link is a new outage: fresh deadline, backoff from the start.
+                // Losing one that never got healthy continues the outage, one attempt in, against the
                 // same deadline, which is what bounds a path that dies every few seconds.
                 val healthy = now - synced.at >= HEALTHY_AFTER
-                val rung: Int
+                val attempt: Int
                 if (healthy || deadline == null) {
                     deadline = now + GIVE_UP_AFTER
-                    rung = 0
+                    attempt = 0
                 } else {
                     // Time spent synchronized was not spent reconnecting: given back, or a path
                     // that comes up for twenty seconds at a time spends the budget while the user
                     // is talking.
                     deadline += now - synced.at
-                    rung = 1
+                    attempt = 1
                 }
-                Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy rung=$rung")
+                Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
                 publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
-                link = replaceLink(session, pin, deadline, diedAt = now, firstRung = rung) ?: return
+                link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt) ?: return
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -815,7 +815,7 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * Opens replacement links until one synchronizes, climbing the ladder on each failure, or
+     * Opens replacement links until one synchronizes, backing off further on each failure, or
      * the deadline passes. Returns the synchronized link, swapped in and wired; null once the
      * session has been ended or parked here.
      */
@@ -824,13 +824,13 @@ class MumbleConnection internal constructor(
         pin: String?,
         deadline: ComparableTimeMark,
         diedAt: ComparableTimeMark,
-        firstRung: Int,
+        firstAttempt: Int,
     ): Link? {
         val gen = session.gen
-        var rung = firstRung
+        var attempt = firstAttempt
         while (true) {
-            // Clamped, not skipped: the network is often back inside the last partial rung.
-            // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s rung
+            // Clamped, not skipped: the network is often back inside the last, clamped wait.
+            // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s wait
             // next, while the in-flight connect, bound to the dead interface, ran out its own
             // timeout. One last attempt at the deadline costs one connect.
             val remaining = deadline - udpClock.markNow()
@@ -840,10 +840,10 @@ class MumbleConnection internal constructor(
                 return null
             }
             // delay's clock and the deadline's boot clock disagree only across a suspend, and the
-            // ladder cannot be suspended through: playout and capture stay open across the swap,
+            // backoff cannot be suspended through: playout and capture stay open across the swap,
             // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
             // measured held across a whole outage.
-            sleep(minOf(RUNGS[minOf(rung, RUNGS.lastIndex)], remaining))
+            sleep(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))
             val next = buildLink(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.
@@ -851,7 +851,7 @@ class MumbleConnection internal constructor(
                 if (gen == generation && current === session) { session.next = next; true } else false
             }
             if (!live) { next.close(); return null }
-            Log.i(TAG, "replacement gen=$gen rung=$rung")
+            Log.i(TAG, "replacement gen=$gen attempt=$attempt")
             val failure = open(session, next)
             if (failure != null) {
                 drop(session, next)
@@ -860,8 +860,8 @@ class MumbleConnection internal constructor(
                     fail(session, failure)
                     return null
                 }
-                Log.w(TAG, "replacement failed gen=$gen rung=$rung status=$failure")
-                rung += 1
+                Log.w(TAG, "replacement failed gen=$gen attempt=$attempt status=$failure")
+                attempt += 1
                 continue
             }
             // Only the state is watched before the swap: a half-built channel tree from the
@@ -874,10 +874,10 @@ class MumbleConnection internal constructor(
                 classify(gen, outcome, diedAt)?.let { fail(session, it); return null }
                 Log.w(
                     TAG,
-                    "replacement handshake failed gen=$gen rung=$rung reason=${outcome.reason} " +
+                    "replacement handshake failed gen=$gen attempt=$attempt reason=${outcome.reason} " +
                         "detail=${outcome.detail}",
                 )
-                rung += 1
+                attempt += 1
                 continue
             }
             val swapped = synchronized(lock) {
@@ -916,7 +916,7 @@ class MumbleConnection internal constructor(
 
     /**
      * The status a dead link ends the session with, or null when a replacement is worth trying.
-     * [diedAt] is when the link whose ghost might still hold the name died — the ladder's own
+     * [diedAt] is when the link whose ghost might still hold the name died — the backoff's own
      * start, not the outage's, since every replacement that synchronizes leaves a fresh ghost.
      */
     private fun classify(
@@ -1119,8 +1119,8 @@ class MumbleConnection internal constructor(
          *  own idle timeout, and the only rejection a retry can outlast. */
         val GHOST_REAP = 45.seconds
 
-        /** Waits between replacement attempts; the last rung repeats. */
-        val RUNGS = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
+        /** The wait before each replacement attempt, exponential; the last repeats. */
+        val BACKOFF = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
 
         /** No number: an attempt that hangs can finish past the deadline. */
         const val GAVE_UP_DETAIL = "could not get back to the server"

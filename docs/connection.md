@@ -36,17 +36,17 @@ user is looking at. A trust prompt retires its session the same way but keeps it
 `trustAndConnect()` to reconnect from.
 
 **Reconnect.** A link that dies after it synchronized is replaced under the same session. The
-driver publishes `Reconnecting`, closes the dead link, and opens replacements on a ladder of 0, 1,
+driver publishes `Reconnecting`, closes the dead link, and opens replacements with a backoff of 0, 1,
 2, 4, 8, 16, 30, 30… seconds until one synchronizes or two minutes of reconnecting have passed;
 the last wait is clamped to what is left of the budget. A rejection is classified on the server's
 reject type: a name still held by our own ghost is retried for the 45 s murmur takes to reap one,
 every other rejection and a too-old server end the session at once. A link that stayed
-synchronized for 30 s was a working path, so losing it starts the ladder and the deadline over;
+synchronized for 30 s was a working path, so losing it starts the backoff and the deadline over;
 losing one that never got that far continues the outage in progress, with the time it spent
 synchronized handed back to the deadline, so a path that dies every few seconds gives up after
 two minutes of outage rather than rejoining forever. The deadline bounds when an attempt may
 start, not how long it may run, so a connect that hangs to its socket timeout can finish past it.
-It is measured on the boot clock while the rungs wait on `delay`, which stops with the CPU; the
+It is measured on the boot clock while the backoff waits on `delay`, which stops with the CPU; the
 two disagree only across a suspend, which the call's audio streams rule out by holding a partial
 wakelock. Whether a link ever synchronized is the state machine's own stamp, taken where the
 transition happens, so a link that synchronized and died inside one emission is still replaced.
