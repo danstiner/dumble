@@ -97,12 +97,18 @@ class MumbleUdpTransportTest {
     private fun open(listener: MumbleUdpTransport.Listener, peer: Peer, crypt: CryptState = ourCrypt()) =
         transport(listener, crypt).apply { open(peer.address) }
 
-    private fun awaitRecvThreads(expected: Int) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-        while (recvThreads() != expected && System.nanoTime() < deadline) Thread.sleep(10)
-    }
+    private fun recvThreads() = Thread.getAllStackTraces().keys.filter { it.name == "dumble-udp-recv" }.toSet()
 
-    private fun recvThreads() = Thread.getAllStackTraces().keys.count { it.name == "dumble-udp-recv" }
+    /** The reader started since [before] was taken. By identity, not by count: readers that
+     *  earlier tests closed are still draining in this JVM and drop out of a count at any moment. */
+    private fun readerStartedSince(before: Set<Thread>): Thread {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (System.nanoTime() < deadline) {
+            (recvThreads() - before).singleOrNull()?.let { return it }
+            Thread.sleep(10)
+        }
+        throw AssertionError("no reader started")
+    }
 
     @Test fun packetsRoundTripThroughOneReusedBuffer() {
         val peer = echoPeer()
@@ -320,18 +326,18 @@ class MumbleUdpTransportTest {
 
     @Test fun closeEndsTheReaderAndOpenAfterCloseIsRefused() {
         val peer = Peer { _, _ -> null }   // never answers, so the read genuinely blocks
-        val baseline = recvThreads()
+        val before = recvThreads()
         val transport = open(Recorder(), peer)
-        awaitRecvThreads(baseline + 1)
+        val reader = readerStartedSince(before)
 
         transport.close()
 
-        awaitRecvThreads(baseline)
-        assertEquals("closing the channel ends the reader", baseline, recvThreads())
+        reader.join(3_000)
+        assertFalse("closing the channel ends the reader", reader.isAlive)
         val late = transport(Recorder()).apply { close() }
+        val beforeLate = recvThreads()
         late.open(peer.address)
-        Thread.sleep(50)
-        assertEquals("a close that raced the open wins", baseline, recvThreads())
+        assertEquals("a close that raced the open wins", emptySet<Thread>(), recvThreads() - beforeLate)
         assertFalse(late.send(byteArrayOf(0), 1))
         peer.close()
     }
@@ -341,10 +347,9 @@ class MumbleUdpTransportTest {
     // the same branch a revoked fd takes. The socket must go with the reader, or it leaks.
     @Test fun aReaderThatDiesClosesTheSocket() {
         val peer = Peer { _, _ -> null }
-        val before = Thread.getAllStackTraces().keys.filter { it.name == "dumble-udp-recv" }.toSet()
+        val before = recvThreads()
         val transport = open(Recorder(), peer)
-        awaitRecvThreads(before.size + 1)
-        val reader = Thread.getAllStackTraces().keys.single { it.name == "dumble-udp-recv" && it !in before }
+        val reader = readerStartedSince(before)
 
         reader.interrupt()
 
