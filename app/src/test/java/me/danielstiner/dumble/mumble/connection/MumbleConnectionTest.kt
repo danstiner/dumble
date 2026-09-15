@@ -1009,11 +1009,9 @@ class MumbleConnectionTest {
     }
 
     /**
-     * The budget left over is spent, not thrown away. A rung longer than what remains used to end
-     * the session while the clock still had time on it, so a network that came back inside that gap
-     * never got an attempt: measured on a Pixel 7a, WiFi returned 8.3 s before a give-up that left
-     * 28.8 s unspent, because the in-flight connect was bound to the interface that had just died
-     * and the rung behind it was 30 s.
+     * The budget left over is spent, not thrown away: measured on a Pixel 7a, WiFi returned with
+     * 28.8 s of budget left and a 30 s rung next, because the in-flight connect was bound to the
+     * interface that had just died and ran out its own timeout.
      */
     @Test fun theBudgetLeftOverIsSpentOnOneLastAttempt() = runBlocking {
         val clock = AtomicTimeSource()
@@ -1021,7 +1019,7 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
         // Refused until the clock reaches the deadline itself, so only the clamped last attempt
-        // can get through — the old rule never made one.
+        // can get through.
         val spent = { waits.sumOf { it.inWholeSeconds }.seconds }
         val conn = MumbleConnection(
             InMemoryPinStore(), call = call, udpClock = clock,
@@ -1135,7 +1133,7 @@ class MumbleConnectionTest {
 
     /** The log is the session's: what the old link received stays, by identity, and the new
      *  link's messages append to it. */
-    @Test fun chatSurvivesARelink() = runBlocking {
+    @Test fun chatSurvivesAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1165,7 +1163,7 @@ class MumbleConnectionTest {
      * state starts fresh: untold, the server and the row it echoes back would show the user
      * unmuted while nothing leaves the device.
      */
-    @Test fun selfMuteSurvivesARelink() = runBlocking {
+    @Test fun selfMuteSurvivesAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1199,7 +1197,7 @@ class MumbleConnectionTest {
      * comes up with the server carrying a microphone the user believes is off — live, under voice
      * activity, with the Deafen control quietly reading undeafened from the new link's own row.
      */
-    @Test fun selfDeafSurvivesARelink() = runBlocking {
+    @Test fun selfDeafSurvivesAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1224,7 +1222,7 @@ class MumbleConnectionTest {
      * `unmuteOnUndeaf` is what tells deafen's own mute apart from one the user set, and re-deriving
      * it would open the microphone on the next undeafen.
      */
-    @Test fun aMuteTheUserSetOutlivesADeafenAcrossARelink() = runBlocking {
+    @Test fun aMuteTheUserSetOutlivesADeafenAcrossAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1355,13 +1353,12 @@ class MumbleConnectionTest {
     }
 
     /**
-     * The stranding regression, now that the session holds the state the state machine used to.
      * A double-tap lands inside one round trip, so the second ask arrives with the tree — and the
      * control's idea of `deafened` — unchanged, and reaches this as a repeat. Advancing again would
-     * run [DeafenState.deafen] against state the first ask already moved, which is what used to
-     * emit `self_mute=true` on an undeafen and leave the user muted with no control to clear it.
+     * run [DeafenState.deafen] against state the first ask already moved and emit `self_mute=true`
+     * on an undeafen, leaving the user muted with no control to clear it.
      *
-     * Asserts every frame, not just the last: the bug was a differing *second* message.
+     * Asserts every frame, not just the last: the bug is a differing *second* message.
      */
     @Test fun undeafenTappedTwiceSendsTheSameMessageTwice() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1459,7 +1456,7 @@ class MumbleConnectionTest {
      * fresh connect gives: the session is retired behind it — no microphone opens against it, and
      * the call ends as a failure — but kept aside, so accepting the new pin reconnects.
      */
-    @Test fun aTrustPromptOnARelinkRetiresTheSessionAndCanStillBeAccepted() = runBlocking {
+    @Test fun aTrustPromptOnAReconnectRetiresTheSessionAndCanStillBeAccepted() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()

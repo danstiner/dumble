@@ -36,11 +36,9 @@ data class DeafenState(
         if (!on && selfDeaf) deafen(false) else copy(selfMute = on)
 
     /**
-     * The state after asking for [on]. A repeat ask — a second tap inside one round trip, where
-     * the echo the control reads has not moved — is this state unchanged, which the caller sends
-     * again verbatim: advancing twice would run [deafen] against state the first ask already moved
-     * and strand the user muted. The rule lives here so the layer that sends and the layer that
-     * remembers cannot drift apart on it.
+     * The state after asking for [on]. A repeat ask, a second tap inside one round trip, is this
+     * state unchanged and sent again verbatim: advancing twice would run [deafen] against state
+     * the first ask already moved and strand the user muted.
      */
     fun withSelfDeaf(on: Boolean): DeafenState = if (on == selfDeaf) this else deafen(on)
 

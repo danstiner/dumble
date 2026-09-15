@@ -193,10 +193,9 @@ class SessionStateMachine(
                         ConnectionState.Synchronized(sync.session),
                     )
                 ) {
-                    // Stamped where the transition happens, not where a collector observes it:
-                    // state is a conflating flow, so a link that synchronized and died inside one
-                    // emission would otherwise look like one that never got on the server at all,
-                    // and the id the UI keeps reading its own row by would be a link out of date.
+                    // Stamped where the transition happens: state conflates, so a link that
+                    // synchronized and died inside one emission would otherwise look like one
+                    // that never got on.
                     this.sync = Sync(bootClock.markNow(), sync.session)
                     deadlineJob?.cancel()
                     startPings()
@@ -361,14 +360,11 @@ class SessionStateMachine(
     }
 
     /**
-     * Ship [next] as our own UserState, verbatim. Returns whether it was enqueued; a no-op until
-     * Synchronized, and no optimistic echo, unlike [sendText] — the server broadcasts UserState
-     * back, so the reducer shows what it believes. Safe off the reader thread: channel.send only
-     * enqueues.
-     *
-     * The state itself belongs to the session, which outlives this link and every repeat ask; both
-     * fields ride together because murmur forces mute on with deaf (`Server::msgUserState`) and
-     * never takes it back off, so a frame carrying one alone would let the two drift apart.
+     * Ship [next] as our own UserState, verbatim; a no-op until Synchronized. No optimistic echo,
+     * unlike [sendText]: the server broadcasts UserState back. Both fields ride together because
+     * murmur forces mute on with deaf (`Server::msgUserState`) and never takes it back off, so a
+     * frame carrying one alone would let the two drift apart. Safe off the reader thread:
+     * channel.send only enqueues.
      */
     fun sendSelfState(next: DeafenState): Boolean {
         val session = (_state.value as? ConnectionState.Synchronized)?.sessionId ?: return false

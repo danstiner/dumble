@@ -121,8 +121,8 @@ class MumbleConnection internal constructor(
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
     private val _selfState = MutableStateFlow(DeafenState())
-    /** What this session has asked of the server, which through an outage is all there is: the
-     *  server's echo stops with the link, and the tree the UI reads it from freezes with it. */
+    /** What this session asked of the server: the only self-state there is through an outage,
+     *  since the echo stops with the link. */
     override val selfState: StateFlow<DeafenState> = _selfState.asStateFlow()
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     override val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
@@ -203,9 +203,8 @@ class MumbleConnection internal constructor(
         @Volatile var pressed: Boolean = false,
         /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
         @Volatile var muted: Boolean = false,
-        /** Self-mute and self-deafen as the user last asked for them. The intent, not what a link
-         *  managed to send: a tap during a reconnect reaches no live link at all, and it is this that
-         *  the replacement is told. */
+        /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
+         *  reaches no link, and this is what the replacement is told. */
         @Volatile var selfState: DeafenState = DeafenState(),
         /** The app wants capture on this session — the level [reconcile] opens from.
          *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
@@ -312,13 +311,11 @@ class MumbleConnection internal constructor(
     private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == generation) _audioRoutes.value = r }
 
     /**
-     * A link's own flow. Guarded on the link's identity and its close flag as well as the
-     * generation: a link the session has moved on from must not land a write after the swap, and
-     * cancelling a link's collectors is no barrier for one already inside its body — the flag is
-     * what stops that last write. Best effort, not a barrier: the flag is raised outside this
-     * lock. A kick is not what it covers — the server's UserRemove arrives before the close, so
-     * that tree is published while the link is still live, and what keeps it from reading as "you
-     * left" is the UI blocking on Reconnecting.
+     * A link's own flow, guarded on the link's identity and its close flag as well as the
+     * generation: cancelling a link's collectors is no barrier for one already inside its body.
+     * Best effort, since the flag is raised outside this lock. A kick's UserRemove lands before
+     * the close, on a live link; the UI blocking on Reconnecting is what keeps it from reading as
+     * "you left".
      */
     private fun <T> publishFromLink(session: Session, link: Link, flow: MutableStateFlow<T>, value: T) =
         synchronized(lock) {
@@ -598,8 +595,8 @@ class MumbleConnection internal constructor(
         val transport = newTransport(pin)
         val stateMachine = SessionStateMachine(
             transport, session.username, session.password, childScope,
-            // The driver compares this machine's sync stamp against its own clock, and marks from
-            // two sources cannot be compared at all.
+            // The driver compares the sync stamp against its own clock, and marks from two
+            // sources cannot be compared.
             bootClock = udpClock,
             pingIntervalMs = pingIntervalMs,
         )
@@ -698,9 +695,8 @@ class MumbleConnection internal constructor(
             // Its own coroutine so the state collector below subscribes before start() opens the
             // output stream, ~100 ms of HAL on a Pixel 7a, which is also why the lock is not held
             // across it — a teardown landing in between is the receiver's own latch to handle.
-            // Both halves of isLive matter: retire() clears `current` without bumping the
-            // generation. Every earlier return skips this, so a session that never gets here
-            // never calls newPlayout().
+            // Every earlier return skips this, so a session that never gets here never calls
+            // newPlayout().
             session.scope.launch { if (isLive(session)) session.receiver.start() }
 
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
@@ -713,32 +709,29 @@ class MumbleConnection internal constructor(
                         if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
-                // The link's own record of its sync, not what a collector on a conflating flow
-                // happened to see: both the retry decision and the id the UI reads its row by.
+                // The link's own stamp, not what a collector on a conflating flow saw: it decides
+                // the retry and names the row the UI reads.
                 val synced = link.stateMachine.sync
-                // The first link dying before it synchronized is the connect failing; never
-                // retried. Every later link came from replaceLink, which returns only synchronized
-                // ones, so this is also the only way `synced` is ever null here.
+                // The first link dying before it synchronized is the connect failing, never
+                // retried; every later link came out of replaceLink synchronized.
                 if (synced == null) {
                     fail(session, mapState(gen, failed)!!)
                     return
                 }
-                // No classify: past Synchronized a link can only end through onClosed, which ends
-                // it as IO — SessionStateMachine.fail refuses to overwrite Synchronized at all.
+                // No classify: past Synchronized the only end is onClosed, which is IO.
                 val now = udpClock.markNow()
                 // Losing a healthy link is a new outage: fresh deadline, ladder from the bottom.
-                // Losing one that never got healthy continues the outage in progress, one rung up
-                // and against the same deadline, which is what bounds a path that dies every few
-                // seconds.
+                // Losing one that never got healthy continues the outage, one rung up, against the
+                // same deadline, which is what bounds a path that dies every few seconds.
                 val healthy = now - synced.at >= HEALTHY_AFTER
                 val rung: Int
                 if (healthy || deadline == null) {
                     deadline = now + GIVE_UP_AFTER
                     rung = 0
                 } else {
-                    // What a replacement spent synchronized was not spent reconnecting: give it
-                    // back, or a path that comes up for twenty seconds at a time spends the budget
-                    // while the user is talking and then reports two minutes of reconnecting.
+                    // Time spent synchronized was not spent reconnecting: given back, or a path
+                    // that comes up for twenty seconds at a time spends the budget while the user
+                    // is talking.
                     deadline += now - synced.at
                     rung = 1
                 }
@@ -789,10 +782,9 @@ class MumbleConnection internal constructor(
 
     /** Republishes [link]'s flows as the session's. The link must already be `session.link`. */
     private fun wire(session: Session, link: Link) {
-        // A link's flows republish under the link guard; the session's own keep the generation
-        // guard alone. Seeded here on the driver, before the loop publishes this link's Connected:
-        // a collector starting on its own coroutine would otherwise leave the dead link's value
-        // published under the replacement's session id — a tree without our own row in it.
+        // Seeded here, before the driver publishes this link's Connected: a collector on its own
+        // coroutine would leave the dead link's tree published under the new session id, one
+        // without our own row in it.
         fun <T> republish(from: StateFlow<T>, into: MutableStateFlow<T>) {
             publishFromLink(session, link, into, from.value)
             link.childScope.launch { from.collect { publishFromLink(session, link, into, it) } }
@@ -803,8 +795,7 @@ class MumbleConnection internal constructor(
         republish(link.stateMachine.lastServerReplyAt, _lastServerReplyAt)
         republish(link.stateMachine.channelTree, _channelTree)
         republish(link.stateMachine.userStats, _userStats)
-        // Chat is the session's, not the link's: what earlier links received stays, by identity,
-        // ahead of this link's own.
+        // Chat is the session's: what earlier links received stays ahead of this link's own.
         link.childScope.launch {
             link.stateMachine.messages.collect {
                 publishFromLink(
@@ -813,13 +804,12 @@ class MumbleConnection internal constructor(
                 )
             }
         }
-        // The wire state is the link's and starts fresh, so a replacement is told what the session
-        // last asked for — deafen included, or a deafened user comes back with the server carrying
-        // a microphone they had switched off. Taps during the outage reached no live link, so this
-        // is where they take effect, unmutes as much as mutes. Under the lock a tap racing the
-        // swap either precedes this read or follows the whole thing.
+        // The wire state starts fresh per link, so the replacement is told what the session last
+        // asked for, deafen included; taps during the outage reached no link, so this is where
+        // they take effect. Under the lock, a tap racing the swap either precedes this read or
+        // follows the send.
         synchronized(lock) {
-                session.selfState.takeIf { it != DeafenState() }
+            session.selfState.takeIf { it != DeafenState() }
                 ?.let { link.stateMachine.sendSelfState(it) }
         }
     }
@@ -839,22 +829,20 @@ class MumbleConnection internal constructor(
         val gen = session.gen
         var rung = firstRung
         while (true) {
-            // Clamped, not skipped: a rung that overruns the deadline used to end the session with
-            // budget still on the clock, and the network is often back inside exactly that gap —
-            // measured on a Pixel 7a, WiFi returned 8.3 s before a give-up that left 28.8 s unspent,
-            // because an in-flight connect bound to the dead interface ran out its own timeout and
-            // the next rung was 30 s. One last attempt at the deadline costs one connect.
+            // Clamped, not skipped: the network is often back inside the last partial rung.
+            // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s rung
+            // next, while the in-flight connect, bound to the dead interface, ran out its own
+            // timeout. One last attempt at the deadline costs one connect.
             val remaining = deadline - udpClock.markNow()
             if (remaining <= Duration.ZERO) {
                 Log.w(TAG, "gave up gen=$gen")
                 fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
                 return null
             }
-            // The wait runs on delay's clock and the deadline on the boot clock, which disagree by
-            // whatever time the CPU spends suspended. It cannot suspend mid-ladder: playout and
-            // capture belong to the session, so they stay open across the swap, and audioserver
-            // holds AudioMix and AudioIn partial wakelocks for as long as they are (measured across
-            // an outage: both held, start to finish).
+            // delay's clock and the deadline's boot clock disagree only across a suspend, and the
+            // ladder cannot be suspended through: playout and capture stay open across the swap,
+            // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
+            // measured held across a whole outage.
             sleep(minOf(RUNGS[minOf(rung, RUNGS.lastIndex)], remaining))
             val next = buildLink(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
@@ -867,8 +855,7 @@ class MumbleConnection internal constructor(
             val failure = open(session, next)
             if (failure != null) {
                 drop(session, next)
-                // The server's certificate changed under us: the prompt, as a fresh connect would
-                // give it.
+                // The server's certificate changed: the prompt, as a fresh connect would give it.
                 if (failure is ConnectionStatus.AwaitingTrust || failure is ConnectionStatus.PinMismatch) {
                     fail(session, failure)
                     return null
@@ -938,9 +925,8 @@ class MumbleConnection internal constructor(
         diedAt: ComparableTimeMark,
     ): ConnectionStatus? = when (failed.reason) {
         FailReason.IO, FailReason.TIMEOUT -> null
-        // A ghost of ourselves is reaped within GHOST_REAP of the link it held dying, so past that
-        // the name is someone else's and retrying only ends the session on a timeout that says
-        // nothing about why. Every other rejection is final at once.
+        // Past GHOST_REAP the name is someone else's, and retrying would only end on a timeout
+        // that says nothing about why. Every other rejection is final at once.
         FailReason.AUTH_REJECT ->
             if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse &&
                 udpClock.markNow() - diedAt < GHOST_REAP
@@ -1047,7 +1033,6 @@ class MumbleConnection internal constructor(
     override fun setMuted(on: Boolean) {
         val session = synchronized(lock) {
             val session = current ?: return
-            // The gate first: the microphone goes quiet at the tap, whatever the wire does.
             session.muted = on
             ask(session) { it.withSelfMute(on) }
             session
@@ -1056,10 +1041,9 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * Advance what the session asks of the server, publish it, and send it to whatever link is
-     * there. All three under [lock], so a swap wiring a replacement cannot slip its own copy of
-     * [Session.selfState] between a tap's write and its send and leave the server on the older of
-     * the two. A tap during an outage reaches no live link at all: it takes effect at the swap.
+     * Advance what the session asks, publish it, and send it to whatever link is there, all under
+     * [lock] so a swap's wire() cannot slip between a tap's write and its send and leave the server
+     * on the older of the two. During an outage the send reaches no link; the swap makes it.
      */
     private fun ask(session: Session, next: (DeafenState) -> DeafenState) {
         session.selfState = next(session.selfState)
@@ -1138,8 +1122,7 @@ class MumbleConnection internal constructor(
         /** Waits between replacement attempts; the last rung repeats. */
         val RUNGS = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
 
-        /** No number: the deadline bounds when an attempt may start, so the ladder gives up
-         *  anywhere from a rung early to an attempt's own length late. */
+        /** No number: an attempt that hangs can finish past the deadline. */
         const val GAVE_UP_DETAIL = "could not get back to the server"
 
         /** Tunneled for its side effect, never answered. Any frame of two bytes or more would

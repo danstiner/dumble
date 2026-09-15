@@ -27,10 +27,9 @@ enum class TalkBlock { NO_MICROPHONE, DEAFENED, MUTED, RECONNECTING }
  * alongside `self_deaf`, so a deafened user would otherwise be told the true-but-useless "Muted".
  */
 fun talkBlock(me: User?, microphoneGranted: Boolean, reconnecting: Boolean = false): TalkBlock? = when {
-    // The permission first: without it there is nothing for a link coming back to unblock, and it
-    // is this value the Mute control keys off to disable itself.
+    // Permission first: a link coming back cannot unblock it, and the Mute control keys off this.
     !microphoneGranted -> TalkBlock.NO_MICROPHONE
-    // The held link is dead, so the packets would go nowhere, and our own row is a link out of date.
+    // The held link is dead, and our own row is a link out of date.
     reconnecting -> TalkBlock.RECONNECTING
     me == null -> null
     me.selfDeaf -> TalkBlock.DEAFENED

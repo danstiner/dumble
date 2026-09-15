@@ -31,9 +31,8 @@ internal class Link(
 ) {
     private val closed = AtomicBoolean(false)
 
-    /** A collector already inside its body when this link's scope is cancelled must not land a
-     *  write under the session that has moved on. Best effort: the flag is raised outside the
-     *  connection's lock, so a check-then-write can still lose the race. */
+    /** Raised outside the connection's lock, so a check-then-write against it can still lose
+     *  the race; see MumbleConnection.publishFromLink. */
     val isClosed: Boolean get() = closed.get()
 
     /**
