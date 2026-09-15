@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /** First byte of a Mumble UDP plaintext packet. */
 private const val UDP_TYPE_AUDIO = 0
@@ -39,7 +41,11 @@ private const val UDP_TYPE_AUDIO = 0
  * the only caller of `start()`/`pause()`, and [stop] joins it before destroying, so no stream
  * call is ever in flight against a dead session.
  */
-class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
+class VoiceReceiver(
+    private val newEngine: () -> PlayoutEngine?,
+    // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
+    private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+) {
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
         /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
@@ -239,7 +245,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
         val baselines = Baselines()
         var started = false
         var inSpurt = false
-        var lastPublishNanos = 0L
+        var lastPublish = clock.markNow()
         var refusalReported = false
         while (true) {
             if (stopped) return
@@ -269,7 +275,7 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
                 delay(POLL_MILLIS)
                 continue
             }
-            val now = System.nanoTime()
+            val now = clock.markNow()
 
             val speaking = HashSet<Int>(live)
             for (i in 0 until live) if (audible[i] == 1) speaking += sessions[i]
@@ -283,14 +289,14 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
             if (speaking.isNotEmpty() && !inSpurt) {
                 inSpurt = true
                 baselines.underruns = counters[NativePlayout.COUNTER_UNDERRUNS]
-                lastPublishNanos = now
+                lastPublish = now
             }
             if (inSpurt && speaking.isEmpty()) {
                 inSpurt = false
                 publishStats(live, sessions, depths, targets, counters, baselines)
                 baselines.rearm(counters)
-            } else if (inSpurt && now - lastPublishNanos >= STATS_PERIOD_MILLIS * 1_000_000) {
-                lastPublishNanos = now
+            } else if (inSpurt && now - lastPublish >= STATS_PERIOD) {
+                lastPublish = now
                 publishStats(live, sessions, depths, targets, counters, baselines)
             }
             if (_speakingSessions.value != speaking) _speakingSessions.value = speaking
@@ -355,6 +361,6 @@ class VoiceReceiver(private val newEngine: () -> PlayoutEngine?) {
          *  most this. */
         const val POLL_MILLIS = 50L
 
-        const val STATS_PERIOD_MILLIS = 1_000L
+        val STATS_PERIOD = 1.seconds
     }
 }
