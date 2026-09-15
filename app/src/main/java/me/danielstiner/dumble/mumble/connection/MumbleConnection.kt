@@ -972,9 +972,11 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) = synchronized(lock) {
-        val session = current ?: return
-        ask(session) { it.withSelfDeaf(on) }
+    override fun setSelfDeaf(on: Boolean) {
+        synchronized(lock) {
+            val session = current ?: return
+            ask(session) { it.withSelfDeaf(on) }
+        }
     }
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
