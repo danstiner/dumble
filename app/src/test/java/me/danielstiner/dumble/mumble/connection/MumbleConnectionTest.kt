@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.connection
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.first
@@ -972,6 +973,99 @@ class MumbleConnectionTest {
         assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
         delay(200)
         assertEquals("no replacement after a kick", 1, transports.size)
+    }
+
+    /**
+     * A network change closes the live link instead of waiting for the socket to notice, and
+     * the first attempt on the new network is immediate even though the link was up under
+     * HEALTHY_AFTER, which on its own would climb from one.
+     */
+    @Test fun aNetworkChangeReplacesTheLinkAtOnce() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val waits = CopyOnWriteArrayList<Duration>()
+        val network = FakeNetworkWatch()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), call = call, sleep = { waits += it }, networkWatch = network,
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        network.change()
+
+        awaitTrue("the live link is closed on the change") { transports[0].closed }
+        // Our close unblocks the reader, whose exit is what reports the death.
+        transports[0].listener!!.onClosed(IOException("closed"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("immediate on the new network", listOf(Duration.ZERO), waits.toList())
+        assertEquals("the call must not end across a handover", 0, call.ends)
+        conn.disconnect()
+    }
+
+    /** A change during a backoff wait ends the wait: the network is new information. */
+    @Test fun aNetworkChangeCutsTheBackoffShort() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val waits = CopyOnWriteArrayList<Duration>()
+        val network = FakeNetworkWatch()
+        var refuse = false
+        val conn = MumbleConnection(
+            InMemoryPinStore(), networkWatch = network,
+            // Real waits never return here: only the change can end one.
+            sleep = { d -> waits += d; if (d > Duration.ZERO) awaitCancellation() },
+        ) {
+            FakeControlTransport { _, _ -> if (refuse) throw IOException("refused") }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+        refuse = true
+        transports[0].listener!!.onClosed(IOException("reset"))
+        awaitTrue("attempt 0 refused, attempt 1 waiting") { waits.toList() == listOf(0.seconds, 1.seconds) }
+        delay(100)
+        assertEquals("nothing moves while the wait holds", 2, transports.size)
+
+        refuse = false
+        network.change()
+
+        startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("the wait was cut, not waited out", listOf(0.seconds, 1.seconds), waits.toList())
+        conn.disconnect()
+    }
+
+    /**
+     * A change during an attempt abandons it: the attempt is bound to the network that just went,
+     * and would otherwise run out its whole timeout. The next attempt is immediate, not one up.
+     */
+    @Test fun aNetworkChangeAbandonsTheAttemptInFlight() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val waits = CopyOnWriteArrayList<Duration>()
+        val network = FakeNetworkWatch()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = { waits += it }, networkWatch = network) {
+            val hangs = transports.size == 1   // the first replacement blocks until closed, like a dead interface
+            val holder = arrayOfNulls<FakeControlTransport>(1)
+            FakeControlTransport { _, _ ->
+                if (hangs) { while (!holder[0]!!.closed) delay(10); throw IOException("aborted") }
+            }.also { holder[0] = it; transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+        transports[0].listener!!.onClosed(IOException("reset"))
+        awaitTrue("the attempt is in flight") { transports.size == 2 && transports[1].listener != null }
+
+        network.change()
+
+        awaitTrue("the attempt in flight is abandoned") { transports[1].closed }
+        startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("attempt 0 again on the new network", listOf(Duration.ZERO, Duration.ZERO), waits.toList())
+        conn.disconnect()
     }
 
     /**

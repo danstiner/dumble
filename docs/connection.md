@@ -53,6 +53,12 @@ transition happens, so a link that synchronized and died inside one emission is 
 The replacement's flows are wired only once it synchronizes, and the dead link's are frozen at
 its close, so nothing it still reduces lands under the new session. Chat rides across the swap;
 the platform call, the receiver and the capture session belong to the session and never notice.
+A change of the app's default network (a handover, a loss, a return) closes the link, or the
+attempt in flight, rather than waiting for the socket to notice, and the attempt that follows is
+immediate; the transport aborts a connect that a close lands on, so an attempt bound to a network
+that has just gone is not run out to its timeout. Close-then-connect, not make-before-break: the
+old session is kicked as a ghost the moment the new one authenticates, so a second live link would
+buy the handshake's worth of audio at the price of two links' worth of guards.
 A kick or a ban is the server's own removal of us, which murmur sends before it closes the
 socket, and ends the session with the reason rather than being replaced; a ghost kick from
 another device on our certificate is the same message, so two devices never ghost each other

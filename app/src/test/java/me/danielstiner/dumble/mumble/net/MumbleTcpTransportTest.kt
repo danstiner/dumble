@@ -15,6 +15,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.cert.X509Certificate
+import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -63,6 +64,24 @@ class MumbleTcpTransportTest {
         assertEquals(TcpMessageType.ServerSync.id, frame!!.type)
         assertArrayEquals(byteArrayOf(7, 8, 9), frame!!.payload)
         transport.close()
+    }
+
+    /** A close aborts a connect in flight rather than letting it run out its timeout: on a network
+     *  that has just gone away, that timeout is the whole of a reconnect attempt. */
+    @Test
+    fun closeAbortsAConnectInFlight() {
+        val silent = ServerSocket(0)   // completes the TCP connect, never speaks: the handshake blocks
+        val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 10_000)
+        thread { Thread.sleep(200); transport.close() }
+        val started = System.nanoTime()
+
+        assertThrows(Exception::class.java) {
+            runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+        }
+
+        val took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        assertTrue("aborted by the close after ${took} ms, not by the 10 s timeout", took < 3_000)
+        silent.close()
     }
 
     @Test

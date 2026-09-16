@@ -16,16 +16,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
 import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
+import me.danielstiner.dumble.mumble.net.NetworkWatch
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
@@ -91,6 +99,8 @@ class MumbleConnection internal constructor(
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
     // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
+    // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
+    private val networkWatch: NetworkWatch = NetworkWatch { },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -101,6 +111,7 @@ class MumbleConnection internal constructor(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
+        networkWatch = AndroidNetworkWatch(context),
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
@@ -150,6 +161,12 @@ class MumbleConnection internal constructor(
         // One point that mirrors every status transition to logcat, whichever path set it.
         scope.launch { status.collect { Log.i(TAG, "status = $it") } }
     }
+
+    /** Bumped on every change of the default network. A count, not the network: what the driver
+     *  asks is whether it has changed since a link or an attempt was opened. */
+    private val networkChanges = MutableStateFlow(0)
+
+    init { networkWatch.start { networkChanges.update { it + 1 } } }
 
     private val lock = Any()
     private var generation = 0
@@ -698,8 +715,22 @@ class MumbleConnection internal constructor(
             // Every earlier return skips this, so a session that never gets here never calls
             // newPlayout().
             session.scope.launch { if (isLive(session)) session.receiver.start() }
+            // A network change is a link death the socket has not noticed yet — a Pixel 7a took
+            // 23 s to abort a handover — or, mid-replacement, an attempt on a network that has
+            // just gone, which its own timeout would otherwise run out. Closing is enough: the
+            // collector below sees the death, and the replacement loop sees the change.
+            session.scope.launch {
+                networkChanges.drop(1).collect {
+                    val (doomed, what) = synchronized(lock) {
+                        session.next?.let { it to "the attempt" } ?: (session.link to "the link")
+                    }
+                    Log.i(TAG, "network changed gen=$gen; closing $what")
+                    doomed?.close()
+                }
+            }
 
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
+            var netAtLink = networkChanges.value       // the network the live link was opened on
             while (true) {
                 // Status is the driver's own collector, not one of the link's: the terminal Error
                 // must be on `status` before retire() cancels this coroutine's scope, and a Failed
@@ -733,14 +764,15 @@ class MumbleConnection internal constructor(
                 } else {
                     // Time spent synchronized was not spent reconnecting: given back, or a path
                     // that comes up for twenty seconds at a time spends the budget while the user
-                    // is talking.
+                    // is talking. A new network is new information, tried at once.
                     deadline += now - synced.at
-                    attempt = 1
+                    attempt = if (networkChanges.value != netAtLink) 0 else 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
                 publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
                 link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt) ?: return
+                netAtLink = networkChanges.value
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -845,7 +877,8 @@ class MumbleConnection internal constructor(
             // backoff cannot be suspended through: playout and capture stay open across the swap,
             // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
             // measured held across a whole outage.
-            sleep(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))
+            if (backOff(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))) attempt = 0
+            val network = networkChanges.value
             val next = buildLink(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.
@@ -863,7 +896,7 @@ class MumbleConnection internal constructor(
                     return null
                 }
                 Log.w(TAG, "replacement failed gen=$gen attempt=$attempt status=$failure")
-                attempt += 1
+                attempt = if (networkChanges.value != network) 0 else attempt + 1
                 continue
             }
             // Only the state is watched before the swap: a half-built channel tree from the
@@ -879,7 +912,7 @@ class MumbleConnection internal constructor(
                     "replacement handshake failed gen=$gen attempt=$attempt reason=${outcome.reason} " +
                         "detail=${outcome.detail}",
                 )
-                attempt += 1
+                attempt = if (networkChanges.value != network) 0 else attempt + 1
                 continue
             }
             val swapped = synchronized(lock) {
@@ -894,6 +927,14 @@ class MumbleConnection internal constructor(
             wire(session, next)
             return next
         }
+    }
+
+    /** Waits [wait], or less if the default network changes meanwhile, which is true on return:
+     *  the attempt that follows is the first on the new network. */
+    private suspend fun backOff(wait: Duration): Boolean {
+        val seen = networkChanges.value
+        merge(flow { sleep(wait); emit(Unit) }, networkChanges.filter { it != seen }.map { }).first()
+        return networkChanges.value != seen
     }
 
     /**
