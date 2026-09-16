@@ -2,12 +2,14 @@ package me.danielstiner.dumble.mumble.voice
 
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.seconds
 
 class VoiceReceiverTest {
 
@@ -28,7 +30,15 @@ class VoiceReceiverTest {
         assertTrue(message, cond())
     }
 
-    private fun receiver(fake: FakePlayoutEngine) = VoiceReceiver({ fake })
+    /** The stats period runs on [clock], which only a test that is about the period ever moves. */
+    private fun receiver(fake: FakePlayoutEngine, clock: AtomicTimeSource = AtomicTimeSource()) =
+        VoiceReceiver({ fake }, clock)
+
+    /** Waits for [n] more polls; every poll calls the engine's start(). */
+    private fun awaitPolls(fake: FakePlayoutEngine, n: Int) {
+        val target = fake.startAttempts.get() + n
+        awaitTrue("$n more polls") { fake.startAttempts.get() >= target }
+    }
 
     /** A packet in an array of its own length, which is what the tunnel delivers. */
     private fun VoiceReceiver.offer(payload: ByteArray) = onVoicePacket(payload, payload.size)
@@ -433,11 +443,13 @@ class VoiceReceiverTest {
     fun aLongSpurtPublishesAPeriodicSampleWhileStillRunning() {
         val fake = FakePlayoutEngine()
         fake.depthsBySession = mapOf(1 to 480)
-        val rx = receiver(fake)
+        val clock = AtomicTimeSource()
+        val rx = receiver(fake, clock)
         rx.start()
         try {
             openSpurt(fake, rx)
-            awaitTrue("no periodic sample inside a long spurt", 3_000) { rx.playoutStats.value != null }
+            clock += 1.seconds
+            awaitTrue("no periodic sample inside a long spurt") { rx.playoutStats.value != null }
             assertEquals("the speaker must still be audible at the periodic sample", setOf(1), rx.speakingSessions.value)
             assertEquals(480, rx.playoutStats.value!!.bufferedSamples[1])
         } finally {
@@ -447,26 +459,30 @@ class VoiceReceiverTest {
 
     /**
      * One sample per second inside a spurt is the contract; a poll that published on every read
-     * would sample twenty times a second. Counted over three seconds of a held-open spurt.
+     * would sample twenty times a second. The clock is the test's, so a second jumped is one
+     * sample however many polls ran, and a starved poll only slows the waits.
      */
     @Test
     fun thePeriodicSampleIsRateLimited() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        val samples = AtomicInteger()
+        val clock = AtomicTimeSource()
+        val rx = receiver(fake, clock)
         rx.start()
         try {
             openSpurt(fake, rx)
-            var last: PlayoutStats? = null
-            val deadline = System.currentTimeMillis() + 3_200
-            while (System.currentTimeMillis() < deadline) {
-                // Every reading distinct, or the flow conflates equal samples and hides them.
-                fake.counter(NativePlayout.COUNTER_FILL_MICROS_MAX, System.nanoTime())
-                val s = rx.playoutStats.value
-                if (s != null && s != last) { samples.incrementAndGet(); last = s }
-                Thread.sleep(5)
-            }
-            assertTrue("sampled ${samples.get()} times in 3.2 s", samples.get() in 2..4)
+            awaitPolls(fake, 6)
+            assertNull("no sample before the period", rx.playoutStats.value)
+
+            clock += 1.seconds
+            awaitTrue("the first sample, a second in") { rx.playoutStats.value != null }
+            val first = rx.playoutStats.value
+            // A distinct reading for the next sample, or the flow conflates it with the first.
+            fake.counter(NativePlayout.COUNTER_FILL_MICROS_MAX, 7)
+            awaitPolls(fake, 6)
+            assertEquals("one sample per second, however many polls", first, rx.playoutStats.value)
+
+            clock += 1.seconds
+            awaitTrue("the second sample, another second in") { rx.playoutStats.value != first }
         } finally {
             rx.stop()
         }
