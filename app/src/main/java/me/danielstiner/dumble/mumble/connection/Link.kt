@@ -37,9 +37,8 @@ internal class Link(
 
     /**
      * Any thread; nothing here blocks; at most once. Safe before [transport] has connected: a
-     * handshake that finishes before the deferred close lands is published and torn down a
-     * moment later, one that finishes after it is discarded unpublished, and the collectors are
-     * already cancelled either way.
+     * handshake in flight is aborted, one that finished before the close landed is published and
+     * torn down a moment later, and the collectors are already cancelled either way.
      */
     fun close() {
         if (!closed.compareAndSet(false, true)) return
