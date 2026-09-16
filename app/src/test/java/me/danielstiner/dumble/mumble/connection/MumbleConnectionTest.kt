@@ -975,6 +975,55 @@ class MumbleConnectionTest {
     }
 
     /**
+     * Losing the network the link is on closes it instead of waiting for the socket to notice,
+     * and the call rides through.
+     */
+    @Test fun losingTheLinksNetworkReplacesItAtOnce() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(InMemoryPinStore(), call = call, sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        network.lose("wifi")
+
+        awaitTrue("the live link is closed on the loss") { transports[0].closed }
+        // Our close unblocks the reader, whose exit is what reports the death.
+        transports[0].listener!!.onClosed(IOException("closed"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("the call must not end across a loss", 0, call.ends)
+        conn.disconnect()
+    }
+
+    /** A default that merely moves, the old network still up, is not a death: with a LAN server
+     *  on a WiFi that lost its uplink, that link is the only one that reaches the server. */
+    @Test fun aNewDefaultLeavesAWorkingLinkAlone() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        network.switchTo("cell")
+
+        delay(300)
+        assertFalse("a link on a network still up stays", transports[0].closed)
+        assertEquals(first, conn.status.value)
+        assertEquals(1, transports.size)
+        conn.disconnect()
+    }
+
+
+    /**
      * The one rejection a retry can fix is a ghost of ourselves still holding the name, which
      * Murmur reaps inside the deadline; every other rejection is final.
      */

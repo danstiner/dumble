@@ -24,6 +24,11 @@ internal class Link(
     val udp: MumbleUdpTransport,
     /** Which transport carries our voice; `MumbleConnection.sendVoice` routes by it. */
     val path: VoicePath,
+    /** The default network this link was dialed on, or null when there was none to know. */
+    val network: Any?,
+    /** The connection's count of network changes when this link was dialed, so whether the
+     *  network has changed since is one compare. */
+    val dialedUnder: Int,
     /** The collectors that republish this link's flows. */
     val childScope: CoroutineScope,
     /** Never cancelled; where the blocking closes run. */

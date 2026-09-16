@@ -16,16 +16,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
 import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
+import me.danielstiner.dumble.mumble.net.NetworkWatch
+import me.danielstiner.dumble.mumble.net.NoNetworkWatch
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
@@ -91,6 +96,8 @@ class MumbleConnection internal constructor(
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
     // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
+    // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
+    private val networkWatch: NetworkWatch = NoNetworkWatch,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -101,6 +108,7 @@ class MumbleConnection internal constructor(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
         TelecomCall(context),
+        networkWatch = AndroidNetworkWatch(context),
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
@@ -150,6 +158,12 @@ class MumbleConnection internal constructor(
         // One point that mirrors every status transition to logcat, whichever path set it.
         scope.launch { status.collect { Log.i(TAG, "status = $it") } }
     }
+
+    /** Bumped on every change of the default network. A count, not the network: what the driver
+     *  asks is whether it has changed since a link or an attempt was opened. */
+    private val networkChanges = MutableStateFlow(0)
+
+    init { networkWatch.start { networkChanges.update { it + 1 } } }
 
     private val lock = Any()
     private var generation = 0
@@ -623,7 +637,7 @@ class MumbleConnection internal constructor(
             }
             override fun requestCryptResync() { stateMachine.requestCryptResync() }
         }, udpClock)
-        return Link(transport, stateMachine, udp, path, childScope, scope)
+        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, childScope, scope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
@@ -698,6 +712,23 @@ class MumbleConnection internal constructor(
             // Every earlier return skips this, so a session that never gets here never calls
             // newPlayout().
             session.scope.launch { if (isLive(session)) session.receiver.start() }
+            // A network change is news the socket has not had: a live link whose network is gone
+            // is dead, and a Pixel 7a took 23 s to notice on its own. A link whose network merely
+            // stopped being the default is left alone: with a LAN server on a WiFi that lost its
+            // uplink, it is the only link that reaches the server. Filtered on the first link's
+            // stamp, so a change during its handshake still counts.
+            val firstDialedUnder = link.dialedUnder
+            session.scope.launch {
+                networkChanges.filter { it != firstDialedUnder }.collect {
+                    val dead = synchronized(lock) {
+                        session.link?.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
+                    }
+                    if (dead != null) {
+                        Log.i(TAG, "network changed gen=$gen; closing the link, its network gone")
+                        dead.close()
+                    }
+                }
+            }
 
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
             while (true) {
