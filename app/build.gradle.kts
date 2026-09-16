@@ -127,6 +127,11 @@ android {
 // class and line without its message, which for a loopback or chaos test is the whole diagnosis.
 tasks.withType<Test>().configureEach {
     testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    // Probe: name every test as it starts, so a run that hangs on CI says which one.
+    testLogging.events(
+        org.gradle.api.tasks.testing.logging.TestLogEvent.STARTED,
+        org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED,
+    )
 }
 
 kotlin {
