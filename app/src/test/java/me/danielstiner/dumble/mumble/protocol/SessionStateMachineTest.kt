@@ -21,6 +21,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import java.io.IOException
 import org.junit.Test
 import kotlin.time.TestTimeSource
 import kotlin.time.Duration
@@ -629,6 +630,52 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.UserRemove, MumbleProtos.UserRemove.newBuilder().setSession(5).build()))
 
         assertEquals("alice", (sm.messages.value.single() as ChatMessage.Remote).senderName)
+    }
+
+    /**
+     * Our own removal ends the link as the server's decision, with who and why. The socket close
+     * that follows keeps that reason; the socket close alone would read as a dead link.
+     */
+    @Test
+    fun ourOwnUserRemoveIsAKick() = runTest {
+        val ch = FakeChannel()
+        val sm = synchronizedSm(ch, backgroundScope)
+        sm.onFrame(frame(TcpMessageType.UserState,
+            MumbleProtos.UserState.newBuilder().setSession(5).setName("alice").setChannelId(0).build()))
+
+        sm.onFrame(frame(TcpMessageType.UserRemove,
+            MumbleProtos.UserRemove.newBuilder().setSession(1).setActor(5).setReason("spam").build()))
+
+        assertEquals(ConnectionState.Failed(FailReason.KICKED, "by alice: spam"), sm.state.value)
+        assertTrue("the link is closed from our side too", ch.closed)
+        sm.onClosed(IOException("reset"))
+        assertEquals("the close keeps the kick", FailReason.KICKED, (sm.state.value as ConnectionState.Failed).reason)
+    }
+
+    @Test
+    fun aBanIsItsOwnReasonAndAGhostKickCarriesOnlyTheServersText() = runTest {
+        val ch = FakeChannel()
+        val banned = synchronizedSm(ch, backgroundScope)
+        banned.onFrame(frame(TcpMessageType.UserRemove,
+            MumbleProtos.UserRemove.newBuilder().setSession(1).setBan(true).build()))
+        assertEquals(ConnectionState.Failed(FailReason.BANNED, null), banned.state.value)
+
+        // Murmur's ghost kick: no actor, no ban, its own reason.
+        val ghost = synchronizedSm(FakeChannel(), backgroundScope)
+        ghost.onFrame(frame(TcpMessageType.UserRemove,
+            MumbleProtos.UserRemove.newBuilder().setSession(1)
+                .setReason("You connected to the server from another device").build()))
+        assertEquals(
+            ConnectionState.Failed(FailReason.KICKED, "You connected to the server from another device"),
+            ghost.state.value,
+        )
+    }
+
+    @Test
+    fun someoneElsesRemovalLeavesTheLinkUp() = runTest {
+        val sm = synchronizedSm(FakeChannel(), backgroundScope)
+        sm.onFrame(frame(TcpMessageType.UserRemove, MumbleProtos.UserRemove.newBuilder().setSession(7).build()))
+        assertEquals(ConnectionState.Synchronized(1), sm.state.value)
     }
 
     @Test

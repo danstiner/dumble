@@ -718,8 +718,10 @@ class MumbleConnection internal constructor(
                     fail(session, mapState(gen, failed)!!)
                     return
                 }
-                // No classify: past Synchronized the only end is onClosed, which is IO.
                 val now = udpClock.markNow()
+                // Past Synchronized a link ends as IO, from its socket, or by the server removing
+                // us, which is final: a kick rejoined at once is a kick again.
+                classify(gen, failed, now)?.let { fail(session, it); return }
                 // Losing a healthy link is a new outage: fresh deadline, backoff from the start.
                 // Losing one that never got healthy continues the outage, one attempt in, against the
                 // same deadline, which is what bounds a path that dies every few seconds.
@@ -935,7 +937,7 @@ class MumbleConnection internal constructor(
             } else {
                 mapState(gen, failed)
             }
-        FailReason.VERSION_TOO_OLD -> mapState(gen, failed)
+        FailReason.VERSION_TOO_OLD, FailReason.KICKED, FailReason.BANNED -> mapState(gen, failed)
     }
 
     /** Accept the presented certificate (first contact or a mismatch) and reconnect on the pinned path. */

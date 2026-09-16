@@ -286,9 +286,21 @@ class SessionStateMachine(
             TcpMessageType.UserState ->
                 _channelTree.value = ChannelTreeReducers.applyUserState(
                     _channelTree.value, MumbleProtos.UserState.parseFrom(frame.payload))
-            TcpMessageType.UserRemove ->
-                _channelTree.value = ChannelTreeReducers.applyUserRemove(
-                    _channelTree.value, MumbleProtos.UserRemove.parseFrom(frame.payload))
+            TcpMessageType.UserRemove -> {
+                val removed = MumbleProtos.UserRemove.parseFrom(frame.payload)
+                // Our own removal is a kick, a ban, or a ghost kick from another device on our
+                // certificate. Murmur sends it to us before closing the socket, and the close on
+                // its own would read as a link death to be replaced: rejoining a kick at once, or
+                // ghosting the other device back and forth for as long as both stay up.
+                if (removed.session == sync?.sessionId) {
+                    val actor = _channelTree.value.users[removed.actor]?.name
+                        ?.takeIf { removed.hasActor() }?.let { "by $it" }
+                    val detail = listOfNotNull(actor, removed.reason.takeIf { it.isNotEmpty() })
+                        .joinToString(": ").ifEmpty { null }
+                    fail(if (removed.ban) FailReason.BANNED else FailReason.KICKED, detail, endsSynchronized = true)
+                }
+                _channelTree.value = ChannelTreeReducers.applyUserRemove(_channelTree.value, removed)
+            }
 
             TcpMessageType.TextMessage -> {
                 val tm = MumbleProtos.TextMessage.parseFrom(frame.payload)
@@ -473,18 +485,22 @@ class SessionStateMachine(
 
     /**
      * First failure wins. The deadline coroutine mutates the same state outside the transport's
-     * listener lock, so a plain check-then-write loses the race it exists to settle.
+     * listener lock, so a plain check-then-write loses the race it exists to settle. Synchronized
+     * is kept unless [endsSynchronized]: past it the handshake's failures are stale, and only the
+     * server's own removal of us ends a live link here.
      */
     private fun fail(
         reason: FailReason,
         detail: String?,
         cause: Throwable? = null,
         rejectType: MumbleProtos.Reject.RejectType? = null,
+        endsSynchronized: Boolean = false,
     ) {
         val failed = ConnectionState.Failed(reason, detail, cause = cause, rejectType = rejectType)
         while (true) {
             val current = _state.value
-            if (current is ConnectionState.Failed || current is ConnectionState.Synchronized) return
+            if (current is ConnectionState.Failed) return
+            if (current is ConnectionState.Synchronized && !endsSynchronized) return
             if (_state.compareAndSet(current, failed)) break
         }
         deadlineJob?.cancel()
