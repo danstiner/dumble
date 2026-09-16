@@ -20,6 +20,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
+import java.net.SocketException
 import java.security.cert.CertificateException
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
@@ -56,6 +57,9 @@ class MumbleTcpTransport(
     private val sendQueue = Channel<ByteArray>(capacity = 32)
 
     @Volatile private var socket: SSLSocket? = null
+    /** The socket of a connect in flight, so a close can abort it: on a network that has just
+     *  gone away a connect otherwise runs out its whole timeout. Under [lock]. */
+    private var connecting: SSLSocket? = null
     @Volatile private var scope: CoroutineScope? = null
     @Volatile private var listener: MumbleControlTransport.Listener? = null
 
@@ -117,6 +121,12 @@ class MumbleTcpTransport(
         val ctx = SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), null) }
         val s = ctx.socketFactory.createSocket() as SSLSocket
 
+        synchronized(lock) {
+            // Already closed: nothing to abort later, so refuse now rather than run the connect
+            // and handshake timeouts out for a socket the closed branch below would discard.
+            if (closed) { runCatching { s.close() }; throw SocketException("closed before connecting") }
+            connecting = s
+        }
         try {
             s.connect(InetSocketAddress(host, port), connectTimeoutMs)
             // Nagle is on by default, and voice's 137-byte tunnel writes at 50 Hz are exactly the
@@ -127,6 +137,7 @@ class MumbleTcpTransport(
             s.soTimeout = 0
             verifyHostNameIfAuthorityValidated(host, s, trust.outcome)
         } catch (t: Throwable) {
+            synchronized(lock) { connecting = null }
             // Nothing owns this socket yet, so if we don't close it here the file descriptor leaks.
             runCatching { s.close() }
             throw t
@@ -144,6 +155,7 @@ class MumbleTcpTransport(
 
         TESTONLY_beforePublish?.invoke()
         synchronized(lock) {
+            connecting = null
             if (closed) {
                 // close() raced us while handshaking: never publish, just tear back down. No reader
                 // was started, so no onClosed is owed — the listener was never told we opened.
@@ -255,19 +267,22 @@ class MumbleTcpTransport(
      */
     private fun teardown(cause: Throwable?) {
         val toClose: SSLSocket?
+        val toAbort: SSLSocket?
         val toCancel: CoroutineScope?
         synchronized(lock) {
             if (closed) return
             closed = true
             closeCause = cause
             toClose = socket; socket = null
+            toAbort = connecting; connecting = null
             toCancel = scope; scope = null
             sendQueue.close()
         }
-        // Guard both independently: socket.close() is what unblocks the blocked reader and releases
+        // Guard each independently: socket.close() is what unblocks the blocked reader and releases
         // the file descriptor, so a throw from cancel() must never skip it.
         runCatching { toCancel?.cancel() }
         runCatching { toClose?.close() }
+        runCatching { toAbort?.close() }
     }
 
     private companion object {

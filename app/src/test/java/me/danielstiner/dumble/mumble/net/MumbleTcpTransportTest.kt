@@ -15,6 +15,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.cert.X509Certificate
+import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -63,6 +64,42 @@ class MumbleTcpTransportTest {
         assertEquals(TcpMessageType.ServerSync.id, frame!!.type)
         assertArrayEquals(byteArrayOf(7, 8, 9), frame!!.payload)
         transport.close()
+    }
+
+    /** A close aborts a connect in flight rather than letting it run out its timeout: on a network
+     *  that has just gone away, that timeout is the whole of a reconnect attempt. */
+    @Test
+    fun closeAbortsAConnectInFlight() {
+        val silent = ServerSocket(0)   // completes the TCP connect, never speaks: the handshake blocks
+        val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 10_000)
+        thread { Thread.sleep(200); transport.close() }
+        val started = System.nanoTime()
+
+        assertThrows(Exception::class.java) {
+            runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+        }
+
+        val took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        assertTrue("aborted by the close after ${took} ms, not by the 10 s timeout", took < 3_000)
+        silent.close()
+    }
+
+    /** A close that lands before the socket exists is not deferred either: the connect refuses
+     *  at once instead of running the connect and handshake timeouts out. */
+    @Test
+    fun closeBeforeConnectFailsAtOnce() {
+        val silent = ServerSocket(0)
+        val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 10_000)
+        transport.close()
+        val started = System.nanoTime()
+
+        assertThrows(Exception::class.java) {
+            runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+        }
+
+        val took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        assertTrue("refused at once, took ${took} ms", took < 1_000)
+        silent.close()
     }
 
     @Test
@@ -173,7 +210,11 @@ class MumbleTcpTransportTest {
         transport.close()
         t.join(10_000)
 
-        runCatching { srv.writeFrame(TcpMessageType.ServerSync.id, byteArrayOf(1)) }
+        // A close that lands mid-handshake aborts it, and then there is no socket to write to;
+        // one that lands after it leaves a socket the transport must have discarded.
+        if (srv.awaitHandshake(1, TimeUnit.SECONDS)) {
+            runCatching { srv.writeFrame(TcpMessageType.ServerSync.id, byteArrayOf(1)) }
+        }
 
         assertFalse(
             "a frame was delivered after close, so a live socket survived the race",
