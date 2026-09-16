@@ -53,7 +53,10 @@ transition happens, so a link that synchronized and died inside one emission is 
 The replacement's flows are wired only once it synchronizes, and the dead link's are frozen at
 its close, so nothing it still reduces lands under the new session. Chat rides across the swap;
 the platform call, the receiver and the capture session belong to the session and never notice.
-The first link of a session is never retried: its failure is the connect failing. A trust prompt
+A kick or a ban is the server's own removal of us, which murmur sends before it closes the
+socket, and ends the session with the reason rather than being replaced; a ghost kick from
+another device on our certificate is the same message, so two devices never ghost each other
+back and forth. The first link of a session is never retried: its failure is the connect failing. A trust prompt
 on a reconnect retires the session with the prompt up and keeps it aside for `trustAndConnect()`,
 as a fresh connect does.
 

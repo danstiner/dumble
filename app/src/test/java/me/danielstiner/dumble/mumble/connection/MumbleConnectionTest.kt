@@ -862,6 +862,11 @@ class MumbleConnectionTest {
         MumbleProtos.ServerSync.newBuilder().setSession(session).build().toByteArray(),
     )
 
+    private fun userRemove(session: Int, reason: String) = TcpFrame(
+        TcpMessageType.UserRemove.id,
+        MumbleProtos.UserRemove.newBuilder().setSession(session).setReason(reason).build().toByteArray(),
+    )
+
     private fun reject(type: MumbleProtos.Reject.RejectType) = TcpFrame(
         TcpMessageType.Reject.id,
         MumbleProtos.Reject.newBuilder().setType(type).setReason(type.name).build().toByteArray(),
@@ -943,6 +948,30 @@ class MumbleConnectionTest {
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         delay(200)
         assertEquals("no replacement for a link that never came up", 1, transports.size)
+    }
+
+    /** A kick is the server's decision: the session ends with the reason, and no replacement is
+     *  opened, or the kicked user would be back inside a second. */
+    @Test fun aKickEndsTheSessionInsteadOfRejoining() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(InMemoryPinStore(), call = call) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val link = startedTransportAt(transports, 0)
+        link.listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        link.listener!!.onFrame(userRemove(session = 1, reason = "spam"))
+        link.listener!!.onClosed(IOException("reset"))
+
+        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
+        assertEquals(ConnectionStatus.Error(ErrorKind.KICKED, "spam"), err)
+        awaitTrue("the call ends as a failure") { call.ends == 1 }
+        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        delay(200)
+        assertEquals("no replacement after a kick", 1, transports.size)
     }
 
     /**
