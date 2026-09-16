@@ -18,6 +18,9 @@ import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -712,19 +715,27 @@ class MumbleConnection internal constructor(
             // Every earlier return skips this, so a session that never gets here never calls
             // newPlayout().
             session.scope.launch { if (isLive(session)) session.receiver.start() }
-            // A network change is news the socket has not had: a live link whose network is gone
-            // is dead, and a Pixel 7a took 23 s to notice on its own. A link whose network merely
-            // stopped being the default is left alone: with a LAN server on a WiFi that lost its
-            // uplink, it is the only link that reaches the server. Filtered on the first link's
-            // stamp, so a change during its handshake still counts.
+            // A network change is news the sockets have not had. A live link whose network is
+            // gone is dead, and a Pixel 7a took 23 s to notice on its own; an attempt in flight
+            // was dialed on the network before this one, and would run out its own timeout. A
+            // link whose network merely stopped being the default is left alone: with a LAN
+            // server on a WiFi that lost its uplink, it is the only link that reaches the server.
+            // Filtered on the first link's stamp, so a change during its handshake still counts.
             val firstDialedUnder = link.dialedUnder
             session.scope.launch {
-                networkChanges.filter { it != firstDialedUnder }.collect {
-                    val dead = synchronized(lock) {
-                        session.link?.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
+                networkChanges.filter { it != firstDialedUnder }.collect { changes ->
+                    val doomed = synchronized(lock) {
+                        val next = session.next
+                        val live = session.link
+                        when {
+                            next != null -> next.takeIf { it.dialedUnder != changes }?.let { it to "the attempt" }
+                            live != null -> live.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
+                                ?.let { it to "the link, its network gone" }
+                            else -> null
+                        }
                     }
-                    if (dead != null) {
-                        Log.i(TAG, "network changed gen=$gen; closing the link, its network gone")
+                    doomed?.let { (dead, what) ->
+                        Log.i(TAG, "network changed gen=$gen; closing $what")
                         dead.close()
                     }
                 }
@@ -771,7 +782,8 @@ class MumbleConnection internal constructor(
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
                 publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
-                link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt) ?: return
+                link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt, since = link.dialedUnder)
+                    ?: return
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -858,9 +870,13 @@ class MumbleConnection internal constructor(
         deadline: ComparableTimeMark,
         diedAt: ComparableTimeMark,
         firstAttempt: Int,
+        /** The change count the dead link was dialed under. */
+        since: Int,
     ): Link? {
         val gen = session.gen
         var attempt = firstAttempt
+        var seen = since
+        var lastDial: ComparableTimeMark? = null
         while (true) {
             // Clamped, not skipped: the network is often back inside the last, clamped wait.
             // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s wait
@@ -876,7 +892,14 @@ class MumbleConnection internal constructor(
             // backoff cannot be suspended through: playout and capture stay open across the swap,
             // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
             // measured held across a whole outage.
-            sleep(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))
+            // One rule: attempt 0 is the first since the network last changed, the change being
+            // new information. A change inside a second of the last dial keeps the rung, so a
+            // flapping default cannot turn the backoff into a connect storm.
+            if (networkChanges.value != seen) {
+                seen = networkChanges.value
+                if (lastDial == null || udpClock.markNow() - lastDial >= BACKOFF[1]) attempt = 0
+            }
+            if (backOff(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))) continue
             val next = buildLink(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.
@@ -884,7 +907,11 @@ class MumbleConnection internal constructor(
                 if (gen == generation && current === session) { session.next = next; true } else false
             }
             if (!live) { next.close(); return null }
+            // Dialed under a network that has since gone; the collector may have run before the
+            // publish and found nothing to close.
+            if (networkChanges.value != next.dialedUnder) { drop(session, next); continue }
             Log.i(TAG, "replacement gen=$gen attempt=$attempt")
+            lastDial = udpClock.markNow()
             val failure = open(session, next)
             if (failure != null) {
                 drop(session, next)
@@ -925,6 +952,14 @@ class MumbleConnection internal constructor(
             wire(session, next)
             return next
         }
+    }
+
+    /** Waits [wait], or less: true if the default network changed meanwhile, the caller's cue
+     *  to go round again. */
+    private suspend fun backOff(wait: Duration): Boolean {
+        val seen = networkChanges.value
+        merge(flow { sleep(wait); emit(Unit) }, networkChanges.filter { it != seen }.map { }).first()
+        return networkChanges.value != seen
     }
 
     /**
