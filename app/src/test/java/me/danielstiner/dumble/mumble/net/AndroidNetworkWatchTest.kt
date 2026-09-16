@@ -12,11 +12,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.ConscryptMode
 import org.robolectric.shadows.ShadowNetwork
 
 /** The glue to ConnectivityManager, against Robolectric's: the seam's three answers. */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [31, 34])
+// Robolectric installs Conscrypt as a JVM-wide security provider for a test unless told not to,
+// and this class runs before the transport tests in the same package, whose TLS test server is
+// JSSE: under Conscrypt they hang or fail, on the Linux runner only, since its Conscrypt carries
+// no macOS ARM native and stays out of the JVM here.
+@ConscryptMode(ConscryptMode.Mode.OFF)
 class AndroidNetworkWatchTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
