@@ -424,7 +424,6 @@ class SessionStateMachine(
     private fun startPings() {
         pingJob = scope.launch {
             var lastTick = bootClock.markNow()
-            var degraded = false
             _lastServerReplyAt.value = lastTick
             while (true) {
                 delay(pingIntervalMs)
@@ -434,14 +433,14 @@ class SessionStateMachine(
                     Log.w(TAG, "no ping sent for ${sinceLast.inWholeMilliseconds}ms session=$sessionId")
                 }
                 lastTick = now
-                // On the edge, not the level: the log is the trail a past outage leaves behind.
+                // Three replies missing is a path that is dead or a server that has reaped us:
+                // the link ends as a timeout, which the driver replaces, rather than waiting for
+                // the socket to say so, which on a dead path it may never do.
                 val pingAge = _lastServerReplyAt.value?.let { now - it } ?: Duration.ZERO
-                if (pingAge >= DEGRADED_PING_AGE && !degraded) {
-                    degraded = true
-                    Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId")
-                } else if (pingAge < DEGRADED_PING_AGE && degraded) {
-                    degraded = false
-                    Log.i(TAG, "ping replies resumed session=$sessionId")
+                if (pingAge >= DEGRADED_PING_AGE) {
+                    Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId; ending the link")
+                    fail(FailReason.TIMEOUT, "no reply from the server for ${pingAge.inWholeSeconds} s", endsSynchronized = true)
+                    return@launch
                 }
                 // Not fatal, unlike the handshake sends: backpressure, or a death the reader
                 // already reports. Either way the ping goes unanswered and ages.
@@ -487,7 +486,7 @@ class SessionStateMachine(
      * First failure wins. The deadline coroutine mutates the same state outside the transport's
      * listener lock, so a plain check-then-write loses the race it exists to settle. Synchronized
      * is kept unless [endsSynchronized]: past it the handshake's failures are stale, and only the
-     * server's own removal of us ends a live link here.
+     * server's own removal of us, or its silence, ends a live link here.
      */
     private fun fail(
         reason: FailReason,
@@ -516,7 +515,8 @@ class SessionStateMachine(
         const val HANDSHAKE_DEADLINE_MS = 15_000L
         const val PING_INTERVAL_MS = 5_000L
         const val MAX_MESSAGES = 1000
-        /** Three intervals: two replies must go missing, and still inside Murmur's 30 s reap. */
+        /** Three intervals of silence end the link: two replies must go missing, and it is still
+         *  inside Murmur's 30 s reap, so the replacement is dialed while our ghost may hold the name. */
         val DEGRADED_PING_AGE = (PING_INTERVAL_MS * 3).milliseconds
 
         /** Real-time gap between sends worth logging: we may already have been reaped, doze or not. */
