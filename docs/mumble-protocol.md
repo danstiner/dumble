@@ -86,6 +86,27 @@ voice, in the desktop client too), stored by the server and echoed in our `UserS
 how another client's sheet reads our round trip and, from the UDP average being there at all,
 which leg carries our voice (`PingAverage`).
 
+**Self mute and deafen.** Both are the client's to set, in its own `UserState`; the server stores
+and echoes them and adds one coupling (`Server::msgUserState`): `self_deaf=true` forces
+`self_mute=true`, and `self_mute=false` forces `self_deaf=false`. Voice is dropped on `self_mute`
+(and `mute`, `suppress`), never on `self_deaf`. The server never lifts the mute a deafen forced, so
+what an undeafen does to the mute is client policy. Desktop's, from `on_qaAudioMute_triggered` and
+`on_qaAudioDeaf_triggered` (`src/mumble/MainWindow.cpp`) — local state, which the echo never writes:
+
+| Ask | Result |
+|---|---|
+| Deafen | Deafened and muted. |
+| Undeafen | Back to the mute as it was before the deafen: one the user set stays (else a muted microphone reopens unasked), one the deafen forced lifts. |
+| Unmute while deafened | Unmuted and undeafened, whoever set the mute. |
+| Mute while deafened | Cannot be asked from the button, which already reads muted; the "mute on" shortcut is a no-op. |
+
+Desktop keeps `bMute`, `bDeaf` and an `unmuteOnUndeaf` flag to tell the two mutes apart.
+`DeafenState` keeps the two asks — the deafen and the user's own mute — and derives the wire's
+`self_mute` as either, which is the same machine with the invalid states unrepresentable and every
+ask an idempotent set. Checked against a port of the two desktop handlers over every toggle sequence
+to depth 16 and every explicit on/off sequence to depth 8; the one difference is the divergence
+listed below. Dumble sends both fields in every ask, so the server's coupling never has to act.
+
 ## Voice framing
 
 Since 1.5, a voice datagram is one header byte then a protobuf message from `MumbleUDP.proto`:
@@ -223,3 +244,7 @@ Deliberate, documented where they live:
   a wider reordering window (63 late, 191 consecutive losses) (`net/CryptState.kt`).
 - **Pin-before-authority trust ordering** (`docs/connection.md`).
 - **Client-side handshake deadline** — the protocol has none, Dumble enforces 15 s.
+- **A mute asked for while deafened is kept by the undeafen.** Dumble's controls read the server's
+  echo, so inside a round trip after a deafen the Mute control still reads unmuted and can be
+  tapped. Desktop's equivalent is a no-op and its undeafen reopens the microphone; Dumble treats
+  the tap as the user's own mute (`DeafenState`, Control channel above).
