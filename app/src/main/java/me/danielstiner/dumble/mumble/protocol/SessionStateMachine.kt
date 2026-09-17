@@ -433,9 +433,8 @@ class SessionStateMachine(
                     Log.w(TAG, "no ping sent for ${sinceLast.inWholeMilliseconds}ms session=$sessionId")
                 }
                 lastTick = now
-                // Three replies missing is a path that is dead or a server that has reaped us:
-                // the link ends as a timeout, which the driver replaces, rather than waiting for
-                // the socket to say so, which on a dead path it may never do.
+                // Silence this long is a dead path or a server that has reaped us. The link ends as
+                // a timeout, which the driver replaces; on a dead path the socket may never say so.
                 val pingAge = _lastServerReplyAt.value?.let { now - it } ?: Duration.ZERO
                 if (pingAge >= DEGRADED_PING_AGE) {
                     Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId; ending the link")
@@ -515,8 +514,8 @@ class SessionStateMachine(
         const val HANDSHAKE_DEADLINE_MS = 15_000L
         const val PING_INTERVAL_MS = 5_000L
         const val MAX_MESSAGES = 1000
-        /** Three intervals of silence end the link: two replies must go missing, and it is still
-         *  inside Murmur's 30 s reap, so the replacement is dialed while our ghost may hold the name. */
+        /** Silence that ends the link, checked as each ping is sent, so at 15 to 20 s: at least two
+         *  replies missing, and still inside Murmur's 30 s reap. */
         val DEGRADED_PING_AGE = (PING_INTERVAL_MS * 3).milliseconds
 
         /** Real-time gap between sends worth logging: we may already have been reaped, doze or not. */
