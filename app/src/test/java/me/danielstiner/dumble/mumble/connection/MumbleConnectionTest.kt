@@ -1500,9 +1500,9 @@ class MumbleConnectionTest {
         .map { (it.second as MumbleProtos.UserState).let { state -> state.selfDeaf to state.selfMute } }
 
     /**
-     * Deafen has no half outside the link the way mute has its gate, so a replacement told nothing
-     * comes up with the server carrying a microphone the user believes is off — live, under voice
-     * activity, with the Deafen control quietly reading undeafened from the new link's own row.
+     * The gate stays shut on what the session asked, but a replacement told nothing has the server
+     * sending audio to a user who asked not to hear it, with the Deafen control quietly reading
+     * undeafened from the new link's own row.
      */
     @Test fun selfDeafSurvivesAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
