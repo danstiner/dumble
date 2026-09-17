@@ -338,10 +338,9 @@ class ConnectViewModel internal constructor(
 
     /**
      * Reads the current value off [uiState] rather than taking it from the caller, so the button and
-     * this can never disagree about what "the other one" means. That value is what was last asked
-     * for, not the server's echo: only we can set our own mute and deafen, so the echo says nothing
-     * the ask does not, a round trip late and not at all through a reconnect. The roster row is
-     * what shows the echo (`docs/mumble-protocol.md`, Self mute and deafen).
+     * this can never disagree about what "the other one" means. That value is the ask, not the
+     * server's echo; the roster row is what shows the echo (`docs/mumble-protocol.md`, Self mute
+     * and deafen).
      */
     fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
 
