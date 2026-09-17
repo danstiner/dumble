@@ -1528,9 +1528,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * The carried state is the one the link held, not a deafen re-derived on the replacement:
-     * `unmuteOnUndeaf` is what tells deafen's own mute apart from one the user set, and re-deriving
-     * it would open the microphone on the next undeafen.
+     * The carried state is what the session asked for, not the wire's two fields: those cannot tell
+     * a deafen's own mute from one the user set, and the next undeafen would open the microphone.
      */
     @Test fun aMuteTheUserSetOutlivesADeafenAcrossAReconnect() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1664,9 +1663,8 @@ class MumbleConnectionTest {
 
     /**
      * A double-tap lands inside one round trip, so the second ask arrives with the tree — and the
-     * control's idea of `deafened` — unchanged, and reaches this as a repeat. Advancing again would
-     * run [DeafenState.deafen] against state the first ask already moved and emit `self_mute=true`
-     * on an undeafen, leaving the user muted with no control to clear it.
+     * control's idea of `deafened` — unchanged, and reaches this as a repeat. A repeat that emitted
+     * `self_mute=true` on an undeafen would leave the user muted with no control to clear it.
      *
      * Asserts every frame, not just the last: the bug is a differing *second* message.
      */
@@ -1687,9 +1685,9 @@ class MumbleConnectionTest {
         conn.disconnect()
     }
 
-    /** The same break from the other side: a repeated deafen must not recompute its unmute debt
-     *  against its own first ask, or the undeafen keeps a mute the user never set. */
-    @Test fun deafenTappedTwiceKeepsTheUnmuteDebt() = runBlocking {
+    /** The same break from the other side: a repeated deafen must not take its own first ask's
+     *  mute for the user's, or the undeafen keeps a mute the user never set. */
+    @Test fun deafenTappedTwiceStillUnmutesOnUndeafen() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> }.also { transports += it } }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -1701,7 +1699,7 @@ class MumbleConnectionTest {
         conn.setSelfDeaf(false)
 
         assertEquals(
-            "the debt survived, so the undeafen unmutes",
+            "the mute was the deafen's, so the undeafen lifts it",
             false to false,
             transports[0].selfStates().last(),
         )

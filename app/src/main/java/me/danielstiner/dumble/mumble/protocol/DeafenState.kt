@@ -1,47 +1,23 @@
 package me.danielstiner.dumble.mumble.protocol
 
 /**
- * What we last put on the wire for deafen, and whether an undeafen still owes an unmute.
+ * What the user last asked for: a deafen, and a mute of their own. Deliberately the ask rather than
+ * the server's echo, which lags a tap by a round trip and is absent through a reconnect.
  *
- * [selfDeaf] and [selfMute] are the two `UserState` fields verbatim; [unmuteOnUndeaf] never leaves
- * this process. Deliberately what we *sent* rather than what the server echoed — see [deafen].
+ * The wire's `self_mute` is derived rather than stored: murmur forces it on with `self_deaf`, and a
+ * stored copy cannot tell that mute from the user's own, which is what decides whether an undeafen
+ * reopens the microphone — under voice activity, a hot mic. Desktop Mumble's rules, and the one
+ * place this leaves them: `docs/mumble-protocol.md`, Self mute and deafen.
  */
 data class DeafenState(
     val selfDeaf: Boolean = false,
-    val selfMute: Boolean = false,
-    val unmuteOnUndeaf: Boolean = false,
+    val ownMute: Boolean = false,
 ) {
-    /**
-     * The state after deafening or undeafening, mirroring desktop Mumble's `unmuteOnUndeaf`
-     * (`src/mumble/MainWindow.cpp`, `on_qaAudioDeaf_triggered`): deafen forces mute, and undeafen
-     * unmutes only if the deafen was what set the mute — so a manual mute survives
-     * mute -> deafen -> undeafen instead of the microphone reopening silently. Dumble has no mute
-     * control yet; the rule is here ahead of one because voice activity detection is what makes the
-     * hazard real. Under push-to-talk the gate is closed by default and a cleared mute costs
-     * nothing; under VAD the microphone is live and the same slip is a hot mic.
-     *
-     * Apply to what we last sent, never to what the server last echoed. Applied to the echo-lagged
-     * value, a second undeafen arriving inside one round trip runs against state the first one
-     * already moved and sends `self_mute=true`, which strands the user muted with nothing able to
-     * clear it: every later deafen then computes `unmuteOnUndeaf = false`, so every later undeafen
-     * re-sends it, and only a reconnect recovers.
-     */
-    fun deafen(on: Boolean): DeafenState =
-        if (on) DeafenState(selfDeaf = true, selfMute = true, unmuteOnUndeaf = !selfMute)
-        else DeafenState(selfDeaf = false, selfMute = !unmuteOnUndeaf && selfMute, unmuteOnUndeaf = false)
+    val selfMute: Boolean get() = ownMute || selfDeaf
 
-    /** Mute or unmute. Unmuting while deafened undeafens too, through [deafen] — murmur forces
-     *  the two together — and its `unmuteOnUndeaf` rule decides whether the mute stays. */
-    fun mute(on: Boolean): DeafenState =
-        if (!on && selfDeaf) deafen(false) else copy(selfMute = on)
+    fun withSelfDeaf(on: Boolean): DeafenState = copy(selfDeaf = on)
 
-    /**
-     * The state after asking for [on]. A repeat ask, a second tap inside one round trip, is this
-     * state unchanged and sent again verbatim: advancing twice would run [deafen] against state
-     * the first ask already moved and strand the user muted.
-     */
-    fun withSelfDeaf(on: Boolean): DeafenState = if (on == selfDeaf) this else deafen(on)
-
-    /** As [withSelfDeaf], for mute. */
-    fun withSelfMute(on: Boolean): DeafenState = if (on == selfMute) this else mute(on)
+    /** Unmuting while deafened undeafens too, as murmur forces. A mute asked for under a deafen
+     *  outlives it. */
+    fun withSelfMute(on: Boolean): DeafenState = if (on) copy(ownMute = true) else DeafenState()
 }

@@ -99,8 +99,7 @@ interface Connection {
      *
      * Fire-and-forget — nothing local reads back, because the server broadcasts the resulting
      * `UserState` to us like any other user's and the channel tree is what the UI renders. A no-op
-     * until synchronized, and safe to repeat: a repeat re-sends the last intent rather than
-     * recomputing it.
+     * until synchronized, and safe to repeat: a repeat asks for the same state again.
      */
     fun setSelfDeaf(on: Boolean)
 
