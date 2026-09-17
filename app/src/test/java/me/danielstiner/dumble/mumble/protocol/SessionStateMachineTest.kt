@@ -193,6 +193,39 @@ class SessionStateMachineTest {
             pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
     }
 
+    /** Three missed replies end the link as a timeout with its sync kept, so the driver replaces
+     *  it rather than reporting a connect failure. */
+    @Test
+    fun threeMissedRepliesEndTheLinkAsATimeout() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+
+        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        assertEquals("two missed replies do not end the link", ConnectionState.Synchronized(1), sm.state.value)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+
+        val failed = sm.state.value as ConnectionState.Failed
+        assertEquals(FailReason.TIMEOUT, failed.reason)
+        assertTrue("the link is closed from our side", ch.closed)
+        assertEquals("the sync stamp survives", 1, sm.sync?.sessionId)
+        sm.onClosed(IOException("closed"))
+        assertEquals("the socket close keeps the timeout", FailReason.TIMEOUT, (sm.state.value as ConnectionState.Failed).reason)
+    }
+
+    @Test
+    fun aReplyInsideTheThresholdKeepsTheLinkUp() = runTest {
+        val ch = FakeChannel()
+        val bootClock = TestTimeSource()
+        val sm = pingSm(ch, bootClock)
+
+        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        sm.onFrame(replyToLastPing(ch))
+        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+
+        assertEquals(ConnectionState.Synchronized(1), sm.state.value)
+    }
+
     @Test
     fun aReplyResetsTheAgeImmediately() = runTest {
         val ch = FakeChannel()
@@ -281,10 +314,11 @@ class SessionStateMachineTest {
     }
 
     // A ping that never reached the wire is two claims, both load-bearing: it cannot be answered,
-    // so the silence keeps growing, and it is not fatal -- a full queue or a dead transport must
-    // not end the session, since the reader already reports that death on its own path.
+    // so the last reply keeps ageing, and the refusal is not itself fatal -- a full queue or a dead
+    // transport must not end the session on the spot, since the reader reports that death on its
+    // own path. The missing replies are what end the link, at the same threshold as any.
     @Test
-    fun aPingThatCannotBeQueuedStillAgesButIsNotFatal() = runTest {
+    fun aPingThatCannotBeQueuedStillAgesButIsNotItselfFatal() = runTest {
         val ch = FailingChannel(TcpMessageType.Ping)
         val bootClock = TestTimeSource()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock)
@@ -292,10 +326,12 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(9).build()))
         runCurrent()
 
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS * 4 + 100)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS * 2 + 100)
+        assertTrue(pingAge(sm) > Duration.ZERO)
+        assertEquals("two refused pings end nothing", ConnectionState.Synchronized(9), sm.state.value)
 
-        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
-        assertEquals(ConnectionState.Synchronized(9), sm.state.value)
+        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        assertEquals("the missing replies do", FailReason.TIMEOUT, (sm.state.value as ConnectionState.Failed).reason)
     }
 
     @Test

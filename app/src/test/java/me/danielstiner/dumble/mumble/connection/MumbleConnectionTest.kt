@@ -2197,4 +2197,29 @@ class MumbleConnectionTest {
         conn.disconnect()
         peer.close()
     }
+
+    /** A link whose pings go unanswered is replaced, not waited out: on a dead path the socket
+     *  may never say so. */
+    @Test fun anUnresponsiveLinkIsReplaced() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val clock = AtomicTimeSource()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(
+            InMemoryPinStore(), call = call, udpClock = clock, pingIntervalMs = 50, sleep = {},
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        clock += 16.seconds   // three ping intervals unanswered, as the ticker sees on its next tick
+
+        val reconnecting = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Reconnecting } }
+        assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), reconnecting)
+        assertTrue("the unresponsive link is closed", transports[0].closed)
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("the call rides through", 0, call.ends)
+        conn.disconnect()
+    }
 }

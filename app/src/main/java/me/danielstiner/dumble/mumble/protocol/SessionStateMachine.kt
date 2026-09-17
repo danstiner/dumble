@@ -127,7 +127,7 @@ class SessionStateMachine(
      * When the server last said anything: seeded at ServerSync, then advanced by each ping reply.
      * Null only before Synchronized. Seeded rather than left null so a server that completes the
      * handshake and then answers no ping still ages — otherwise it would read healthy forever.
-     * The UI ages this against [DEGRADED_PING_AGE]; nothing here ends a session on it.
+     * The UI ages this against [DEGRADED_PING_AGE], where the ping loop ends the link.
      *
      * An instant, not an age, because what changes an age is the passage of time — deriving it in
      * the UI's own tick also means a doze shows up, which a count of unanswered pings cannot see:
@@ -424,7 +424,6 @@ class SessionStateMachine(
     private fun startPings() {
         pingJob = scope.launch {
             var lastTick = bootClock.markNow()
-            var degraded = false
             _lastServerReplyAt.value = lastTick
             while (true) {
                 delay(pingIntervalMs)
@@ -434,14 +433,13 @@ class SessionStateMachine(
                     Log.w(TAG, "no ping sent for ${sinceLast.inWholeMilliseconds}ms session=$sessionId")
                 }
                 lastTick = now
-                // On the edge, not the level: the log is the trail a past outage leaves behind.
+                // No reply for this long is a dead path or a server that has reaped us. The link ends
+                // as a timeout, which the driver replaces; on a dead path the socket may never say so.
                 val pingAge = _lastServerReplyAt.value?.let { now - it } ?: Duration.ZERO
-                if (pingAge >= DEGRADED_PING_AGE && !degraded) {
-                    degraded = true
-                    Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId")
-                } else if (pingAge < DEGRADED_PING_AGE && degraded) {
-                    degraded = false
-                    Log.i(TAG, "ping replies resumed session=$sessionId")
+                if (pingAge >= DEGRADED_PING_AGE) {
+                    Log.w(TAG, "no ping reply for ${pingAge.inWholeMilliseconds}ms session=$sessionId; ending the link")
+                    fail(FailReason.TIMEOUT, "no reply from the server for ${pingAge.inWholeSeconds} s", endsSynchronized = true)
+                    return@launch
                 }
                 // Not fatal, unlike the handshake sends: backpressure, or a death the reader
                 // already reports. Either way the ping goes unanswered and ages.
@@ -487,7 +485,7 @@ class SessionStateMachine(
      * First failure wins. The deadline coroutine mutates the same state outside the transport's
      * listener lock, so a plain check-then-write loses the race it exists to settle. Synchronized
      * is kept unless [endsSynchronized]: past it the handshake's failures are stale, and only the
-     * server's own removal of us ends a live link here.
+     * server's own removal of us, or its pings going unanswered, ends a live link here.
      */
     private fun fail(
         reason: FailReason,
@@ -516,7 +514,8 @@ class SessionStateMachine(
         const val HANDSHAKE_DEADLINE_MS = 15_000L
         const val PING_INTERVAL_MS = 5_000L
         const val MAX_MESSAGES = 1000
-        /** Three intervals: two replies must go missing, and still inside Murmur's 30 s reap. */
+        /** Reply age that ends the link, checked as each ping is sent, so at 15 to 20 s: at least
+         *  two replies missing, and still inside Murmur's 30 s reap. */
         val DEGRADED_PING_AGE = (PING_INTERVAL_MS * 3).milliseconds
 
         /** Real-time gap between sends worth logging: we may already have been reaped, doze or not. */
