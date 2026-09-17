@@ -1705,8 +1705,8 @@ class MumbleConnectionTest {
 
     /**
      * A whole sequence the wire refused — the socket is gone, the state machine has yet to hear —
-     * is still the session's, and the replacement is told the end of it. The mute is the user's own
-     * here, so the deafen that follows owes it no unmute and the undeafen leaves it standing.
+     * is still the session's, and the replacement is told the end of it. The mute is the user's own,
+     * so the deafen does not replace it and the undeafen leaves it standing.
      */
     @Test fun asksTheWireRefusedStillCompose() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()

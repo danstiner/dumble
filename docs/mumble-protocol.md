@@ -96,7 +96,7 @@ what an undeafen does to the mute is client policy. Desktop's, from `on_qaAudioM
 | Ask | Result |
 |---|---|
 | Deafen | Deafened and muted. |
-| Undeafen | The mute goes back to what it was before the deafen: one the user set stays (or a microphone they muted reopens unasked), one the deafen forced lifts. |
+| Undeafen | Back to the mute as it was before the deafen: one the user set stays (else a muted microphone reopens unasked), one the deafen forced lifts. |
 | Unmute while deafened | Unmuted and undeafened, whoever set the mute. |
 | Mute while deafened | Cannot be asked from the button, which already reads muted; the "mute on" shortcut is a no-op. |
 
