@@ -6,8 +6,8 @@ package me.danielstiner.dumble.mumble.protocol
  *
  * The wire's `self_mute` is derived rather than stored: murmur forces it on with `self_deaf`, and a
  * stored copy cannot tell that mute from the user's own, which is what decides whether an undeafen
- * reopens the microphone — under voice activity, a hot mic. Desktop Mumble's rules, and the one
- * place this leaves them: `docs/mumble-protocol.md`, Self mute and deafen.
+ * reopens the microphone — under voice activity, a hot mic. Desktop Mumble's rules and this
+ * class's one departure from them: `docs/mumble-protocol.md`, Self mute and deafen.
  */
 data class DeafenState(
     val selfDeaf: Boolean = false,
