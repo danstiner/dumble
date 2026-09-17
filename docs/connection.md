@@ -65,11 +65,11 @@ server removing us and end the session.
 A kick or a ban is the server's own removal of us, which murmur sends before it closes the
 socket, and ends the session with the reason rather than being replaced; a ghost kick from
 another device on our certificate is the same message, so two devices never ghost each other
-back and forth. A link the server has been silent on for three ping intervals ends as a timeout
+back and forth. A link whose pings have gone unanswered for three intervals ends as a timeout
 and is replaced the same way, rather than waited out until a socket that may never report a dead
-path does. The age is checked as each ping is sent, so that is 15 to 20 s; murmur reaps a silent
-client at 30 s, so the replacement is dialed while our ghost may still hold the name, which the
-ghost rule above covers.
+path does. The age is checked as each ping is sent, so that is 15 to 20 s; murmur reaps a client
+it has not heard from at 30 s, so the replacement is dialed while our ghost may still hold the
+name, which the ghost rule above covers.
 The first link of a session is never retried: its failure is the connect failing. A trust prompt
 on a reconnect retires the session with the prompt up and keeps it aside for `trustAndConnect()`,
 as a fresh connect does.

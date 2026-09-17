@@ -202,7 +202,7 @@ class SessionStateMachineTest {
         val sm = pingSm(ch, bootClock)
 
         repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
-        assertEquals("two missed replies are not yet silence", ConnectionState.Synchronized(1), sm.state.value)
+        assertEquals("two missed replies do not end the link", ConnectionState.Synchronized(1), sm.state.value)
         advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
 
         val failed = sm.state.value as ConnectionState.Failed
@@ -314,9 +314,9 @@ class SessionStateMachineTest {
     }
 
     // A ping that never reached the wire is two claims, both load-bearing: it cannot be answered,
-    // so the silence keeps growing, and the refusal is not itself fatal -- a full queue or a dead
+    // so the last reply keeps ageing, and the refusal is not itself fatal -- a full queue or a dead
     // transport must not end the session on the spot, since the reader reports that death on its
-    // own path. The silence it leaves behind is what ends the link, at the same threshold as any.
+    // own path. The missing replies are what end the link, at the same threshold as any.
     @Test
     fun aPingThatCannotBeQueuedStillAgesButIsNotItselfFatal() = runTest {
         val ch = FailingChannel(TcpMessageType.Ping)
@@ -331,7 +331,7 @@ class SessionStateMachineTest {
         assertEquals("two refused pings end nothing", ConnectionState.Synchronized(9), sm.state.value)
 
         advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
-        assertEquals("the silence does", FailReason.TIMEOUT, (sm.state.value as ConnectionState.Failed).reason)
+        assertEquals("the missing replies do", FailReason.TIMEOUT, (sm.state.value as ConnectionState.Failed).reason)
     }
 
     @Test
