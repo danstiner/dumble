@@ -1087,10 +1087,6 @@ class MumbleConnection internal constructor(
      * Advance what the session asks, publish it, and send it to whatever link is there, all under
      * [lock] so a swap's wire() cannot slip between a tap's write and its send and leave the server
      * on the older of the two. During an outage the send reaches no link; the swap makes it.
-     *
-     * The gate reads the same state, so the microphone goes quiet at the tap rather than at the
-     * server's echo, a deafen shuts it with the mute it forces, and a capture session rebuilt
-     * after the tap does not come up transmitting.
      */
     private fun ask(next: (DeafenState) -> DeafenState) {
         val session = synchronized(lock) {
