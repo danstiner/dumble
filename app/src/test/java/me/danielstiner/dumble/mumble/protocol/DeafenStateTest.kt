@@ -40,4 +40,11 @@ class DeafenStateTest {
         val muted = DeafenState().withSelfMute(true)
         assertEquals(muted, muted.withSelfMute(true))
     }
+
+    @Test fun droppingTheUsersOwnMuteLeavesADeafenStanding() {
+        assertEquals(DeafenState(), DeafenState().withSelfMute(true).withoutOwnMute())
+        val state = DeafenState().withSelfMute(true).withSelfDeaf(true).withoutOwnMute()
+        assertEquals(true to true, wire(state))
+        assertEquals(false to false, wire(state.withSelfDeaf(false)))
+    }
 }

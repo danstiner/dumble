@@ -20,4 +20,7 @@ data class DeafenState(
     /** Unmuting while deafened undeafens too, as murmur forces. A mute asked for under a deafen
      *  outlives it. */
     fun withSelfMute(on: Boolean): DeafenState = if (on) copy(ownMute = true) else DeafenState()
+
+    /** Unlike [withSelfMute]`(false)`, leaves a deafen standing. */
+    fun withoutOwnMute(): DeafenState = copy(ownMute = false)
 }
