@@ -1,8 +1,10 @@
 package me.danielstiner.dumble.mumble.net
 
 /**
- * The app's default network and its changes. Networks are opaque identities: what the
- * connection asks is which one a link was dialed on, and whether that one is still up.
+ * The app's default network and its changes. Networks are opaque identities, `Any` rather than
+ * `android.net.Network`: the connection only ever asks which one a link was dialed on and
+ * whether that one is still up, and nothing outside the platform can construct a `Network`, so
+ * typing it would put every driver test that loses or switches a network on Robolectric.
  */
 interface NetworkWatch {
     /** The default network now, or null when there is none. */
