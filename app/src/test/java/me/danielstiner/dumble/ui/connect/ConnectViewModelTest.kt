@@ -426,10 +426,8 @@ class ConnectViewModelTest {
     }
 
     /**
-     * Mute and Deafen toggle from what the control shows, and through an outage that cannot be the
-     * echo: the server's answer stops with the link, and the tree it would arrive in is frozen at
-     * that link's close. Read from the echo, a second tap asks for the same thing again and the
-     * control never moves.
+     * Through an outage no echo arrives at all: the tree is frozen at the dead link's close. Read
+     * from it, a second tap asks for the same thing again and the control never moves.
      */
     @Test fun aMuteTakenDuringTheOutageCanBeTakenBack() = runTest(dispatcher) {
         val conn = FakeConnection()
@@ -457,10 +455,11 @@ class ConnectViewModelTest {
     }
 
     /**
-     * Deafen is the server's answer, read off our own row, not a local flag set by the tap. The tap
-     * only sends; an admin or another client moving it is picked up for free.
+     * Deafen is what was asked for, not the echo on our own row: `self_deaf` is ours alone to set,
+     * so the row can only lag the ask. A second tap inside the round trip is therefore an undeafen,
+     * not a repeat.
      */
-    @Test fun deafenedReflectsTheServerNotTheTap() = runTest(dispatcher) {
+    @Test fun deafenedFollowsTheTapNotTheEcho() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
@@ -469,31 +468,29 @@ class ConnectViewModelTest {
 
         vm.onToggleDeafen()
         runCurrent()
-        assertEquals(listOf(true), conn.selfDeaf)
-        assertFalse("the tap alone must not move the button", vm.uiState.value.deafened)
+        assertTrue("the button moves at the tap", vm.uiState.value.deafened)
 
-        conn.channelTree.value = treeWith(user(7, selfDeaf = true))
-        runCurrent()
-        assertTrue(vm.uiState.value.deafened)
-
-        // And the toggle now reads the other way, because it reads what the button shows.
         vm.onToggleDeafen()
         runCurrent()
         assertEquals(listOf(true, false), conn.selfDeaf)
+
+        conn.channelTree.value = treeWith(user(7, selfDeaf = true, selfMute = true))
+        runCurrent()
+        assertFalse("the first tap's echo, landing late, moves nothing", vm.uiState.value.deafened)
     }
 
     /**
      * Every other case here carries `self_mute` alongside `self_deaf`, because murmur sets both — so
      * they cannot tell `deafened` reading the wrong one of the two apart from it reading the right
-     * one. Confirmed by mutation: `deafened = me?.selfMute` passed this whole class without this.
-     * Reachable now from another client, and from this app once a mute control lands.
+     * one. Confirmed by mutation: `deafened` reading `selfMute` passed this whole class without this.
      */
     @Test fun selfMutedAloneIsNotDeafened() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         vm.onMicrophonePermissionResult(granted = true)
-        conn.channelTree.value = treeWith(user(7, selfDeaf = false, selfMute = true))
+        conn.channelTree.value = treeWith(user(7))
+        vm.onToggleMute()
         runCurrent()
 
         assertFalse(vm.uiState.value.deafened)
@@ -518,19 +515,22 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
         vm.onMicrophonePermissionResult(granted = true)
-        conn.channelTree.value = treeWith(user(7, selfDeaf = true))
+        conn.channelTree.value = treeWith(user(7))
+        vm.onToggleDeafen()
         runCurrent()
 
         assertEquals(TalkBlock.DEAFENED, vm.uiState.value.talkBlock)
 
+        // The server's half still comes off our row.
+        vm.onToggleDeafen()
         conn.channelTree.value = treeWith(user(7, mute = true))
         runCurrent()
         assertEquals(TalkBlock.MUTED, vm.uiState.value.talkBlock)
     }
 
     /**
-     * The gate can be open while nothing we send is carried — a press already in flight when the
-     * deafen echo lands is the reachable case. Showing our own row speaking then is a lie.
+     * The gate can be open while nothing we send is carried — an admin mute shuts nothing here.
+     * Showing our own row speaking then is a lie.
      */
     @Test fun aBlockedTalkNeverMarksYouSpeaking() = runTest(dispatcher) {
         val conn = FakeConnection()
@@ -544,7 +544,7 @@ class ConnectViewModelTest {
         runCurrent()
         assertTrue(7 in vm.uiState.value.speakingSessions)
 
-        conn.channelTree.value = treeWith(user(7, selfDeaf = true))
+        conn.channelTree.value = treeWith(user(7, mute = true))
         runCurrent()
         assertFalse(7 in vm.uiState.value.speakingSessions)
     }
@@ -838,8 +838,8 @@ class ConnectViewModelTest {
         assertEquals(TransmitMode.VoiceActivity, conn.transmitModes.last())
     }
 
-    /** Same discipline as deafen: the button follows our own row, not the tap. */
-    @Test fun mutedReflectsTheServerNotTheTap() = runTest(dispatcher) {
+    /** Same discipline as deafen: the button follows the tap, not our own row. */
+    @Test fun mutedFollowsTheTapNotTheEcho() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         conn.emitConnected(sessionId = 7)
@@ -848,17 +848,31 @@ class ConnectViewModelTest {
 
         vm.onToggleMute()
         runCurrent()
-        assertEquals(listOf(true), conn.muted)
-        assertFalse("the tap alone must not move the button", vm.uiState.value.muted)
+        assertTrue("the button moves at the tap", vm.uiState.value.muted)
 
-        conn.channelTree.value = treeWith(user(7, selfMute = true))
-        runCurrent()
-        assertTrue(vm.uiState.value.muted)
-
-        // And the toggle reads the server's answer back, so the second tap is an unmute.
+        // No echo yet, and the second tap is still an unmute.
         vm.onToggleMute()
         runCurrent()
         assertEquals(listOf(true, false), conn.muted)
+    }
+
+    /** Desktop's rule, reachable now that Mute reads muted the moment a deafen is asked for. */
+    @Test fun muteTappedWhileDeafenedUnmutesAndUndeafens() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        conn.emitConnected(sessionId = 7)
+        conn.channelTree.value = treeWith(user(7))
+        runCurrent()
+
+        vm.onToggleDeafen()
+        runCurrent()
+        assertTrue("a deafen mutes", vm.uiState.value.muted)
+
+        vm.onToggleMute()
+        runCurrent()
+        assertEquals(listOf(false), conn.muted)
+        assertFalse(vm.uiState.value.muted)
+        assertFalse(vm.uiState.value.deafened)
     }
 
     /** Self-unmute stays legal under an admin mute or suppress; reported apart from [muted] so
