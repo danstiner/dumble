@@ -9,6 +9,7 @@ import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -634,6 +635,24 @@ class CaptureLifecycleTest {
         assertFalse("push-to-talk's gate is the thumb", handles[0].gateOpen)
         conn.setTransmitting(true)
         awaitTrue("a press must open the gate, the mute having been lifted") { handles[0].gateOpen }
+
+        conn.disconnect()
+    }
+
+    /** The mute it lifts is the user's own. A deafen stands and takes over a mute set before it,
+     *  so the undeafen is what clears Talk. */
+    @Test fun switchingToPushToTalkLeavesADeafenStanding() = runBlocking {
+        val conn = MumbleConnection(InMemoryPinStore()) { FakeControlTransport { _, _ -> } }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        conn.setMuted(true)
+        conn.setSelfDeaf(true)
+
+        conn.setTransmitMode(TransmitMode.PushToTalk)
+        assertTrue("the deafen stands", conn.selfState.value.deafened)
+        conn.setSelfDeaf(false)
+        assertEquals("and the undeafen lifts the mute with it", DeafenState(), conn.selfState.value)
 
         conn.disconnect()
     }

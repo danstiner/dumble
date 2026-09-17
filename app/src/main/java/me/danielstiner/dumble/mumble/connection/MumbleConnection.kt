@@ -218,8 +218,6 @@ class MumbleConnection internal constructor(
          *  button comes up transmitting. UI thread writes it; [openCapture] reads it after
          *  publishing [capture] — see [apply] for why that order matters, and keep both `@Volatile`. */
         @Volatile var pressed: Boolean = false,
-        /** Self-mute. The wire half lives in [SessionStateMachine]; this half closes the gate. */
-        @Volatile var muted: Boolean = false,
         /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
          *  reaches no link, and this is what the replacement is told. */
         @Volatile var selfState: DeafenState = DeafenState(),
@@ -277,9 +275,7 @@ class MumbleConnection internal constructor(
                     handle.setTransmitMode(transmitMode)
                     appliedMode = transmitMode
                 }
-                sender.setTransmitting(
-                    !session.muted && (session.pressed || transmitMode == TransmitMode.VoiceActivity),
-                )
+                sender.setTransmitting(wantsGate(session))
             }
         }
 
@@ -1031,12 +1027,7 @@ class MumbleConnection internal constructor(
 
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
-    override fun setSelfDeaf(on: Boolean) {
-        synchronized(lock) {
-            val session = current ?: return
-            ask(session) { it.deafen(on) }
-        }
-    }
+    override fun setSelfDeaf(on: Boolean) = ask { it.deafen(on) }
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
@@ -1066,11 +1057,12 @@ class MumbleConnection internal constructor(
      * that. When both act, the gate is set twice, which costs nothing.
      */
     private fun apply(session: Session) {
-        if (!session.muted && (session.pressed || transmitMode == TransmitMode.VoiceActivity)) {
-            send(CaptureCommand.Acquire(session))
-        }
+        if (wantsGate(session)) send(CaptureCommand.Acquire(session))
         session.capture?.apply(session)
     }
+
+    private fun wantsGate(session: Session) =
+        !session.selfState.muted && (session.pressed || transmitMode == TransmitMode.VoiceActivity)
 
     /** A press while muted stays shut: mute has no engine-side existence, and the Talk button is
      *  only disabled once the server echoes `self_mute`. */
@@ -1080,36 +1072,35 @@ class MumbleConnection internal constructor(
         apply(session)
     }
 
-    /** Switching to push-to-talk lifts a self-mute: that mode has no Mute control, so a mute
-     *  carried into it would disable Talk with nothing to clear it. Its gate is closed anyway. */
+    /** Switching to push-to-talk lifts the user's own mute: that mode has no Mute control, so one
+     *  carried into it would disable Talk with nothing to clear it. A deafen stands. */
     override fun setTransmitMode(mode: TransmitMode) {
         transmitMode = mode
         val session = current ?: return
-        if (transmitMode != TransmitMode.VoiceActivity && session.muted) setMuted(false) else apply(session)
+        val carried = mode != TransmitMode.VoiceActivity && session.selfState.ownMute
+        if (carried) ask { it.liftOwnMute() } else apply(session)
     }
 
-    /** Closes the gate here, not just on the wire: the microphone goes quiet at the tap rather
-     *  than at the server's echo, and a capture session rebuilt after the tap must not come up
-     *  transmitting. */
-    override fun setMuted(on: Boolean) {
-        val session = synchronized(lock) {
-            val session = current ?: return
-            session.muted = on
-            ask(session) { it.mute(on) }
-            session
-        }
-        apply(session)   // opens or closes a capture engine; never under the lock
-    }
+    override fun setMuted(on: Boolean) = ask { it.mute(on) }
 
     /**
      * Advance what the session asks, publish it, and send it to whatever link is there, all under
      * [lock] so a swap's wire() cannot slip between a tap's write and its send and leave the server
      * on the older of the two. During an outage the send reaches no link; the swap makes it.
+     *
+     * The gate reads the same state, so the microphone goes quiet at the tap rather than at the
+     * server's echo, a deafen shuts it with the mute it forces, and a capture session rebuilt
+     * after the tap does not come up transmitting.
      */
-    private fun ask(session: Session, next: (DeafenState) -> DeafenState) {
-        session.selfState = next(session.selfState)
-        _selfState.value = session.selfState
-        session.link?.stateMachine?.sendSelfState(session.selfState)
+    private fun ask(next: (DeafenState) -> DeafenState) {
+        val session = synchronized(lock) {
+            val session = current ?: return
+            session.selfState = next(session.selfState)
+            _selfState.value = session.selfState
+            session.link?.stateMachine?.sendSelfState(session.selfState)
+            session
+        }
+        apply(session)   // opens or closes a capture engine; never under the lock
     }
 
     /**

@@ -98,8 +98,9 @@ interface Connection {
      * murmur stops sending to a deaf receiver, so this saves bandwidth rather than muting locally.
      *
      * Fire-and-forget — nothing local reads back, because the server broadcasts the resulting
-     * `UserState` to us like any other user's and the channel tree is what the UI renders. A no-op
-     * until synchronized, and safe to repeat: a repeat asks for the same state again.
+     * `UserState` to us like any other user's and the channel tree is what the UI renders. The
+     * mute a deafen forces shuts the transmit gate as [setMuted]'s does. A no-op until synchronized,
+     * and safe to repeat: a repeat asks for the same state again.
      */
     fun setSelfDeaf(on: Boolean)
 

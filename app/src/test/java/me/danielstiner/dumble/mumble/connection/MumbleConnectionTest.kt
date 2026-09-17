@@ -2226,4 +2226,48 @@ class MumbleConnectionTest {
         assertEquals("the call rides through", 0, call.ends)
         conn.disconnect()
     }
+
+    /** The gate follows what the session asks for: a deafen shuts it, deafen forcing a mute, and
+     *  the undeafen that lifts that mute reopens it. */
+    @Test fun theGateFollowsADeafen() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(InMemoryPinStore(), newCapture = { FakeCaptureHandle().also { handles += it } }) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        conn.requestCapture()   // voice activity is the default mode, so the gate opens with the engine
+        awaitTrue("the gate opens") { handles.size == 1 && handles[0].gateOpen }
+
+        conn.setSelfDeaf(true)
+        awaitTrue("deafened is muted, so the gate shuts") { !handles[0].gateOpen }
+        conn.setSelfDeaf(false)
+        awaitTrue("the undeafen lifts the mute it set, and the gate with it") { handles[0].gateOpen }
+        conn.disconnect()
+    }
+
+    /** A mute tapped while deafened, inside the echo window where the control still reads
+     *  unmuted, is the user's own: the undeafen keeps it on the wire, and the gate shut with it. */
+    @Test fun aMuteTappedWhileDeafenedOutlivesTheUndeafen() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val conn = MumbleConnection(InMemoryPinStore(), newCapture = { FakeCaptureHandle().also { handles += it } }) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        conn.requestCapture()
+        awaitTrue("the gate opens") { handles.size == 1 && handles[0].gateOpen }
+
+        conn.setSelfDeaf(true)
+        conn.setMuted(true)
+        conn.setSelfDeaf(false)
+
+        awaitTrue("undeafened on the wire, and still muted") { transports[0].selfStates().lastOrNull() == (false to true) }
+        awaitTrue("and the gate agrees") { !handles[0].gateOpen }
+        conn.disconnect()
+    }
 }
