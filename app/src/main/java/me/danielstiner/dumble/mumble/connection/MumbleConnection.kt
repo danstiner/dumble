@@ -716,8 +716,8 @@ class MumbleConnection internal constructor(
             // newPlayout().
             session.scope.launch { if (isLive(session)) session.receiver.start() }
             // A network change is news the sockets have not had. A live link whose network is
-            // gone is dead, and a Pixel 7a took 23 s to notice on its own; an attempt in flight
-            // was dialed on the network before this one, and would run out its own timeout. A
+            // gone is dead (a Pixel 7a took 23 s to notice on its own), and an attempt in flight
+            // was dialed on the network before this one and would run out its own timeout. A
             // link whose network merely stopped being the default is left alone: with a LAN
             // server on a WiFi that lost its uplink, it is the only link that reaches the server.
             // Filtered on the first link's stamp, so a change during its handshake still counts.
@@ -725,19 +725,12 @@ class MumbleConnection internal constructor(
             session.scope.launch {
                 networkChanges.filter { it != firstDialedUnder }.collect { changes ->
                     val doomed = synchronized(lock) {
-                        val next = session.next
-                        val live = session.link
-                        when {
-                            next != null -> next.takeIf { it.dialedUnder != changes }?.let { it to "the attempt" }
-                            live != null -> live.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
-                                ?.let { it to "the link, its network gone" }
-                            else -> null
-                        }
-                    }
-                    doomed?.let { (dead, what) ->
-                        Log.i(TAG, "network changed gen=$gen; closing $what")
-                        dead.close()
-                    }
+                        session.next?.takeIf { it.dialedUnder != changes }
+                            ?: session.link?.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
+                    } ?: return@collect
+                    val what = if (doomed === session.next) "the attempt" else "the link, its network gone"
+                    Log.i(TAG, "network changed gen=$gen; closing $what")
+                    doomed.close()
                 }
             }
 
@@ -892,9 +885,8 @@ class MumbleConnection internal constructor(
             // backoff cannot be suspended through: playout and capture stay open across the swap,
             // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
             // measured held across a whole outage.
-            // One rule: attempt 0 is the first since the network last changed, the change being
-            // new information. A change inside a second of the last dial keeps the rung, so a
-            // flapping default cannot turn the backoff into a connect storm.
+            // Attempt 0 is the first since the network last changed, unless the last dial was
+            // under a second ago: a flapping default must not turn the backoff into a connect storm.
             if (networkChanges.value != seen) {
                 seen = networkChanges.value
                 if (lastDial == null || udpClock.markNow() - lastDial >= BACKOFF[1]) attempt = 0
@@ -907,8 +899,7 @@ class MumbleConnection internal constructor(
                 if (gen == generation && current === session) { session.next = next; true } else false
             }
             if (!live) { next.close(); return null }
-            // Dialed under a network that has since gone; the collector may have run before the
-            // publish and found nothing to close.
+            // A change between the dial and the publish is one the collector could not have seen.
             if (networkChanges.value != next.dialedUnder) { drop(session, next); continue }
             Log.i(TAG, "replacement gen=$gen attempt=$attempt")
             lastDial = udpClock.markNow()

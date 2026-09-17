@@ -56,10 +56,10 @@ the platform call, the receiver and the capture session belong to the session an
 A link is dialed on the app's default network and stamped with it. When that network is gone the
 link is closed rather than left for the socket to notice, and an attempt in flight is abandoned by
 any change of the default, since it was dialed on the network before; the transport aborts a
-connect that a close lands on, so neither is run out to its timeout. A link whose network merely
+connect that a close lands on, so neither runs out to its timeout. A link whose network merely
 stopped being the default is left alone: with a LAN server on a WiFi that has lost its uplink, it
-is the only link that reaches the server. The first attempt after a change is immediate, unless
-the last dial was under a second ago, which keeps a flapping default from a connect storm.
+is the only link that reaches the server. The first attempt after a change is immediate unless
+the last dial was under a second ago, so a flapping default cannot become a connect storm.
 Close-then-connect, not make-before-break: the old link would read its own ghost kick as the
 server removing us and end the session.
 A kick or a ban is the server's own removal of us, which murmur sends before it closes the
