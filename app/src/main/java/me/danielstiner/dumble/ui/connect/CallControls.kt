@@ -64,8 +64,8 @@ private val controlActiveShape = RoundedCornerShape(percent = 30)
  * is now the audio-route control, which reads [AudioRoutes.available] to decide whether it is a
  * speaker toggle or a menu — see [RouteControl].
  *
- * [deafened] and [talkBlock] are the server's answer, not the last tap, so both lag a round trip and
- * that is deliberate — see `ConnectViewModel.onToggleDeafen`.
+ * [deafened] and [muted] are what was last asked for, so they move at the tap — see
+ * `ConnectViewModel.onToggleDeafen`.
  */
 @Composable
 fun CallControls(

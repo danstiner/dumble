@@ -1064,8 +1064,8 @@ class MumbleConnection internal constructor(
     private fun wantsGate(session: Session) =
         !session.selfState.selfMute && (session.pressed || transmitMode == TransmitMode.VoiceActivity)
 
-    /** A press while muted stays shut: mute has no engine-side existence, and the Talk button is
-     *  only disabled once the server echoes `self_mute`. */
+    /** A press while muted stays shut: mute has no engine-side existence, so nothing below this
+     *  refuses it. */
     override fun setTransmitting(on: Boolean) {
         val session = current ?: return
         session.pressed = on
