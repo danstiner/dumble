@@ -975,6 +975,161 @@ class MumbleConnectionTest {
     }
 
     /**
+     * Losing the network the link is on closes it instead of waiting for the socket to notice,
+     * and the call rides through.
+     */
+    @Test fun losingTheLinksNetworkReplacesItAtOnce() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val call = FakeVoiceCall()
+        val conn = MumbleConnection(InMemoryPinStore(), call = call, sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+
+        network.lose("wifi")
+
+        awaitTrue("the live link is closed on the loss") { transports[0].closed }
+        // Our close unblocks the reader, whose exit is what reports the death.
+        transports[0].listener!!.onClosed(IOException("closed"))
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        val second = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), second)
+        assertEquals("the call must not end across a loss", 0, call.ends)
+        conn.disconnect()
+    }
+
+    /** A default that merely moves, the old network still up, is not a death: with a LAN server
+     *  on a WiFi that lost its uplink, that link is the only one that reaches the server. */
+    @Test fun aNewDefaultLeavesAWorkingLinkAlone() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        network.switchTo("cell")
+
+        delay(300)
+        assertFalse("a link on a network still up stays", transports[0].closed)
+        assertEquals(first, conn.status.value)
+        assertEquals(1, transports.size)
+        conn.disconnect()
+    }
+
+    /** Changes a session never saw are not deaths: the first link is stamped at its dial. */
+    @Test fun changesBeforeConnectingAreNotADeath() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        network.lose("wifi")
+        network.switchTo("cell")
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        delay(300)
+        assertFalse(transports[0].closed)
+        assertEquals(1, transports.size)
+        conn.disconnect()
+    }
+
+    /** A switch while the first link is still handshaking, its network staying up, is nothing. */
+    @Test fun aSwitchDuringTheFirstHandshakeLeavesTheLinkAlone() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val release = CompletableDeferred<Unit>()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> release.await() }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        awaitTrue("the handshake is in flight") { transports.size == 1 && transports[0].listener != null }
+
+        network.switchTo("cell")
+        release.complete(Unit)
+
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        delay(300)
+        assertFalse("the change during the handshake was not a loss", transports[0].closed)
+        conn.disconnect()
+    }
+
+    /**
+     * A loss while the first link is still handshaking is caught once it is wired, the collector
+     * filtering on the link's own stamp, and ends as the connect failing: the first link is
+     * never retried, and a network that is gone is a failed connect.
+     */
+    @Test fun aLossDuringTheFirstHandshakeIsTheConnectFailing() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val release = CompletableDeferred<Unit>()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> release.await() }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        awaitTrue("the handshake is in flight") { transports.size == 1 && transports[0].listener != null }
+
+        network.lose("wifi")
+        release.complete(Unit)
+
+        awaitTrue("the link is closed as soon as it is wired") { transports[0].closed }
+        transports[0].listener!!.onClosed(IOException("closed"))
+        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
+        assertEquals(ErrorKind.DISCONNECTED, err.kind)
+        delay(200)
+        assertEquals("never retried", 1, transports.size)
+    }
+
+    /** The replacement is stamped with its own network, and closed when that one goes. */
+    @Test fun losingTheReplacementsNetworkClosesItToo() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch()
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        transports[0].listener!!.onClosed(IOException("reset"))   // an ordinary death
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 } }
+
+        network.lose("wifi")
+
+        awaitTrue("the replacement is closed on the loss") { transports[1].closed }
+        transports[1].listener!!.onClosed(IOException("closed"))
+        startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 3 } }
+        conn.disconnect()
+    }
+
+    /** No default to stamp a link with means any change is taken as its loss. */
+    @Test fun aLinkDialedWithNoDefaultIsClosedOnAnyChange() = runBlocking {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val network = FakeNetworkWatch(default = null)
+        val conn = MumbleConnection(InMemoryPinStore(), sleep = {}, networkWatch = network) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        }
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+
+        network.switchTo("cell")
+
+        awaitTrue("closed on the first change") { transports[0].closed }
+        conn.disconnect()
+    }
+
+
+    /**
      * The one rejection a retry can fix is a ghost of ourselves still holding the name, which
      * Murmur reaps inside the deadline; every other rejection is final.
      */

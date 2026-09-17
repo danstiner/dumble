@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Required to access local Mumble servers (e.g. for a LAN party). Specifically, targeting
          API 37+ gates RFC1918 destinations behind this permission. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
