@@ -1341,10 +1341,13 @@ class MumbleConnectionTest {
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
         transports[0].listener!!.onClosed(IOException("reset"))
 
+        // Waits for the handshake, not just the transport: the ninth can be a refused one created
+        // just before the sleep that spends the budget, with the reachable tenth still to come.
         awaitTrue("an attempt is made after the ladder would have given up") {
-            spent() >= 120.seconds && transports.size >= 9
+            spent() >= 120.seconds && transports.size >= 9 &&
+                transports.last().sent.any { it.first == TcpMessageType.Version }
         }
-        startedTransportAt(transports, transports.lastIndex).listener!!.onFrame(serverSync(2))
+        transports.last().listener!!.onFrame(serverSync(2))
         val back = withTimeout(5_000) {
             conn.status.first { it is ConnectionStatus.Connected && it.sessionId == 2 }
         }
