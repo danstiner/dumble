@@ -2211,6 +2211,9 @@ class MumbleConnectionTest {
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
         val first = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } } as ConnectionStatus.Connected
+        // Connected is published before the ping loop seeds its reply mark; a bump that lands
+        // in between is folded into the seed and never ages.
+        withTimeout(5_000) { conn.lastServerReplyAt.first { it != null } }
 
         clock += 16.seconds   // three ping intervals unanswered, as the ticker sees on its next tick
 
