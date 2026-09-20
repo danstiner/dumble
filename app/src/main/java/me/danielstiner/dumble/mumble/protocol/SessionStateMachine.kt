@@ -384,8 +384,8 @@ class SessionStateMachine(
             TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder()
                 .setSession(session)
-                .setSelfDeaf(next.selfDeaf)
-                .setSelfMute(next.selfMute)
+                .setSelfDeaf(next.deafened)
+                .setSelfMute(next.muted)
                 .build(),
         )
         return ok

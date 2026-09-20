@@ -10,14 +10,15 @@ package me.danielstiner.dumble.mumble.protocol
  * class's one departure from them: `docs/mumble-protocol.md`, Self mute and deafen.
  */
 data class DeafenState(
-    val selfDeaf: Boolean = false,
+    val deafened: Boolean = false,
     val ownMute: Boolean = false,
 ) {
-    val selfMute: Boolean get() = ownMute || selfDeaf
+    /** `self_mute` on the wire: a deafen mutes too. */
+    val muted: Boolean get() = ownMute || deafened
 
-    fun withSelfDeaf(on: Boolean): DeafenState = copy(selfDeaf = on)
+    fun deafen(on: Boolean): DeafenState = copy(deafened = on)
 
     /** Unmuting while deafened undeafens too, as murmur forces. A mute asked for under a deafen
      *  outlives it. */
-    fun withSelfMute(on: Boolean): DeafenState = if (on) copy(ownMute = true) else DeafenState()
+    fun mute(on: Boolean): DeafenState = if (on) copy(ownMute = true) else DeafenState()
 }

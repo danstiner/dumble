@@ -63,12 +63,12 @@ class FakeConnection : Connection {
 
     override fun setSelfDeaf(on: Boolean) {
         selfDeaf += on
-        selfState.value = selfState.value.withSelfDeaf(on)
+        selfState.value = selfState.value.deafen(on)
     }
 
     override fun setMuted(on: Boolean) {
         muted += on
-        selfState.value = selfState.value.withSelfMute(on)
+        selfState.value = selfState.value.mute(on)
     }
 
     override fun setTransmitMode(mode: TransmitMode) { transmitModes += mode }

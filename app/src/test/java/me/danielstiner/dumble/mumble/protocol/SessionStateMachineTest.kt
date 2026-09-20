@@ -850,7 +850,7 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val sm = synchronizedMachine(ch, backgroundScope)
 
-        assertTrue(sm.sendSelfState(DeafenState().withSelfDeaf(true)))
+        assertTrue(sm.sendSelfState(DeafenState().deafen(true)))
 
         val sent = ch.userStates().single()
         assertEquals(4, sent.session)
@@ -863,7 +863,7 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
-        assertFalse(sm.sendSelfState(DeafenState().withSelfMute(true)))
+        assertFalse(sm.sendSelfState(DeafenState().mute(true)))
         assertTrue("nothing may reach the wire before we have a session", ch.userStates().isEmpty())
     }
 
@@ -876,7 +876,7 @@ class SessionStateMachineTest {
     fun aRepeatStillReachesTheWire() = runTest {
         val ch = FakeChannel()
         val sm = synchronizedMachine(ch, backgroundScope)
-        val deafened = DeafenState().withSelfDeaf(true)
+        val deafened = DeafenState().deafen(true)
 
         sm.sendSelfState(deafened)
         sm.sendSelfState(deafened)
@@ -890,7 +890,7 @@ class SessionStateMachineTest {
     fun aRefusedSendIsReportedAndTheRetryStillReachesTheWire() = runTest {
         val ch = FakeChannel()
         val sm = synchronizedMachine(ch, backgroundScope)
-        val deafened = DeafenState().withSelfDeaf(true)
+        val deafened = DeafenState().deafen(true)
 
         ch.sendResult = false
         assertFalse(sm.sendSelfState(deafened))
@@ -911,7 +911,7 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder().setSession(4).setName("me").setChannelId(0).build()))
 
-        sm.sendSelfState(DeafenState().withSelfDeaf(true))
+        sm.sendSelfState(DeafenState().deafen(true))
         assertFalse(sm.channelTree.value.users[4]!!.selfDeaf)
 
         sm.onFrame(frame(TcpMessageType.UserState,

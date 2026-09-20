@@ -197,8 +197,8 @@ class ConnectViewModel internal constructor(
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 // No echo to read through a reconnect, the tree froze at the dead link's close:
                 // the controls read what was asked for, which is what the replacement is told.
-                deafened = if (reconnecting) c.self.selfState.selfDeaf else me?.selfDeaf == true,
-                muted = if (reconnecting) c.self.selfState.selfMute else me?.selfMute == true,
+                deafened = if (reconnecting) c.self.selfState.deafened else me?.selfDeaf == true,
+                muted = if (reconnecting) c.self.selfState.muted else me?.selfMute == true,
                 inaudible = me?.mute == true || me?.suppress == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
