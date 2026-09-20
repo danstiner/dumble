@@ -1034,7 +1034,7 @@ class MumbleConnection internal constructor(
     override fun setSelfDeaf(on: Boolean) {
         synchronized(lock) {
             val session = current ?: return
-            ask(session) { it.withSelfDeaf(on) }
+            ask(session) { it.deafen(on) }
         }
     }
 
@@ -1095,7 +1095,7 @@ class MumbleConnection internal constructor(
         val session = synchronized(lock) {
             val session = current ?: return
             session.muted = on
-            ask(session) { it.withSelfMute(on) }
+            ask(session) { it.mute(on) }
             session
         }
         apply(session)   // opens or closes a capture engine; never under the lock

@@ -197,8 +197,8 @@ class ConnectViewModel internal constructor(
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
                 // No echo to read through a reconnect, the tree froze at the dead link's close:
                 // the controls read what was asked for, which is what the replacement is told.
-                deafened = if (reconnecting) c.self.selfState.selfDeaf else me?.selfDeaf == true,
-                muted = if (reconnecting) c.self.selfState.selfMute else me?.selfMute == true,
+                deafened = if (reconnecting) c.self.selfState.deafened else me?.selfDeaf == true,
+                muted = if (reconnecting) c.self.selfState.muted else me?.selfMute == true,
                 inaudible = me?.mute == true || me?.suppress == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
@@ -342,8 +342,8 @@ class ConnectViewModel internal constructor(
     /**
      * Reads the current value off [uiState] — the server's answer — rather than taking it from the
      * caller, so the button and this can never disagree about what "the other one" means. Two taps
-     * inside one round trip therefore ask for the same thing twice; the state machine re-sends its
-     * last intent for the second, which is what keeps that harmless.
+     * inside one round trip therefore ask for the same thing twice, which [DeafenState] makes
+     * harmless: every ask sets a value rather than flipping one.
      */
     fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
 
