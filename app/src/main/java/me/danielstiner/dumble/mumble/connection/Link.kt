@@ -1,7 +1,6 @@
 package me.danielstiner.dumble.mumble.connection
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
@@ -47,10 +46,11 @@ internal class Link(
      */
     fun close() {
         if (!closed.compareAndSet(false, true)) return
-        // IO because the TLS close blocks: SSLSocket.close can stall writing close-notify to a
-        // dead peer, and one slow socket must not delay anything else. UDP first: its close
-        // never blocks, and datagrams would otherwise keep arriving while the TLS close stalls.
-        scope.launch(Dispatchers.IO) {
+        // On the connection's blocking scope because the TLS close blocks: SSLSocket.close can
+        // stall writing close-notify to a dead peer, and one slow socket must not delay anything
+        // else. UDP first: its close never blocks, and datagrams would otherwise keep arriving
+        // while the TLS close stalls.
+        scope.launch {
             runCatching { udp.close() }
             runCatching { transport.close() }
         }
