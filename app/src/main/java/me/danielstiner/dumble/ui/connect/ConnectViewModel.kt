@@ -181,7 +181,7 @@ class ConnectViewModel internal constructor(
             // Nothing past the reconnect to cover: the swap publishes the replacement's tree before
             // its Connected, so our row is there to read.
             val reconnecting = status is ConnectionStatus.Reconnecting
-            val block = talkBlock(me, f.microphoneGranted, reconnecting)
+            val block = talkBlock(me, c.self.selfState, f.microphoneGranted, reconnecting)
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
             val speakingMe = session?.takeIf { selfSpeaking && block == null }
@@ -195,10 +195,8 @@ class ConnectViewModel internal constructor(
                 playoutStats = health.audio.playoutStats, captureStats = health.audio.captureStats,
                 channelTree = c.channelTree, messages = c.messages,
                 speakingSessions = if (speakingMe != null) speaking + speakingMe else speaking,
-                // No echo to read through a reconnect, the tree froze at the dead link's close:
-                // the controls read what was asked for, which is what the replacement is told.
-                deafened = if (reconnecting) c.self.selfState.deafened else me?.selfDeaf == true,
-                muted = if (reconnecting) c.self.selfState.muted else me?.selfMute == true,
+                deafened = c.self.selfState.deafened,
+                muted = c.self.selfState.muted,
                 inaudible = me?.mute == true || me?.suppress == true,
                 talkBlock = block,
                 audioRoutes = c.audioRoutes,
@@ -323,8 +321,7 @@ class ConnectViewModel internal constructor(
      */
     fun onMicrophoneReady() = connection.requestCapture()
 
-    /** Reads the mute off [uiState] — the server's answer — for the same reason [onToggleDeafen]
-     *  does. */
+    /** Reads the mute off [uiState] for the same reason [onToggleDeafen] does. */
     fun onToggleMute() = connection.setMuted(!uiState.value.muted)
 
     fun onSelectTransmitMode(mode: TransmitMode) {
@@ -340,10 +337,10 @@ class ConnectViewModel internal constructor(
     fun onResume() = connection.requestCapture()
 
     /**
-     * Reads the current value off [uiState] — the server's answer — rather than taking it from the
-     * caller, so the button and this can never disagree about what "the other one" means. Two taps
-     * inside one round trip therefore ask for the same thing twice, which [DeafenState] makes
-     * harmless: every ask sets a value rather than flipping one.
+     * Reads the current value off [uiState] rather than taking it from the caller, so the button and
+     * this can never disagree about what "the other one" means. That value is the ask, not the
+     * server's echo; the roster row is what shows the echo (`docs/mumble-protocol.md`, Self mute
+     * and deafen).
      */
     fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
 

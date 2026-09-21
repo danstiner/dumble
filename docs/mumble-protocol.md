@@ -104,8 +104,16 @@ Desktop keeps `bMute`, `bDeaf` and an `unmuteOnUndeaf` flag to tell the two mute
 `DeafenState` keeps the two asks — the deafen and the user's own mute — and derives the wire's
 `self_mute` as either, which is the same machine with the invalid states unrepresentable and every
 ask an idempotent set. Checked against a port of the two desktop handlers over every toggle sequence
-to depth 16 and every explicit on/off sequence to depth 8; the one difference is the divergence
-listed below. Dumble sends both fields in every ask, so the server's coupling never has to act.
+to depth 16 and every explicit on/off sequence to depth 8. The one difference is a mute asked for
+while deafened, which `DeafenState` keeps as the user's own where desktop's shortcut ignores it; no
+control can ask for it. Dumble sends both fields in every ask, so the server's coupling never has
+to act.
+
+As on desktop, the ask and the echo are separate states with separate readers. Only a user's own
+`UserState` can write their `self_mute` and `self_deaf` (murmur returns early on anyone else's, and
+its Ice interface only reads them), so the echo can only lag the ask, and says nothing through a
+reconnect. The Mute and Deafen controls, Talk's self half and the capture gate read the ask; the
+roster row reads the echo, which is what everyone else sees.
 
 ## Voice framing
 
@@ -244,7 +252,3 @@ Deliberate, documented where they live:
   a wider reordering window (63 late, 191 consecutive losses) (`net/CryptState.kt`).
 - **Pin-before-authority trust ordering** (`docs/connection.md`).
 - **Client-side handshake deadline** — the protocol has none, Dumble enforces 15 s.
-- **A mute asked for while deafened is kept by the undeafen.** Dumble's controls read the server's
-  echo, so inside a round trip after a deafen the Mute control still reads unmuted and can be
-  tapped. Desktop's equivalent is a no-op and its undeafen reopens the microphone; Dumble treats
-  the tap as the user's own mute (`DeafenState`, Control channel above).
