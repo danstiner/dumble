@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.mumble.voice
 
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.runBlocking
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertEquals
@@ -61,7 +62,7 @@ class VoiceReceiverTest {
             assertEquals(1, fake.offered.size)
             assertEquals(5, fake.offered[0].session)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -79,7 +80,7 @@ class VoiceReceiverTest {
             Thread.sleep(200)
             assertEquals("silence must not pause the stream", listOf("start"), fake.calls)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -101,7 +102,7 @@ class VoiceReceiverTest {
             fake.startResult = true
             awaitTrue("the stream must come up once it can") { fake.started }
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -119,7 +120,7 @@ class VoiceReceiverTest {
             fake.audibleSessions = emptySet()
             awaitTrue("speaking must clear once nobody produces") { rx.speakingSessions.value.isEmpty() }
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -149,7 +150,7 @@ class VoiceReceiverTest {
                 fake.calls.count { it == "start" } == 2
             }
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -160,13 +161,13 @@ class VoiceReceiverTest {
         rx.start()
         awaitTrue("start") { fake.started }
         rx.offer(audioPayload(session = 3))
-        rx.stop()
+        runBlocking { rx.stop() }
         val offeredBeforeStop = fake.offered.size
         assertEquals("destroy must be the last call", "destroy", fake.calls.last())
         assertEquals("engine must be destroyed exactly once", 1, fake.destroyCalls)
         rx.offer(audioPayload(session = 3))
         assertEquals("a packet after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
-        rx.stop()
+        runBlocking { rx.stop() }
         assertEquals("a second stop() must not destroy again", 1, fake.destroyCalls)
         assertEquals(emptySet<Int>(), rx.speakingSessions.value)
         assertNull(rx.playoutStats.value)
@@ -181,7 +182,7 @@ class VoiceReceiverTest {
     fun startAfterStopBuildsNoEngine() {
         val engines = AtomicInteger()
         val rx = VoiceReceiver({ engines.incrementAndGet(); FakePlayoutEngine() })
-        rx.stop()
+        runBlocking { rx.stop() }
         rx.start()
         assertEquals("start() after stop() built a playout engine", 0, engines.get())
     }
@@ -193,7 +194,7 @@ class VoiceReceiverTest {
         rx.start()
         rx.start()
         assertEquals(1, engines.get())
-        rx.stop()
+        runBlocking { rx.stop() }
         rx.start()
         assertEquals("start() after stop() must not build a second engine", 1, engines.get())
     }
@@ -212,7 +213,7 @@ class VoiceReceiverTest {
             assertEquals(2, fake.offered[1].session)
             assertTrue("the terminator flag must reach the engine", fake.offered[1].terminator)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -233,7 +234,7 @@ class VoiceReceiverTest {
             rx.offer(audioPayload(session = 3))
             assertEquals("the session must still work after garbage", 9, fake.offered.size)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -250,7 +251,7 @@ class VoiceReceiverTest {
             rx.offer(audioPayload(session = 0))
             assertEquals("the reader must keep working after the cap trips", 9, fake.offered.size)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -267,7 +268,7 @@ class VoiceReceiverTest {
             rx.offer(ByteArray(0))
             assertEquals("a non-audio type byte must not reach the engine", 0, fake.offered.size)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -282,7 +283,7 @@ class VoiceReceiverTest {
             rx.offer(byteArrayOf(0, -1, -1, -1, -1, -1))
             assertEquals(0, fake.offered.size)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -330,7 +331,7 @@ class VoiceReceiverTest {
             assertEquals("a clean spurt has no gaps", 0, stats.concealedGaps)
             assertEquals("a clean spurt drops nothing", 0, stats.droppedPackets)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -344,7 +345,7 @@ class VoiceReceiverTest {
             closeSpurt(fake, rx, null)
             assertNull("-1 from the seam is no reading, not a reading of -1 ms", rx.playoutStats.value!!.latencyMs)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -370,7 +371,7 @@ class VoiceReceiverTest {
             closeSpurt(fake, rx, first)
             assertEquals("a clean spurt must not inherit the previous spurt's count", 0, rx.playoutStats.value!!.concealedGaps)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -391,7 +392,7 @@ class VoiceReceiverTest {
             closeSpurt(fake, rx, first)
             assertEquals("a spurt must report its own drops, not the session's running total", 3, rx.playoutStats.value!!.droppedPackets)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -411,7 +412,7 @@ class VoiceReceiverTest {
             closeSpurt(fake, rx, null)
             assertEquals(2, rx.playoutStats.value?.underruns)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -429,7 +430,7 @@ class VoiceReceiverTest {
             assertEquals(960, rx.playoutStats.value!!.bufferedSamples[1])
             assertEquals(1440, rx.playoutStats.value!!.targetSamples[1])
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -453,7 +454,7 @@ class VoiceReceiverTest {
             assertEquals("the speaker must still be audible at the periodic sample", setOf(1), rx.speakingSessions.value)
             assertEquals(480, rx.playoutStats.value!!.bufferedSamples[1])
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -484,7 +485,7 @@ class VoiceReceiverTest {
             clock += 1.seconds
             awaitTrue("the second sample, another second in") { rx.playoutStats.value != first }
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -495,7 +496,7 @@ class VoiceReceiverTest {
         rx.start()
         openSpurt(fake, rx)
         closeSpurt(fake, rx, null)
-        rx.stop()
+        runBlocking { rx.stop() }
         // The poll owns the flow while alive and has to hand it back empty, or a stats page shows
         // the previous call's numbers after a disconnect.
         assertNull("stats outlived the receiver", rx.playoutStats.value)
@@ -520,7 +521,7 @@ class VoiceReceiverTest {
             fake.refuseBuffers = false
             awaitTrue("the poll must recover once the read succeeds") { rx.speakingSessions.value == setOf(3) }
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -537,7 +538,7 @@ class VoiceReceiverTest {
         assertEquals(emptySet<Int>(), rx.speakingSessions.value)
         rx.start()
         assertEquals("a refused start() must not be retried", 1, builds.get())
-        rx.stop()
+        runBlocking { rx.stop() }
     }
 
     /**
@@ -550,7 +551,7 @@ class VoiceReceiverTest {
     fun stopWithoutEverStartingBuildsNoEngine() {
         val builds = AtomicInteger()
         val rx = VoiceReceiver({ builds.incrementAndGet(); FakePlayoutEngine() })
-        rx.stop()
+        runBlocking { rx.stop() }
         assertEquals("a receiver that never started must never build an engine", 0, builds.get())
         rx.start()
         assertEquals(0, builds.get())

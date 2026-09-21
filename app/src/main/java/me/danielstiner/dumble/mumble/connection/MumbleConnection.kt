@@ -672,7 +672,7 @@ class MumbleConnection internal constructor(
         // a session whose link comes up ever reaches — building eagerly would leak one per
         // session that fails or is superseded before that.
         val session = Session(
-            gen, endpoint, username, password, VoiceReceiver(newPlayout),
+            gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
             CoroutineScope(scope.coroutineContext + SupervisorJob()),
         )
         // Published after the prior's Release was queued above, so nothing this session asks of

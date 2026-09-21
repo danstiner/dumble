@@ -13,8 +13,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -45,6 +45,8 @@ class VoiceReceiver(
     private val newEngine: () -> PlayoutEngine?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+    // Seam: where the poll runs; the connection passes its own.
+    context: CoroutineContext = Dispatchers.Default,
 ) {
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
@@ -73,7 +75,7 @@ class VoiceReceiver(
         fun destroy()
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(context + SupervisorJob())
 
     private val _speakingSessions = MutableStateFlow<Set<Int>>(emptySet())
     val speakingSessions: StateFlow<Set<Int>> = _speakingSessions.asStateFlow()
@@ -133,14 +135,15 @@ class VoiceReceiver(
     /**
      * Safe to call before start(), twice, or from two threads at once: `stopped` latches, the
      * join is idempotent, and the destroy is guarded by the engine going null under the monitor.
+     * Suspends for the join rather than blocking, so a single-threaded caller cannot wait on itself.
      */
-    fun stop() {
+    suspend fun stop() {
         stopped = true
         // Joined, not merely cancelled: a start()/pause() in flight on the poll's thread must
         // have returned before the session underneath it is freed. Outside the monitor because
         // the poll takes it for readStats, and a join under it would wait on itself.
         val job = synchronized(this) { poll }
-        if (job != null) runBlocking { job.cancelAndJoin() }
+        job?.cancelAndJoin()
         synchronized(this) {
             // Under the monitor, like offer(): a reader already inside offer() finishes first,
             // and one arriving later sees `stopped`.
