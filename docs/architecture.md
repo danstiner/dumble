@@ -44,3 +44,13 @@ constants answer to the protocol, deliberately not to each other.
 focus, communication routing, and the microphone foreground service. An incoming cellular call
 holds it, which releases capture entirely for the duration — see the platform-call section of
 `docs/capture.md`.
+
+## Publish last
+
+A published state is a promise. When a `StateFlow` write is a plain write, everything the new
+state implies — a timer armed, a mark seeded, a resource built — is written before it, so a reader
+acting on the emission finds it in place. Where the write doubles as the guard that settles a race
+(`SessionStateMachine`'s `compareAndSet` out of `Handshaking`), the bookkeeping cannot precede it;
+it stays on the same thread, right after, and a test that cares drives the scheduler to that point
+(`runCurrent()`) rather than resuming on the emission. The two test races of 2026-09 (#165, #167)
+were tests resuming on a publish and reading bookkeeping that had not happened yet.
