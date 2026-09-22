@@ -422,7 +422,9 @@ class LiveServerIntegrationTest {
     /**
      * [awaitPort] only proves the TCP port is accepting connections; the TLS listener behind it
      * can still refuse the handshake for a few seconds longer during container cold start. Retry
-     * the actual connect rather than widening the plain-socket probe above.
+     * the actual connect rather than widening the plain-socket probe above. Few attempts, because
+     * Murmur's default autoban is 10 connections in 120 s, successful ones included, and a local
+     * Docker server sees every client — this JVM, the phone, the desktop — as one address.
      */
     private suspend fun connectWithRetry(
         transport: MumbleTcpTransport,
@@ -431,10 +433,8 @@ class LiveServerIntegrationTest {
         session: SessionStateMachine,
         tap: (TcpFrame) -> Unit = {},
     ) {
-        val deadline = System.currentTimeMillis() + 30_000
-        var attempt = 0
-        while (true) {
-            attempt++
+        val attempts = 5
+        for (attempt in 1..attempts) {
             try {
                 transport.connect(host, port, object : MumbleControlTransport.Listener {
                     override fun onFrame(f: TcpFrame) { tap(f); session.onFrame(f) }
@@ -442,10 +442,10 @@ class LiveServerIntegrationTest {
                 })
                 return
             } catch (t: Throwable) {
-                if (System.currentTimeMillis() >= deadline) {
+                if (attempt == attempts) {
                     throw AssertionError("connect to $host:$port failed after $attempt attempts", t)
                 }
-                Thread.sleep(1_000)
+                delay(1.seconds)
             }
         }
     }
