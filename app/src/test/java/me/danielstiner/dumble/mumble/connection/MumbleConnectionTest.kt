@@ -1428,6 +1428,9 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val conn = own(MumbleConnection(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+            // Long enough that the ping ticker never ends a link during a 29 s connected stretch;
+            // the links here die by the resets below, not by ping age.
+            pingIntervalMs = 3_600_000L,
         ) {
             // Two replacements come up and die again short of healthy; everything after is refused.
             val refuse = transports.size >= 3
@@ -1439,17 +1442,19 @@ class MumbleConnectionTest {
 
         val outageOpened = clock.markNow()
         transports[0].listener!!.onClosed(IOException("reset"))
-        for (session in 2..3) {
+        for ((rung, session) in listOf(0.seconds to 2, 1.seconds to 3)) {
+            elapse(rung)   // short of healthy, each loss is another rung of the same outage
             startedTransportAt(transports, session - 1).listener!!.onFrame(serverSync(session))
             assertEquals(session, connected(conn).sessionId)
             elapse(29.seconds)                     // connected, and short of healthy either way
+            assertEquals("nothing else ended the link", session, transports.size)
             transports[session - 1].listener!!.onClosed(IOException("reset"))
         }
 
         elapse(3.minutes)   // the rest of the given-back budget, refused at every rung
         assertSettled("gave up") { conn.status.value is ConnectionStatus.Error }
         val spent = clock.markNow() - outageOpened
-        assertTrue("gave up after $spent, charging the 58 s spent connected", spent > 2.minutes + 20.seconds)
+        assertTrue("gave up after $spent, charging the 58 s spent connected", spent >= 2.minutes + 58.seconds)
     }
 
     /**
@@ -1466,11 +1471,9 @@ class MumbleConnectionTest {
         connected(conn)
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        // Each replacement is rejected the moment it dials, so only the ladder's own waits between
-        // dials advance the clock — a wait itself never risks the 15 s handshake deadline, since no
-        // transport is open while it runs. Six replacements land at 0+1+2+4+8+16 = 31 s, still
-        // inside the 45 s ghost window; the seventh, after the ladder's capped 30 s rung, lands at
-        // 61 s, past it.
+        // Every replacement is rejected as it dials, so the clock moves only in the ladder's own
+        // waits, with no transport open to meet the 15 s handshake deadline. The rungs land the
+        // sixth rejection at 31 s, inside the 45 s window, and the seventh at 61 s, past it.
         val rungs = listOf(0, 1, 2, 4, 8, 16, 30).map { it.seconds }
         for (i in 1..7) {
             elapse(rungs[i - 1])
