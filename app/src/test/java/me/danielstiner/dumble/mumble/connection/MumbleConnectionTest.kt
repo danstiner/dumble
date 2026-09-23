@@ -1608,6 +1608,76 @@ class MumbleConnectionTest {
         assertSettled("and the gate agrees") { !handles[0].gateOpen }
     }
 
+    /**
+     * A session that dies on its own reaches no disconnect() and supersedes no prior session, so
+     * before retire() nothing tore the session down and the playback thread outlived it — waking
+     * at 100 Hz with an open AudioTrack for as long as the error screen stayed up.
+     */
+    @Test fun aFailedSessionReleasesTheReceiver() = deterministic {
+        lateinit var fake: FakeControlTransport
+        val playout = FakePlayoutEngine()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+
+        // Reach the receiver first, so there is a live playout and a started stream to release.
+        playout.liveSessions = setOf(9)
+        playout.audibleSessions = setOf(9)
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
+            .build()
+        assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        elapse(50.milliseconds)   // VoiceReceiver.POLL_MILLIS: the next poll reads the engine's speaking set
+        assertSettled("speaking") { conn.speakingSessions.value.isNotEmpty() }
+
+        // The server rejects the login: a terminal state nobody asked for.
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
+            MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
+        assertSettled("rejected") { conn.status.value is ConnectionStatus.Error }
+        assertEquals(ErrorKind.AUTH_REJECTED, (conn.status.value as ConnectionStatus.Error).kind)
+
+        assertSettled("a failed session must destroy the playout engine") { playout.destroyed }
+        // The error must survive the teardown — it is what the user is looking at.
+        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
+    }
+
+    @Test fun speakingSessionsPopulateThenClearOnDisconnect() = deterministic {
+        lateinit var fake: FakeControlTransport
+        val playout = FakePlayoutEngine()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+
+        // The engine's answer to the packet below: session 9 holds a slot and is producing.
+        playout.liveSessions = setOf(9)
+        playout.audibleSessions = setOf(9)
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
+            .build()
+        assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        assertSettled("the packet must reach the engine") { playout.offered.isNotEmpty() }
+
+        elapse(50.milliseconds)   // VoiceReceiver.POLL_MILLIS: the next poll reads the engine's speaking set
+        assertSettled("speaking") { conn.speakingSessions.value == setOf(9) }
+        assertTrue("a live speaker must start the stream", playout.started)
+
+        conn.disconnect()
+        assertEquals("disconnect() zeroes the flow under the lock", emptySet<Int>(), conn.speakingSessions.value)
+        // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
+        // synchronously and the generation guard blocks any later receiver-originated write, so
+        // deleting the stop() from teardown() would still pass it. This is what actually proves
+        // the receiver was released.
+        assertSettled("teardown must destroy the playout engine") { playout.destroyed }
+    }
+
     // ---- Real threads, by design. Everything below runs on runBlocking and the default
     // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
     //   parking the driver on a latch or a continuation the test releases —
@@ -1616,8 +1686,7 @@ class MumbleConnectionTest {
     //     disconnectWhileReconnectingClosesTheReplacement, aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree
     //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
     //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
-    //     holdTearsTheSessionDownAndResumeRebuildsIt, aFailedSessionReleasesTheReceiver,
-    //     speakingSessionsPopulateThenClearOnDisconnect — and its own clock — theCaptureCountersFollowTheSession
+    //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
     //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the twelve `peer` tests
     // A converted test lives above this line and never calls awaitOnRealThreads.
 
@@ -1907,77 +1976,6 @@ class MumbleConnectionTest {
      * audible read is pump-produced like [requestCaptureRunsTheSendPathAndDisconnectReleasesIt]'s
      * `sentRaw`.
      */
-    @Test fun aFailedSessionReleasesTheReceiver() = runBlocking {
-        lateinit var fake: FakeControlTransport
-        val playout = FakePlayoutEngine()
-        val conn = MumbleConnection(InMemoryPinStore(), newPlayout = { playout }) {
-            FakeControlTransport { _, _ -> }.also { fake = it }
-        }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-
-        // Reach the receiver first, so there is a live playout and a started stream to release.
-        playout.liveSessions = setOf(9)
-        playout.audibleSessions = setOf(9)
-        val audio = MumbleUdpProtos.Audio.newBuilder()
-            .setSenderSession(9)
-            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
-            .build()
-        awaitEngineBuilt(playout)
-        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
-        withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
-
-        // The server rejects the login: a terminal state nobody asked for.
-        fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
-            MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
-
-        val err = withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } } as ConnectionStatus.Error
-        assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
-
-        // Awaited for the same reason as in the disconnect test: stop() runs on a coroutine.
-        awaitOnRealThreads("a failed session must destroy the playout engine") { playout.destroyed }
-        // The error must survive the teardown — it is what the user is looking at.
-        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
-    }
-
-    @Test fun speakingSessionsPopulateThenClearOnDisconnect() = runBlocking {
-        lateinit var fake: FakeControlTransport
-        val playout = FakePlayoutEngine()
-        val conn = MumbleConnection(InMemoryPinStore(), newPlayout = { playout }) {
-            FakeControlTransport { _, _ -> }.also { fake = it }
-        }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-
-        // The engine's answer to the packet below: session 9 holds a slot and is producing.
-        playout.liveSessions = setOf(9)
-        playout.audibleSessions = setOf(9)
-        val audio = MumbleUdpProtos.Audio.newBuilder()
-            .setSenderSession(9)
-            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
-            .build()
-        awaitEngineBuilt(playout)
-        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
-
-        // speakingSessions updates on the receiver's poll; the flow collect that republishes it
-        // is another hop, so wait on the value rather than sampling it.
-        val speaking = withTimeout(5_000) { conn.speakingSessions.first { it.isNotEmpty() } }
-        assertEquals(setOf(9), speaking)
-        awaitOnRealThreads("the packet must reach the engine") { playout.offered.isNotEmpty() }
-        awaitOnRealThreads("a live speaker must start the stream") { playout.started }
-
-        // disconnect() zeroes the flow under the same lock as every other reset, so this is
-        // deterministic even though the receiver's own stop() is handed to a coroutine.
-        conn.disconnect()
-        assertEquals(emptySet<Int>(), conn.speakingSessions.value)
-
-        // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
-        // synchronously and the generation guard blocks any later receiver-originated write, so
-        // deleting the stop() from teardown() would still pass it. This is what actually proves
-        // the receiver was released. stop() is handed to a coroutine, hence the poll.
-        awaitOnRealThreads("teardown must destroy the playout engine") { playout.destroyed }
-    }
-
     /**
      * The counters reach the flow from the live session's pump and leave with the session.
      *
