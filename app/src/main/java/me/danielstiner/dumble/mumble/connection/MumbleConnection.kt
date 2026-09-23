@@ -104,8 +104,9 @@ class MumbleConnection internal constructor(
     // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
     private val networkWatch: NetworkWatch = NoNetworkWatch,
     // Seams: where everything that suspends runs, and where the three launches that block do
-    // (HAL opens, socket closes, the receiver's join). A test passes one StandardTestDispatcher
-    // for both and drives the scheduler; production never names another dispatcher below here.
+    // (HAL opens, socket closes, the receiver's native destroy). A test passes one
+    // StandardTestDispatcher for both and drives the scheduler; production never names another
+    // dispatcher below here.
     private val context: CoroutineContext = Dispatchers.Default,
     private val blocking: CoroutineDispatcher = Dispatchers.IO,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
@@ -305,11 +306,11 @@ class MumbleConnection internal constructor(
     private var heldGen = NO_GEN
 
     init {
-        // The single owner of capture. On blockingScope, never a childScope — teardown cancels
-        // those synchronously and would discard queued commands, leaking the engine and the
-        // microphone — and because every handler blocks: newCapture() on the HAL, stop() on
-        // OboeCapture::close(). runCatching because a SupervisorJob does not restart a coroutine
-        // that threw, and a dead consumer fails silently and permanently.
+        // The single owner of capture. On blockingScope, never a session's or a link's scope —
+        // teardown cancels those synchronously and would discard queued commands, leaking the
+        // engine and the microphone — and because every handler blocks: newCapture() on the HAL,
+        // stop() on OboeCapture::close(). runCatching because a SupervisorJob does not restart a
+        // coroutine that threw, and a dead consumer fails silently and permanently.
         //
         // A second init block, not folded into the first: `captureCommands` is declared between
         // them, and Kotlin runs property initializers and init blocks in textual order, so a
@@ -613,10 +614,10 @@ class MumbleConnection internal constructor(
     /** The pieces of one TLS connect, built but not yet connected. */
     private fun buildLink(session: Session, pin: String?): Link {
         val gen = session.gen
-        val childScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+        val linkScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
         val transport = newTransport(pin)
         val stateMachine = SessionStateMachine(
-            transport, session.username, session.password, childScope,
+            transport, session.username, session.password, linkScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
             bootClock = udpClock,
@@ -645,7 +646,7 @@ class MumbleConnection internal constructor(
             }
             override fun requestCryptResync() { stateMachine.requestCryptResync() }
         }, udpClock)
-        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, childScope, blockingScope)
+        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
@@ -830,7 +831,7 @@ class MumbleConnection internal constructor(
         // without our own row in it.
         fun <T> republish(from: StateFlow<T>, into: MutableStateFlow<T>) {
             publishFromLink(session, link, into, from.value)
-            link.childScope.launch { from.collect { publishFromLink(session, link, into, it) } }
+            link.scope.launch { from.collect { publishFromLink(session, link, into, it) } }
         }
         republish(link.stateMachine.serverVersion, _serverVersion)
         republish(link.stateMachine.roundTripTime, _roundTripTime)
@@ -839,7 +840,7 @@ class MumbleConnection internal constructor(
         republish(link.stateMachine.channelTree, _channelTree)
         republish(link.stateMachine.userStats, _userStats)
         // Chat is the session's: what earlier links received stays ahead of this link's own.
-        link.childScope.launch {
+        link.scope.launch {
             link.stateMachine.messages.collect {
                 publishFromLink(
                     session, link, _messages,
@@ -1129,9 +1130,9 @@ class MumbleConnection internal constructor(
     /** Any thread; nothing here blocks. [session] is already out of [current], its Release queued
      *  by whoever removed it, so this runs at most once per session. */
     private fun teardown(session: Session) {
-        // blockingScope because stop() joins the receiver's poll, which can be inside a stream
-        // start. Its own coroutine, so a stalled socket close cannot delay it. The receiver drops
-        // any datagram that reaches it after stop().
+        // blockingScope because stop() ends with the native stream's destroy, which blocks; its
+        // join of the poll suspends. Its own coroutine, so a stalled socket close cannot delay
+        // it. The receiver drops any datagram that reaches it after stop().
         blockingScope.launch { session.receiver.stop() }
         // Either the driver published the link under the lock before `current` was cleared, and
         // this closes it, or it will see the session is no longer current and close it itself.

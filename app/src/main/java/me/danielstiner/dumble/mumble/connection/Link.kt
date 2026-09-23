@@ -28,10 +28,10 @@ internal class Link(
     /** The connection's count of network changes when this link was dialed, so whether the
      *  network has changed since is one compare. */
     val dialedUnder: Int,
-    /** The collectors that republish this link's flows. */
-    val childScope: CoroutineScope,
-    /** Never cancelled; where the blocking closes run. */
-    private val scope: CoroutineScope,
+    /** Everything that lives exactly as long as the link: its collectors and its state machine. */
+    val scope: CoroutineScope,
+    /** The connection's; never cancelled, where the blocking closes run. */
+    private val blockingScope: CoroutineScope,
 ) {
     private val closed = AtomicBoolean(false)
 
@@ -50,11 +50,11 @@ internal class Link(
         // stall writing close-notify to a dead peer, and one slow socket must not delay anything
         // else. UDP first: its close never blocks, and datagrams would otherwise keep arriving
         // while the TLS close stalls.
-        scope.launch {
+        blockingScope.launch {
             runCatching { udp.close() }
             runCatching { transport.close() }
         }
         // The collectors never finish on their own; nothing else stops them.
-        childScope.cancel()
+        scope.cancel()
     }
 }
