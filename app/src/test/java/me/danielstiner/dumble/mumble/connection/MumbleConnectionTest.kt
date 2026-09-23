@@ -7,7 +7,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -16,6 +18,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
@@ -1353,9 +1356,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * The ladder and the deadline, with the clock driven by the waits themselves: each requested
-     * sleep advances the test clock by exactly that much and returns, so the sequence of waits is
-     * the whole story and the run takes no real time.
+     * The ladder and the deadline under virtual time: one elapse spans the whole outage, the
+     * waits consume it in order, and the sequence of waits is the whole story.
      */
     @Test fun replacementsThatKeepFailingGiveUpAtTheDeadline() = deterministic {
         val waits = CopyOnWriteArrayList<Duration>()
@@ -1440,7 +1442,6 @@ class MumbleConnectionTest {
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
         connected(conn)
 
-        val outageOpened = clock.markNow()
         transports[0].listener!!.onClosed(IOException("reset"))
         for ((rung, session) in listOf(0.seconds to 2, 1.seconds to 3)) {
             elapse(rung)   // short of healthy, each loss is another rung of the same outage
@@ -1451,10 +1452,11 @@ class MumbleConnectionTest {
             transports[session - 1].listener!!.onClosed(IOException("reset"))
         }
 
-        elapse(3.minutes)   // the rest of the given-back budget, refused at every rung
+        // Two minutes of reconnecting on top of the 58 s spent connected: the give-up is at 178 s.
+        elapse(118.seconds)   // t = 177: the clamped last wait is still running
+        assertSettled("still inside the given-back budget") { conn.status.value is ConnectionStatus.Reconnecting }
+        elapse(1.seconds)     // t = 178: the last attempt is refused and the budget is spent
         assertSettled("gave up") { conn.status.value is ConnectionStatus.Error }
-        val spent = clock.markNow() - outageOpened
-        assertTrue("gave up after $spent, charging the 58 s spent connected", spent >= 2.minutes + 58.seconds)
     }
 
     /**
@@ -1700,15 +1702,22 @@ class MumbleConnectionTest {
         transports[0].listener!!.onFrame(serverSync(1))
         connected(conn)
 
+        // Unconfined, the collector runs inside the publish itself: a row seeded a task later
+        // would be missing here, where a collector that ran afterwards would see it.
+        var rowAtConnected: User? = null
+        scope.backgroundScope.launch(Dispatchers.Unconfined) {
+            conn.status.collect {
+                if (it is ConnectionStatus.Connected && it.sessionId == 2) rowAtConnected = conn.channelTree.value.users[2]
+            }
+        }
         transports[0].listener!!.onClosed(IOException("reset"))
         // The replacement's own handshake: its rows land before its ServerSync, as murmur sends them.
         startedTransportAt(transports, 1).listener!!.onFrame(ourRow(2))
         transports[1].listener!!.onFrame(serverSync(2))
 
         assertEquals(2, connected(conn).sessionId)
-        val row = conn.channelTree.value.users[2]
-        assertNotNull("our row must be readable the moment Connected lands", row)
-        assertTrue("and carry what the replacement was told", row!!.selfMute)
+        assertNotNull("our row must be readable the moment Connected lands", rowAtConnected)
+        assertTrue("and carry what the replacement was told", rowAtConnected!!.selfMute)
     }
 
     /**
@@ -2295,7 +2304,7 @@ class MumbleConnectionTest {
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
         val first = connected(conn)
 
-        elapse(16.seconds)   // three ping intervals unanswered; the fourth tick ends the link
+        elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the link
 
         assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), conn.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
