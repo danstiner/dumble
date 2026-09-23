@@ -3,13 +3,13 @@ package me.danielstiner.dumble.mumble.connection
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -228,6 +228,35 @@ class MumbleConnectionTest {
 
         assertSettled("teardown must close the link the driver published") { transports.single().closed }
         gate.complete(Unit)   // inert: the cancelled wait ignores it
+    }
+
+    /**
+     * The driver lives on the session's scope, so a disconnect() cancels it wherever it waits.
+     * Held inside a cancellable pin lookup it dies there and never builds a transport.
+     */
+    @Test fun aDisconnectDuringThePinLookupCancelsTheDriver() = deterministic {
+        val parked = CompletableDeferred<CancellableContinuation<Unit>>()
+        val pins = object : PinStore {
+            // Handed out only once the driver is suspended here, so the cancel that follows lands
+            // on this very wait rather than on a driver still on its way to it.
+            override suspend fun get(key: String): String? {
+                suspendCancellableCoroutine { parked.complete(it) }
+                return null
+            }
+            override suspend fun put(key: String, fingerprint: String) = Unit
+            override suspend fun remove(key: String) = Unit
+        }
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = own(MumbleConnection(pins, udpClock = clock, context = dispatcher, blocking = dispatcher) {
+            FakeControlTransport { _, _ -> }.also { transports += it }
+        })
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("the driver is parked in the pin lookup") { parked.isCompleted }
+        val wait = parked.getCompleted()
+        conn.disconnect()
+        wait.resume(Unit)   // ignored once cancelled; a driver that survived would run on and build
+        assertSettled("the cancelled driver must build nothing") { transports.isEmpty() }
     }
 
     @Test fun callStartsWithTheConnectionNotTheMicrophone() = deterministic {
@@ -1379,6 +1408,7 @@ class MumbleConnectionTest {
                 if (it is ConnectionStatus.Connected && it.sessionId == 2) rowAtConnected = conn.channelTree.value.users[2]
             }
         }
+
         transports[0].listener!!.onClosed(IOException("reset"))
         // The replacement's own handshake: its rows land before its ServerSync, as murmur sends them.
         startedTransportAt(transports, 1).listener!!.onFrame(ourRow(2))
@@ -1555,7 +1585,7 @@ class MumbleConnectionTest {
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
         val first = connected(conn)
 
-        elapse(16.seconds)   // three ping intervals unanswered; the fourth tick ends the link
+        elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the link
 
         assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), conn.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
@@ -1678,16 +1708,41 @@ class MumbleConnectionTest {
         assertSettled("teardown must destroy the playout engine") { playout.destroyed }
     }
 
+    // Voice is additive: a socket that cannot be opened must cost the session nothing but UDP.
+    @Test fun aSocketThatCannotOpenLeavesTheSessionHealthyAndTunneled() = deterministic {
+        val playout = FakePlayoutEngine()
+        lateinit var fake: FakeControlTransport
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) {
+            // Unresolved, so DatagramChannel.connect refuses it locally: no DNS, no network.
+            FakeControlTransport { _, _ -> }.apply { remote = InetSocketAddress.createUnresolved("nowhere.invalid", 1) }.also { fake = it }
+        })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+        fake.listener!!.onFrame(keyExchange())
+        fake.listener!!.onFrame(serverSync())
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
+            MumbleProtos.UserState.newBuilder().setSession(1).setChannelId(0).build().toByteArray()))
+        connected(conn)
+        assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
+
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, audioPacket(session = 9)))
+
+        assertSettled("tunneled audio still reaches the engine") { playout.offered.isNotEmpty() }
+        assertEquals(9, playout.offered.first().session)
+    }
+
     // ---- Real threads, by design. Everything below runs on runBlocking and the default
     // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
     //   parking the driver on a latch or a continuation the test releases —
     //     aSupersededHandshakeDoesNotClobberIdle, aSupersededSessionLeavesChannelTreeEmpty,
-    //     aDisconnectDuringThePinLookupClosesTheLinkItBuilt, aDisconnectDuringThePinLookupCancelsTheDriver,
+    //     aDisconnectDuringThePinLookupClosesTheLinkItBuilt,
     //     disconnectWhileReconnectingClosesTheReplacement, aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree
     //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
     //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
     //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
-    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the twelve `peer` tests
+    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the eleven `peer` tests
     // A converted test lives above this line and never calls awaitOnRealThreads.
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
@@ -1764,34 +1819,6 @@ class MumbleConnectionTest {
             transports.size == 1 && transports.all { it.closed }
         }
         assertEquals("no receiver should ever start on this path", 0, engines.get())
-    }
-
-    /**
-     * The driver lives on the session's scope, so a disconnect() cancels it wherever it waits.
-     * Held inside a cancellable pin lookup it dies there and never builds a transport.
-     */
-    @Test fun aDisconnectDuringThePinLookupCancelsTheDriver() = runBlocking {
-        val parked = CompletableDeferred<CancellableContinuation<Unit>>()
-        val pins = object : PinStore {
-            // Handed out only once the driver is suspended here, so the cancel that follows lands
-            // on this very wait rather than on a driver still on its way to it.
-            override suspend fun get(key: String): String? {
-                suspendCancellableCoroutine { parked.complete(it) }
-                return null
-            }
-            override suspend fun put(key: String, fingerprint: String) = Unit
-            override suspend fun remove(key: String) = Unit
-        }
-        val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = MumbleConnection(pins) { FakeControlTransport { _, _ -> }.also { transports += it } }
-
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        val wait = withTimeout(5_000) { parked.await() }
-        conn.disconnect()
-        wait.resume(Unit)   // ignored once cancelled; a driver that survived would run on and build
-        delay(200)
-
-        assertTrue("the cancelled driver must build nothing", transports.isEmpty())
     }
 
     /** Hanging up mid-reconnect is a hang-up: the replacement in flight goes with the session. */
@@ -1967,15 +1994,6 @@ class MumbleConnectionTest {
         awaitOnRealThreads("disconnect must release the rebuilt engine") { handles[1].destroyed }
     }
 
-    /**
-     * A session that dies on its own reaches no disconnect() and supersedes no prior session, so
-     * before retire() nothing tore the session down and the playback thread outlived it — waking
-     * at 100 Hz with an open AudioTrack for as long as the error screen stayed up.
-     *
-     * Real threads: `speakingSessions` here follows a UDP frame through the receiver's poll, whose
-     * audible read is pump-produced like [requestCaptureRunsTheSendPathAndDisconnectReleasesIt]'s
-     * `sentRaw`.
-     */
     /**
      * The counters reach the flow from the live session's pump and leave with the session.
      *
@@ -2227,30 +2245,6 @@ class MumbleConnectionTest {
         conn.disconnect()
         awaitOnRealThreads("and none after disconnect") { readersSince(before) == 0 }
         peer.close()
-    }
-
-    // Voice is additive: a socket that cannot be opened must cost the session nothing but UDP.
-    @Test fun aSocketThatCannotOpenLeavesTheSessionHealthyAndTunneled() = runBlocking {
-        val playout = FakePlayoutEngine()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), newPlayout = { playout }) {
-            // Unresolved, so DatagramChannel.connect refuses it locally: no DNS, no network.
-            FakeControlTransport { _, _ -> }.apply { remote = InetSocketAddress.createUnresolved("nowhere.invalid", 1) }.also { fake = it }
-        }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        fake.listener!!.onFrame(keyExchange())
-        fake.listener!!.onFrame(serverSync())
-        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
-            MumbleProtos.UserState.newBuilder().setSession(1).setChannelId(0).build().toByteArray()))
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
-        awaitEngineBuilt(playout)
-
-        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, audioPacket(session = 9)))
-
-        awaitOnRealThreads("tunneled audio still reaches the engine") { playout.offered.isNotEmpty() }
-        assertEquals(9, playout.offered.first().session)
-        conn.disconnect()
     }
 
     // ---- which transport carries our voice ------------------------------------------------
