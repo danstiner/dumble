@@ -8,6 +8,7 @@ import me.danielstiner.dumble.time.BootTimeSource
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.PortUnreachableException
+import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import kotlin.time.Duration
@@ -84,6 +85,9 @@ class MumbleUdpTransport(
         check(channel == null) { "open() twice" }
         val ch = DatagramChannel.open()
         try {
+            // DSCP EF. Home WiFi drivers map it to a WMM queue ahead of best effort; elsewhere it
+            // is ignored or bleached. Pings share the socket, so the flow carries one mark.
+            ch.setOption(StandardSocketOptions.IP_TOS, 0xB8)
             ch.connect(address)
         } catch (t: Throwable) {
             runCatching { ch.close() }
