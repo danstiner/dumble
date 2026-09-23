@@ -122,7 +122,7 @@ class MumbleConnection internal constructor(
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
-    private val scope = CoroutineScope(SupervisorJob() + context)
+    private val scope = CoroutineScope(context + SupervisorJob())
     /** Never cancelled; the launches that block. */
     private val blockingScope = CoroutineScope(SupervisorJob() + blocking)
 
@@ -305,9 +305,9 @@ class MumbleConnection internal constructor(
     private var heldGen = NO_GEN
 
     init {
-        // The single owner of capture. On `scope`, never a childScope — teardown cancels those
-        // synchronously and would discard queued commands, leaking the engine and the microphone.
-        // On blockingScope, because every handler blocks: newCapture() on the HAL, stop() on
+        // The single owner of capture. On blockingScope, never a childScope — teardown cancels
+        // those synchronously and would discard queued commands, leaking the engine and the
+        // microphone — and because every handler blocks: newCapture() on the HAL, stop() on
         // OboeCapture::close(). runCatching because a SupervisorJob does not restart a coroutine
         // that threw, and a dead consumer fails silently and permanently.
         //
@@ -346,7 +346,7 @@ class MumbleConnection internal constructor(
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
-     * consumer lives on [scope], which is never cancelled. Checked because the failure would be
+     * consumer lives on [blockingScope], which is never cancelled. Checked because the failure would be
      * silent and permanent — a dropped Release strands both a microphone and the platform call.
      */
     private fun send(cmd: CaptureCommand) {

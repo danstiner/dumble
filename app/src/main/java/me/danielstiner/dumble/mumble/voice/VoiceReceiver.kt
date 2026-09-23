@@ -5,6 +5,7 @@ import com.google.protobuf.InvalidProtocolBufferException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
@@ -143,7 +145,8 @@ class VoiceReceiver(
         // have returned before the session underneath it is freed. Outside the monitor because
         // the poll takes it for readStats, and a join under it would wait on itself.
         val job = synchronized(this) { poll }
-        job?.cancelAndJoin()
+        // The destroy below must follow even if the caller is cancelled mid-join.
+        withContext(NonCancellable) { job?.cancelAndJoin() }
         synchronized(this) {
             // Under the monitor, like offer(): a reader already inside offer() finishes first,
             // and one arriving later sees `stopped`.
