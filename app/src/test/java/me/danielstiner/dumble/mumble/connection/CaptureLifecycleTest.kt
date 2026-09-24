@@ -589,23 +589,34 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * call.start() runs before connect() publishes the session, and the platform can deliver a
-     * hold from inside it. onHeld keys on the generation rather than on `current`, so that hold is
-     * recorded against the session that is about to publish, and a capture asked for afterwards
-     * stays refused until the resume.
+     * call.start() runs before connect() publishes the session, and when connect() runs off the
+     * main thread the call's first hold can be handled before that publish; the settle inside
+     * start() handles it there. That hold must still reach the session: a capture asked for
+     * afterwards stays refused, and the receiver's poll never starts the output stream, until the
+     * resume.
      */
-    @Test fun aHoldDeliveredInsideCallStartLeavesTheSessionNotCapturing() = deterministic {
+    @Test fun aHoldHandledBeforeThePublishHoldsCaptureAndPlayout() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall(holdInsideStart = true)
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
-
+        val playout = FakePlayoutEngine()
+        var engines = 0
+        val call = FakeVoiceCall(insideStart = { onActive -> onActive(false); settle() })
+        val conn = connection(
+            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
+            newPlayout = { engines++; playout },
+            call = call,
+        )
         connectTo(conn)
 
         conn.requestCapture()
-        assertSettled("a held call must open no engine") { handles.isEmpty() }
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+        assertEquals("the receiver must be polling", 1, engines)
+        assertTrue("a held call must open no capture engine", handles.isEmpty())
+        assertEquals("a held call must never start the stream", 0, playout.startAttempts.get())
 
         call.resume()
-        assertSettled("resuming must open one") { handles.size == 1 }
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+        assertEquals("resuming must open one capture engine", 1, handles.size)
+        assertTrue("resuming must start the stream", playout.started)
         conn.disconnect()
     }
 

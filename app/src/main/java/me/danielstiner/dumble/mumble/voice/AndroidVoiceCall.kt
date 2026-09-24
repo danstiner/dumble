@@ -14,8 +14,9 @@ import me.danielstiner.dumble.service.VoiceService
 /**
  * Takes MODE_IN_COMMUNICATION and a communication device itself, with no Telecom call and no
  * audio focus. Without a Telecom call no dialer draws over our screen, and a Bluetooth headset
- * still gets its call link (SCO, the two-way link that carries its microphone), which a Telecom
- * call hidden from dialers does not. Without focus, other apps' media keeps playing.
+ * still gets its call link (the two-way link that carries its microphone, SCO on a classic
+ * headset), which a Telecom call hidden from dialers does not. Without focus, other apps' media
+ * keeps playing.
  *
  * Two things hold the session: the phone taking the audio, and another app capturing voice. The
  * mode and the recording callback report both ends, so a hold resumes by itself.

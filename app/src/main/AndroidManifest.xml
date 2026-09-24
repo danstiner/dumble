@@ -8,6 +8,8 @@
          API 37+ gates RFC1918 destinations behind this permission. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- setMode ignores callers without it, silently. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- The fallback type when RECORD_AUDIO is not granted yet. Needs no runtime permission of its
