@@ -32,6 +32,10 @@ jobs:
           # Nothing here pushes; don't leave the token readable by ./gradlew.
           persist-credentials: false
           submodules: recursive
+      - name: Fetch opus's release tags
+        # opus's CMake takes its version from `git describe`, and the shallow submodule checkout
+        # has no tags; without them every configure warns "Could not get package version".
+        run: git -C third_party/opus fetch --depth=1 origin 'refs/tags/v*:refs/tags/v*'
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

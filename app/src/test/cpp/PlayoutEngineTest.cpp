@@ -342,8 +342,8 @@ TEST(PlayoutEngine, ReportsEachSpeakersBufferedDepth) {
     const PlayoutEngine::Stats stats = e->stats();
     ASSERT_EQ(2, stats.speakers);
     for (int i = 0; i < stats.speakers; i++) {
-        if (stats.sessions[i] == 4) EXPECT_EQ(3 * 480, stats.depths[i]);
-        if (stats.sessions[i] == 8) EXPECT_EQ(6 * 480, stats.depths[i]);
+        if (stats.sessions[i] == 4) { EXPECT_EQ(3 * 480, stats.depths[i]); }
+        if (stats.sessions[i] == 8) { EXPECT_EQ(6 * 480, stats.depths[i]); }
     }
 }
 

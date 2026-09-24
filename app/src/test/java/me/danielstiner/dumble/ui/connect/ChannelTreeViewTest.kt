@@ -2,7 +2,7 @@ package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasStateDescription
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -17,8 +17,6 @@ import org.robolectric.annotation.Config
 
 /**
  * Robolectric rather than androidTest because CI runs testDebugUnitTest and no instrumented suite.
- * v1 createComposeRule deliberately, matching CallControlsTest — see the TODO.md entry on why the
- * v2 rule's StandardTestDispatcher is not worth adopting for one file.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])

@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -39,6 +40,7 @@ import kotlin.random.Random
  * own dispatcher (real Compose callbacks never run anywhere else) and the connection side as three
  * real threads, one per field, each free-running against it.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModelChaosTest {
 
     private class Counters {

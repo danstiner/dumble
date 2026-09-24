@@ -131,6 +131,7 @@ tasks.withType<Test>().configureEach {
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions.allWarningsAsErrors = true
 }
 
 dependencies {
@@ -150,7 +151,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.protobuf.javalite)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)

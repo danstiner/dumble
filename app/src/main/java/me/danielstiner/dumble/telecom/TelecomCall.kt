@@ -74,6 +74,8 @@ internal fun coreTelecomPhoneAccount(context: Context): PhoneAccount {
         "Jetpack",
         Process.myUserHandle(),
     )
+    // Deprecated in favour of core-telecom, which is what registers this account with it.
+    @Suppress("DEPRECATION")
     var capabilities = PhoneAccount.CAPABILITY_SELF_MANAGED
     if (usesTransactionalCalls()) {
         capabilities = capabilities or PhoneAccount.CAPABILITY_SUPPORTS_TRANSACTIONAL_OPERATIONS

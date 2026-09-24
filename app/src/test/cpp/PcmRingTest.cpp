@@ -140,6 +140,6 @@ TEST(PcmRing, SurvivesConcurrentProducerAndConsumer) {
     // with the producer still joinable, and ~thread() on a joinable thread is std::terminate.
     producer.join();
     EXPECT_FALSE(corrupt) << "read data matches no producer burst after #" << lastBurst;
-    if (!corrupt) EXPECT_EQ(acceptedBursts, readBursts);  // every accepted burst read once, in order
+    if (!corrupt) { EXPECT_EQ(acceptedBursts, readBursts); }  // every accepted burst read once, in order
     EXPECT_GT(readBursts, 0u);
 }
