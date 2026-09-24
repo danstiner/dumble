@@ -120,7 +120,6 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onTransmitting = vm::onTransmitting,
                     onToggleDeafen = vm::onToggleDeafen,
                     onToggleMute = vm::onToggleMute,
-                    onResume = vm::onResume,
                     onSelectRoute = vm::onSelectRoute,
                     modifier = m,
                 )

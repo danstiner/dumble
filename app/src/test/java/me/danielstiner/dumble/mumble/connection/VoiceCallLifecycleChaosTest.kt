@@ -16,9 +16,9 @@ import kotlin.random.Random
 /**
  * Concurrent chaos test for the platform call's lifecycle seam: [MumbleConnection] driving
  * [me.danielstiner.dumble.mumble.voice.VoiceCall] through [FakeVoiceCall]`(autoGrant = false)`,
- * where the grant is asynchronous and a superseding start or a platform hangup can land before
- * it. Randomized concurrent rounds hunt schedules the design did not anticipate; a deterministic
- * tail pins the orderings it names — see [storm].
+ * where the grant is asynchronous and a superseding start can land before it. Randomized
+ * concurrent rounds hunt schedules the design did not anticipate; a deterministic tail pins the
+ * orderings it names — see [storm].
  *
  * Sibling to [CaptureLifecycleChaosTest], not folded in: that one hammers the stream/engine
  * invariants, this one [FakeVoiceCall]'s start/end/grant bookkeeping and the connection's
@@ -33,8 +33,8 @@ class VoiceCallLifecycleChaosTest {
 
     /**
      * One randomized concurrent storm, then a deterministic tail pinning the orderings the design
-     * names — supersede-while-ungranted, end-before-grant, a stale hangup racing a live one —
-     * which a random schedule is not guaranteed to ever produce.
+     * names — supersede-while-ungranted, end-before-grant — which a random schedule is not
+     * guaranteed to ever produce.
      */
     private fun storm(seed: Long, c: Counters) = runBlocking {
         val call = FakeVoiceCall(autoGrant = false)
@@ -45,9 +45,9 @@ class VoiceCallLifecycleChaosTest {
             call = call,
         ) { FakeControlTransport { _, _ -> } }
 
-        // The cheap, high-frequency ops a real session sees, plus a late grant and a platform
-        // hangup for any known generation — live or superseded — since callbacks are not fenced
-        // against having been replaced.
+        // The cheap, high-frequency ops a real session sees, plus a late grant for any known
+        // generation — live or superseded — since callbacks are not fenced against having been
+        // replaced.
         val stop = AtomicBoolean(false)
         val hammerThreads = (0 until HAMMER_THREADS).map { t ->
             Thread {
@@ -59,11 +59,6 @@ class VoiceCallLifecycleChaosTest {
                     { conn.setTransmitting(true) },
                     { conn.setTransmitting(false) },
                     { call.grantPending() },
-                    {
-                        // startedGens only grows, so a size snapshot then a bounded index is safe.
-                        val gens = call.startedGens
-                        if (gens.isNotEmpty()) call.endedBySystemFor(gens[r.nextInt(gens.size)])
-                    },
                 )
                 while (!stop.get()) {
                     try {
@@ -162,24 +157,6 @@ class VoiceCallLifecycleChaosTest {
         call.grantPending()
         awaitTrue(c.violations, "seed=$seed: fake still live after the queued-end tail's cleanup") {
             !call.hasLiveCall
-        }
-
-        // Gen-gating of endedByPlatform: a hangup for a superseded generation must not retire the
-        // attempt that replaced it; one for the live generation must. endedBySystemFor runs the
-        // onEnded closure inline, so the assertions are immediate — no polling.
-        conn.connect(endpoint, "user", null)
-        val staleGen = call.startedGens.last()
-        conn.connect(endpoint, "user", null)   // supersedes staleGen
-        val liveGen = call.startedGens.last()
-        call.endedBySystemFor(staleGen)
-        if (conn.status.value == ConnectionStatus.Idle) {
-            c.violations += "seed=$seed: a hangup for superseded gen=$staleGen retired the live " +
-                "attempt gen=$liveGen"
-        }
-        call.endedBySystemFor(liveGen)
-        if (conn.status.value != ConnectionStatus.Idle) {
-            c.violations += "seed=$seed: a hangup for the live gen=$liveGen did not retire it " +
-                "(status=${conn.status.value})"
         }
     }
 

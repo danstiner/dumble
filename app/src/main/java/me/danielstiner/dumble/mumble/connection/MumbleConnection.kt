@@ -248,7 +248,7 @@ class MumbleConnection internal constructor(
          *  session itself, not just its generation, so onHeld can tell its receiver directly even
          *  before connect() publishes it as `current`. */
         data class Held(val session: Session, val held: Boolean) : CaptureCommand
-        data class Release(val session: Session, val reason: VoiceCall.Reason) : CaptureCommand
+        data class Release(val session: Session) : CaptureCommand
         data class PumpExited(val session: Session, val sender: VoiceSender) : CaptureCommand
         data class WedgeCheck(val session: Session, val capture: CaptureSession) : CaptureCommand
     }
@@ -366,7 +366,7 @@ class MumbleConnection internal constructor(
         when (cmd) {
             is CaptureCommand.Acquire -> onAcquire(cmd.session)
             is CaptureCommand.Held -> onHeld(cmd.session, cmd.held)
-            is CaptureCommand.Release -> onRelease(cmd.session, cmd.reason)
+            is CaptureCommand.Release -> onRelease(cmd.session)
             is CaptureCommand.PumpExited -> onPumpExited(cmd.session, cmd.sender)
             is CaptureCommand.WedgeCheck -> onWedgeCheck(cmd.session, cmd.capture)
         }
@@ -374,14 +374,10 @@ class MumbleConnection internal constructor(
 
     /**
      * A capture session was asked for — the microphone became ready, or Talk was pressed. Raises
-     * the level and reconciles. While the platform holds the call, the ask also re-checks the hold:
-     * the platform reports a hold ending by itself, and this is the net behind that. Lifecycle
-     * consumer only.
+     * the level and reconciles. Lifecycle consumer only.
      */
     private fun onAcquire(session: Session) {
         session.wanted = true
-        // Guarded on heldGen so an ordinary press while active does not re-check on every edge.
-        if (heldGen == session.gen) call.requestActive(session.gen)
         reconcile(session)
     }
 
@@ -454,13 +450,13 @@ class MumbleConnection internal constructor(
      * session it still holds. Queued synchronously by [teardown], which is what orders this ahead
      * of anything a replacing session can produce on the same channel. Lifecycle consumer only.
      */
-    private fun onRelease(session: Session, reason: VoiceCall.Reason) {
+    private fun onRelease(session: Session) {
         session.wanted = false
         // Before reconcile, needing nothing from it but the generation: reconcile blocks on
         // the HAL close and can throw (the consumer loop swallows it), either of which
         // would strand the call. Not deferred to the pump's exit either — a wedged pump
         // would never end it.
-        call.end(session.gen, reason)
+        call.end(session.gen)
         reconcile(session)
     }
 
@@ -596,7 +592,7 @@ class MumbleConnection internal constructor(
         // Queued here, under the lock that unpublishes [prior]: nothing the next session can ask
         // of the capture consumer is queued before this, so the release runs first. trySend
         // never blocks, so it is safe under the lock.
-        prior?.let { send(CaptureCommand.Release(it, VoiceCall.Reason.USER)) }
+        prior?.let { send(CaptureCommand.Release(it)) }
         _status.value = status
         _serverVersion.value = null; _roundTripTime.value = null; _lastServerReplyAt.value = null
         _voicePath.value = VoicePath.State()
@@ -676,19 +672,18 @@ class MumbleConnection internal constructor(
         // Still ahead of the publish below: the prior's Release is queued first (above), and
         // end(gen) must never be queued ahead of that start(gen).
         call.start(
-            gen, endpoint, username,
+            gen, endpoint,
             // The session, not just the generation: onHeld tells its receiver directly, and a
             // hold from a superseded call is dropped by its own generation check regardless.
             onActive = { active -> send(CaptureCommand.Held(session, !active)) },
             onRoutes = { r -> publishRoutes(gen, r) },
-            onEnded = { endedByPlatform(gen) },
         )
         // Published after the prior's Release was queued above, so nothing this session asks of
         // the capture consumer is ordered ahead of that release; and under the lock, so a
         // disconnect() that landed since leaves it unpublished.
         val live = synchronized(lock) { if (gen == generation) { current = session; true } else false }
         if (!live) {
-            send(CaptureCommand.Release(session, VoiceCall.Reason.USER))
+            send(CaptureCommand.Release(session))
             teardown(session)
             return
         }
@@ -1027,21 +1022,6 @@ class MumbleConnection internal constructor(
         prior?.let { teardown(it) }
     }
 
-    /**
-     * The platform ended [gen]'s call. Generation-gated for the same reason `onActive` is: a hangup
-     * delivered for a call we have already superseded — its callbacks fall silent only once the
-     * supersede cancels its job — would otherwise retire the session that replaced it.
-     */
-    private fun endedByPlatform(gen: Int) {
-        val prior = synchronized(lock) {
-            // Status, not `current != null`: a retired session has already cleared it, and a late
-            // hangup must not replace the error or trust prompt the user is looking at.
-            if (gen != generation || !_status.value.ongoing) return
-            retireAndClearLocked(ConnectionStatus.Idle)
-        }
-        prior?.let { teardown(it) }
-    }
-
     override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
 
     override fun setSelfDeaf(on: Boolean) = ask { it.deafen(on) }
@@ -1063,8 +1043,8 @@ class MumbleConnection internal constructor(
 
     /**
      * Re-derive the gate: open when not muted and either Talk is held or voice activity is on.
-     * Wanting it open also asks for a session, which is what brings one back after a hold or a
-     * terminal engine failure.
+     * Wanting it open also asks for a session, which is what brings one back after a terminal
+     * engine failure.
      *
      * Levels first, then the live session — the mirror of [openCapture], which publishes the
      * session and then reads the levels. Each side writes one volatile and reads the other, so a
@@ -1127,7 +1107,7 @@ class MumbleConnection internal constructor(
             if (session.gen == generation && current === session) {
                 current = null
                 // Under the lock, for the same ordering retireAndClearLocked keeps.
-                send(CaptureCommand.Release(session, VoiceCall.Reason.SESSION_FAILED))
+                send(CaptureCommand.Release(session))
                 true
             } else false
         }

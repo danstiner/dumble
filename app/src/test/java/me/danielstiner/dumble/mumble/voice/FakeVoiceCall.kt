@@ -5,7 +5,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Lets a test drive a hold, a resume, or a system-ended call without a platform to register with.
+ * Lets a test drive a hold or a resume synchronously, without AndroidVoiceCall's main-looper hop.
  *
  * The grant is its own event because the real call applies start() later, on the main looper,
  * after start() returns; a fake that superseded inside start() could not express the defects that
@@ -23,10 +23,6 @@ class FakeVoiceCall(
     /** Generation per start(), in order — so a test can address a superseded call by generation. */
     val startedGens = CopyOnWriteArrayList<Int>()
     var ends = 0; private set
-    /** Reason per end(), in order — so a test can assert a failure is not reported as a hang-up. */
-    val endReasons = CopyOnWriteArrayList<VoiceCall.Reason>()
-    /** Generation per requestActive(), in order — so a test can assert a Talk press asked, or didn't. */
-    val activeRequests = CopyOnWriteArrayList<Int>()
     /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
     val routeRequests = CopyOnWriteArrayList<String>()
 
@@ -34,43 +30,36 @@ class FakeVoiceCall(
     private var liveGen = NO_CALL
     private var pendingGen = NO_CALL
     /** An end() that arrived before the grant; applied when it lands, never dropped. */
-    private var pendingEnd: VoiceCall.Reason? = null
+    private var pendingEnd = false
     /** Whether the platform currently holds a granted, un-ended call — for a test to check that
      *  the connection's own idea of "connected" and the platform's idea of "a call exists" agree. */
     val hasLiveCall: Boolean get() = synchronized(lock) { liveGen != NO_CALL }
     /** Whether an end() is parked awaiting the still-outstanding start's grant — for a test to
      *  observe that a queued end actually arrived, rather than racing a fixed delay against it. */
-    val hasPendingEnd: Boolean get() = synchronized(lock) { pendingEnd != null }
+    val hasPendingEnd: Boolean get() = synchronized(lock) { pendingEnd }
     // Per generation, not one field: a stale hold from a superseded call is exactly the failure the
     // connection's generation check exists to stop, and a single field cannot express one.
     private val onActive = ConcurrentHashMap<Int, (Boolean) -> Unit>()
     // Per generation for the same reason onActive is: a route update from a superseded call is
     // exactly what the connection's generation guard exists to drop.
     private val onRoutes = ConcurrentHashMap<Int, (AudioRoutes) -> Unit>()
-    private val onEnded = ConcurrentHashMap<Int, () -> Unit>()
 
     override fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        username: String,
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-        onEnded: () -> Unit,
     ) {
         synchronized(lock) {
             // A pending start's queued end is recorded before the new start supersedes it,
             // mirroring the real consumer's ordered queue.
-            if (pendingGen != NO_CALL && pendingEnd != null) {
-                ends++
-                endReasons += pendingEnd!!
-            }
+            if (pendingGen != NO_CALL && pendingEnd) ends++
             starts += endpoint.host
             startedGens += gen
             pendingGen = gen
-            pendingEnd = null
+            pendingEnd = false
             this.onActive[gen] = onActive
             this.onRoutes[gen] = onRoutes
-            this.onEnded[gen] = onEnded
         }
         if (autoGrant) grant(gen)
         // A hold from inside the platform's own start, before connect() has published the session.
@@ -78,17 +67,17 @@ class FakeVoiceCall(
     }
 
     /**
-     * The platform granted control for [gen]. This — not start() — is where the call being
-     * replaced ends, mirroring the real call's supersede ordering.
+     * start()'s effects landing for [gen], standing in for AndroidVoiceCall's main-looper hop.
+     * This — not start() — is where the call being replaced ends, mirroring the real call's
+     * supersede ordering.
      */
     fun grant(gen: Int): Unit = synchronized(lock) {
         if (gen == NO_CALL) return
         if (gen != pendingGen) return
-        if (liveGen != NO_CALL) endNow(VoiceCall.Reason.USER)
+        if (liveGen != NO_CALL) endNow()
         liveGen = gen
         pendingGen = NO_CALL
-        pendingEnd?.let { reason -> pendingEnd = null; endNow(reason) }
-        Unit
+        if (pendingEnd) { pendingEnd = false; endNow() }
     }
 
     /** Grant whatever start() is outstanding. No-op when there is none. */
@@ -96,27 +85,18 @@ class FakeVoiceCall(
         grant(pendingGen)
     }
 
-    override fun end(gen: Int, reason: VoiceCall.Reason): Unit = synchronized(lock) {
+    override fun end(gen: Int): Unit = synchronized(lock) {
         // Ordered, not lost: the real consumer handles an End queued behind a Start after that
-        // Start has finished registering.
-        if (gen == pendingGen) { pendingEnd = reason; return }
+        // Start's effects have applied on the main looper.
+        if (gen == pendingGen) { pendingEnd = true; return }
         // Mirrors the real generation guard, so a test that supersedes a session exercises it.
         if (gen != liveGen) return
-        endNow(reason)
+        endNow()
     }
 
-    private fun endNow(reason: VoiceCall.Reason) {
+    private fun endNow() {
         liveGen = NO_CALL
         ends++
-        endReasons += reason
-    }
-
-    override fun requestActive(gen: Int): Unit = synchronized(lock) {
-        // Mirrors the real generation guard. Deliberately does not grant it: a resume
-        // arrives asynchronously through onActive, so a test drives that itself via resumeFor().
-        if (gen != liveGen) return
-        activeRequests += gen
-        Unit
     }
 
     override fun requestRoute(gen: Int, routeId: String): Unit = synchronized(lock) {
@@ -132,8 +112,8 @@ class FakeVoiceCall(
 
     fun emitRoutes(routes: AudioRoutes) = emitRoutesFor(liveGen, routes)
 
-    // hold(), resume(), and endedBySystem() no-op once end() has run: liveGen is NO_CALL then,
-    // matching a platform call that is no longer registered.
+    // hold() and resume() no-op once end() has run: liveGen is NO_CALL then, matching a platform
+    // call that is no longer registered.
     fun hold() = holdFor(liveGen)
 
     fun resume() = resumeFor(liveGen)
@@ -145,11 +125,6 @@ class FakeVoiceCall(
     fun holdFor(gen: Int) { onActive[gen]?.invoke(false) }
 
     fun resumeFor(gen: Int) { onActive[gen]?.invoke(true) }
-
-    fun endedBySystem() = endedBySystemFor(liveGen)
-
-    /** A platform hangup for a specific generation, live or not — same reason as [holdFor]. */
-    fun endedBySystemFor(gen: Int) { onEnded[gen]?.invoke() }
 
     private companion object {
         const val NO_CALL = -1
