@@ -3,6 +3,7 @@ package me.danielstiner.dumble.mumble.voice
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.runBlocking
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -112,7 +113,7 @@ class OboePlayoutDeviceTest {
             // is counted as one. Anything beyond that is the callback failing to keep up.
             assertTrue("concealment during a clean spurt: ${end.concealedGaps}", end.concealedGaps <= 1)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -152,7 +153,7 @@ class OboePlayoutDeviceTest {
             assertNotNull("the stream reported no latency", end.latencyMs)
             assertEquals("the second spurt must not underrun", 0, end.underruns)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 
@@ -180,7 +181,7 @@ class OboePlayoutDeviceTest {
             // tens of microseconds for one speaker.
             assertTrue("a fill took $worst us: ${samples.map { it.fillMicrosMax }}", worst < 2_000)
         } finally {
-            rx.stop()
+            runBlocking { rx.stop() }
         }
     }
 

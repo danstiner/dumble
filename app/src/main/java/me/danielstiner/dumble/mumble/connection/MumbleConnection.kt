@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import kotlin.time.ComparableTimeMark
 import kotlinx.coroutines.flow.asStateFlow
@@ -101,6 +103,12 @@ class MumbleConnection internal constructor(
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
     // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
     private val networkWatch: NetworkWatch = NoNetworkWatch,
+    // Seams: where everything that suspends runs, and where the three launches that block do
+    // (HAL opens, socket closes, the receiver's native destroy). A test passes one
+    // StandardTestDispatcher for both and drives the scheduler; production never names another
+    // dispatcher below here.
+    private val context: CoroutineContext = Dispatchers.Default,
+    private val blocking: CoroutineDispatcher = Dispatchers.IO,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -115,7 +123,9 @@ class MumbleConnection internal constructor(
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(context + SupervisorJob())
+    /** Never cancelled; the launches that block. */
+    private val blockingScope = CoroutineScope(SupervisorJob() + blocking)
 
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     override val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
@@ -296,17 +306,17 @@ class MumbleConnection internal constructor(
     private var heldGen = NO_GEN
 
     init {
-        // The single owner of capture. On `scope`, never a childScope — teardown cancels those
-        // synchronously and would discard queued commands, leaking the engine and the microphone.
-        // IO explicitly, because every handler blocks: newCapture() on the HAL, stop() on
-        // OboeCapture::close(). runCatching because a SupervisorJob does not restart a coroutine
-        // that threw, and a dead consumer fails silently and permanently.
+        // The single owner of capture. On blockingScope, never a session's or a link's scope —
+        // teardown cancels those synchronously and would discard queued commands, leaking the
+        // engine and the microphone — and because every handler blocks: newCapture() on the HAL,
+        // stop() on OboeCapture::close(). runCatching because a SupervisorJob does not restart a
+        // coroutine that threw, and a dead consumer fails silently and permanently.
         //
         // A second init block, not folded into the first: `captureCommands` is declared between
         // them, and Kotlin runs property initializers and init blocks in textual order, so a
         // consumer launched before that declaration can start against a still-null channel — this
         // is what a real, if rare, "Channel.iterator() on null" crash traced back to.
-        scope.launch(Dispatchers.IO) {
+        blockingScope.launch {
             for (cmd in captureCommands) {
                 runCatching { dispatch(cmd) }
                     .onFailure { Log.e(TAG, "capture command failed: $cmd", it) }
@@ -337,7 +347,7 @@ class MumbleConnection internal constructor(
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
-     * consumer lives on [scope], which is never cancelled. Checked because the failure would be
+     * consumer lives on [blockingScope], which is never cancelled. Checked because the failure would be
      * silent and permanent — a dropped Release strands both a microphone and the platform call.
      */
     private fun send(cmd: CaptureCommand) {
@@ -465,7 +475,7 @@ class MumbleConnection internal constructor(
 
     /** Build the native engine and its pump for [session] and publish them as its capture.
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
-     *  consumer runs on [Dispatchers.IO]. */
+     *  consumer runs on blockingScope. */
     private fun openCapture(session: Session) {
         // Leaves `wanted` set on failure, unlike onPumpExited's terminal branch: opens here are
         // command-rate-bounded rather than a loop, and a Talk press re-asks anyway.
@@ -604,10 +614,10 @@ class MumbleConnection internal constructor(
     /** The pieces of one TLS connect, built but not yet connected. */
     private fun buildLink(session: Session, pin: String?): Link {
         val gen = session.gen
-        val childScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val linkScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
         val transport = newTransport(pin)
         val stateMachine = SessionStateMachine(
-            transport, session.username, session.password, childScope,
+            transport, session.username, session.password, linkScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
             bootClock = udpClock,
@@ -636,7 +646,7 @@ class MumbleConnection internal constructor(
             }
             override fun requestCryptResync() { stateMachine.requestCryptResync() }
         }, udpClock)
-        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, childScope, scope)
+        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
@@ -663,8 +673,8 @@ class MumbleConnection internal constructor(
         // a session whose link comes up ever reaches — building eagerly would leak one per
         // session that fails or is superseded before that.
         val session = Session(
-            gen, endpoint, username, password, VoiceReceiver(newPlayout),
-            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+            CoroutineScope(scope.coroutineContext + SupervisorJob()),
         )
         // Published after the prior's Release was queued above, so nothing this session asks of
         // the capture consumer is ordered ahead of that release; and under the lock, so a
@@ -821,7 +831,7 @@ class MumbleConnection internal constructor(
         // without our own row in it.
         fun <T> republish(from: StateFlow<T>, into: MutableStateFlow<T>) {
             publishFromLink(session, link, into, from.value)
-            link.childScope.launch { from.collect { publishFromLink(session, link, into, it) } }
+            link.scope.launch { from.collect { publishFromLink(session, link, into, it) } }
         }
         republish(link.stateMachine.serverVersion, _serverVersion)
         republish(link.stateMachine.roundTripTime, _roundTripTime)
@@ -830,7 +840,7 @@ class MumbleConnection internal constructor(
         republish(link.stateMachine.channelTree, _channelTree)
         republish(link.stateMachine.userStats, _userStats)
         // Chat is the session's: what earlier links received stays ahead of this link's own.
-        link.childScope.launch {
+        link.scope.launch {
             link.stateMachine.messages.collect {
                 publishFromLink(
                     session, link, _messages,
@@ -1120,10 +1130,10 @@ class MumbleConnection internal constructor(
     /** Any thread; nothing here blocks. [session] is already out of [current], its Release queued
      *  by whoever removed it, so this runs at most once per session. */
     private fun teardown(session: Session) {
-        // IO because stop() blocks: it joins the receiver's poll, which can be inside a stream
-        // start. Its own coroutine, so a stalled socket close cannot delay it. The receiver drops
-        // any datagram that reaches it after stop().
-        scope.launch(Dispatchers.IO) { session.receiver.stop() }
+        // blockingScope because stop() ends with the native stream's destroy, which blocks; its
+        // join of the poll suspends. Its own coroutine, so a stalled socket close cannot delay
+        // it. The receiver drops any datagram that reaches it after stop().
+        blockingScope.launch { session.receiver.stop() }
         // Either the driver published the link under the lock before `current` was cleared, and
         // this closes it, or it will see the session is no longer current and close it itself.
         session.link?.close()
