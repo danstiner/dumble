@@ -5,8 +5,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 
 /**
- * The app's default network as ConnectivityManager reports it, which is per uid: during a call
- * Telecom asks for a cellular slice on our behalf, and what this tracks is what our sockets get.
+ * The app's default network as ConnectivityManager reports it — per uid, so what this tracks is
+ * what our sockets get.
  */
 class AndroidNetworkWatch(context: Context) : NetworkWatch {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
