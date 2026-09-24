@@ -8,6 +8,7 @@ import me.danielstiner.dumble.time.BootTimeSource
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.PortUnreachableException
+import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import kotlin.time.Duration
@@ -84,6 +85,8 @@ class MumbleUdpTransport(
         check(channel == null) { "open() twice" }
         val ch = DatagramChannel.open()
         try {
+            // Pings too: mixed marks within one flow invite reordering (RFC 7657 §5.1).
+            ch.setOption(StandardSocketOptions.IP_TOS, TOS_EXPEDITED_FORWARDING)
             ch.connect(address)
         } catch (t: Throwable) {
             runCatching { ch.close() }
@@ -242,5 +245,13 @@ class MumbleUdpTransport(
         private val RESYNC_QUIET = 5.seconds
         private const val UDP_TYPE_PING: Byte = 1
         private const val UNANSWERED_TO_REPORT = 2
+
+        /**
+         * Expedited Forwarding, DSCP 46 (RFC 3246), the class RFC 4594 gives telephony, shifted
+         * into the top six bits of the TOS / traffic-class byte (RFC 2474). On WiFi it goes ahead
+         * of best effort: to the voice queue under RFC 8325's mapping, to video under the older
+         * top-three-bits one. The internet mostly bleaches it to zero, which costs nothing.
+         */
+        private const val TOS_EXPEDITED_FORWARDING = 46 shl 2
     }
 }
