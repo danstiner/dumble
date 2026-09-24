@@ -57,6 +57,7 @@ class CoreTelecomAccountTest {
     }
 
     /** Drop either and core-telecom's own `addCall` stops working against the account we left. */
+    @Suppress("DEPRECATION")
     @Test fun theAccountKeepsTheCapabilitiesCoreTelecomNeeds() {
         val account = coreTelecomPhoneAccount(context)
         assertTrue(account.hasCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED))

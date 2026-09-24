@@ -62,7 +62,7 @@ class MumbleTcpTransportTest {
 
         assertTrue("frame not received", received.await(5, TimeUnit.SECONDS))
         assertEquals(TcpMessageType.ServerSync.id, frame!!.type)
-        assertArrayEquals(byteArrayOf(7, 8, 9), frame!!.payload)
+        assertArrayEquals(byteArrayOf(7, 8, 9), frame.payload)
         transport.close()
     }
 
@@ -299,18 +299,18 @@ class MumbleTcpTransportTest {
     @Test
     fun aReaderErrorTearsDownTheTransportWithoutAnExternalClose() = runBlocking {
         val srv = startServer()
-        val cause = AtomicReference<Throwable?>()
+        val closedWith = AtomicReference<Throwable?>()
         val closedFired = CountDownLatch(1)
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
         transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
-            override fun onClosed(c: Throwable?) { cause.set(c); closedFired.countDown() }
+            override fun onClosed(cause: Throwable?) { closedWith.set(cause); closedFired.countDown() }
         })
 
         srv.close()   // server drops the connection; the client's blocked read fails
 
         assertTrue("the reader error never surfaced as onClosed", closedFired.await(5, TimeUnit.SECONDS))
-        assertNotNull("a dropped connection must report a cause, not a clean close", cause.get())
+        assertNotNull("a dropped connection must report a cause, not a clean close", closedWith.get())
         assertFalse("the reader error must tear the socket down on its own", transport.isConnected)
     }
 
@@ -321,20 +321,20 @@ class MumbleTcpTransportTest {
     fun aWriteFailureIsReportedAsItsOwnCause() = runBlocking {
         val srv = startServer()
         val writeError = java.io.IOException("forced write failure")
-        val cause = AtomicReference<Throwable?>()
+        val closedWith = AtomicReference<Throwable?>()
         val closedFired = CountDownLatch(1)
         val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
         transport.TESTONLY_beforeWrite = { throw writeError }
         transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = Unit
-            override fun onClosed(c: Throwable?) { cause.set(c); closedFired.countDown() }
+            override fun onClosed(cause: Throwable?) { closedWith.set(cause); closedFired.countDown() }
         })
 
         // Any frame triggers a write, which the seam turns into the failure above.
         transport.send(TcpMessageType.Ping, pingMessage())
 
         assertTrue("a write failure never surfaced as onClosed", closedFired.await(5, TimeUnit.SECONDS))
-        assertSame("onClosed reported the reader's exception, not the write failure", writeError, cause.get())
+        assertSame("onClosed reported the reader's exception, not the write failure", writeError, closedWith.get())
     }
 
     // Finding 6, made deterministic by the seam. Publish and close are mutually exclusive on one

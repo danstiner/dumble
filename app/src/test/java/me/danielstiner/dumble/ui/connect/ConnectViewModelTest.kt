@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -35,6 +36,7 @@ import kotlin.time.TestTimeSource
 import kotlin.time.Duration.Companion.seconds
 import java.time.Instant
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModelTest {
     private val dispatcher = StandardTestDispatcher()
 
