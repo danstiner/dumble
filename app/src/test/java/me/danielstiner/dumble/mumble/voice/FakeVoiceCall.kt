@@ -7,9 +7,9 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Lets a test drive a hold, a resume, or a system-ended call without a platform to register with.
  *
- * The grant is its own event because the real [TelecomCall] gets its CallControlScope inside
- * core-telecom's addCall block, well after start() returns; a fake that superseded inside start()
- * could not express the defects that live in that window.
+ * The grant is its own event because the real call applies start() later, on the main looper,
+ * after start() returns; a fake that superseded inside start() could not express the defects that
+ * live in that window.
  *
  * [autoGrant] only moves *when* the grant fires: the default grants immediately, so observable
  * counts at assertion time are unchanged.
@@ -79,7 +79,7 @@ class FakeVoiceCall(
 
     /**
      * The platform granted control for [gen]. This — not start() — is where the call being
-     * replaced ends, mirroring TelecomCall's supersede-then-register ordering.
+     * replaced ends, mirroring the real call's supersede ordering.
      */
     fun grant(gen: Int): Unit = synchronized(lock) {
         if (gen == NO_CALL) return
@@ -112,7 +112,7 @@ class FakeVoiceCall(
     }
 
     override fun requestActive(gen: Int): Unit = synchronized(lock) {
-        // Mirrors the real generation guard. Deliberately does not grant it: TelecomCall's grant
+        // Mirrors the real generation guard. Deliberately does not grant it: a resume
         // arrives asynchronously through onActive, so a test drives that itself via resumeFor().
         if (gen != liveGen) return
         activeRequests += gen
