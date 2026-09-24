@@ -37,26 +37,32 @@ microphone audio lost before it was encoded; "Dropped sends" is what the transpo
 counters come off the pump every two seconds (`VoiceSender.onStats`), the log line every ten.
 
 **Lifecycle** (`MumbleConnection`): four producers demand transitions concurrently — the Talk
-button, telecom hold/resume, disconnect/reconnect, and the pump's own exit — so every transition
+button, platform hold/resume, disconnect/reconnect, and the pump's own exit — so every transition
 is a command on one channel with a single consumer, and state is levels, not events: `reconcile()`
 compares them and is the only place the capture session opens or closes.
 
 The transmit gate is not stored: `apply` derives it from three levels — Talk held, self-muted, and
 the transmit mode — as `!muted && (pressed || voiceActivity)`, whenever one of them moves and again
 when the capture session opens. Wanting it open also re-asks for capture, which is what brings it
-back after a hold or a terminal failure. The mute is the `self_mute` the session last asked the
+back after a terminal failure. The mute is the `self_mute` the session last asked the
 server for, the one a deafen forces included, rather than the server's echo of it, so the gate
 shuts at the tap. The mode lives on the connection rather than the session, so a rebuilt engine —
 which comes up in push-to-talk — gets it back. The mirrored-write argument that keeps a press from
 racing an open is KDoc'd at `apply`.
 
-**Platform call** (`TelecomCall`, behind the `VoiceCall` seam): registering a self-managed telecom
-call is what grants audio focus, communication routing, and the microphone foreground service. A
-hold — an incoming cellular call is the case that matters — releases the capture session entirely
-rather than gating it, because the platform owns the input device for the duration. Core-telecom
-sends no unsolicited resume, so any request for capture while held doubles as the resume request:
-a Talk press under push-to-talk, or the tap on the held-call banner (`callHeld`) that voice
-activity needs because it has no press.
+**Platform call** (`AndroidVoiceCall`, behind the `VoiceCall` seam): the session owns
+`MODE_IN_COMMUNICATION` and picks the route with `setCommunicationDevice`. No Telecom call is
+registered, so no other app's dialer is handed it, and AudioService opens a Bluetooth headset's
+SCO link for the device we set. No audio focus is requested. Two things hold the session: the
+phone taking the audio (the mode moving to ringing or a call) and another app capturing voice — a
+`VOICE_COMMUNICATION` capture whose audio session id isn't ours; every capture stream opens with
+`CaptureSessionId`'s id, and the platform anonymizes every recording it reports but keeps that id.
+Which of two voice captures keeps the microphone differs between devices — measured both ways — so
+yielding is what hands the other call the microphone. A hold releases the capture session entirely
+rather than gating it, and pauses playout too: the receiver drops incoming packets and pauses its
+output stream for as long as it holds. The mode and the recording callback report either hold
+ending, so the session resumes by itself; a request for capture while held — a Talk press, or the
+tap on the held-call banner (`callHeld`) — re-checks.
 
 The invariants — never two open input streams, the engine freed only after its pump exits (a
 wedged pump leaks deliberately rather than risk a use-after-free), no auto-reopen after a terminal

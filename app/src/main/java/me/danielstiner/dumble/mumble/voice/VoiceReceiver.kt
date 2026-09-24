@@ -108,8 +108,8 @@ class VoiceReceiver(
     @Volatile
     private var stopped = false
 
-    // The platform has the audio device (an incoming cellular call). Read by the poll, which
-    // pauses the stream and keeps it paused for as long as this holds.
+    // The platform has the audio device (another call — the phone's or another app's). Read by
+    // the poll, which pauses the stream and keeps it paused for as long as this holds.
     @Volatile
     private var held = false
 

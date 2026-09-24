@@ -100,7 +100,7 @@ data class ConnectUiState(
     val playoutStats: PlayoutStats? = null,
     // Our own send path's counters; null without a capture session.
     val captureStats: CaptureStats? = null,
-    // A cellular call has the microphone; capture is released until the user asks for it back.
+    // Another call — the phone's or another app's — has the microphone.
     val callHeld: Boolean = false,
     // The selected user's ping, or null when the server has not answered for them. Already
     // matched against [selectedSession]: the reply is asynchronous, so one for the user whose

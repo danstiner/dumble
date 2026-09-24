@@ -21,8 +21,8 @@ to end; positional audio is out of scope by decision (see `CLAUDE.md`).
       ├─ VoiceSender ── CaptureEngine ── OboeCapture ── mic          docs/capture.md
       ├─ VoiceReceiver ── PlayoutEngine ── AudioTrack ── speaker     docs/playout.md
       │
-      └─ TelecomCall                   self-managed platform call: audio focus, routing,
-                                       the mic foreground service, hold/resume
+      └─ AndroidVoiceCall              the audio mode and route, the mic foreground service,
+                                       hold/resume
 ```
 
 **Connection** (`mumble/`). `MumbleConnection` owns the blocking TLS connect — trust decisions
@@ -40,10 +40,12 @@ constants answer to the protocol, deliberately not to each other.
 - **Playout** — packets to the speaker: per-speaker queueing and decode, mixing, and the playback
   loop. `docs/playout.md`.
 
-**Platform call** (`telecom/`). Registering a self-managed telecom call is what grants audio
-focus, communication routing, and the microphone foreground service. An incoming cellular call
-holds it, which releases capture entirely for the duration — see the platform-call section of
-`docs/capture.md`.
+**Platform call** (`mumble/voice/AndroidVoiceCall`). The session owns the audio mode and route
+through AudioManager and registers no Telecom call: Telecom shows a call to every InCallService
+that asks, dialers and Bluetooth alike, or to none, so a Telecom call either lets a dialer draw its
+screen over ours or leaves a Bluetooth headset without call audio. The phone taking the audio, or
+another app capturing voice, holds the session, which releases capture and pauses playout for the
+duration — see the platform-call section of `docs/capture.md`.
 
 ## Publish last
 
