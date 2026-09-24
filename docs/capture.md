@@ -61,8 +61,7 @@ Which of two voice captures keeps the microphone differs between devices — mea
 yielding is what hands the other call the microphone. A hold releases the capture session entirely
 rather than gating it, and pauses playout too: the receiver drops incoming packets and pauses its
 output stream for as long as it holds. The mode and the recording callback report either hold
-ending, so the session resumes by itself; a request for capture while held — a Talk press, or the
-tap on the held-call banner (`callHeld`) — re-checks.
+ending, so the session resumes by itself; a Talk press held through the hold transmits once it ends.
 
 The invariants — never two open input streams, the engine freed only after its pump exits (a
 wedged pump leaks deliberately rather than risk a use-after-free), no auto-reopen after a terminal

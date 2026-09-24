@@ -40,7 +40,6 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
-import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -268,38 +267,16 @@ class MumbleConnectionTest {
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
-        // No requestCapture() anywhere in this test: connecting alone must register the call.
+        // No requestCapture() anywhere in this test: connecting alone must start the call.
         assertSettled("connecting must start the call with the server host") { call.starts == listOf("localhost") }
         conn.disconnect()
         assertSettled("disconnecting must end the call") { call.ends == 1 }
-        assertEquals("a hang-up is the user's doing", listOf(VoiceCall.Reason.USER), call.endReasons)
-    }
-
-    /**
-     * A session that dies on us is not a hang-up. The platform records a different disconnect cause
-     * for each, and reporting a server failure as LOCAL would claim the user ended a call they did
-     * not.
-     */
-    @Test fun aFailedConnectEndsTheCallAsFailureNotHangUp() = deterministic {
-        val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
-            InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") } })
-
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        assertSettled("a failed handshake must end the call") { call.ends == 1 }
-        assertEquals(
-            "a handshake that never produced a session is not a hang-up",
-            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons,
-        )
     }
 
     /**
      * A connect that fails outright leaves nothing for the user to act on, unlike a trust prompt,
      * so the session is retired on the spot: the microphone must not open against it, and the
-     * call ends exactly once, as a failure.
+     * call ends exactly once.
      */
     @Test fun aHardConnectFailureRetiresTheSession() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -320,7 +297,7 @@ class MumbleConnectionTest {
         conn.requestCapture()
 
         assertSettled("no microphone may open for a retired session") { handles.isEmpty() }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        assertEquals(1, call.ends)
         assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
         assertSettled("retire must close the link") { transports.single().closed }
     }
@@ -355,7 +332,7 @@ class MumbleConnectionTest {
         conn.trustAndConnect()
         handshaking(conn)
         assertEquals("ab12", pins.get(endpoint.address))
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        assertEquals(1, call.ends)
     }
 
     /** The generation is the UI's handle on "which call": one per connect(), whatever session id
@@ -383,21 +360,6 @@ class MumbleConnectionTest {
         assertNotEquals(first.gen, second.gen)
     }
 
-    /** The system ending the call (a cellular call taking over) must take the session down with it. */
-    @Test fun aSystemEndedCallDisconnectsTheSession() = deterministic {
-        val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
-            InMemoryPinStore(), newCapture = { null }, call = call,
-            udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
-
-        call.endedBySystem()
-
-        assertSettled("idle") { conn.status.value == ConnectionStatus.Idle }
-    }
-
     /** A late callback from a call we already ended must not resurrect a dead session. */
     @Test fun holdDeliveredAfterDisconnectRebuildsNothing() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -420,10 +382,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * Connecting over a live connection must release the platform call it replaces. start() used to
-     * overwrite liveGen without ending anything, after which end(priorGen) was a no-op forever — the
-     * OS kept a call whose onDisconnect is wired to disconnect(), so hanging up the ghost from
-     * system UI tore down the session that replaced it.
+     * Connecting over a live connection ends the call it replaces: every generation the connection
+     * starts, it ends exactly once, whichever order the call layer then applies them in.
      */
     @Test fun connectingOverALiveConnectionEndsThePriorCall() = deterministic {
         val call = FakeVoiceCall()
@@ -439,7 +399,6 @@ class MumbleConnectionTest {
 
         assertEquals(listOf("first", "second"), call.starts)
         assertSettled("the superseded call must end") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons)
 
         conn.disconnect()
         assertSettled("disconnecting must end the second call") { call.ends == 2 }
@@ -483,8 +442,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * A collector inside a cancelled addCall block can still emit — cancellation is asynchronous —
-     * so the generation guard is what stops a dead call repainting the live one's control.
+     * A superseded generation's collector can still emit — cancellation is asynchronous — so the
+     * generation guard is what stops a dead call repainting the live one's control.
      */
     @Test fun routesFromASupersededCallAreDropped() = deterministic {
         val call = FakeVoiceCall()
@@ -746,8 +705,7 @@ class MumbleConnectionTest {
         link.listener!!.onClosed(IOException("reset"))
 
         assertSettled("kicked") { conn.status.value == ConnectionStatus.Error(ErrorKind.KICKED, "spam") }
-        assertSettled("the call ends as a failure") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
+        assertSettled("the call ends") { call.ends == 1 }
         assertEquals("no replacement after a kick", 1, transports.size)
     }
 
@@ -1049,7 +1007,6 @@ class MumbleConnectionTest {
         val err = conn.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
         assertSettled("giving up ends the call") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
         assertEquals("no attempt after a final rejection", 3, transports.size)
     }
 
@@ -1083,7 +1040,6 @@ class MumbleConnectionTest {
         assertEquals("could not get back to the server", err.detail)
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30, 29).map { it.seconds }, waits.toList())
         assertSettled("giving up ends the call") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
     }
 
     /**
@@ -1530,7 +1486,7 @@ class MumbleConnectionTest {
     /**
      * The server's certificate changed while we were rebuilding the link. The prompt is the one a
      * fresh connect gives: the session is retired behind it — no microphone opens against it, and
-     * the call ends as a failure — but kept aside, so accepting the new pin reconnects.
+     * the call ends — but kept aside, so accepting the new pin reconnects.
      */
     @Test fun aTrustPromptOnAReconnectRetiresTheSessionAndCanStillBeAccepted() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1559,7 +1515,6 @@ class MumbleConnectionTest {
 
         assertSettled("pin mismatch") { conn.status.value == ConnectionStatus.PinMismatch("aa", "bb") }
         assertSettled("the prompt must end the call") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons)
         assertSettled("the dead link and its refused replacement are both closed") {
             transports.size == 2 && transports.all { it.closed }
         }
@@ -1821,7 +1776,7 @@ class MumbleConnectionTest {
         assertEquals("no receiver should ever start on this path", 0, engines.get())
     }
 
-    /** Hanging up mid-reconnect is a hang-up: the replacement in flight goes with the session. */
+    /** Disconnecting mid-reconnect takes the replacement in flight with it, along with the session. */
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val release = CountDownLatch(1)
@@ -1842,8 +1797,7 @@ class MumbleConnectionTest {
         assertEquals(ConnectionStatus.Idle, conn.status.value)
         release.countDown()
         awaitOnRealThreads("both links must be closed") { transports.all { it.closed } }
-        awaitOnRealThreads("the call ends once, as a hang-up") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons)
+        awaitOnRealThreads("the call ends once") { call.ends == 1 }
     }
 
     /**
