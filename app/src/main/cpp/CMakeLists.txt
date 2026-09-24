@@ -36,6 +36,7 @@ add_library(dumble SHARED
     android/playout_jni.cpp)
 target_include_directories(dumble PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dumble opus oboe::oboe log)
+target_compile_options(dumble PRIVATE -Wall -Wextra -Werror)
 set(DUMBLE_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/dumble.map)
 target_link_options(dumble PRIVATE
     # Android 15+ ships 16 KB page-size devices; without this the loader rejects the library.

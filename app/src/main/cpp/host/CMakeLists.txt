@@ -34,6 +34,7 @@ target_include_directories(dumble_core PUBLIC ${CORE_DIR})
 # build never defines it.
 target_compile_definitions(dumble_core PUBLIC DUMBLE_TESTING)
 target_link_libraries(dumble_core PUBLIC opus)
+target_compile_options(dumble_core PRIVATE -Wall -Wextra -Werror)
 
 enable_testing()
 file(GLOB CORE_TESTS CONFIGURE_DEPENDS ${REPO_ROOT}/app/src/test/cpp/*.cpp)
@@ -46,5 +47,6 @@ target_compile_definitions(dumble_core_tests PRIVATE
     DUMBLE_TEST_DATA_DIR="${REPO_ROOT}/app/src/test/resources"
     DUMBLE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 target_link_libraries(dumble_core_tests dumble_core GTest::gtest_main)
+target_compile_options(dumble_core_tests PRIVATE -Wall -Wextra -Werror)
 include(GoogleTest)
 gtest_discover_tests(dumble_core_tests)
