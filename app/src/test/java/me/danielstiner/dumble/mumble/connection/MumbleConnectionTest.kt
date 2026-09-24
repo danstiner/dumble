@@ -348,7 +348,7 @@ class MumbleConnectionTest {
 
         conn.requestCapture()
 
-        assertTrue("no microphone may open while a prompt is up", handles.isEmpty())
+        assertSettled("no microphone may open while a prompt is up") { handles.isEmpty() }
         assertSettled("the stopped handshake's transport is closed") { transports.single().closed }
         assertTrue(conn.status.value is ConnectionStatus.AwaitingTrust)
 
