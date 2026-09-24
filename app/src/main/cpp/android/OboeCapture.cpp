@@ -10,8 +10,8 @@ using Clock = std::chrono::steady_clock;
 constexpr auto kOpenRetryInterval = std::chrono::seconds(1);
 }  // namespace
 
-OboeCapture::OboeCapture(std::shared_ptr<CaptureEngine> engine)
-    : callbacks_(std::make_shared<Callbacks>(std::move(engine))) {}
+OboeCapture::OboeCapture(std::shared_ptr<CaptureEngine> engine, int32_t sessionId)
+    : callbacks_(std::make_shared<Callbacks>(std::move(engine))), sessionId_(sessionId) {}
 
 bool OboeCapture::start() {
     if (stream_ && callbacks_->streamDead.load(std::memory_order_acquire)) {
@@ -46,6 +46,11 @@ oboe::Result OboeCapture::open() {
         ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
         ->setDataCallback(callbacks_)
         ->setErrorCallback(callbacks_);
+
+    // Lets the voice call pick our recording out of the anonymized recording list. An id rules out
+    // the memory-mapped path and the RAW flag, which this preset never gets anyway: measured, the
+    // same stream opens with and without one.
+    if (sessionId_ > 0) b.setSessionId(static_cast<oboe::SessionId>(sessionId_));
 
     // Cleared before the open, not after: a route change can close a stream that is open but
     // not yet started, and that is an error callback like any other. Set between here and
@@ -95,12 +100,13 @@ void OboeCapture::logActualConfig(Clock::time_point started,
     // landed on the low-latency path, and what an open costs. Not one of the three has a value
     // we could predict, which is the whole reason they are logged.
     const auto took = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started);
-    LOGI("open: %lld us, rate=%d ch=%d perf=%s sharing=%s burst=%d",
+    LOGI("open: %lld us, rate=%d ch=%d perf=%s sharing=%s burst=%d session=%d",
          (long long)took.count(),
          stream->getSampleRate(), stream->getChannelCount(),
          oboe::convertToText(stream->getPerformanceMode()),
          oboe::convertToText(stream->getSharingMode()),
-         stream->getFramesPerBurst());
+         stream->getFramesPerBurst(),
+         static_cast<int>(stream->getSessionId()));
     if (stream->getSampleRate() != kSampleRate) {
         LOGW("device opened at %d Hz; Oboe is resampling and the low-latency path is likely lost",
              stream->getSampleRate());

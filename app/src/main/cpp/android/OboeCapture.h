@@ -21,7 +21,7 @@ namespace dumble {
  */
 class OboeCapture {
 public:
-    explicit OboeCapture(std::shared_ptr<CaptureEngine> engine);
+    OboeCapture(std::shared_ptr<CaptureEngine> engine, int32_t sessionId);
     ~OboeCapture() { close(); }
 
     /** True when a started stream exists on return. Cheap while one runs. A stream Oboe closed
@@ -65,6 +65,8 @@ private:
     // shared_ptr because openStream() hands out nothing else; no one but this object holds it.
     std::shared_ptr<oboe::AudioStream> stream_;
     std::chrono::steady_clock::time_point nextOpenAt_{};
+    // -1 (Oboe's SessionId::None) opens without one.
+    const int32_t sessionId_;
 };
 
 }  // namespace dumble

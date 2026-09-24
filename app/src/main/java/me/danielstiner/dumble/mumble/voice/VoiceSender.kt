@@ -178,7 +178,7 @@ fun openNativeCapture(context: Context): VoiceSender.CaptureHandle? {
         Log.e("VoiceSender", "Silero weights could not be read", e)
         return null
     }
-    val handle = NativeCapture.create(TRANSMIT_BITRATE, weights)
+    val handle = NativeCapture.create(TRANSMIT_BITRATE, weights, CaptureSessionId.get(context))
     if (handle == 0L) {
         Log.e("VoiceSender", "capture engine could not be created")
         return null
