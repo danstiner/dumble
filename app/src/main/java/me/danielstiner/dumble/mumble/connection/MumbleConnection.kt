@@ -50,6 +50,7 @@ import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
@@ -60,7 +61,6 @@ import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
 import me.danielstiner.dumble.mumble.voice.openNativePlayout
-import me.danielstiner.dumble.telecom.TelecomCall
 import me.danielstiner.dumble.time.BootTimeSource
 import java.net.SocketTimeoutException
 import javax.inject.Inject
@@ -118,7 +118,7 @@ class MumbleConnection internal constructor(
     ) : this(
         pinStore, { openNativeCapture(context) },
         { openNativePlayout() },
-        TelecomCall(context),
+        AndroidVoiceCall(context),
         networkWatch = AndroidNetworkWatch(context),
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
@@ -244,8 +244,10 @@ class MumbleConnection internal constructor(
         /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
         data class Acquire(val session: Session) : CaptureCommand
-        /** The platform has taken, or returned, the input device for the call of this generation. */
-        data class Held(val gen: Int, val held: Boolean) : CaptureCommand
+        /** The platform has taken, or returned, the input device for [session]'s call. Carries the
+         *  session itself, not just its generation, so onHeld can tell its receiver directly even
+         *  before connect() publishes it as `current`. */
+        data class Held(val session: Session, val held: Boolean) : CaptureCommand
         data class Release(val session: Session, val reason: VoiceCall.Reason) : CaptureCommand
         data class PumpExited(val session: Session, val sender: VoiceSender) : CaptureCommand
         data class WedgeCheck(val session: Session, val capture: CaptureSession) : CaptureCommand
@@ -363,7 +365,7 @@ class MumbleConnection internal constructor(
     private fun dispatch(cmd: CaptureCommand) {
         when (cmd) {
             is CaptureCommand.Acquire -> onAcquire(cmd.session)
-            is CaptureCommand.Held -> onHeld(cmd.gen, cmd.held)
+            is CaptureCommand.Held -> onHeld(cmd.session, cmd.held)
             is CaptureCommand.Release -> onRelease(cmd.session, cmd.reason)
             is CaptureCommand.PumpExited -> onPumpExited(cmd.session, cmd.sender)
             is CaptureCommand.WedgeCheck -> onWedgeCheck(cmd.session, cmd.capture)
@@ -372,14 +374,13 @@ class MumbleConnection internal constructor(
 
     /**
      * A capture session was asked for — the microphone became ready, or Talk was pressed. Raises
-     * the level and reconciles. While the platform holds the call, the ask also doubles as the
-     * resume request: core-telecom sends no unsolicited resume, so the user asking to talk is the
-     * only retry there is. Lifecycle consumer only.
+     * the level and reconciles. While the platform holds the call, the ask also re-checks the hold:
+     * the platform reports a hold ending by itself, and this is the net behind that. Lifecycle
+     * consumer only.
      */
     private fun onAcquire(session: Session) {
         session.wanted = true
-        // Guarded on heldGen so an ordinary press while active does not setActive() the platform
-        // on every edge.
+        // Guarded on heldGen so an ordinary press while active does not re-check on every edge.
         if (heldGen == session.gen) call.requestActive(session.gen)
         reconcile(session)
     }
@@ -419,29 +420,32 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * The platform took the input device out from under [gen]'s call — an incoming cellular call
-     * is the case that matters — or gave it back. Records the hold as a level and reconciles the
-     * live session, which releases the capture session on a hold and rebuilds it on a resume.
-     * Lifecycle consumer only.
+     * The platform took the input device out from under [session]'s call — another call, the
+     * phone's or another app's, is the case that matters — or gave it back. Records the hold as a
+     * level, tells the receiver directly, and reconciles, which releases the capture session on a
+     * hold and rebuilds it on a resume. Lifecycle consumer only.
      */
-    private fun onHeld(gen: Int, held: Boolean) {
-        // One read: `generation` says whether the callback is stale, `current` says who to
-        // reconcile. Checked against `generation` rather than `current` because a hold can
-        // arrive before its session publishes — call.start runs first on the caller's thread.
-        val (live, session) = synchronized(lock) { (gen == generation) to current }
+    private fun onHeld(session: Session, held: Boolean) {
+        // Checked against the generation, not `current`: connect() starts the call before it
+        // publishes `current`, and when connect() runs off the main thread the call's first hold,
+        // posted to the main looper, can beat that publish. The command carries the session
+        // itself, so that costs nothing.
+        val live = synchronized(lock) { session.gen == generation }
         // Dropped rather than recorded if it belongs to a superseded call: recording it
         // would let a stale hold clobber a live one, or a stale resume clear it — either
         // way the microphone ends up on a device the platform has taken.
         if (live) {
-            Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=$gen")
-            heldGen = if (held) gen else NO_GEN
+            Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
+            heldGen = if (held) session.gen else NO_GEN
             _callHeld.value = held
             // The output stream follows the hold too: the platform has the device, and the
             // receiver's poll is the one owner of that stream.
-            session?.receiver?.setHeld(held)
-            session?.let { reconcile(it) }
+            session.receiver.setHeld(held)
+            // Safe even before the session is published: reconcile() only acts when `wanted` and
+            // `capture` say there is something to do, and neither is ever true yet.
+            reconcile(session)
         } else {
-            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=$gen")
+            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=${session.gen}")
         }
     }
 
@@ -657,24 +661,27 @@ class MumbleConnection internal constructor(
             gen = generation
         }
         prior?.let { teardown(it) }
-        // Here rather than in requestCapture(): tying the call to the connection, not the
-        // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
-        // survives backgrounding. Foreground is no precondition — the service starts inside
-        // addCall's block, 25–390 ms after this returns, beyond any caller's control.
-        call.start(
-            gen, endpoint, username,
-            // The generation, not the session: a hold from a superseded call must not reach
-            // the live session.
-            onActive = { active -> send(CaptureCommand.Held(gen, !active)) },
-            onRoutes = { r -> publishRoutes(gen, r) },
-            onEnded = { endedByPlatform(gen) },
-        )
         // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which only
         // a session whose link comes up ever reaches — building eagerly would leak one per
-        // session that fails or is superseded before that.
+        // session that fails or is superseded before that. Built before call.start() so a hold
+        // that beats the publish below still has a session, and its receiver, to tell.
         val session = Session(
             gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
             CoroutineScope(scope.coroutineContext + SupervisorJob()),
+        )
+        // Here rather than in requestCapture(): tying the call to the connection, not the
+        // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
+        // survives backgrounding. The service starts a main-looper hop after this returns, while
+        // the connect tap still has the app in front — a microphone service cannot start later.
+        // Still ahead of the publish below: the prior's Release is queued first (above), and
+        // end(gen) must never be queued ahead of that start(gen).
+        call.start(
+            gen, endpoint, username,
+            // The session, not just the generation: onHeld tells its receiver directly, and a
+            // hold from a superseded call is dropped by its own generation check regardless.
+            onActive = { active -> send(CaptureCommand.Held(session, !active)) },
+            onRoutes = { r -> publishRoutes(gen, r) },
+            onEnded = { endedByPlatform(gen) },
         )
         // Published after the prior's Release was queued above, so nothing this session asks of
         // the capture consumer is ordered ahead of that release; and under the lock, so a
@@ -1042,8 +1049,8 @@ class MumbleConnection internal constructor(
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
     override fun requestAudioRoute(routeId: String) {
-        // The live session supplies the generation the UI does not carry. TelecomCall re-checks it
-        // on its consumer, so a route tapped as a session dies is dropped rather than applied to
+        // The live session supplies the generation the UI does not carry. The call re-checks it
+        // on its own thread, so a route tapped as a session dies is dropped rather than applied to
         // its successor.
         val session = current ?: return
         call.requestRoute(session.gen, routeId)
