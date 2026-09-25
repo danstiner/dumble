@@ -29,7 +29,7 @@ import kotlin.random.Random
  * Concurrent chaos test for [ConnectViewModel]'s permission and transmit state.
  *
  * Sibling to [me.danielstiner.dumble.mumble.connection.CaptureLifecycleChaosTest] and
- * [me.danielstiner.dumble.mumble.connection.TelecomLifecycleChaosTest] in shape (seeded per-round
+ * [me.danielstiner.dumble.mumble.connection.VoiceCallLifecycleChaosTest] in shape (seeded per-round
  * storms, a shared violations sink, `awaitTrue` polling instead of a bare `delay`), but a different
  * concurrency model on purpose. Those two hammer a coordinator meant to be called from anywhere.
  * [ConnectViewModel] is not: every public method here is a UI-thread call in production (a Compose
