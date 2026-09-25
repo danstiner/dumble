@@ -176,7 +176,7 @@ fun ConnectedScreen(
         },
         bottomBar = {
             // In the bottom bar, above the controls: the banner explains why the mic button is
-            // inert, and its tap is the way back — both belong near the thumb.
+            // inert, near the thumb. The session resumes by itself; the tap only re-checks.
             Column {
                 if (callHeld) HeldBanner(onResume)
                 CallControls(
@@ -226,7 +226,10 @@ fun ConnectedScreen(
     }
 }
 
-/** Shown while a cellular call has the microphone; tapping asks for it back. */
+/**
+ * Shown while another call — the phone's or another app's — has the microphone. The session
+ * resumes by itself when that call ends; a tap only re-checks.
+ */
 @Composable
 private fun HeldBanner(onResume: () -> Unit) {
     Surface(
@@ -243,7 +246,7 @@ private fun HeldBanner(onResume: () -> Unit) {
                 modifier = Modifier.size(20.dp),
             )
             Text(
-                "Microphone paused for a phone call. Tap to resume.",
+                "Microphone paused for another call.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                 modifier = Modifier.padding(start = 12.dp),

@@ -55,9 +55,10 @@ fun ConnectScreen(
     // no local-network grant, and a session with no microphone still receives.
     //
     // The microphone is asked here rather than on the connected screen because the call's
-    // foreground service starts inside addCall's block during connect, and picks its type from
-    // this permission. Asked any later, the first service of every install is mediaPlayback-typed
-    // and that session can never transmit from the background.
+    // foreground service starts a main-looper hop after connect() returns, while the Connect tap
+    // still has the app in front, and picks its type from this permission. Asked any later, the
+    // first service of every install is mediaPlayback-typed and that session can never transmit
+    // from the background.
     //
     // No SDK guard on the local-network permission. Its gate is targetSdkVersion, fixed for every
     // build we ship, so a device check would only ask "does this permission exist here" — and below
