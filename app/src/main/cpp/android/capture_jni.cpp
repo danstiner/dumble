@@ -10,11 +10,11 @@
 
 namespace {
 struct Session {
-    static Session* create(int bitrate, const void* weights, size_t weightBytes) {
+    static Session* create(int bitrate, const void* weights, size_t weightBytes, int32_t sessionId) {
         std::shared_ptr<dumble::CaptureEngine> engine =
             dumble::CaptureEngine::create(bitrate, weights, weightBytes);
         if (!engine) return nullptr;
-        return new Session(std::move(engine));
+        return new Session(std::move(engine), sessionId);
     }
 
     // The engine is shared because Oboe's error callback can reach it after destroy(); the
@@ -23,8 +23,8 @@ struct Session {
     const std::unique_ptr<dumble::OboeCapture> capture;
 
 private:
-    explicit Session(std::shared_ptr<dumble::CaptureEngine> e)
-        : engine(std::move(e)), capture(std::make_unique<dumble::OboeCapture>(engine)) {}
+    Session(std::shared_ptr<dumble::CaptureEngine> e, int32_t sessionId)
+        : engine(std::move(e)), capture(std::make_unique<dumble::OboeCapture>(engine, sessionId)) {}
 };
 inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
 }  // namespace
@@ -32,11 +32,11 @@ inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights) {
+FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights, jint sessionId) {
     const jsize n = env->GetArrayLength(weights);
     std::vector<uint8_t> blob(static_cast<size_t>(n));
     env->GetByteArrayRegion(weights, 0, n, reinterpret_cast<jbyte*>(blob.data()));
-    return reinterpret_cast<jlong>(Session::create(bitrate, blob.data(), blob.size()));
+    return reinterpret_cast<jlong>(Session::create(bitrate, blob.data(), blob.size(), sessionId));
 }
 
 JNIEXPORT jboolean JNICALL FN(start)(JNIEnv*, jobject, jlong h) {

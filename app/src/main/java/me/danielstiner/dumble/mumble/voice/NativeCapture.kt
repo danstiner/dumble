@@ -26,8 +26,8 @@ object NativeCapture {
     const val MAX_PACKET_BYTES = 1276
 
     /** Returns 0 when the encoder cannot be built or the Silero blob ([weights]) will not load —
-     *  there is no degraded mode. */
-    external fun create(bitrate: Int, weights: ByteArray): Long
+     *  there is no degraded mode. [sessionId] comes from [CaptureSessionId]. */
+    external fun create(bitrate: Int, weights: ByteArray, sessionId: Int): Long
     /** Opens and starts the stream. A stream lost later is [pollPacket]'s to bring back. */
     external fun start(handle: Long): Boolean
     /** Shuts the engine down; the stream closes on the pump's next [pollPacket]. */
