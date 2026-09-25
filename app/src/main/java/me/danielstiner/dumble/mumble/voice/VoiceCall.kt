@@ -11,19 +11,17 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
  */
 interface VoiceCall {
     /**
-     * [gen] is the connection attempt's generation. [onActive] reports the system resuming the
-     * call and holding it (a cellular call arriving); [onEnded] reports the system ending it.
+     * [gen] is the connection attempt's generation. [onActive] reports the platform holding the
+     * call — the phone, or another app's call, taking the audio — and resuming it.
      *
-     * Calls here apply in send order on a single consumer — an [end] arriving before the platform
-     * has granted the call is ordered, not lost — and return before their effects apply.
+     * Calls here apply in send order on a single consumer — an [end] arriving before the call has
+     * started is ordered, not lost — and return before their effects apply.
      */
     fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        username: String,
         onActive: (active: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-        onEnded: () -> Unit,
     )
 
     /**
@@ -31,14 +29,7 @@ interface VoiceCall {
      * next call in the same breath, so without the generation a superseded attempt's teardown would
      * end its successor.
      */
-    fun end(gen: Int, reason: Reason = Reason.USER)
-
-    /**
-     * Re-check whether [gen]'s call is held, resuming it if not. The platform reports a hold ending
-     * on its own; this is the net behind a Talk press or the held banner. Ignored unless [gen] is
-     * the live call; a resume reaches the connection through [start]'s `onActive`, as any other does.
-     */
-    fun requestActive(gen: Int)
+    fun end(gen: Int)
 
     /**
      * Route call audio to [routeId] — one of the ids last reported through [start]'s `onRoutes`.
@@ -47,22 +38,16 @@ interface VoiceCall {
      * nothing here assumes it happened.
      */
     fun requestRoute(gen: Int, routeId: String)
-
-    /** Why the call ended. The platform records a different disconnect cause for each. */
-    enum class Reason { USER, SESSION_FAILED }
 }
 
-/** For the connection tests, and any build with no platform to register a call with. */
+/** The constructor default the tests use; every build uses [AndroidVoiceCall]. */
 object NoVoiceCall : VoiceCall {
     override fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        username: String,
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-        onEnded: () -> Unit,
     ) = Unit
-    override fun end(gen: Int, reason: VoiceCall.Reason) = Unit
-    override fun requestActive(gen: Int) = Unit
+    override fun end(gen: Int) = Unit
     override fun requestRoute(gen: Int, routeId: String) = Unit
 }

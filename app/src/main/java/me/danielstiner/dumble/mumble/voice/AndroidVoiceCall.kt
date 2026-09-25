@@ -83,21 +83,14 @@ class AndroidVoiceCall(
     override fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        username: String,
         onActive: (active: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-        onEnded: () -> Unit,
     ) {
         main.post { handleStart(gen, endpoint.host, onActive, onRoutes) }
     }
 
-    override fun end(gen: Int, reason: VoiceCall.Reason) {
+    override fun end(gen: Int) {
         main.post { handleEnd(gen) }
-    }
-
-    /** A re-check, behind a Talk press or the held banner: the platform reports a hold ending itself. */
-    override fun requestActive(gen: Int) {
-        main.post { live?.takeIf { it.gen == gen }?.let(::reconcile) }
     }
 
     override fun requestRoute(gen: Int, routeId: String) {

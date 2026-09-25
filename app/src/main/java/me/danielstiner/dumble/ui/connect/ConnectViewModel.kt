@@ -333,9 +333,6 @@ class ConnectViewModel internal constructor(
     /** Seam for [CallControls]: press and release open and close the transmit gate. */
     fun onTransmitting(active: Boolean) = connection.setTransmitting(active)
 
-    /** The held-call banner's tap: requesting capture while held also asks for the call back. */
-    fun onResume() = connection.requestCapture()
-
     /**
      * Reads the current value off [uiState] rather than taking it from the caller, so the button and
      * this can never disagree about what "the other one" means. That value is the ask, not the
