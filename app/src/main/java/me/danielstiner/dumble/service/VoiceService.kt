@@ -155,10 +155,10 @@ class VoiceService : Service() {
         // so the raise to DEFAULT needs a fresh id.
         private const val CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1
-        private const val EXTRA_SERVER = "server"
+        internal const val EXTRA_SERVER = "server"
         private const val TAG = "VoiceService"
         private const val ACTION_DISCONNECT = "me.danielstiner.dumble.DISCONNECT"
-        private const val ACTION_STOP = "me.danielstiner.dumble.STOP"
+        internal const val ACTION_STOP = "me.danielstiner.dumble.STOP"
         // Distinct from the content intent's, so the two PendingIntents cannot collide.
         private const val REQUEST_DISCONNECT = 1
 
