@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.MediaRecorder
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -29,7 +31,7 @@ class AndroidVoiceCallTest {
     private val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE, 2, "Pixel 7a")
     private val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, 3, "Pixel 7a")
     private val headset = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, 7, "WH-1000XM5")
-    private val call = AndroidVoiceCall(context)
+    private val call = AndroidVoiceCall(context, captureSession = OURS)
     /** What each generation was told through onActive, in order. */
     private val active = mutableMapOf<Int, MutableList<Boolean>>()
     /** The last routes each generation was given. */
@@ -65,6 +67,20 @@ class AndroidVoiceCallTest {
     /** Robolectric's setCommunicationDevice does not call its own listener; the platform's does. */
     private fun platformConfirmsRoute() {
         shadow.callOnCommunicationDeviceChangedListeners(audio.communicationDevice)
+        idle()
+    }
+
+    private fun otherAppCaptures(vararg sessions: Int) {
+        shadow.setActiveRecordingConfigurations(
+            sessions.map { shadow.createActiveRecordingConfiguration(it, MediaRecorder.AudioSource.VOICE_COMMUNICATION, "") },
+            true,
+        )
+        idle()
+    }
+
+    /** The phone setting its own mode; Robolectric's setMode dispatches the mode listeners. */
+    private fun phone(mode: Int) {
+        audio.mode = mode
         idle()
     }
 
@@ -232,5 +248,160 @@ class AndroidVoiceCallTest {
         // VoiceService.stop is a startService carrying a stop action, not a stopService call.
         assertEquals(VoiceService::class.java.name, stopped?.component?.className)
         assertEquals(VoiceService.ACTION_STOP, stopped?.action)
+    }
+
+    @Test fun aCellularCallHoldsAndItsEndResumes() {
+        start(1)
+        phone(AudioManager.MODE_RINGTONE)
+        phone(AudioManager.MODE_IN_CALL)
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(listOf(false, true), active[1])
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+    }
+
+    @Test fun anotherAppsVoiceCaptureHoldsAndItsEndResumes() {
+        start(1)
+        otherAppCaptures(99)
+        otherAppCaptures()
+        assertEquals(listOf(false, true), active[1])
+    }
+
+    @Test fun ourOwnCaptureDoesNotHold() {
+        start(1)
+        otherAppCaptures(OURS)
+        assertNull(active[1])
+    }
+
+    /**
+     * The newest MODE_IN_COMMUNICATION setter can win the microphone, so taking the mode would
+     * seize the other call.
+     */
+    @Test fun connectingDuringAnotherAppsCallStartsHeldAndTakesNothing() {
+        otherAppCaptures(99)
+        start(1)
+        assertEquals(listOf(false), active[1])
+        assertEquals(AudioManager.MODE_NORMAL, audio.mode)
+        assertNull(audio.communicationDevice)
+        otherAppCaptures()
+        assertEquals(listOf(false, true), active[1])
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        assertEquals(earpiece.id, audio.communicationDevice?.id)
+    }
+
+    @Test fun connectingDuringACellularCallStartsHeld() {
+        phone(AudioManager.MODE_IN_CALL)
+        start(1)
+        assertEquals(listOf(false), active[1])
+        assertNull(audio.communicationDevice)
+    }
+
+    /** MumbleConnection scopes holds by generation: a successor never told would open the microphone mid-call. */
+    @Test fun aSupersedeDuringAHoldTellsTheSuccessor() {
+        start(1)
+        phone(AudioManager.MODE_IN_CALL)
+        start(2)
+        assertEquals(listOf(false), active[2])
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(listOf(false, true), active[2])
+    }
+
+    @Test fun aSuccessorThatIsNotHeldIsToldNothing() {
+        start(1)
+        start(2)
+        assertNull(active[2])
+    }
+
+    /** The safety net behind a Talk press or the held banner reads the platform afresh. */
+    @Test fun requestActiveRereadsTheRecordings() {
+        start(1)
+        shadow.setActiveRecordingConfigurations(
+            listOf(shadow.createActiveRecordingConfiguration(99, MediaRecorder.AudioSource.VOICE_COMMUNICATION, "")),
+            false,
+        )
+        call.requestActive(1)
+        idle()
+        assertEquals(listOf(false), active[1])
+    }
+
+    /** The other direction of [requestActiveRereadsTheRecordings]: a resume no listener reported. */
+    @Test fun requestActiveDetectsAResumeNobodyAnnounced() {
+        start(1)
+        otherAppCaptures(99)
+        shadow.setActiveRecordingConfigurations(emptyList(), false)
+        call.requestActive(1)
+        idle()
+        assertEquals(listOf(false, true), active[1])
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+    }
+
+    /** Our route request applies only while we own the mode, so it waits for the resume. */
+    @Test fun aHeadsetArrivingDuringAHoldIsTheRouteOnResume() {
+        start(1)
+        phone(AudioManager.MODE_IN_CALL)
+        shadow.addAvailableCommunicationDevice(headset, true)
+        idle()
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(headset.id, audio.communicationDevice?.id)
+    }
+
+    /**
+     * requestRoute must mark the call routed even while held, or take()'s deferred preferredRoute
+     * pick overwrites a route the user chose during the hold once the call resumes.
+     */
+    @Test fun aPickDuringAHoldIsTheRouteOnResume() {
+        phone(AudioManager.MODE_IN_CALL)
+        start(1)
+        pick(1, "3")
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(speaker.id, audio.communicationDevice?.id)
+    }
+
+    @Test fun afterEndAHoldIsNotReported() {
+        start(1)
+        end(1)
+        phone(AudioManager.MODE_IN_CALL)
+        assertNull(active[1])
+    }
+
+    /**
+     * Another app's call can end leaving the mode at IN_COMMUNICATION and still its own — only the
+     * latest setMode call owns it — so the resume must call setMode again even though the value
+     * does not change. Robolectric's own listener only fires on a change, so a counting shadow
+     * stands in for the platform's ownership.
+     */
+    @Test
+    @Config(shadows = [CountingModeAudioManagerShadow::class])
+    fun aResumeSetsTheModeAgainEvenThoughItAlreadyReadsInCommunication() {
+        val modeCalls = Shadow.extract<CountingModeAudioManagerShadow>(audio)
+        start(1)
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        otherAppCaptures(99)
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        val callsWhileHeld = modeCalls.setModeCalls
+        otherAppCaptures()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        assertEquals(callsWhileHeld + 1, modeCalls.setModeCalls)
+    }
+
+    /**
+     * AudioService drops the mode of an owner with no voice playback or capture after a grace
+     * period, and hands it back once one starts. The call must not fight that by setting it again,
+     * nor take the drop for a hold.
+     */
+    @Test
+    @Config(shadows = [CountingModeAudioManagerShadow::class])
+    fun anIdleOwnersDroppedModeIsLeftToThePlatform() {
+        val modeCalls = Shadow.extract<CountingModeAudioManagerShadow>(audio)
+        start(1)
+        audio.mode = AudioManager.MODE_NORMAL
+        val callsAfterTheDrop = modeCalls.setModeCalls
+        idle()
+        assertEquals(callsAfterTheDrop, modeCalls.setModeCalls)
+        assertEquals(AudioManager.MODE_NORMAL, audio.mode)
+        assertNull(active[1])
+    }
+
+    private companion object {
+        const val OURS = 41
     }
 }
