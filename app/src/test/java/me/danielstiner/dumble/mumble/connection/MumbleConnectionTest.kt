@@ -381,10 +381,7 @@ class MumbleConnectionTest {
         assertSettled("no engine may be built for a dead session") { handles.size == 1 }
     }
 
-    /**
-     * Connecting over a live connection ends the call it replaces: every generation the connection
-     * starts, it ends exactly once, whichever order the call layer then applies them in.
-     */
+    /** Asserted on the ends asked for: the fake's own supersede would satisfy a count. */
     @Test fun connectingOverALiveConnectionEndsThePriorCall() = deterministic {
         val call = FakeVoiceCall()
         val conn = own(MumbleConnection(
@@ -398,10 +395,10 @@ class MumbleConnectionTest {
         handshaking(conn)
 
         assertEquals(listOf("first", "second"), call.starts)
-        assertSettled("the superseded call must end") { call.ends == 1 }
+        assertSettled("the superseded call must end") { call.endRequests == call.startedGens.take(1) }
 
         conn.disconnect()
-        assertSettled("disconnecting must end the second call") { call.ends == 2 }
+        assertSettled("disconnecting must end the second call") { call.endRequests == call.startedGens }
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the call's service. */
