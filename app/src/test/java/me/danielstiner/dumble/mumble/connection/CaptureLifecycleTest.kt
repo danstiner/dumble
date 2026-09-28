@@ -797,6 +797,34 @@ class CaptureLifecycleTest {
     }
 
     /**
+     * The same hold must also reach the receiver, not just refuse capture. connect() builds the
+     * session — and its receiver — before call.start(), and `CaptureCommand.Held` carries that
+     * session rather than a generation, so onHeld can tell the receiver directly whether or not
+     * `current` has been published yet. Without `session.receiver.setHeld` in onHeld, the receiver
+     * never learns it is held and its poll starts the output stream — playing the channel into
+     * whatever the platform gave the device to instead.
+     */
+    @Test fun aHoldDeliveredInsideCallStartAlsoHoldsTheReceiver() = runBlocking {
+        val playout = FakePlayoutEngine()
+        val call = FakeVoiceCall(holdInsideStart = true)
+        val conn = MumbleConnection(
+            InMemoryPinStore(),
+            newPlayout = { playout },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+
+        delay(300)   // several poll intervals; long enough for a missed hold to start the stream
+        assertFalse("a hold delivered inside call.start must reach the receiver too", playout.started)
+
+        call.resume()
+        awaitTrue("the resume must let the stream start") { playout.started }
+        conn.disconnect()
+    }
+
+    /**
      * A resume arriving while a release is still in flight must not be dropped. reconcile refuses to
      * open while `releasing`, so the only thing that rebuilds is onPumpExited's trailing reconcile —
      * this is what pins it.

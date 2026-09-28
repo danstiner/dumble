@@ -45,8 +45,8 @@ interface Connection {
      *  audio. */
     val selfSpeaking: StateFlow<Boolean>
 
-    /** A cellular call has taken the microphone. Capture is released while this is true;
-     *  [requestCapture] asks for both back. */
+    /** Another call — the phone's or another app's — has the microphone. Capture is released and
+     *  playout paused while this is true, both coming back by themselves when that call ends. */
     val callHeld: StateFlow<Boolean>
 
     /** The receive path's last second of measurement; null before the first one lands. */
@@ -86,9 +86,10 @@ interface Connection {
 
     /**
      * Push-to-talk. Opening the gate also asks for capture, exactly as [requestCapture] does, so a
-     * press recovers a session a terminal engine failure or a hold took away — but asynchronously,
-     * so the press that rebuilds is not the press that transmits. The intent is remembered either
-     * way: a session built while the button is still down comes up transmitting.
+     * press recovers a session a terminal engine failure took away — but asynchronously, so the
+     * press that rebuilds is not the press that transmits. The intent is remembered either way: a
+     * session built while the button is still down comes up transmitting. A hold's own end brings
+     * capture back by itself, with no press needed.
      */
     fun setTransmitting(on: Boolean)
 
