@@ -46,16 +46,15 @@ class AndroidVoiceCallTest {
 
     private fun start(gen: Int, host: String = "host") {
         call.start(
-            gen, MumbleEndpoint.parse(host), "user",
+            gen, MumbleEndpoint.parse(host),
             onActive = { active.getOrPut(gen) { mutableListOf() } += it },
             onRoutes = { routes[gen] = it },
-            onEnded = {},
         )
         idle()
     }
 
     private fun end(gen: Int) {
-        call.end(gen, VoiceCall.Reason.USER)
+        call.end(gen)
         idle()
     }
 
@@ -299,28 +298,6 @@ class AndroidVoiceCallTest {
         start(1)
         start(2)
         assertNull(active[2])
-    }
-
-    /** A capture that started without the callback firing. */
-    @Test fun requestActiveRereadsTheRecordings() {
-        start(1)
-        shadow.setActiveRecordingConfigurations(
-            listOf(shadow.createActiveRecordingConfiguration(99, MediaRecorder.AudioSource.VOICE_COMMUNICATION, "")),
-            false,
-        )
-        call.requestActive(1)
-        idle()
-        assertEquals(listOf(false), active[1])
-    }
-
-    @Test fun requestActiveDetectsAResumeNobodyAnnounced() {
-        start(1)
-        otherAppCaptures(99)
-        shadow.setActiveRecordingConfigurations(emptyList(), false)
-        call.requestActive(1)
-        idle()
-        assertEquals(listOf(false, true), active[1])
-        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
     }
 
     @Test fun aHeadsetArrivingDuringAHoldIsTheRouteOnResume() {
