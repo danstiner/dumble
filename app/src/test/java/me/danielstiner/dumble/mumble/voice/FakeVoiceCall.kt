@@ -23,6 +23,8 @@ class FakeVoiceCall(
     /** Generation per start(), in order — so a test can address a superseded call by generation. */
     val startedGens = CopyOnWriteArrayList<Int>()
     var ends = 0; private set
+    /** Generation per end(), in order, applied or not — [ends] also counts a grant's supersede. */
+    val endRequests = CopyOnWriteArrayList<Int>()
     /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
     val routeRequests = CopyOnWriteArrayList<String>()
 
@@ -86,6 +88,7 @@ class FakeVoiceCall(
     }
 
     override fun end(gen: Int): Unit = synchronized(lock) {
+        endRequests += gen
         // Ordered, not lost: the real consumer handles an End queued behind a Start after that
         // Start's effects have applied on the main looper.
         if (gen == pendingGen) { pendingEnd = true; return }
@@ -113,7 +116,7 @@ class FakeVoiceCall(
     fun emitRoutes(routes: AudioRoutes) = emitRoutesFor(liveGen, routes)
 
     // hold() and resume() no-op once end() has run: liveGen is NO_CALL then, matching a platform
-    // call that is no longer registered.
+    // call that has ended.
     fun hold() = holdFor(liveGen)
 
     fun resume() = resumeFor(liveGen)
