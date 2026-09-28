@@ -6,9 +6,8 @@ import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowAudioManager
 
 /**
- * Counts every setMode call, including a repeat of the current value. Robolectric's own shadow
- * only fires OnModeChangedListener on a change (measured, javap on shadows-framework 4.15.1), so a
- * call that re-asserts an unchanged mode is otherwise unobservable from a test.
+ * Counts every setMode call, repeats included: Robolectric fires OnModeChangedListener only on a
+ * change (checked in shadows-framework 4.15.1).
  */
 @Implements(AudioManager::class)
 class CountingModeAudioManagerShadow : ShadowAudioManager() {

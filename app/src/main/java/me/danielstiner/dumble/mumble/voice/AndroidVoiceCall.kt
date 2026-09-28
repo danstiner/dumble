@@ -37,25 +37,21 @@ class AndroidVoiceCall(
         val onRoutes: (AudioRoutes) -> Unit,
     ) {
         /**
-         * Per generation, never carried across a supersede: MumbleConnection opens capture for any
-         * generation it was not told is held, so a new one starts not held and is told if it is.
+         * Never carried across a supersede: MumbleConnection opens capture for a generation not
+         * told it is held.
          */
         var held = false
     }
 
     // Main only, like everything below.
     private var live: Live? = null
-    /**
-     * Whether this call has picked its route. Deferred while it starts held, so connecting during
-     * another call takes neither that call's route nor its mode.
-     */
+    /** Deferred while a call starts held, so connecting mid-call takes neither route nor mode. */
     private var routed = false
     /**
-     * Whether the mode has been set since this call started or last resumed — the only times it is.
-     * A resume sets it whatever it reads: another app's call can end leaving IN_COMMUNICATION set
-     * and still its own. In between, AudioService drops an owner with no voice playback or capture
-     * after a 6 s grace and hands the mode back once one starts (measured: dropped 6.0 s into a
-     * stalled connect), so setting it again there would only fight that.
+     * The mode is set once per start or resume, even if it already reads IN_COMMUNICATION: another
+     * app's call can end leaving it set but still that app's. Not in between: AudioService takes
+     * the mode from an owner idle for 6 s and returns it once voice starts (measured), so setting it
+     * again would only fight that.
      */
     private var modeTaken = false
     // Arrivals are found by diff: nothing reports the communication-device list changing, and a
@@ -97,8 +93,7 @@ class AndroidVoiceCall(
     override fun requestRoute(gen: Int, routeId: String) {
         main.post {
             if (live?.gen == gen) {
-                // A pick is the call's route even during a hold, so take() must not overwrite it
-                // with its own deferred preferredRoute pick on resume.
+                // A pick made during a hold is kept; take() must not replace it on resume.
                 routed = true
                 route(routeId)
             }
@@ -145,16 +140,12 @@ class AndroidVoiceCall(
         audio.mode = AudioManager.MODE_NORMAL
     }
 
-    /**
-     * Everything the platform can change, re-read: the hold first — a call not held takes whatever
-     * route and mode it lacks — then a headset's arrival, then the routes shown.
-     */
+    /** Re-reads what the platform can change: the hold, a headset's arrival, the routes shown. */
     private fun reconcile(l: Live) {
         val held = isHeld(audio.mode, otherVoiceCaptures(audio.activeRecordingConfigurations, captureSession))
         if (held) modeTaken = false else take()
         val routes = routes()
-        // Routed even while held: the request applies only once we own the mode again — measured,
-        // one made during a cellular call left that call's route alone.
+        // Even while held: the request applies only once we own the mode again (measured).
         arrivedHeadset(known, routes)?.let { route(it.id) }
         known = routes.mapTo(HashSet()) { it.id }
         if (held != l.held) {
@@ -165,11 +156,7 @@ class AndroidVoiceCall(
         l.onRoutes(AudioRoutes(routes.distinctBy { it.id }.sorted(), audio.communicationDevice?.toAudioRoute()))
     }
 
-    /**
-     * The route, once per call, then the mode, once per start or resume. Route before mode: the
-     * other way round (Discord's order) spends ~1 s on the earpiece (measured). A cellular call can
-     * leave the mode NORMAL (measured: resumed at mode 0); the resume's set covers it.
-     */
+    /** Route before mode: the other way round spends ~1 s on the earpiece (measured). */
     private fun take() {
         if (!routed) {
             routed = true

@@ -276,7 +276,6 @@ class AndroidVoiceCallTest {
         assertNull(audio.communicationDevice)
     }
 
-    /** MumbleConnection scopes holds by generation: a successor never told would open the microphone mid-call. */
     @Test fun aSupersedeDuringAHoldTellsTheSuccessor() {
         start(1)
         phone(AudioManager.MODE_IN_CALL)
@@ -292,7 +291,7 @@ class AndroidVoiceCallTest {
         assertNull(active[2])
     }
 
-    /** The safety net behind a Talk press or the held banner reads the platform afresh. */
+    /** A capture that started without the callback firing. */
     @Test fun requestActiveRereadsTheRecordings() {
         start(1)
         shadow.setActiveRecordingConfigurations(
@@ -304,7 +303,6 @@ class AndroidVoiceCallTest {
         assertEquals(listOf(false), active[1])
     }
 
-    /** The other direction of [requestActiveRereadsTheRecordings]: a resume no listener reported. */
     @Test fun requestActiveDetectsAResumeNobodyAnnounced() {
         start(1)
         otherAppCaptures(99)
@@ -315,7 +313,6 @@ class AndroidVoiceCallTest {
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
     }
 
-    /** Our route request applies only while we own the mode, so it waits for the resume. */
     @Test fun aHeadsetArrivingDuringAHoldIsTheRouteOnResume() {
         start(1)
         phone(AudioManager.MODE_IN_CALL)
@@ -325,10 +322,7 @@ class AndroidVoiceCallTest {
         assertEquals(headset.id, audio.communicationDevice?.id)
     }
 
-    /**
-     * requestRoute must mark the call routed even while held, or take()'s deferred preferredRoute
-     * pick overwrites a route the user chose during the hold once the call resumes.
-     */
+    /** The resume's own pick doesn't overwrite it. */
     @Test fun aPickDuringAHoldIsTheRouteOnResume() {
         phone(AudioManager.MODE_IN_CALL)
         start(1)
@@ -344,12 +338,6 @@ class AndroidVoiceCallTest {
         assertNull(active[1])
     }
 
-    /**
-     * Another app's call can end leaving the mode at IN_COMMUNICATION and still its own — only the
-     * latest setMode call owns it — so the resume must call setMode again even though the value
-     * does not change. Robolectric's own listener only fires on a change, so a counting shadow
-     * stands in for the platform's ownership.
-     */
     @Test
     @Config(shadows = [CountingModeAudioManagerShadow::class])
     fun aResumeSetsTheModeAgainEvenThoughItAlreadyReadsInCommunication() {
@@ -364,11 +352,7 @@ class AndroidVoiceCallTest {
         assertEquals(callsWhileHeld + 1, modeCalls.setModeCalls)
     }
 
-    /**
-     * AudioService drops the mode of an owner with no voice playback or capture after a grace
-     * period, and hands it back once one starts. The call must not fight that by setting it again,
-     * nor take the drop for a hold.
-     */
+    /** Setting NORMAL here stands in for AudioService dropping an idle owner's mode. */
     @Test
     @Config(shadows = [CountingModeAudioManagerShadow::class])
     fun anIdleOwnersDroppedModeIsLeftToThePlatform() {
