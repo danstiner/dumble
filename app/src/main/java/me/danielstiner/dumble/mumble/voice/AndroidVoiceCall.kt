@@ -11,11 +11,12 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.service.VoiceService
 
 /**
- * The session's audio mode, route and microphone service, run as Discord runs a voice channel
- * (measured): our own MODE_IN_COMMUNICATION, a communication device AudioService opens SCO for, and
- * no Telecom call or audio focus. With no Telecom call no dialer draws its screen over ours, and
- * Bluetooth still gets SCO, which a Telecom call hidden from dialers does not. With no focus, other
- * apps' media keeps playing, at call quality over SCO.
+ * The session's audio mode, route and microphone service: our own MODE_IN_COMMUNICATION, a
+ * communication device, and no Telecom call or audio focus. For a Bluetooth headset AudioService
+ * then opens its call link (SCO), the two-way link that carries the headset's microphone. With no
+ * Telecom call no dialer draws its screen over ours, and the headset still gets that link, which a
+ * Telecom call hidden from dialers does not. With no focus, other apps' media keeps playing, at
+ * call quality over the call link.
  *
  * All state belongs to the main looper: calls post to it and the listeners run on it, which keeps
  * the seam's contract that commands apply in send order.
@@ -31,7 +32,8 @@ class AndroidVoiceCall(private val context: Context) : VoiceCall {
     private var live: Live? = null
     /**
      * Communication-device ids last seen. No listener reports that list changing, and a headset's
-     * SCO device is never itself announced as added (measured), so arrivals are found by diff.
+     * call-link device is never itself announced as added (measured), so arrivals are found by
+     * diff.
      */
     private var known: Set<String> = emptySet()
 
@@ -65,7 +67,8 @@ class AndroidVoiceCall(private val context: Context) : VoiceCall {
 
     /**
      * A start while a call is live supersedes it: listeners, service, mode and route carry over,
-     * since releasing them between attempts would drop SCO only for the successor to reopen it.
+     * since releasing them between attempts would close a headset's call link only for the
+     * successor to reopen it.
      */
     private fun handleStart(gen: Int, host: String, onRoutes: (AudioRoutes) -> Unit) {
         val superseding = live != null
@@ -74,8 +77,7 @@ class AndroidVoiceCall(private val context: Context) : VoiceCall {
         // Again on a supersede, only to show the new host.
         VoiceService.start(context, host)
         if (!superseding) {
-            // Route before mode: the other way round (Discord's order) spends ~1 s on the earpiece
-            // (measured).
+            // Route before mode: the other way round spends ~1 s on the earpiece (measured).
             preferredRoute(routes())?.let { route(it.id) }
             audio.mode = AudioManager.MODE_IN_COMMUNICATION
             // What is here at start is not an arrival.
