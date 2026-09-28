@@ -702,9 +702,8 @@ class CaptureLifecycleTest {
     /**
      * A throw out of the release must not strand the platform call. The consumer loop wraps the
      * whole dispatch in runCatching, so when `call.end` sat at the tail of the Release handler a
-     * throw in reconcile skipped it silently: the telecom call stayed registered with its microphone
-     * notification, and the only way out was hanging up the ghost from system UI — which is wired to
-     * onEnded -> disconnect(). Ending first also keeps the call off an unbounded HAL close.
+     * throw in reconcile skipped it silently, leaving the microphone service and the audio mode
+     * held. Ending first also keeps the call off an unbounded HAL close.
      */
     @Test fun aThrowingReleaseStillEndsThePlatformCall() = runBlocking {
         val handle = ThrowingStopHandle()
@@ -867,10 +866,9 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A Talk press while held is the only resume signal core-telecom leaves us: it does not tell us
-     * when the interrupting cellular call ends, so without this the session stays ON_HOLD forever
-     * after one. Fails without the fix — before requestActive() existed, a held Acquire just re-ran
-     * reconcile(), which no-ops while heldGen is set, and the platform was never asked again.
+     * A Talk press while held re-checks the hold — the net behind the platform reporting a hold
+     * ending itself. Before requestActive() existed, a held Acquire just re-ran reconcile(), which
+     * no-ops while heldGen is set, and the platform was never asked again.
      */
     @Test fun aTalkPressWhileHeldAsksThePlatformToResume() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -954,7 +952,7 @@ class CaptureLifecycleTest {
     /**
      * A wedged pump must not hold the platform call open. Deferring call.end until the engine was
      * freed meant a pump that never exits never ended the call — a permanent foreground service and
-     * telecom UI showing an active call until process death.
+     * audio mode until process death.
      *
      * Also the observable half of the wedge watchdog: `wedged` does not exist as state, so this
      * pollsInFlightAtDestroy == -1 check — the engine is not freed while the pump is in flight — is
@@ -1143,9 +1141,8 @@ class CaptureLifecycleTest {
     /*
      * The design also called for "a supersede while ungranted ends the prior call first" and "a
      * Talk press while held and ungranted does not strand a resume". Verified unreachable, not
-     * forgotten: TelecomCall.handleStart ends on `granted.await()`, which suspends the single
-     * command consumer until the grant resolves, so no later command can ever observe an
-     * ungranted Start.
+     * forgotten: the platform call applies each start completely before any later command — they
+     * run in turn on the main looper — so no command can observe an ungranted Start.
      */
 
     /**
@@ -1298,8 +1295,8 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
-    /** Core-telecom sends no unsolicited resume, so asking for capture while held is also the
-     *  ask for the call back — the held-call banner's tap under voice activity. */
+    /** Asking for capture while held re-checks the hold — the held-call banner's tap under voice
+     *  activity. */
     @Test fun requestingCaptureWhileHeldAsksForTheCallBack() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()

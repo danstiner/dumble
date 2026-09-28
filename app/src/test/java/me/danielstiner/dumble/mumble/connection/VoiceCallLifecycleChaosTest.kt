@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
 /**
- * Concurrent chaos test for the telecom call lifecycle seam: [MumbleConnection] driving
+ * Concurrent chaos test for the platform call's lifecycle seam: [MumbleConnection] driving
  * [me.danielstiner.dumble.mumble.voice.VoiceCall] through [FakeVoiceCall]`(autoGrant = false)`,
  * where the grant is asynchronous and a superseding start or a platform hangup can land before
  * it. Randomized concurrent rounds hunt schedules the design did not anticipate; a deterministic
@@ -25,7 +25,7 @@ import kotlin.random.Random
  * generation-gating of platform callbacks. No fixture or invariant is shared, and `newCapture`
  * always returns null — capture is not this test's concern.
  */
-class TelecomLifecycleChaosTest {
+class VoiceCallLifecycleChaosTest {
 
     private class Counters {
         val violations = CopyOnWriteArrayList<String>()
@@ -183,7 +183,7 @@ class TelecomLifecycleChaosTest {
         }
     }
 
-    @Test fun chaosStormNeverBreaksTheTelecomLifecycleInvariants() {
+    @Test fun chaosStormNeverBreaksTheCallLifecycleInvariants() {
         val c = Counters()
         repeat(ROUNDS) { round ->
             val seed = BASE_SEED + round
