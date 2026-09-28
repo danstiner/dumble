@@ -91,13 +91,7 @@ class AndroidVoiceCall(
     }
 
     override fun requestRoute(gen: Int, routeId: String) {
-        main.post {
-            if (live?.gen == gen) {
-                // A pick made during a hold is kept; take() must not replace it on resume.
-                routed = true
-                route(routeId)
-            }
-        }
+        main.post { if (live?.gen == gen) route(routeId) }
     }
 
     /**
@@ -171,6 +165,8 @@ class AndroidVoiceCall(
     private fun routes() = audio.availableCommunicationDevices.map { it.toAudioRoute() }
 
     private fun route(id: String) {
+        // A pick or an arrival during a hold is kept; take() must not replace it on resume.
+        routed = true
         val device = audio.availableCommunicationDevices.firstOrNull { it.id.toString() == id }
         if (device == null) {
             // Gone since the menu was drawn; the next device event redraws it.

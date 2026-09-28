@@ -322,6 +322,18 @@ class AndroidVoiceCallTest {
         assertEquals(headset.id, audio.communicationDevice?.id)
     }
 
+    /** The resume's own pick would prefer the Bluetooth headset that was already there. */
+    @Test fun aHeadsetArrivingDuringAHoldKeepsTheRouteOnResumeWhenTheCallStartedHeld() {
+        shadow.addAvailableCommunicationDevice(headset, false)
+        phone(AudioManager.MODE_IN_CALL)
+        start(1)
+        val wired = audioDevice(AudioDeviceInfo.TYPE_WIRED_HEADSET, 4)
+        shadow.addAvailableCommunicationDevice(wired, true)
+        idle()
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(wired.id, audio.communicationDevice?.id)
+    }
+
     /** The resume's own pick doesn't overwrite it. */
     @Test fun aPickDuringAHoldIsTheRouteOnResume() {
         phone(AudioManager.MODE_IN_CALL)
