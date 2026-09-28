@@ -21,9 +21,8 @@ import kotlin.random.Random
  * orderings it names — see [storm].
  *
  * Sibling to [CaptureLifecycleChaosTest], not folded in: that one hammers the stream/engine
- * invariants, this one [FakeVoiceCall]'s start/end/grant bookkeeping and the connection's
- * generation-gating of platform callbacks. No fixture or invariant is shared, and `newCapture`
- * always returns null — capture is not this test's concern.
+ * invariants, this one [FakeVoiceCall]'s start/end/grant bookkeeping. No fixture or invariant is
+ * shared, and `newCapture` always returns null — capture is not this test's concern.
  */
 class VoiceCallLifecycleChaosTest {
 
@@ -45,9 +44,8 @@ class VoiceCallLifecycleChaosTest {
             call = call,
         ) { FakeControlTransport { _, _ -> } }
 
-        // The cheap, high-frequency ops a real session sees, plus a late grant for any known
-        // generation — live or superseded — since callbacks are not fenced against having been
-        // replaced.
+        // The cheap, high-frequency ops a real session sees, plus a late grant of whatever start
+        // is outstanding.
         val stop = AtomicBoolean(false)
         val hammerThreads = (0 until HAMMER_THREADS).map { t ->
             Thread {
