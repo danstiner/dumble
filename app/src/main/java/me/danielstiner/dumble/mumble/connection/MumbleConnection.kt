@@ -430,14 +430,17 @@ class MumbleConnection internal constructor(
         // publishes `current`, and when connect() runs off the main thread the call's first hold,
         // posted to the main looper, can beat that publish. The command carries the session
         // itself, so that costs nothing.
-        val live = synchronized(lock) { session.gen == generation }
+        // Published under the check's lock: a connect() between the two would clear the banner
+        // only for this stale hold to set it again on the new session.
+        val live = synchronized(lock) {
+            (session.gen == generation).also { if (it) _callHeld.value = held }
+        }
         // Dropped rather than recorded if it belongs to a superseded call: recording it
         // would let a stale hold clobber a live one, or a stale resume clear it — either
         // way the microphone ends up on a device the platform has taken.
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
             heldGen = if (held) session.gen else NO_GEN
-            _callHeld.value = held
             // The output stream follows the hold too: the platform has the device, and the
             // receiver's poll is the one owner of that stream.
             session.receiver.setHeld(held)

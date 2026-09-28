@@ -15,7 +15,8 @@ interface VoiceCall {
      * call and holding it (a cellular call arriving); [onEnded] reports the system ending it.
      *
      * Calls here apply in send order on a single consumer — an [end] arriving before the platform
-     * has granted the call is ordered, not lost — and return before their effects apply.
+     * has granted the call is ordered, not lost — and return before their effects apply. A start
+     * older than one already seen is ignored: connects on two threads can send out of order.
      */
     fun start(
         gen: Int,
