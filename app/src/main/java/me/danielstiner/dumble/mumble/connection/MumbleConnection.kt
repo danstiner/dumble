@@ -251,6 +251,8 @@ class MumbleConnection internal constructor(
          *  engine. Keeps [reconcile] from starting a second release meanwhile; cleared by
          *  [onPumpExited]. */
         var releasing: Boolean = false,
+        /** The platform is holding this session's call. Lifecycle consumer only. */
+        var held: Boolean = false,
     )
 
     private sealed interface CaptureCommand {
@@ -315,9 +317,6 @@ class MumbleConnection internal constructor(
     }
 
     private val captureCommands = Channel<CaptureCommand>(Channel.UNLIMITED)
-
-    /** The generation whose call the platform is holding, or [NO_GEN]. Consumer-only. */
-    private var heldGen = NO_GEN
 
     init {
         // The single owner of capture. On blockingScope, never a session's or a link's scope —
@@ -392,8 +391,8 @@ class MumbleConnection internal constructor(
      */
     private fun onAcquire(session: Session) {
         session.wanted = true
-        // Guarded on heldGen so an ordinary press while active does not re-check on every edge.
-        if (heldGen == session.gen) call.requestActive(session.gen)
+        // Guarded so an ordinary press while active does not re-check on every edge.
+        if (session.held) call.requestActive(session.gen)
         reconcile(session)
     }
 
@@ -440,14 +439,16 @@ class MumbleConnection internal constructor(
         // Checked against the generation, not `current`: connect() starts the call before it
         // publishes `current`, and when connect() runs off the main thread the call's first hold,
         // posted to the main looper, can beat that publish.
-        val live = synchronized(lock) { session.gen == generation }
-        // Dropped rather than recorded if it belongs to a superseded call: recording it
-        // would let a stale hold clobber a live one, or a stale resume clear it — either
-        // way the microphone ends up on a device the platform has taken.
+        // Published under the check's lock: a connect() between the two would clear the banner
+        // only for this stale hold to set it again on the new session.
+        val live = synchronized(lock) {
+            (session.gen == generation).also { if (it) _callHeld.value = held }
+        }
+        // A superseded call's hold changes nothing: its session is released, and the banner
+        // belongs to the live one.
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
-            heldGen = if (held) session.gen else NO_GEN
-            _callHeld.value = held
+            session.held = held
             // The output stream follows the hold too: the platform has the device, and the
             // receiver's poll is the one owner of that stream.
             session.receiver.setHeld(held)
@@ -476,7 +477,7 @@ class MumbleConnection internal constructor(
 
     /** Lifecycle consumer only. The only place a capture session is created or released. */
     private fun reconcile(session: Session) {
-        if (session.wanted && heldGen != session.gen && isLive(session)) {
+        if (session.wanted && !session.held && isLive(session)) {
             // A release in flight re-reconciles from onPumpExited; opening a second engine here is
             // exactly the two-microphone defect.
             if (session.capture != null) return
@@ -1173,7 +1174,6 @@ class MumbleConnection internal constructor(
 
     private companion object {
         const val TAG = "MumbleConn"
-        const val NO_GEN = -1
 
         /** How long the speaking halo outlives the last packet: enough to bridge the pauses
          *  inside a sentence, not so long it is still lit once someone has stopped. */

@@ -191,6 +191,16 @@ class AndroidVoiceCallTest {
         assertEquals(earpiece.id, audio.communicationDevice?.id)
     }
 
+    /** Two connects on two threads can post their starts out of order. */
+    @Test fun anOlderStartPostedLateIsIgnored() {
+        start(2)
+        start(1)
+        end(1)
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        pick(2, "3")
+        assertEquals(speaker.id, audio.communicationDevice?.id)
+    }
+
     @Test fun afterEndNothingIsPublished() {
         start(1)
         end(1)
@@ -341,6 +351,18 @@ class AndroidVoiceCallTest {
         pick(1, "3")
         phone(AudioManager.MODE_NORMAL)
         assertEquals(speaker.id, audio.communicationDevice?.id)
+    }
+
+    /** One route is gone before the lookup; the other leaves between the lookup and the set. */
+    @Test fun aPickThatFailsDuringAHoldLeavesTheResumeItsOwnPick() {
+        phone(AudioManager.MODE_IN_CALL)
+        start(1)
+        pick(1, "7")
+        shadow.lockCommunicationDevice(true)
+        pick(1, "3")
+        shadow.lockCommunicationDevice(false)
+        phone(AudioManager.MODE_NORMAL)
+        assertEquals(earpiece.id, audio.communicationDevice?.id)
     }
 
     @Test fun afterEndAHoldIsNotReported() {

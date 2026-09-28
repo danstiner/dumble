@@ -303,11 +303,7 @@ class CaptureLifecycleTest {
         assertSettled("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
     }
 
-    /**
-     * A hold callback from a superseded call must not touch the live session. Without the
-     * generation check, a stale hold latched onto the successor and killed transmit with nothing
-     * able to clear it.
-     */
+    /** A hold from a superseded call must reach neither the live session's capture nor its banner. */
     @Test fun aStaleHoldDoesNotTouchTheLiveSession() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
@@ -322,6 +318,7 @@ class CaptureLifecycleTest {
 
         call.holdFor(staleGen)
         assertSettled("a stale hold must not release the live engine") { handles.any { !it.destroyed } }
+        assertFalse("a stale hold must not raise the banner", conn.callHeld.value)
         conn.disconnect()
     }
 
@@ -556,15 +553,7 @@ class CaptureLifecycleTest {
         assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons.toList())
     }
 
-    /**
-     * A resume from a superseded call must not clear a hold that is legitimately protecting
-     * the live session. aStaleHoldDoesNotTouchTheLiveSession above only ever delivers a stale
-     * *hold*, which sets heldGen to a generation that already differs from the live one — harmless
-     * by coincidence (heldGen != session.gen was already true), not because gen == generation did
-     * anything. The staleness check's real job is guarding a stale *resume*: unchecked, it would
-     * clear heldGen back to NO_GEN while the platform still holds the live call, reopening capture
-     * against a device the platform owns.
-     */
+    /** A resume from a superseded call must not lift the live session's hold, nor its banner. */
     @Test fun aStaleResumeDoesNotClearTheLiveHold() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
@@ -582,6 +571,7 @@ class CaptureLifecycleTest {
 
         call.resumeFor(staleGen)   // a resume for the superseded call (1), not the live hold
         assertSettled("a stale resume must not reopen capture the platform still holds") { handles.size == 1 }
+        assertTrue("a stale resume must not clear the banner", conn.callHeld.value)
 
         call.resume()   // the genuine resume, for the live generation
         assertSettled("the genuine resume must rebuild") { handles.size == 2 }
@@ -658,7 +648,7 @@ class CaptureLifecycleTest {
      * A Talk press while held is the only resume signal core-telecom leaves us: it does not tell us
      * when the interrupting cellular call ends, so without this the session stays ON_HOLD forever
      * after one. Fails without the fix — before requestActive() existed, a held Acquire just re-ran
-     * reconcile(), which no-ops while heldGen is set, and the platform was never asked again.
+     * reconcile(), which no-ops while the session is held, and the platform was never asked again.
      */
     @Test fun aTalkPressWhileHeldAsksThePlatformToResume() = runBlocking {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
