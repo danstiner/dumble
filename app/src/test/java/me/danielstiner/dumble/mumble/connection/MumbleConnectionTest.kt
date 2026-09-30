@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -43,6 +42,7 @@ import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.time.AtomicTimeSource
+import me.danielstiner.dumble.time.elapse
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -647,11 +647,7 @@ class MumbleConnectionTest {
             assertTrue(what, cond())
         }
 
-        /** Virtual time passes; every timer due in it fires, in order. */
-        fun elapse(d: Duration) {
-            scope.advanceTimeBy(d)
-            scope.runCurrent()
-        }
+        fun elapse(d: Duration) = scope.elapse(d)
 
         fun connected(conn: MumbleConnection): ConnectionStatus.Connected {
             assertSettled("connected") { conn.status.value is ConnectionStatus.Connected }

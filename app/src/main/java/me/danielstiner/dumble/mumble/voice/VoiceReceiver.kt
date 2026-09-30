@@ -360,7 +360,8 @@ class VoiceReceiver(
         }
     }
 
-    private companion object {
+    // Internal so the tests can step the poll by its own period.
+    internal companion object {
         const val TAG = "VoiceReceiver"
 
         /** How often the poll reads the engine. The speaking set and a hold's pause lag by at
