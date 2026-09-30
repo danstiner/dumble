@@ -34,6 +34,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The capture lifecycle's regression suite. Each case here reproduced a real defect before the
@@ -45,8 +46,8 @@ class CaptureLifecycleTest {
 
     /**
      * A connection on the rig's scheduler, torn down by it, whose capture pumps the rig steps: a
-     * release and the engine's free land in one `assertSettled`. Every handle here returns 0 where
-     * the engine would block.
+     * release and the engine's free land in one `assertSettled`, and the speaking hold runs on
+     * the scheduler's clock. Every handle here returns 0 where the engine would block.
      */
     private fun Rig.connection(
         newCapture: () -> VoiceSender.CaptureHandle? = { null },
@@ -56,7 +57,7 @@ class CaptureLifecycleTest {
         newTransport: () -> FakeControlTransport = { FakeControlTransport { _, _ -> } },
     ) = own(MumbleConnection(
         InMemoryPinStore(), newCapture = newCapture, newPlayout = newPlayout, call = call,
-        stuckPumpMillis = stuckPumpMillis, startPump = startPump,
+        stuckPumpMillis = stuckPumpMillis, startPump = startPump, captureClock = clock,
         udpClock = clock, context = dispatcher, blocking = dispatcher,
     ) { newTransport() })
 
@@ -978,40 +979,37 @@ class CaptureLifecycleTest {
 
     /** Speaking follows packets on the wire, not the button: voice activity has no press, and a
      *  press whose session never opened is not speech. */
-    @Test fun speakingFollowsThePacketsAndNotTheGate() = runBlocking {
-        val handle = FakeCaptureHandle()
-        val conn = MumbleConnection(
-            InMemoryPinStore(), newCapture = { handle },
-        ) { FakeControlTransport { _, _ -> } }
+    @Test fun speakingFollowsThePacketsAndNotTheGate() = deterministic {
+        val handle = FakeCaptureHandle(blocking = false)
+        val conn = connection(newCapture = { handle })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
         conn.setTransmitting(true)
-        awaitTrue("the engine must open, transmitting") { handle.gateOpen }
+        assertSettled("the engine must open, transmitting") { handle.gateOpen }
         assertFalse("an open gate alone is not speech", conn.selfSpeaking.value)
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), 0L, terminator = false))
-        awaitTrue("a packet on the wire is") { conn.selfSpeaking.value }
+        assertSettled("a packet on the wire is") { conn.selfSpeaking.value }
 
-        awaitTrue("and released once they stop", timeoutMillis = 3_000) { !conn.selfSpeaking.value }
+        elapse(1.seconds)   // well past the hold, with no packet since
+        assertFalse("and released once they stop", conn.selfSpeaking.value)
 
         conn.disconnect()
     }
 
-    @Test fun aTerminatorIsNotSpeech() = runBlocking {
-        val handle = FakeCaptureHandle()
-        val conn = MumbleConnection(
-            InMemoryPinStore(), newCapture = { handle },
-        ) { FakeControlTransport { _, _ -> } }
+    @Test fun aTerminatorIsNotSpeech() = deterministic {
+        val handle = FakeCaptureHandle(blocking = false)
+        lateinit var fake: FakeControlTransport
+        val conn = connection(
+            newCapture = { handle }, newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
+        )
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
         conn.setTransmitting(true)
-        awaitTrue("the engine must open") { handle.gateOpen }
+        assertSettled("the engine must open") { handle.gateOpen }
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), 4L, terminator = true))
-        // Nothing to await on a value that must never become true; give the pump room to be wrong.
-        delay(200)
+        assertSettled("the terminator must reach the wire") { fake.sentRaw.size == 1 }
         assertFalse("a terminator must not light the halo", conn.selfSpeaking.value)
 
         conn.disconnect()
@@ -1019,25 +1017,21 @@ class CaptureLifecycleTest {
 
     /** Left standing across a release, the hold would light the next session's halo for audio
      *  the previous one sent. */
-    @Test fun releasingCaptureClearsSpeaking() = runBlocking {
+    @Test fun releasingCaptureClearsSpeaking() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
         conn.setTransmitting(true)
-        awaitTrue("the engine must open") { handles.size == 1 && handles[0].gateOpen }
+        assertSettled("the engine must open") { handles.size == 1 && handles[0].gateOpen }
 
         handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
-        awaitTrue("a packet lights it") { conn.selfSpeaking.value }
+        assertSettled("a packet lights it") { conn.selfSpeaking.value }
 
+        // No time passes, so only the release can have lowered it.
         call.hold()
-        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        assertSettled("the hold must release the engine") { handles[0].destroyed }
         assertFalse("the release must clear it, ahead of the hold expiring", conn.selfSpeaking.value)
 
         conn.disconnect()
