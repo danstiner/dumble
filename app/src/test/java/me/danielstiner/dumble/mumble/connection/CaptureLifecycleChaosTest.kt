@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -12,6 +13,7 @@ import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,6 +39,8 @@ import kotlin.random.Random
  * not the ~23s the full suite takes.
  */
 class CaptureLifecycleChaosTest {
+
+    @get:Rule val timeout = hangGuard()
 
     /**
      * A native engine stand-in built to be hammered concurrently, not scripted: it tracks two
@@ -154,6 +158,11 @@ class CaptureLifecycleChaosTest {
 
         conn.connect(endpoint, "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        // The storm starts on an open engine, so every round races the lifecycle against a live
+        // capture however its schedule falls, and the checks below can never pass on a storm that
+        // only ever met a disconnected connection.
+        conn.requestCapture()
+        awaitTrue(c.violations, "seed=$seed: no engine opened before the storm") { created.get() > 0 }
 
         // The cheap, high-frequency ops a real session sees constantly: a PTT press, a hold/resume
         // pair. None of these block, so HAMMER_THREADS racing them concurrently is the point.
@@ -174,7 +183,7 @@ class CaptureLifecycleChaosTest {
         // the hammer threads finish their whole quota in single-digit milliseconds (nothing here
         // blocks), so whenever the lifecycle thread's own random schedule opened its first
         // connected window a little late, every hammer thread had already gone quiet and no op was
-        // left to land in it — see the coverage-floor failures this fixed below.
+        // left to land in it.
         val stop = AtomicBoolean(false)
         val hammerThreads = (0 until HAMMER_THREADS).map { t ->
             Thread {
@@ -216,18 +225,9 @@ class CaptureLifecycleChaosTest {
         }.apply { isDaemon = true; start() }
 
         val threads = hammerThreads + lifecycleThread
-        threads.forEach { it.join(10_000) }
-        threads.forEach { if (it.isAlive) c.violations += "seed=$seed: a worker thread did not finish" }
-
-        // Coverage floor: every assertion below runs in a clean tail after a forced disconnect()+
-        // connect(), so without this check a storm that happened to no-op almost entirely — every
-        // op landing on a disconnected connection, `requestCapture` and `setTransmitting` both
-        // hitting `?: return` — would still pass every one of them. At least one engine must have
-        // been built during the chaotic middle itself, not just the clean tail that follows it.
-        val builtDuringStorm = created.get()
-        if (builtDuringStorm == 0) {
-            c.violations += "seed=$seed: no engines were created during the storm itself (coverage floor)"
-        }
+        // Unbounded: a worker that never finishes is a hang, which the hang guard reports with
+        // its stack.
+        threads.forEach { it.join() }
 
         // Settle into a known state — the storm can leave the connection live, held, or idle at
         // random — then check the two things that must be true no matter which: the consumer is

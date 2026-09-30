@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.chat.DenyReason
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -22,6 +23,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import java.io.IOException
+import org.junit.Rule
 import org.junit.Test
 import kotlin.time.TestTimeSource
 import kotlin.time.Duration
@@ -32,6 +34,8 @@ import kotlin.concurrent.thread
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionStateMachineTest {
+
+    @get:Rule val timeout = hangGuard()
 
     private class FakeChannel : ControlChannel {
         val sent = mutableListOf<Pair<TcpMessageType, MessageLite>>()

@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.net
 
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertArrayEquals
@@ -9,7 +10,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.nio.ByteBuffer
@@ -30,6 +34,8 @@ import kotlin.time.Duration.Companion.seconds
  * is the real five seconds, jumped over rather than waited out.
  */
 class MumbleUdpTransportTest {
+    @get:Rule val timeout = hangGuard()
+
     private val key = ByteArray(16) { it.toByte() }
     private val ourNonce = ByteArray(16) { (0x40 + it).toByte() }
     private val theirNonce = ByteArray(16) { (0x80 + it).toByte() }
@@ -377,12 +383,11 @@ class MumbleUdpTransportTest {
         transport.send(byteArrayOf(0, 3), 2)   // may fail as the ICMP's own report
         Thread.sleep(100)
 
-        val again = DatagramChannel.open().apply { bind(InetSocketAddress("127.0.0.1", port)) }
-        val wire = ByteBuffer.allocate(64)
+        // A DatagramSocket, not a channel: its receive honours SO_TIMEOUT, and a channel's ignores it.
+        val again = DatagramSocket(InetSocketAddress("127.0.0.1", port)).apply { soTimeout = 3000 }
         assertTrue(transport.send(byteArrayOf(0, 4), 2))
-        again.socket().soTimeout = 3000
-        val got = again.receive(wire)
-        assertNotNull("the same socket reaches a peer that came back on the port", got)
+        // Throws SocketTimeoutException unless the same socket reaches a peer back on the port.
+        again.receive(DatagramPacket(ByteArray(64), 64))
         transport.close()
         again.close()
     }

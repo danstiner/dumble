@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
@@ -23,6 +24,7 @@ import me.danielstiner.dumble.mumble.voice.VoiceSender
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
@@ -35,6 +37,8 @@ import java.util.concurrent.atomic.AtomicLong
  * serialised-reconcile redesign; they now assert those defects are absent.
  */
 class CaptureLifecycleTest {
+
+    @get:Rule val timeout = hangGuard()
 
     /**
      * A native engine whose pump cannot be woken. Stands in for the real failure the production
@@ -141,6 +145,7 @@ class CaptureLifecycleTest {
                 "freed only after the poll returned", 0, handle.pollsInFlightAtDestroy,
             )
         } finally {
+            conn.disconnect()
             handle.release()
         }
     }
@@ -1099,17 +1104,20 @@ class CaptureLifecycleTest {
             InMemoryPinStore(),
             call = call,
         ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
+        try {
+            conn.connect(MumbleEndpoint.parse("host"), "user", null)
+            awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
+            assertEquals("nothing may end before the platform grants control", 0, call.ends)
 
-        conn.connect(MumbleEndpoint.parse("host"), "user", null)
-        awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
-        assertEquals("nothing may end before the platform grants control", 0, call.ends)
-
-        call.grantPending()
-        awaitTrue("the grant must release the pending end") { call.ends == 1 }
-        assertEquals(
-            "a failed session is not a hang-up",
-            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
-        )
+            call.grantPending()
+            awaitTrue("the grant must release the pending end") { call.ends == 1 }
+            assertEquals(
+                "a failed session is not a hang-up",
+                listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
+            )
+        } finally {
+            conn.disconnect()
+        }
     }
 
     /*

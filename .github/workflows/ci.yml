@@ -49,7 +49,7 @@ jobs:
       - name: Build and test
         env:
           MUMBLE_TEST_SERVER: localhost
-        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest lintDebug --stacktrace
+        run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest lintDebug verifyShippedGroups --stacktrace
       - name: Keep the test reports of a failed run
         if: failure()
         uses: actions/upload-artifact@v7
@@ -68,5 +68,3 @@ jobs:
           cmake -S app/src/main/cpp/host -B build/host
           cmake --build build/host -j
           ctest --test-dir build/host --output-on-failure
-      - name: Verify attribution
-        run: ./gradlew verifyShippedGroups --stacktrace
