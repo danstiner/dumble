@@ -3,7 +3,11 @@ package me.danielstiner.dumble.mumble.voice
 import java.util.concurrent.LinkedBlockingQueue
 
 /** Scripted stand-in for the native engine: each entry is one pollPacket outcome. */
-class FakeCaptureHandle : VoiceSender.CaptureHandle {
+class FakeCaptureHandle(
+    /** False for a pump the test steps: an empty script then polls 0, the engine's "nothing yet",
+     *  instead of blocking the thread that steps it. */
+    private val blocking: Boolean = true,
+) : VoiceSender.CaptureHandle {
     sealed interface Step {
         data class Frame(val bytes: ByteArray, val frameNumber: Long, val terminator: Boolean) : Step
         data object Retry : Step
@@ -31,16 +35,19 @@ class FakeCaptureHandle : VoiceSender.CaptureHandle {
     var stats: CaptureStats? = null
     override fun stats() = stats
 
-    override fun pollPacket(out: ByteArray, meta: LongArray): Int = when (val s = steps.take()) {
-        is Step.Frame -> {
-            s.bytes.copyInto(out)
-            meta[0] = s.frameNumber
-            meta[1] = if (s.terminator) NativeCapture.FLAG_TERMINATOR else 0L
-            s.bytes.size
+    override fun pollPacket(out: ByteArray, meta: LongArray): Int {
+        val s = if (blocking) steps.take() else steps.poll() ?: return 0
+        return when (s) {
+            is Step.Frame -> {
+                s.bytes.copyInto(out)
+                meta[0] = s.frameNumber
+                meta[1] = if (s.terminator) NativeCapture.FLAG_TERMINATOR else 0L
+                s.bytes.size
+            }
+            Step.Retry -> NativeCapture.POLL_RETRY
+            Step.Unavailable -> NativeCapture.POLL_UNAVAILABLE
+            Step.Shutdown -> NativeCapture.POLL_SHUTDOWN
+            is Step.Unknown -> s.code
         }
-        Step.Retry -> NativeCapture.POLL_RETRY
-        Step.Unavailable -> NativeCapture.POLL_UNAVAILABLE
-        Step.Shutdown -> NativeCapture.POLL_SHUTDOWN
-        is Step.Unknown -> s.code
     }
 }
