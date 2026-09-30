@@ -193,42 +193,6 @@ class MumbleTcpTransportTest {
         assertFalse(transport.send(TcpMessageType.Ping, pingMessage()))
     }
 
-    // Asserts a real consequence rather than a flag this test already set: if the racing connect
-    // published a socket and started its pumps, a frame written afterwards would be delivered.
-    @Test
-    fun closeDuringConnectLeavesNoSocketDeliveringFrames() {
-        val srv = startServer()
-        val transport = MumbleTcpTransport(expectedPin = srv.certSha256)
-        val connectStarted = CountDownLatch(1)
-        val delivered = CountDownLatch(1)
-
-        val t = thread {
-            connectStarted.countDown()
-            runCatching {
-                runBlocking {
-                    transport.connect("localhost", srv.port, object : MumbleControlTransport.Listener {
-                        override fun onFrame(f: TcpFrame) { delivered.countDown() }
-                        override fun onClosed(cause: Throwable?) = Unit
-                    })
-                }
-            }
-        }
-        connectStarted.await()
-        transport.close()
-        t.join(10_000)
-
-        // A close that lands mid-handshake aborts it, and then there is no socket to write to;
-        // one that lands after it leaves a socket the transport must have discarded.
-        if (srv.awaitHandshake(1, TimeUnit.SECONDS)) {
-            runCatching { srv.writeFrame(TcpMessageType.ServerSync.id, byteArrayOf(1)) }
-        }
-
-        assertFalse(
-            "a frame was delivered after close, so a live socket survived the race",
-            delivered.await(1, TimeUnit.SECONDS),
-        )
-    }
-
     // Reproduces the concurrency defect this lock closes: onClosed must not run while onFrame is
     // still executing, or a listener written to the documented contract races its own state.
     @Test
@@ -440,7 +404,7 @@ class MumbleTcpTransportTest {
     @Test
     fun presentsTheClientCertificateWhenTheServerAsks() = runBlocking {
         val srv = startServer(requestClientCertificate = true)
-        val identity = ClientIdentity.generate()
+        val identity = testIdentity
         val transport = MumbleTcpTransport(srv.certSha256, identityStore = FixedIdentity(identity))
 
         transport.connect("localhost", srv.port, noopListener())

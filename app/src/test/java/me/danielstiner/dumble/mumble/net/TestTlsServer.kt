@@ -32,7 +32,7 @@ import kotlin.concurrent.thread
  */
 class TestTlsServer(private val requestClientCertificate: Boolean = false) : AutoCloseable {
 
-    private val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    private val keys = sharedKeys
 
     private val cert = run {
         val now = System.currentTimeMillis()
@@ -122,9 +122,6 @@ class TestTlsServer(private val requestClientCertificate: Boolean = false) : Aut
         }
     }
 
-    /** Whether a client's handshake completed within the wait. */
-    fun awaitHandshake(timeout: Long, unit: TimeUnit): Boolean = ready.await(timeout, unit)
-
     /** Blocks until a client's handshake has completed, then writes one control frame to it. */
     fun writeFrame(type: Int, payload: ByteArray) {
         ready.await()
@@ -142,6 +139,9 @@ class TestTlsServer(private val requestClientCertificate: Boolean = false) : Aut
 
     companion object {
         private val PASSWORD = "test".toCharArray()
+
+        // Key generation was most of a server's start-up, and no test is about the server's key.
+        private val sharedKeys by lazy { KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair() }
 
         /** Rejects every certificate, forcing [MumbleTrustManager] past the authority path to
          *  [UntrustedCertificateException] — stands in for a client with no CA that trusts a

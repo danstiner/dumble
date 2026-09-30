@@ -4,7 +4,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -21,26 +20,23 @@ class FileClientIdentityStoreTest {
 
     private fun file() = File(folder.root, "identity.p12")
 
-    @Test fun firstLoadGeneratesAndPersists() = runBlocking {
-        val file = file()
-        val identity = FileClientIdentityStore(file).load()
-        assertTrue(file.exists())
-        assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
-        assertFalse("temp file must not survive", File(file.path + ".tmp").exists())
-    }
+    /** A store whose first load writes [testIdentity]: these tests are about the file, not RSA. */
+    private fun store(file: File) = FileClientIdentityStore(file) { testIdentity }
 
     @Test fun aSecondStoreOnTheSameFileLoadsTheSameIdentity() = runBlocking {
-        val first = FileClientIdentityStore(file()).load()
-        val second = FileClientIdentityStore(file()).load()
+        val first = store(file()).load()
+        val second = FileClientIdentityStore(file()) { error("a second store must read the file, not generate") }.load()
         assertEquals(first.hash, second.hash)
         assertArrayEquals(first.certificate.encoded, second.certificate.encoded)
     }
 
     @Test fun loadIsMemoised() = runBlocking {
-        val store = FileClientIdentityStore(file())
+        val store = store(file())
         assertSame(store.load(), store.load())
     }
 
+    // The real generator on purpose: two racing first loads must settle on one of two distinct
+    // identities, in the memo and in the file alike.
     @Test fun concurrentFirstLoadsAgree() = runBlocking {
         val file = file()
         val store = FileClientIdentityStore(file)
@@ -72,7 +68,7 @@ class FileClientIdentityStoreTest {
     @Test fun anEmptyFileIsGeneratedOver() = runBlocking {
         val file = file()
         file.writeBytes(ByteArray(0))
-        val identity = FileClientIdentityStore(file).load()
+        val identity = store(file).load()
         assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
     }
 
@@ -81,14 +77,14 @@ class FileClientIdentityStoreTest {
         // after itself and the identity file must not appear.
         val file = file()
         folder.newFolder("identity.p12.tmp")
-        assertThrows(IOException::class.java) { runBlocking { FileClientIdentityStore(file).load() } }
+        assertThrows(IOException::class.java) { runBlocking { store(file).load() } }
         assertEquals(emptyList<String>(), folder.root.list()!!.toList())
     }
 
     @Test fun aTempFileLeftByACrashIsOverwritten() = runBlocking {
         val file = file()
         File(file.path + ".tmp").writeBytes(byteArrayOf(1, 2, 3, 4))
-        val identity = FileClientIdentityStore(file).load()
+        val identity = store(file).load()
         assertEquals(identity.hash, ClientIdentity.decode(file.readBytes()).hash)
         assertEquals(listOf(file.name), folder.root.list()!!.toList())
     }

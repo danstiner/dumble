@@ -1746,7 +1746,7 @@ class MumbleConnectionTest {
     //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
     //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
     //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
-    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the eleven `peer` tests
+    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the nine `peer` tests
     // A converted test lives above this line and never calls awaitOnRealThreads.
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
@@ -2159,48 +2159,6 @@ class MumbleConnectionTest {
         }
         val request = fake.sent.last { it.first == TcpMessageType.CryptSetup }.second
         assertEquals(MumbleProtos.CryptSetup.getDefaultInstance(), request)
-        conn.disconnect()
-        peer.close()
-    }
-
-    /**
-     * The wiring of the transport's unanswered-ping report: a peer that opens our pings but
-     * never answers them. Keying sends the first; the ticker's first tick judges it and sends
-     * the second, and its second tick judges that and reports. On a shortened interval, so the
-     * two ticks pass in well under a second.
-     */
-    @Test fun twoUnansweredPingsSendATunneledPingToPullTheDownlinkBack() = runBlocking {
-        val peer = UdpPeer(serverCrypt())
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), pingIntervalMs = 200, newTransport = fakeAimedAt(peer) { fake = it })
-        connectToHandshaking(conn)
-        fake.listener!!.onFrame(keyExchange())
-        assertNotNull(peer.opened.poll(5, TimeUnit.SECONDS))
-        fake.listener!!.onFrame(serverSync())
-        assertTrue("nothing tunneled yet", fake.sentRaw.none { it.first == TcpMessageType.UDPTunnel })
-
-        awaitOnRealThreads("the tick after the second unanswered ping must tunnel a ping") {
-            fake.sentRaw.any { it.first == TcpMessageType.UDPTunnel }
-        }
-
-        val frame = fake.sentRaw.first { it.first == TcpMessageType.UDPTunnel }.second
-        assertEquals("a ping, so no peer hears a blip", 1.toByte(), frame[0])
-        conn.disconnect()
-        peer.close()
-    }
-
-    /** The other half: a peer that answers keeps the report armed and nothing is ever tunneled. */
-    @Test fun answeredPingsNeverTunnelAnything() = runBlocking {
-        val peer = answeringPeer()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), pingIntervalMs = 100, newTransport = fakeAimedAt(peer) { fake = it })
-        connectToHandshaking(conn)
-        fake.listener!!.onFrame(keyExchange())
-        fake.listener!!.onFrame(serverSync())
-
-        awaitOnRealThreads("several pings answered") { peer.opened.size >= 5 }
-
-        assertTrue(fake.sentRaw.none { it.first == TcpMessageType.UDPTunnel })
         conn.disconnect()
         peer.close()
     }

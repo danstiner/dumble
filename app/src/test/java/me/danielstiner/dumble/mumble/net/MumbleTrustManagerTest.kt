@@ -14,6 +14,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigInteger
+import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.cert.CertificateException
@@ -25,7 +26,7 @@ class MumbleTrustManagerTest {
 
     /** Minimal self-signed certificate; the stub delegate below decides trust, so contents barely matter. */
     private fun selfSigned(commonName: String): X509Certificate {
-        val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val keys = KEYS
         val now = System.currentTimeMillis()
         val builder = JcaX509v3CertificateBuilder(
             X500Name("CN=$commonName"),
@@ -152,9 +153,9 @@ class MumbleTrustManagerTest {
     // all take the pinned path. This drives a genuine JSSE validator over a real chain instead.
     @Test
     fun realValidatorAcceptsAProperlyChainedCertificateWithNoPinStored() {
-        val root = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val root = KEYS
         val rootCert = certificate("test-root", root, "test-root", root, isAuthority = true)
-        val leaf = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val leaf = LEAF_KEYS
         val leafCert = certificate("leaf", leaf, "test-root", root, isAuthority = false)
 
         val anchors = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
@@ -203,5 +204,13 @@ class MumbleTrustManagerTest {
         }
         val signer = JcaContentSignerBuilder("SHA256withRSA").build(issuerKeys.private)
         return JcaX509CertificateConverter().getCertificate(builder.build(signer))
+    }
+
+    private companion object {
+        // Key generation was most of this class's time, and no test here is about the key.
+        val KEYS: KeyPair by lazy { rsa2048() }
+        val LEAF_KEYS: KeyPair by lazy { rsa2048() }
+
+        fun rsa2048(): KeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     }
 }
