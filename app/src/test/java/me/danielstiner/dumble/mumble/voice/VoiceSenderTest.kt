@@ -14,7 +14,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TestTimeSource
 
 /**
- * The pump, one [VoiceSender.step] at a time on the test's own thread. The last two cases run it
+ * The pump, one [VoiceSender.step] at a time on the test's own thread. The last three cases run it
  * on its real thread, since start()'s loop and stop()'s join are theirs to pin.
  */
 class VoiceSenderTest {
@@ -198,5 +198,40 @@ class VoiceSenderTest {
         sender.stop()
         assertEquals("the pump must have exited by the time stop() returns", 1, exits.total())
         assertEquals(VoiceSender.StopReason.REQUESTED, sender.stopReason)
+    }
+
+    /**
+     * A pump wedged in native code: stop() gives up at its bound instead of hanging the release,
+     * and reports no exit the pump has not made — the owner frees the engine on that exit, and a
+     * poll is still in flight.
+     */
+    @Test
+    fun stopGivesUpOnAWedgedPumpWithoutReportingAnExit() {
+        val unwedge = CountDownLatch(1)
+        val fake = object : VoiceSender.CaptureHandle {
+            // Blocks like the real pollPacket, and stop() deliberately does not release it.
+            override fun pollPacket(out: ByteArray, meta: LongArray): Int {
+                unwedge.await(); return NativeCapture.POLL_SHUTDOWN
+            }
+            override fun setGateOpen(open: Boolean) = Unit
+            override fun setTransmitMode(mode: TransmitMode) = Unit
+            override fun stop() = Unit
+            override fun destroy() = Unit
+            override fun stats(): CaptureStats? = null
+        }
+        val exits = Exits()
+        val sender = VoiceSender(fake, { true }, exits.callback)
+        try {
+            sender.start()
+            sender.stop()   // an unbounded join never returns: the hang guard reports it
+            assertEquals("a wedged pump has not exited", 0, exits.total())
+
+            unwedge.countDown()
+            exits.awaitFirst()
+            assertEquals(1, exits.total())
+            assertEquals(VoiceSender.StopReason.REQUESTED, sender.stopReason)
+        } finally {
+            unwedge.countDown()
+        }
     }
 }

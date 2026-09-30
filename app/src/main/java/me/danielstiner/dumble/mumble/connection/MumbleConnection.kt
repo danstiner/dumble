@@ -94,6 +94,8 @@ class MumbleConnection internal constructor(
     private val call: VoiceCall = NoVoiceCall,
     // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
     private val stuckPumpMillis: Long = 1_000L,
+    // Seam: what runs a built pump — its own thread, or a test that steps it.
+    private val startPump: (VoiceSender) -> Unit = VoiceSender::start,
     // Seams: the UDP transport's clock, so its wiring test can jump the resync throttle's quiet
     // period rather than wait it out (it reads zero off-device, which is why the test must inject
     // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
@@ -492,9 +494,9 @@ class MumbleConnection internal constructor(
         val capture = CaptureSession(handle, sender)
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
         session.capture = capture
-        // Before start(), so the pump's first poll already reads the mode and the gate.
+        // Before the pump starts, so its first poll already reads the mode and the gate.
         capture.apply(session)
-        sender.start()
+        startPump(sender)
     }
 
     /** Whichever transport the session's link has voice on; dropped while it has none. A datagram
