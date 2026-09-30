@@ -53,7 +53,6 @@ import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -558,9 +557,9 @@ class MumbleConnectionTest {
     private suspend fun awaitEngineBuilt(playout: FakePlayoutEngine) =
         awaitOnRealThreads("the receiver's poll never started") { playout.startAttempts.get() > 0 }
 
-    /** Polls under a wall-clock bound. Only for the tests that must run real threads — the
-     *  driver-parking, TLS and loopback-UDP tests — and never inside [deterministic]: a
-     *  converted test drives the scheduler and asserts (`assertSettled`). */
+    /** Polls under a wall-clock bound. Only for the tests that must run real threads — the TLS
+     *  and loopback-UDP tests — and never inside [deterministic]: a converted test drives the
+     *  scheduler and asserts (`assertSettled`). */
     private suspend fun awaitOnRealThreads(message: String, timeout: Duration = 5.seconds, cond: () -> Boolean) {
         val deadline = TimeSource.Monotonic.markNow() + timeout
         while (!cond() && deadline.hasNotPassedNow()) delay(10)
@@ -586,28 +585,6 @@ class MumbleConnectionTest {
         TcpMessageType.TextMessage.id,
         MumbleProtos.TextMessage.newBuilder().setActor(actor).setMessage(body).build().toByteArray(),
     )
-
-    /** The nth transport the connection built, once it exists and has connected. */
-    private suspend fun transportAtOnRealThreads(transports: List<FakeControlTransport>, index: Int): FakeControlTransport {
-        awaitOnRealThreads("transport $index must be built and connected") {
-            transports.size > index && transports[index].listener != null
-        }
-        return transports[index]
-    }
-
-    /**
-     * The nth transport once its state machine has started, which the handshake's Version on the
-     * wire is the proof of. `listener` is set at the top of connect(), several steps before
-     * start(), and a ServerSync fed in that window is dropped by its compare-and-set on
-     * Handshaking, leaving the link to look like one that never synchronized.
-     */
-    private suspend fun startedTransportAtOnRealThreads(transports: List<FakeControlTransport>, index: Int): FakeControlTransport {
-        val transport = transportAtOnRealThreads(transports, index)
-        awaitOnRealThreads("transport $index must have started its handshake") {
-            transport.sent.any { it.first == TcpMessageType.Version }
-        }
-        return transport
-    }
 
     /**
      * The point of the split: the platform call, the receiver and the capture session all belong
@@ -1664,151 +1641,112 @@ class MumbleConnectionTest {
         assertEquals(9, playout.offered.first().session)
     }
 
-    // ---- Real threads, by design. Everything below runs on runBlocking and the default
-    // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
-    //   parking the driver on a latch or a continuation the test releases —
-    //     aSupersededHandshakeDoesNotClobberIdle, aSupersededSessionLeavesChannelTreeEmpty,
-    //     aDisconnectDuringThePinLookupClosesTheLinkItBuilt,
-    //     disconnectWhileReconnectingClosesTheReplacement, aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree
-    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
-    //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
-    //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
-    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the nine `peer` tests
-    // A converted test lives above this line and never calls awaitOnRealThreads.
+    // A driver that cannot be cancelled where it stands: each fake below calls disconnect() from
+    // inside a call that returns without suspending, so the return is not a cancellation point
+    // and the superseded driver runs on to its own live check, every run.
+    // aDisconnectDuringTheHandshakeClosesTheLink and aDisconnectDuringThePinLookupCancelsTheDriver
+    // pin the other half: cancelled at a suspension, the driver never gets there.
 
-    @Test fun aSupersededHandshakeDoesNotClobberIdle() = runBlocking {
-        val arrived = CompletableDeferred<Unit>()
-        val release = CountDownLatch(1)
+    @Test fun aSupersededHandshakeDoesNotClobberIdle() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = MumbleConnection(InMemoryPinStore()) {
-            // Blocks the thread with no dispatcher change, so unlike the real handshake's
-            // withContext(IO) the return is not a cancellation point: the stale driver runs on
-            // to its own live check every time. Holds one Default worker while parked.
-            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
-                .also { transports += it }
-        }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { arrived.await() }               // the driver is inside the handshake
-        conn.disconnect()                                     // bumps the generation
-        assertEquals(ConnectionStatus.Idle, conn.status.value)
-        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
-        delay(100)                                            // let the stale driver run to its live check
-        assertEquals(ConnectionStatus.Idle, conn.status.value)  // guard held: no clobber
-        awaitOnRealThreads("the superseded link must be closed") { transports.single().closed }
-    }
+        lateinit var conn: MumbleConnection
+        conn = own(MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> conn.disconnect() }.also { transports += it } })
 
-    @Test fun aSupersededSessionLeavesChannelTreeEmpty() = runBlocking {
-        val arrived = CompletableDeferred<Unit>()
-        val release = CountDownLatch(1)
-        val conn = MumbleConnection(InMemoryPinStore()) {
-            // Blocks the thread with no dispatcher change, so the return is not a cancellation
-            // point and the stale driver runs on to its live check every time.
-            FakeControlTransport { _, _ -> arrived.complete(Unit); release.await() }
-        }
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { arrived.await() }   // the driver is inside the handshake
-        conn.disconnect()          // bumps the generation
-        release.countDown()   // stale driver finishes its handshake late; the live check closes what it built
-        delay(100)   // let the stale driver run to its live check
+
+        assertSettled("the superseded link must be closed") { transports.single().closed }
+        assertEquals("no clobber", ConnectionStatus.Idle, conn.status.value)
         assertEquals(ChannelTree(), conn.channelTree.value)
     }
 
     /**
      * connect() publishes the session synchronously, but its link is built on the driver after the
-     * pin lookup, so a disconnect() landing while that lookup is still suspended must find the
+     * pin lookup, so a disconnect() landing while that lookup is still in flight must find the
      * session already retired. No teardown can reach a link that was never published, so the
      * driver's own live check after the lookup is what closes it.
-     *
-     * Deterministic rather than racy: the lookup holds the driver on a latch that blocks the
-     * thread rather than suspending, so disconnect() always wins and the cancel cannot land at a
-     * resume; the driver returns from the lookup instead of dying inside it, which is the case
-     * the check exists for.
      */
-    @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = runBlocking {
-        val arrived = CompletableDeferred<Unit>()
-        val release = CountDownLatch(1)
+    @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = deterministic {
+        lateinit var conn: MumbleConnection
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { arrived.complete(Unit); release.await(); return null }
+            override suspend fun get(key: String): String? { conn.disconnect(); return null }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
         val engines = AtomicInteger()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = MumbleConnection(
-            pins,
-            newPlayout = { engines.incrementAndGet(); FakePlayoutEngine() },
-        ) {
-            FakeControlTransport { _, _ -> }.also { transports += it }
-        }
+        conn = own(MumbleConnection(
+            pins, newPlayout = { engines.incrementAndGet(); FakePlayoutEngine() },
+            udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } })
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { arrived.await() }   // the driver is inside the lookup
-        conn.disconnect()
-        release.countDown()
 
-        awaitOnRealThreads("a superseded session must close the transport it built") {
-            transports.size == 1 && transports.all { it.closed }
+        assertSettled("a superseded session must close the transport it built") {
+            transports.size == 1 && transports.single().closed
         }
         assertEquals("no receiver should ever start on this path", 0, engines.get())
     }
 
     /** Hanging up mid-reconnect is a hang-up: the replacement in flight goes with the session. */
-    @Test fun disconnectWhileReconnectingClosesTheReplacement() = runBlocking {
+    @Test fun disconnectWhileReconnectingClosesTheReplacement() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val release = CountDownLatch(1)
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(InMemoryPinStore(), call = call) {
-            val first = transports.isEmpty()
-            // The replacement blocks the thread inside its handshake, like the real one.
-            FakeControlTransport { _, _ -> if (!first) release.await() }.also { transports += it }
-        }
+        lateinit var conn: MumbleConnection
+        conn = own(MumbleConnection(
+            InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) {
+            val replacement = transports.isNotEmpty()
+            FakeControlTransport { _, _ -> if (replacement) conn.disconnect() }.also { transports += it }
+        })
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        startedTransportAtOnRealThreads(transports, 0).listener!!.onFrame(serverSync(1))
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        connected(conn)
+
         transports[0].listener!!.onClosed(IOException("reset"))
-        transportAtOnRealThreads(transports, 1)   // inside its handshake
 
-        conn.disconnect()
-
+        assertSettled("both links must be closed") { transports.size == 2 && transports.all { it.closed } }
         assertEquals(ConnectionStatus.Idle, conn.status.value)
-        release.countDown()
-        awaitOnRealThreads("both links must be closed") { transports.all { it.closed } }
-        awaitOnRealThreads("the call ends once, as a hang-up") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons)
+        assertEquals("the call ends once, as a hang-up", listOf(VoiceCall.Reason.USER), call.endReasons)
     }
 
     /**
      * The freeze: from its close, nothing the dead link still reduces may reach the UI, or the
      * ghost kick's UserRemove would read as "you left". The close is what the guard reads, and it
-     * lands before any replacement exists.
+     * lands before any replacement is swapped in.
      */
-    @Test fun aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree() = runBlocking {
+    @Test fun aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val release = CountDownLatch(1)
-        val conn = MumbleConnection(InMemoryPinStore()) {
-            val first = transports.isEmpty()
-            FakeControlTransport { _, _ -> if (!first) release.await() }.also { transports += it }
-        }
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        startedTransportAtOnRealThreads(transports, 0).listener!!.onFrame(serverSync(1))
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Connected } }
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        connected(conn)
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray()))
-        withTimeout(5_000) { conn.channelTree.first { it.channels.containsKey(1) } }
+        assertSettled("the tree") { conn.channelTree.value.channels.containsKey(1) }
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Reconnecting } }
-        // The driver closes the dead link before it builds any replacement, and close() raises the
-        // flag before it hands the socket to IO, so a closed transport proves the flag is up.
-        awaitOnRealThreads("the dead link must be closed") { transports[0].closed }
+        // The replacement connects, then waits in replaceLink for a ServerSync this test never
+        // sends: the dead link is closed and nothing has been swapped in.
+        startedTransportAt(transports, 1)
+        assertTrue(conn.status.value is ConnectionStatus.Reconnecting)
+        assertTrue("the dead link must be closed", transports[0].closed)
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(2).setName("Late").build().toByteArray()))
-        delay(200)
 
-        assertFalse("a frozen link must not reach the tree", conn.channelTree.value.channels.containsKey(2))
-        release.countDown()
-        conn.disconnect()
+        assertSettled("a frozen link must not reach the tree") { !conn.channelTree.value.channels.containsKey(2) }
     }
+
+    // ---- Real threads, by design. Everything below runs on runBlocking and the default
+    // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
+    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
+    //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
+    //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
+    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the nine `peer` tests
+    // A converted test lives above this line and never calls awaitOnRealThreads.
 
     @Test fun firstContactAwaitsTrustThenPinsAndReachesHandshaking() = runBlocking {
         val srv = TestTlsServer()
