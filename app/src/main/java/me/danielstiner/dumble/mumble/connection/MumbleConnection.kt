@@ -65,8 +65,10 @@ import me.danielstiner.dumble.time.BootTimeSource
 import java.net.SocketTimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 /**
@@ -96,6 +98,9 @@ class MumbleConnection internal constructor(
     private val stuckPumpMillis: Long = 1_000L,
     // Seam: what runs a built pump — its own thread, or a test that steps it.
     private val startPump: (VoiceSender) -> Unit = VoiceSender::start,
+    // Seam: the clock of capture's two timers, the pump's stats cadence and the speaking hold, so
+    // a test that steps the pump runs both on the scheduler's time.
+    private val captureClock: TimeSource = TimeSource.Monotonic,
     // Seams: the UDP transport's clock, so its wiring test can jump the resync throttle's quiet
     // period rather than wait it out (it reads zero off-device, which is why the test must inject
     // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
@@ -153,7 +158,7 @@ class MumbleConnection internal constructor(
     private val _selfSpeaking = MutableStateFlow(false)
     override val selfSpeaking: StateFlow<Boolean> = _selfSpeaking.asStateFlow()
 
-    @Volatile private var lastAudioSentNanos = 0L
+    @Volatile private var lastAudioSent: TimeMark = captureClock.markNow()
 
     private val _callHeld = MutableStateFlow(false)
     override val callHeld: StateFlow<Boolean> = _callHeld.asStateFlow()
@@ -394,28 +399,27 @@ class MumbleConnection internal constructor(
      *  the raise is truthful, cannot outlive its hold, and worst case is a ~200 ms halo past the
      *  last drained packet. Relies on [scope] never being cancelled. */
     private fun onAudioSent() {
-        lastAudioSentNanos = System.nanoTime()
+        lastAudioSent = captureClock.markNow()
         if (_selfSpeaking.compareAndSet(expect = false, update = true)) {
             scope.launch { holdSelfSpeaking() }
         }
     }
 
-    private fun holdRemainingMillis() =
-        SPEAKING_HOLD_MILLIS - (System.nanoTime() - lastAudioSentNanos) / 1_000_000
+    private fun holdRemaining() = SPEAKING_HOLD - lastAudioSent.elapsedNow()
 
-    /** Lowers [selfSpeaking] once [SPEAKING_HOLD_MILLIS] pass with no packet. Loops rather than
+    /** Lowers [selfSpeaking] once [SPEAKING_HOLD] passes with no packet. Loops rather than
      *  delaying once: every packet moves the stamp while this sleeps. */
     private suspend fun holdSelfSpeaking() {
         while (true) {
-            val remaining = holdRemainingMillis()
-            if (remaining > 0) { delay(remaining); continue }
+            val remaining = holdRemaining()
+            if (remaining.isPositive()) { delay(remaining); continue }
             _selfSpeaking.value = false
             // Dekker-style: lower, then re-read, while onAudioSent stamps then compares-and-sets.
             // Each side writes its own variable first and reads the other's, so at least one
             // sees the other — a packet that lands during the lower either wins the
             // compare-and-set (launching a new hold) or is seen here via the fresh stamp.
             // Volatile under StateFlow's lock.
-            if (holdRemainingMillis() <= 0) return
+            if (!holdRemaining().isPositive()) return
             if (!_selfSpeaking.compareAndSet(expect = false, update = true)) return
         }
     }
@@ -487,6 +491,7 @@ class MumbleConnection internal constructor(
             onExit = { s -> send(CaptureCommand.PumpExited(session, s)) },
             onAudioSent = ::onAudioSent,
             onStats = { publishCaptureStats(session.gen, it) },
+            clock = captureClock,
         )
         // Recheck: `generation`/`current` are still mutated on caller threads while newCapture()
         // blocks, so a disconnect landing in that window has already moved the world.
@@ -1164,7 +1169,7 @@ class MumbleConnection internal constructor(
 
         /** How long the speaking halo outlives the last packet: enough to bridge the pauses
          *  inside a sentence, not so long it is still lit once someone has stopped. */
-        const val SPEAKING_HOLD_MILLIS = 200L
+        val SPEAKING_HOLD = 200.milliseconds
 
         /** A link that stayed synchronized this long was a working path: losing it is a new
          *  outage, not another failure of the one being retried. */

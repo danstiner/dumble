@@ -402,7 +402,7 @@ class MumbleConnectionTest {
         val call = FakeVoiceCall()
         val conn = own(MumbleConnection(
             InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
+            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, startPump = startPump,
             call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -597,7 +597,7 @@ class MumbleConnectionTest {
         val call = FakeVoiceCall()
         val conn = own(MumbleConnection(
             InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
+            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, startPump = startPump,
             newPlayout = { playout }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
@@ -1508,8 +1508,8 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val conn = own(MumbleConnection(
-            InMemoryPinStore(), newCapture = { FakeCaptureHandle().also { handles += it } },
-            udpClock = clock, context = dispatcher, blocking = dispatcher,
+            InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
+            startPump = startPump, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
@@ -1529,8 +1529,8 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val conn = own(MumbleConnection(
-            InMemoryPinStore(), newCapture = { FakeCaptureHandle().also { handles += it } },
-            udpClock = clock, context = dispatcher, blocking = dispatcher,
+            InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
+            startPump = startPump, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
@@ -1740,11 +1740,107 @@ class MumbleConnectionTest {
         assertSettled("a frozen link must not reach the tree") { !conn.channelTree.value.channels.containsKey(2) }
     }
 
+    /**
+     * The whole transmit path end to end, since every piece of it is new wiring: the service comes
+     * up before the engine is opened, the pump reaches the wire, the gate follows push-to-talk, and
+     * teardown releases all three. Asserting on `sentRaw` rather than on the sender means the test
+     * cannot pass with a pump that was built but never started.
+     */
+    @Test fun requestCaptureRunsTheSendPathAndDisconnectReleasesIt() = deterministic {
+        lateinit var fake: FakeControlTransport
+        val handle = FakeCaptureHandle(blocking = false)
+        val call = FakeVoiceCall()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newCapture = { handle }, call = call, startPump = startPump,
+            captureClock = clock, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(conn)
+
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
+        conn.requestCapture()
+
+        assertSettled("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
+        val (type, payload) = fake.sentRaw.first()
+        assertEquals(TcpMessageType.UDPTunnel, type)
+        // Leading 0 is the UDP audio type byte the tunnel carries ahead of the Audio protobuf.
+        assertEquals(0, payload[0].toInt())
+
+        conn.setTransmitting(true)
+        assertSettled("push-to-talk must open the gate") { handle.gateOpen }
+
+        conn.disconnect()
+        assertSettled("teardown must destroy the engine") { handle.destroyed }
+        assertTrue("teardown must stop the pump", handle.stopped)
+        assertEquals("teardown must end the call", 1, call.ends)
+    }
+
+    /**
+     * A hold tears the capture session down instead of merely closing the gate, and a resume builds
+     * a fresh one. This is the design's substitute for gating the reopen backoff on focus state: proving
+     * the rebuilt session reaches the wire is what makes the substitution honest, since a teardown
+     * that could not come back would be worse than the backoff it replaced.
+     */
+    @Test fun holdTearsTheSessionDownAndResumeRebuildsIt() = deterministic {
+        lateinit var fake: FakeControlTransport
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val call = FakeVoiceCall()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
+            call = call, startPump = startPump, captureClock = clock,
+            udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { fake = it } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(conn)
+
+        conn.requestCapture()
+        assertSettled("the engine must open") { handles.size == 1 }
+        handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
+        assertSettled("the first session must reach the wire") { fake.sentRaw.size == 1 }
+
+        call.hold()
+        assertSettled("a hold must destroy the engine") { handles[0].destroyed }
+        assertTrue("a hold must stop the pump", handles[0].stopped)
+
+        call.resume()
+        assertSettled("resuming must build a new engine") { handles.size == 2 }
+        handles[1].script(FakeCaptureHandle.Step.Frame(byteArrayOf(2), frameNumber = 2, terminator = false))
+        assertSettled("the rebuilt session must reach the wire") { fake.sentRaw.size == 2 }
+
+        conn.disconnect()
+        assertSettled("disconnect must release the rebuilt engine") { handles[1].destroyed }
+        assertEquals("disconnect must end the call", 1, call.ends)
+    }
+
+    /** The counters reach the flow from the live session's pump and leave with the session. */
+    @Test fun theCaptureCountersFollowTheSession() = deterministic {
+        val handle = FakeCaptureHandle(blocking = false)
+        handle.stats = CaptureStats(
+            encodedPackets = 0, encodeErrors = 0, encodeMicrosMean = 400, encodeMicrosMax = 900,
+            ringOverruns = 0, skippedSamples = 0, streamOverruns = 0, framesPerBurst = 96,
+            droppedFrames = 0, inputLatencyMillis = 12.0,
+        )
+        var opens = 0
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newCapture = { opens++; handle }, call = FakeVoiceCall(),
+            startPump = startPump, captureClock = clock,
+            udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(conn)
+        conn.requestCapture()
+        assertSettled("the engine must open") { opens == 1 }
+
+        elapse(2.seconds)   // the pump's stats period; the poll after it reads the counters
+        assertEquals(12.0, conn.captureStats.value?.inputLatencyMillis)
+
+        conn.disconnect()
+        assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
+    }
+
     // ---- Real threads, by design. Everything below runs on runBlocking and the default
     // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
     //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
-    //   the pump's own thread — frames on the wire or self-speaking: requestCaptureRunsTheSendPathAndDisconnectReleasesIt,
-    //     holdTearsTheSessionDownAndResumeRebuildsIt — and its own clock — theCaptureCountersFollowTheSession
     //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the nine `peer` tests
     // A converted test lives above this line and never calls awaitOnRealThreads.
 
@@ -1780,117 +1876,6 @@ class MumbleConnectionTest {
         } finally {
             srv.close()
         }
-    }
-
-    /**
-     * The whole transmit path end to end, since every piece of it is new wiring: the service comes
-     * up before the engine is opened, the pump reaches the wire, the gate follows push-to-talk, and
-     * teardown releases all three. Asserting on `sentRaw` rather than on the sender means the test
-     * cannot pass with a pump that was built but never started.
-     *
-     * Real threads: `sentRaw` is written from the pump's own thread, not the scheduler — nothing
-     * drives it to run just because the test calls runCurrent().
-     */
-    @Test fun requestCaptureRunsTheSendPathAndDisconnectReleasesIt() = runBlocking {
-        lateinit var fake: FakeControlTransport
-        val handle = FakeCaptureHandle()
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { handle },
-            call = call,
-        ) { FakeControlTransport { _, _ -> }.also { fake = it } }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-
-        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
-        conn.requestCapture()
-
-        awaitOnRealThreads("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
-        val (type, payload) = fake.sentRaw.first()
-        assertEquals(TcpMessageType.UDPTunnel, type)
-        // Leading 0 is the UDP audio type byte the tunnel carries ahead of the Audio protobuf.
-        assertEquals(0, payload[0].toInt())
-
-        // setTransmitting only reaches the engine once the sender is published, which happens on
-        // the same coroutine that opened it — so this runs after the awaits above, not before.
-        conn.setTransmitting(true)
-        awaitOnRealThreads("push-to-talk must open the gate") { handle.gateOpen }
-
-        conn.disconnect()
-        awaitOnRealThreads("teardown must stop the pump") { handle.stopped }
-        awaitOnRealThreads("teardown must destroy the engine") { handle.destroyed }
-        awaitOnRealThreads("teardown must end the call") { call.ends == 1 }
-    }
-
-    /**
-     * A hold tears the capture session down instead of merely closing the gate, and a resume builds
-     * a fresh one. This is the design's substitute for gating the reopen backoff on focus state: proving
-     * the rebuilt session reaches the wire is what makes the substitution honest, since a teardown
-     * that could not come back would be worse than the backoff it replaced.
-     *
-     * Real threads: same as [requestCaptureRunsTheSendPathAndDisconnectReleasesIt] — `sentRaw` is
-     * pump-produced.
-     */
-    @Test fun holdTearsTheSessionDownAndResumeRebuildsIt() = runBlocking {
-        lateinit var fake: FakeControlTransport
-        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> }.also { fake = it } }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-
-        conn.requestCapture()
-        awaitOnRealThreads("the engine must open") { handles.size == 1 }
-        handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
-        awaitOnRealThreads("the first session must reach the wire") { fake.sentRaw.size == 1 }
-
-        call.hold()
-        awaitOnRealThreads("a hold must stop the pump") { handles[0].stopped }
-        awaitOnRealThreads("a hold must destroy the engine") { handles[0].destroyed }
-
-        call.resume()
-        awaitOnRealThreads("resuming must build a new engine") { handles.size == 2 }
-        handles[1].script(FakeCaptureHandle.Step.Frame(byteArrayOf(2), frameNumber = 2, terminator = false))
-        awaitOnRealThreads("the rebuilt session must reach the wire") { fake.sentRaw.size == 2 }
-
-        conn.disconnect()
-        awaitOnRealThreads("disconnect must end the call") { call.ends == 1 }
-        awaitOnRealThreads("disconnect must release the rebuilt engine") { handles[1].destroyed }
-    }
-
-    /**
-     * The counters reach the flow from the live session's pump and leave with the session.
-     *
-     * Real threads: pump-produced — the stats are read on the pump's own clock.
-     */
-    @Test fun theCaptureCountersFollowTheSession() = runBlocking {
-        val handle = FakeCaptureHandle()
-        handle.stats = CaptureStats(
-            encodedPackets = 0, encodeErrors = 0, encodeMicrosMean = 400, encodeMicrosMax = 900,
-            ringOverruns = 0, skippedSamples = 0, streamOverruns = 0, framesPerBurst = 96,
-            droppedFrames = 0, inputLatencyMillis = 12.0,
-        )
-        val conn = MumbleConnection(InMemoryPinStore(), newCapture = { handle }, call = FakeVoiceCall()) {
-            FakeControlTransport { _, _ -> }
-        }
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.requestCapture()
-
-        // The pump reads the counters after a poll returns, two seconds apart; keep it polling.
-        awaitOnRealThreads("the counters must reach the flow", timeout = 6.seconds) {
-            handle.script(FakeCaptureHandle.Step.Retry)
-            conn.captureStats.value != null
-        }
-        assertEquals(12.0, conn.captureStats.value!!.inputLatencyMillis)
-
-        conn.disconnect()
-        awaitOnRealThreads("teardown must clear the counters") { conn.captureStats.value == null }
     }
 
     // ---- the UDP voice socket ------------------------------------------------------------
