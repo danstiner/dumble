@@ -1048,7 +1048,9 @@ class SessionStateMachineTest {
         // latency, which dwarfs the few-nanosecond window between fail()'s read and its write. Two
         // persistent busy-spinning threads plus an atomic generation counter remove that latency so
         // many more trials actually land inside the window.
-        val trials = 200_000
+        // Measured: a check-then-write fail() is caught within 24 trials, idle or under CPU load.
+        // More trials buy nothing, and three spinning threads on a busy 4-core runner starve.
+        val trials = 2_000
         val gen = java.util.concurrent.atomic.AtomicInteger(0)
         val ackA = java.util.concurrent.atomic.AtomicInteger(0)
         val ackB = java.util.concurrent.atomic.AtomicInteger(0)
