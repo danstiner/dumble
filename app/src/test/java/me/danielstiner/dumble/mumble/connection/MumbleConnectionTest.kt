@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
@@ -48,6 +49,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -72,6 +74,8 @@ import kotlin.time.TimeSource
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class MumbleConnectionTest {
+
+    @get:Rule val timeout = hangGuard()
 
     @Test fun connectTimeoutMapsToTimeoutError() = deterministic {
         val conn = own(MumbleConnection(
@@ -562,9 +566,9 @@ class MumbleConnectionTest {
     /** Polls under a wall-clock bound. Only for the tests that must run real threads — the
      *  driver-parking, TLS and loopback-UDP tests — and never inside [deterministic]: a
      *  converted test drives the scheduler and asserts (`assertSettled`). */
-    private suspend fun awaitOnRealThreads(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (!cond() && System.currentTimeMillis() < deadline) delay(10)
+    private suspend fun awaitOnRealThreads(message: String, timeout: Duration = 5.seconds, cond: () -> Boolean) {
+        val deadline = TimeSource.Monotonic.markNow() + timeout
+        while (!cond() && deadline.hasNotPassedNow()) delay(10)
         assertTrue(message, cond())
     }
 
@@ -2014,7 +2018,7 @@ class MumbleConnectionTest {
         conn.requestCapture()
 
         // The pump reads the counters after a poll returns, two seconds apart; keep it polling.
-        awaitOnRealThreads("the counters must reach the flow", timeoutMillis = 6_000) {
+        awaitOnRealThreads("the counters must reach the flow", timeout = 6.seconds) {
             handle.script(FakeCaptureHandle.Step.Retry)
             conn.captureStats.value != null
         }
@@ -2267,9 +2271,10 @@ class MumbleConnectionTest {
 
     /** The first audio packet the peer opens; its pings land on the same queue. */
     private fun awaitAudio(peer: UdpPeer): ByteArray? {
-        val deadline = System.currentTimeMillis() + 5_000
+        val started = TimeSource.Monotonic.markNow()
         while (true) {
-            val packet = peer.opened.poll(deadline - System.currentTimeMillis(), TimeUnit.MILLISECONDS) ?: return null
+            val left = 5.seconds - started.elapsedNow()
+            val packet = peer.opened.poll(left.inWholeMilliseconds, TimeUnit.MILLISECONDS) ?: return null
             if (packet[0] == 0.toByte()) return packet
         }
     }

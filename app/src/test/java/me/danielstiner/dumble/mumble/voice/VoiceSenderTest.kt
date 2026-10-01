@@ -1,9 +1,11 @@
 package me.danielstiner.dumble.mumble.voice
 
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -13,6 +15,8 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 class VoiceSenderTest {
+
+    @get:Rule val timeout = hangGuard()
 
     /** Counts pump exits, which stop()'s bounded join does not report. */
     private class Exits {

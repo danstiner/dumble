@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.mumble.net
 
 import kotlinx.coroutines.runBlocking
+import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
@@ -13,6 +14,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import java.security.cert.X509Certificate
 import java.net.ServerSocket
@@ -27,6 +29,8 @@ import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
 
 class MumbleTcpTransportTest {
+
+    @get:Rule val timeout = hangGuard()
 
     private var server: TestTlsServer? = null
 
@@ -70,36 +74,39 @@ class MumbleTcpTransportTest {
      *  that has just gone away, that timeout is the whole of a reconnect attempt. */
     @Test
     fun closeAbortsAConnectInFlight() {
-        val silent = ServerSocket(0)   // completes the TCP connect, never speaks: the handshake blocks
-        val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 10_000)
-        thread { Thread.sleep(200); transport.close() }
-        val started = System.nanoTime()
-
-        assertThrows(Exception::class.java) {
-            runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+        ServerSocket(0).use { silent ->   // completes the TCP connect, never speaks: the handshake blocks
+            // Minutes, so only the close can end this connect: one that fails to abort hangs, and
+            // the hang guard fails the test.
+            val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 300_000)
+            var failure: Throwable? = null
+            val connecting = thread {
+                failure = runCatching { runBlocking { transport.connect("localhost", silent.localPort, noopListener()) } }
+                    .exceptionOrNull()
+            }
+            // Accepted means the connect has registered its socket for a close to abort. Held open
+            // until the connect has failed, so nothing but the close can have ended it.
+            silent.accept().use {
+                transport.close()
+                connecting.join()
+            }
+            assertNotNull("the connect must fail once closed", failure)
         }
-
-        val took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-        assertTrue("aborted by the close after ${took} ms, not by the 10 s timeout", took < 3_000)
-        silent.close()
     }
 
     /** A close that lands before the socket exists is not deferred either: the connect refuses
      *  at once instead of running the connect and handshake timeouts out. */
     @Test
     fun closeBeforeConnectFailsAtOnce() {
-        val silent = ServerSocket(0)
-        val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 10_000)
-        transport.close()
-        val started = System.nanoTime()
+        ServerSocket(0).use { silent ->
+            // Minutes: a connect that ignored the close would sit in the handshake until the hang
+            // guard failed the test.
+            val transport = MumbleTcpTransport(expectedPin = "11".repeat(32), handshakeTimeoutMs = 300_000)
+            transport.close()
 
-        assertThrows(Exception::class.java) {
-            runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+            assertThrows(Exception::class.java) {
+                runBlocking { transport.connect("localhost", silent.localPort, noopListener()) }
+            }
         }
-
-        val took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-        assertTrue("refused at once, took ${took} ms", took < 1_000)
-        silent.close()
     }
 
     @Test

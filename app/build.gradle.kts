@@ -1,4 +1,5 @@
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import java.time.Duration
 
 plugins {
     alias(libs.plugins.android.application)
@@ -127,6 +128,9 @@ android {
 // class and line without its message, which for a loopback or chaos test is the whole diagnosis.
 tasks.withType<Test>().configureEach {
     testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    // A hang the JUnit hang guard can't see — a Robolectric class, or one without the rule —
+    // fails the task in minutes instead of eating the CI job.
+    timeout.set(Duration.ofMinutes(10))
 }
 
 kotlin {

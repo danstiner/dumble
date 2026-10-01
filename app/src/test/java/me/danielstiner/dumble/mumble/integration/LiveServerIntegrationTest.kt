@@ -452,8 +452,8 @@ class LiveServerIntegrationTest {
 
     /** The server image declares no health check, so the port may not be accepting yet. */
     private fun awaitPort(host: String, port: Int) {
-        val deadline = System.currentTimeMillis() + 60_000
-        while (System.currentTimeMillis() < deadline) {
+        val deadline = TimeSource.Monotonic.markNow() + 60.seconds
+        while (deadline.hasNotPassedNow()) {
             try {
                 Socket().use { it.connect(InetSocketAddress(host, port), 1_000) }
                 return

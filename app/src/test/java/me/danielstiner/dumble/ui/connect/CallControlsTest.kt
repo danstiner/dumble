@@ -404,12 +404,12 @@ class CallControlsTest {
         compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
 
         // The headset leaves mid-call: the control falls back to a toggle and the menu goes with it.
-        routes = AudioRoutes(listOf(speaker, earpiece), earpiece)
+        compose.runOnIdle { routes = AudioRoutes(listOf(speaker, earpiece), earpiece) }
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
 
         // …and comes back. No tap in between, so no menu.
-        routes = AudioRoutes(listOf(shokz, speaker, earpiece), earpiece)
+        compose.runOnIdle { routes = AudioRoutes(listOf(shokz, speaker, earpiece), earpiece) }
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
@@ -437,9 +437,9 @@ class CallControlsTest {
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Earpiece, current route").assertExists()
 
-        routes = AudioRoutes()
+        compose.runOnIdle { routes = AudioRoutes() }
         compose.waitForIdle()
-        routes = AudioRoutes(listOf(shokz, earpiece), earpiece)
+        compose.runOnIdle { routes = AudioRoutes(listOf(shokz, earpiece), earpiece) }
         compose.waitForIdle()
 
         compose.onNodeWithContentDescription("Earpiece, current route").assertDoesNotExist()
