@@ -3,6 +3,7 @@
 #include <chrono>
 #include <climits>
 #include <atomic>
+#include <future>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -865,9 +866,9 @@ TEST(PlayoutEngine, OutputDownAbandonsEveryQueueAndKeepsEveryEstimate) {
     // Earn a target above the cold constant — two stalled bursts 600 ms apart, as in
     // ARetiredSpeakerKeepsItsEstimate — so a kept estimate is distinguishable from a fresh one.
     e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    e->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++) e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    e->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++) e->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
     const int32_t earned = e->stats().targets[0];
     ASSERT_GT(earned, pl::kColdStartSamples) << "no histogram update landed";
@@ -915,14 +916,15 @@ TEST(PlayoutEngine, ARealtimeFillThatFindsTheMutexHeldFallsSilentAndCountsIt) {
         e->holdMutexForTest([&] { while (!release.load()) std::this_thread::yield(); });
     });
     while (!e->mutexHeldForTest()) std::this_thread::yield();
-    const auto t0 = std::chrono::steady_clock::now();
-    const int producing = e->fillQuantum(pcm.data(), kFrame, s.data(), &live);
-    const double us =
-        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    // A fill that waited for the mutex would hang until the holder lets go, not run slow. The 5 s
+    // wait only bounds that hang; reaching it is the failure.
+    auto fill = std::async(std::launch::async,
+                           [&] { return e->fillQuantum(pcm.data(), kFrame, s.data(), &live); });
+    const bool blocked = fill.wait_for(std::chrono::seconds(5)) == std::future_status::timeout;
     release = true;
     holder.join();
-    EXPECT_EQ(0, producing);
-    EXPECT_LT(us, 1000.0);
+    ASSERT_FALSE(blocked) << "the fill waited for the mutex";
+    EXPECT_EQ(0, fill.get());
     for (int i = 0; i < kFrame; i++) ASSERT_EQ(0, pcm[i]) << "sample " << i;
     EXPECT_EQ(1, live);
     EXPECT_EQ(1u, e->stats().contendedFills);
@@ -958,10 +960,13 @@ TEST(PlayoutEngine, ASlotSurvivesItsEstimatorBeingEvicted) {
     // Give the downlink a target, so that anything claimed from here on seeds well above the cold
     // constant — that difference is what makes the assertion below able to fail.
     e->offer(2, p.data(), int(p.size()), frameFor(2)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    e->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++) e->offer(2, p.data(), int(p.size()), frameFor(2)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    e->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++) e->offer(2, p.data(), int(p.size()), frameFor(2)++, false);
+    const pl::PlayoutEngine::Stats seeded = e->stats();
+    ASSERT_EQ(2, seeded.sessions[1]);
+    ASSERT_GT(seeded.targets[1], pl::kColdStartSamples) << "no histogram update landed";
 
     // Speaker 1's slot is still live and draining, but every arriving sender claims a table entry
     // before the speaker cap is consulted, and the table is only kEstimatorSlots deep. Enough
@@ -989,16 +994,16 @@ TEST(PlayoutEngine, ARetiredSpeakerKeepsItsEstimate) {
     std::vector<int16_t> pcm(kFrame);
     const auto payload = dumble::testtone::encodeToneAlone(kFrame);
 
-    // The engine stamps arrivals off CLOCK_BOOTTIME, so earning a target above the cold start
-    // needs real elapsed time — two stalled bursts, 600 ms apart. The first sets the peak-hold
-    // window, the second closes it. Contiguous frame numbers against a held baseline is exactly
-    // what a delay spike looks like, which is the point: 1.2 s of sleep is what it costs to prove
-    // the table survives retirement with a target that is measurably not the cold-start constant.
+    // Earning a target above the cold start takes elapsed arrival time — two stalled bursts,
+    // 600 ms apart on the engine's clock. The first sets the peak-hold window, the second closes
+    // it. Contiguous frame numbers against a held baseline is exactly what a delay spike looks
+    // like, which is the point: it proves the table survives retirement with a target that is
+    // measurably not the cold-start constant.
     engine->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    engine->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++)
         engine->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    engine->advanceArrivalClockForTest(std::chrono::milliseconds(600));
     for (int i = 0; i < 12; i++)
         engine->offer(1, payload.data(), int(payload.size()), frameFor(1)++, false);
 

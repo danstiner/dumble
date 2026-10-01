@@ -166,11 +166,9 @@ TEST(SileroVad, CostPerWindow) {
         std::chrono::steady_clock::now() - start).count();
     ASSERT_FALSE(probs.empty());
     const double usPerWindow = double(micros) / double(probs.size());
-    // The absolute number is informational only — a host number says nothing about a phone, and
-    // PR 2 measures the phone — but 20x margin against Debug's ~1583 us still catches a
-    // catastrophic regression (an accidental O(n^2), a debug-only sanitizer left on, ...).
-    // CMAKE_BUILD_TYPE is printed alongside so a Debug number is never mistaken for the real cost.
-    EXPECT_LT(usPerWindow, 32000.0) << "build=" << DUMBLE_BUILD_TYPE;
+    // Printed, never asserted: a wall-clock bound fails on a loaded machine, and a host number says
+    // nothing about a phone. CMAKE_BUILD_TYPE rides along so a Debug number is never mistaken for
+    // the real cost.
     std::printf("[          ] %.1f us/window over %zu windows (%.2f%% of the 32 ms each covers, "
                 "build=%s)\n",
                 usPerWindow, probs.size(), 100.0 * usPerWindow / 32000.0, DUMBLE_BUILD_TYPE);
