@@ -32,7 +32,11 @@ object NoClientIdentity : ClientIdentityStore {
  * Auto Backup carries the file to a reinstall or a new phone: it must stay under `filesDir` and
  * out of any backup exclusion.
  */
-class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
+class FileClientIdentityStore(
+    private val file: File,
+    // Seam: a test about the file hands in a fixed identity instead of paying for RSA-3072.
+    private val generate: () -> ClientIdentity = { ClientIdentity.generate() },
+) : ClientIdentityStore {
 
     // Two loads racing on a fresh install would otherwise each generate, and the memo could
     // hold one identity while the file holds the other.
@@ -56,7 +60,7 @@ class FileClientIdentityStore(private val file: File) : ClientIdentityStore {
                 throw IOException("client identity ${file.name} does not decode; clearing the app's data starts a new one", e)
             }
         }
-        val (identity, took) = measureTimedValue { ClientIdentity.generate() }
+        val (identity, took) = measureTimedValue { generate() }
         // Synced before the rename so a power loss leaves the old file or none, never a torn
         // file at the final name.
         val tmp = File(file.path + ".tmp")

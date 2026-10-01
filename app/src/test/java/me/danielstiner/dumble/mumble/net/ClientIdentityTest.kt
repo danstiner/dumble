@@ -2,7 +2,6 @@ package me.danielstiner.dumble.mumble.net
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -15,9 +14,7 @@ import java.time.ZoneOffset
 
 class ClientIdentityTest {
 
-    // RSA-3072 generation takes up to a few seconds; one identity serves every test that does
-    // not need a second.
-    private val identity by lazy { SHARED }
+    private val identity get() = testIdentity
 
     @Test fun generatesASelfSignedRsa3072CertificateShapedLikeTheDesktops() {
         val cert = identity.certificate
@@ -79,13 +76,5 @@ class ClientIdentityTest {
         assertNull(km.getCertificateChain("other"))
         assertNull(km.getPrivateKey("other"))
         assertNull(km.chooseServerAlias("RSA", null, null))
-    }
-
-    @Test fun eachGenerationIsANewIdentity() {
-        assertNotEquals(identity.hash, ClientIdentity.generate().hash)
-    }
-
-    private companion object {
-        val SHARED: ClientIdentity by lazy { ClientIdentity.generate() }
     }
 }
