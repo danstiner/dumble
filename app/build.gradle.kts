@@ -121,7 +121,8 @@ android {
             version = "3.22.1"
         }
     }
-    ndkVersion = "27.0.12077973"
+    // The CI runner image's preinstalled default; any other version is a download on every run.
+    ndkVersion = "27.3.13750724"
 }
 
 // The CI log is the only record of a failed test, and Gradle's default prints the exception
