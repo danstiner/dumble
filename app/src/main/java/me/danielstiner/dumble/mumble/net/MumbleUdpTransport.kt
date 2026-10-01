@@ -140,7 +140,8 @@ class MumbleUdpTransport(
         }
     }
 
-    private fun received(datagram: ByteArray, n: Int) {
+    // Internal so the tests can hand it datagrams without a socket or its thread.
+    internal fun received(datagram: ByteArray, n: Int) {
         // The header plus at least the type byte, and no more than the server sends: past that
         // the read truncated it, and the tag would fail for no fault of the counter's. Unkeyed
         // is skipped for the same reason.
