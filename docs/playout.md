@@ -179,15 +179,15 @@ more than on the device. `OboePlayout: open:` in logcat says what was granted.
 | Emulator (no FastMixer)                                 | legacy / Shared        | 960   | 1920   | 110–150 ms |
 
 Probed with the same process on the speaker route, no call object, only `AudioManager.setMode`
-changed. Telecom's part in this is the mode: every connection registers a self-managed call,
-which puts the device in `MODE_IN_COMMUNICATION`. In that mode the 7a's HAL refuses MMAP for
-any usage (`openMmapStream` returns ENOSYS, logged by `MmapStreamInterface`), so AAudio falls
-back to legacy. Which legacy path is the usage's doing: `VoiceCommunication` maps to stream
-`VOICE_CALL`, and the policy replaces the requested flags with `VOIP_RX|DIRECT`
-(`AudioPolicyManager::getOutputForAttrInt`), selecting the DSP voice path with the echo
-canceller — burst 480, 81 ms, the route the old AudioTrack loop was on at 89 ms. Media usage
-lands on the primary fast track at 54 ms but loses the AEC reference and call-volume pairing;
-not taken, pending a listen. The 8 ms is real and reachable only outside a call.
+changed. The platform call's part in this is the mode: every connection puts the device in
+`MODE_IN_COMMUNICATION`. In that mode the 7a's HAL refuses MMAP for any usage (`openMmapStream`
+returns ENOSYS, logged by `MmapStreamInterface`), so AAudio falls back to legacy. Which legacy path
+is the usage's doing: `VoiceCommunication` maps to stream `VOICE_CALL`, and the policy replaces the
+requested flags with `VOIP_RX|DIRECT` (`AudioPolicyManager::getOutputForAttrInt`), selecting the DSP
+voice path with the echo canceller — burst 480, 81 ms, the route the old AudioTrack loop was on at
+89 ms. Media usage lands on the primary fast track at 54 ms but loses the AEC reference and
+call-volume pairing; not taken, pending a listen. The 8 ms is real and reachable only outside a
+call.
 
 Two consequences of the legacy path worth knowing. Its underrun count stayed at 0 while
 AudioFlinger counted 480 underruns on the fast track over a session (mostly around Bluetooth

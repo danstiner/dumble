@@ -45,6 +45,12 @@ class AndroidVoiceCall(
 
     // Main only, like everything below.
     private var live: Live? = null
+    /**
+     * Connects run on two threads (the UI's, and trust-and-connect's), so their starts can post out
+     * of order. An older start would otherwise supersede the newer call, and its own end then tear
+     * that call down.
+     */
+    private var newestGen = Int.MIN_VALUE
     /** Deferred while a call starts held, so connecting mid-call takes neither route nor mode. */
     private var routed = false
     /**
@@ -104,6 +110,8 @@ class AndroidVoiceCall(
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
+        if (gen < newestGen) return
+        newestGen = gen
         val superseding = live != null
         val l = Live(gen, onActive, onRoutes)
         live = l
@@ -165,14 +173,14 @@ class AndroidVoiceCall(
     private fun routes() = audio.availableCommunicationDevices.map { it.toAudioRoute() }
 
     private fun route(id: String) {
-        // A pick or an arrival during a hold is kept; take() must not replace it on resume.
-        routed = true
         val device = audio.availableCommunicationDevices.firstOrNull { it.id.toString() == id }
         if (device == null) {
             // Gone since the menu was drawn; the next device event redraws it.
             Log.w(TAG, "route $id is gone")
             return
         }
+        // A pick or an arrival during a hold is kept; take() must not replace it on resume.
+        routed = true
         // A device that vanished since the lookup throws on API 31 and returns false after.
         val moved = try {
             audio.setCommunicationDevice(device)
