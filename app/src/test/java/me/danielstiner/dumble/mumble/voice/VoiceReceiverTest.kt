@@ -1,18 +1,27 @@
 package me.danielstiner.dumble.mumble.voice
 
 import com.google.protobuf.ByteString
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.time.AtomicTimeSource
+import me.danielstiner.dumble.time.elapse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.milliseconds
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class VoiceReceiverTest {
+
+    private val onePoll = VoiceReceiver.POLL_MILLIS.milliseconds
 
     private fun audioPayload(session: Int, terminator: Boolean = false): ByteArray {
         val audio = MumbleUdpProtos.Audio.newBuilder()
@@ -23,23 +32,31 @@ class VoiceReceiverTest {
         return byteArrayOf(0) + audio.toByteArray()
     }
 
-    /** Polls [cond] until it is true or [timeoutMillis] elapses, then asserts it — the poll this
-     *  class drives means most assertions are about eventual state, not an instant one. */
-    private fun awaitTrue(message: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (!cond() && System.currentTimeMillis() < deadline) Thread.sleep(5)
-        assertTrue(message, cond())
+    /**
+     * The receiver's poll and its stats clock on the test's scheduler: nothing moves between two
+     * statements unless the test drives it, and [onePoll] of virtual time is one poll. Never
+     * `advanceUntilIdle()`: the poll is an endless delay loop. For the same reason the receiver is
+     * stopped before the test returns, or runTest's final drain would run the poll forever.
+     */
+    private fun receiving(
+        newEngine: () -> VoiceReceiver.PlayoutEngine?,
+        body: suspend TestScope.(VoiceReceiver) -> Unit,
+    ) = runTest {
+        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
+        try {
+            body(rx)
+        } finally {
+            rx.stop()
+        }
     }
 
-    /** The stats period runs on [clock], which only a test that is about the period ever moves. */
-    private fun receiver(fake: FakePlayoutEngine, clock: AtomicTimeSource = AtomicTimeSource()) =
-        VoiceReceiver({ fake }, clock)
-
-    /** Waits for [n] more polls; every poll calls the engine's start(). */
-    private fun awaitPolls(fake: FakePlayoutEngine, n: Int) {
-        val target = fake.startAttempts.get() + n
-        awaitTrue("$n more polls") { fake.startAttempts.get() >= target }
-    }
+    /** A started receiver whose first poll has run, so each [onePoll] from here is exactly one more. */
+    private fun polling(fake: FakePlayoutEngine, body: suspend TestScope.(VoiceReceiver) -> Unit) =
+        receiving({ fake }) { rx ->
+            rx.start()
+            runCurrent()
+            body(rx)
+        }
 
     /** A packet in an array of its own length, which is what the tunnel delivers. */
     private fun VoiceReceiver.offer(payload: ByteArray) = onVoicePacket(payload, payload.size)
@@ -52,35 +69,28 @@ class VoiceReceiverTest {
     @Test
     fun lenBoundsThePacketNotTheArray() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             val packet = audioPayload(session = 5)
             val past = MumbleUdpProtos.Audio.newBuilder().setSenderSession(999).build().toByteArray()
             rx.onVoicePacket(packet + past, packet.size)
 
             assertEquals(1, fake.offered.size)
             assertEquals(5, fake.offered[0].session)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     @Test
     fun theStreamStartsWithTheReceiverNotWithTheFirstPacket() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             // Before any packet: a start costs up to 100 ms on some devices, and packets landing
             // during it pile up ahead of the gate as standing delay.
-            awaitTrue("the stream must start with the receiver") { fake.started }
+            assertTrue("the stream must start with the receiver", fake.started)
             assertTrue("nothing was offered yet", fake.offered.isEmpty())
             fake.liveSessions = emptySet()
-            Thread.sleep(200)
+            elapse(onePoll * 4)
+            assertEquals("four more polls ran", 5, fake.startAttempts.get())
             assertEquals("silence must not pause the stream", listOf("start"), fake.calls)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -94,83 +104,76 @@ class VoiceReceiverTest {
     fun aStreamThatCannotOpenIsRetriedUntilItCan() {
         val fake = FakePlayoutEngine()
         fake.startResult = false
-        val rx = receiver(fake)
-        rx.start()
-        try {
-            awaitTrue("start must be attempted repeatedly") { fake.startAttempts.get() >= 3 }
+        polling(fake) { rx ->
+            elapse(onePoll * 2)
+            assertEquals("start must be attempted every poll", 3, fake.startAttempts.get())
             assertTrue("nothing started while it could not open", fake.calls.isEmpty())
             fake.startResult = true
-            awaitTrue("the stream must come up once it can") { fake.started }
-        } finally {
-            runBlocking { rx.stop() }
+            elapse(onePoll)
+            assertTrue("the stream must come up on the next poll once it can", fake.started)
         }
     }
 
     @Test
     fun speakingFollowsTheAudibleSet() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             // Two slots held, one producing: live is what starts the stream, audible is what the
             // UI shows, and they are not the same set.
             fake.liveSessions = setOf(3, 4)
             fake.audibleSessions = setOf(3)
-            awaitTrue("speaking must be the audible set") { rx.speakingSessions.value == setOf(3) }
+            elapse(onePoll)
+            assertEquals("speaking must be the audible set", setOf(3), rx.speakingSessions.value)
             fake.audibleSessions = emptySet()
-            awaitTrue("speaking must clear once nobody produces") { rx.speakingSessions.value.isEmpty() }
-        } finally {
-            runBlocking { rx.stop() }
+            elapse(onePoll)
+            assertTrue("speaking must clear once nobody produces", rx.speakingSessions.value.isEmpty())
         }
     }
 
     @Test
     fun aHoldPausesTheStreamAndAResumeStartsIt() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
-            awaitTrue("start") { fake.started }
+        polling(fake) { rx ->
+            assertTrue("start", fake.started)
             fake.liveSessions = setOf(3)
             fake.audibleSessions = setOf(3)
-            awaitTrue("speaking") { rx.speakingSessions.value == setOf(3) }
+            elapse(onePoll)
+            assertEquals("speaking", setOf(3), rx.speakingSessions.value)
             rx.setHeld(true)
-            // Within a poll, not after some idle window: the platform has the device.
-            awaitTrue("a hold must pause the stream", 500) { fake.calls.contains("pause") }
+            // One poll, not some idle window: the platform has the device.
+            elapse(onePoll)
+            assertTrue("a hold must pause the stream on the next poll", fake.calls.contains("pause"))
             // The pause released the engine's speakers: whoever was mid-word is not left lit
             // for the length of the hold.
-            awaitTrue("a hold must end the spurt", 500) { rx.speakingSessions.value.isEmpty() }
+            assertTrue("a hold must end the spurt on the same poll", rx.speakingSessions.value.isEmpty())
             val offeredBeforeHold = fake.offered.size
             rx.offer(audioPayload(session = 3))
-            Thread.sleep(200)
+            elapse(onePoll * 4)
             assertEquals("held: nothing may start", 1, fake.calls.count { it == "start" })
             assertEquals("held: a packet is dropped, not queued", offeredBeforeHold, fake.offered.size)
             rx.setHeld(false)
-            awaitTrue("a resume must start the stream again", 500) {
-                fake.calls.count { it == "start" } == 2
-            }
-        } finally {
-            runBlocking { rx.stop() }
+            elapse(onePoll)
+            assertEquals("a resume must start the stream on the next poll", 2, fake.calls.count { it == "start" })
         }
     }
 
     @Test
     fun stopJoinsThePollDestroysOnceAndDropsALateOffer() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        awaitTrue("start") { fake.started }
-        rx.offer(audioPayload(session = 3))
-        runBlocking { rx.stop() }
-        val offeredBeforeStop = fake.offered.size
-        assertEquals("destroy must be the last call", "destroy", fake.calls.last())
-        assertEquals("engine must be destroyed exactly once", 1, fake.destroyCalls)
-        rx.offer(audioPayload(session = 3))
-        assertEquals("a packet after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
-        runBlocking { rx.stop() }
-        assertEquals("a second stop() must not destroy again", 1, fake.destroyCalls)
-        assertEquals(emptySet<Int>(), rx.speakingSessions.value)
-        assertNull(rx.playoutStats.value)
+        polling(fake) { rx ->
+            assertTrue("start", fake.started)
+            rx.offer(audioPayload(session = 3))
+            rx.stop()
+            val offeredBeforeStop = fake.offered.size
+            assertEquals("destroy must be the last call", "destroy", fake.calls.last())
+            assertEquals("engine must be destroyed exactly once", 1, fake.destroyCalls)
+            rx.offer(audioPayload(session = 3))
+            assertEquals("a packet after stop() must not reach the engine", offeredBeforeStop, fake.offered.size)
+            rx.stop()
+            assertEquals("a second stop() must not destroy again", 1, fake.destroyCalls)
+            assertEquals(emptySet<Int>(), rx.speakingSessions.value)
+            assertNull(rx.playoutStats.value)
+        }
     }
 
     /**
@@ -181,30 +184,30 @@ class VoiceReceiverTest {
     @Test
     fun startAfterStopBuildsNoEngine() {
         val engines = AtomicInteger()
-        val rx = VoiceReceiver({ engines.incrementAndGet(); FakePlayoutEngine() })
-        runBlocking { rx.stop() }
-        rx.start()
-        assertEquals("start() after stop() built a playout engine", 0, engines.get())
+        receiving({ engines.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+            rx.stop()
+            rx.start()
+            assertEquals("start() after stop() built a playout engine", 0, engines.get())
+        }
     }
 
     @Test
     fun startIsSingleShot() {
         val engines = AtomicInteger()
-        val rx = VoiceReceiver({ engines.incrementAndGet(); FakePlayoutEngine() })
-        rx.start()
-        rx.start()
-        assertEquals(1, engines.get())
-        runBlocking { rx.stop() }
-        rx.start()
-        assertEquals("start() after stop() must not build a second engine", 1, engines.get())
+        receiving({ engines.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+            rx.start()
+            rx.start()
+            assertEquals(1, engines.get())
+            rx.stop()
+            rx.start()
+            assertEquals("start() after stop() must not build a second engine", 1, engines.get())
+        }
     }
 
     @Test
     fun routesEachPacketToTheEngine() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             rx.offer(audioPayload(session = 1))
             rx.offer(audioPayload(session = 2, terminator = true))
             assertEquals("every packet must reach the engine", 2, fake.offered.size)
@@ -212,8 +215,6 @@ class VoiceReceiverTest {
             assertFalse("only the second packet set the terminator flag", fake.offered[0].terminator)
             assertEquals(2, fake.offered[1].session)
             assertTrue("the terminator flag must reach the engine", fake.offered[1].terminator)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -225,16 +226,12 @@ class VoiceReceiverTest {
     fun keepsReadingThroughMalformedPayloads() {
         val fake = FakePlayoutEngine()
         fake.offerResult = NativePlayout.OFFER_MALFORMED_PACKET
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             repeat(8) { rx.offer(audioPayload(session = 3)) }
             assertEquals("a malformed payload must not stop the reader", 8, fake.offered.size)
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
             rx.offer(audioPayload(session = 3))
             assertEquals("the session must still work after garbage", 9, fake.offered.size)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -242,71 +239,54 @@ class VoiceReceiverTest {
     fun keepsReadingWhileTheSpeakerCapRefuses() {
         val fake = FakePlayoutEngine()
         fake.offerResult = NativePlayout.OFFER_SPEAKER_CAP
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             repeat(8) { rx.offer(audioPayload(session = it)) }
             assertEquals("every packet must still reach the engine even while capped", 8, fake.offered.size)
             fake.offerResult = NativePlayout.OFFER_ACCEPTED
             rx.offer(audioPayload(session = 0))
             assertEquals("the reader must keep working after the cap trips", 9, fake.offered.size)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     @Test
     fun ignoresUnknownTypeByte() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             // The body must be a *valid* Audio message, differing from an accepted packet only in
             // the type byte; with a garbage body the malformed-protobuf path would reject it anyway.
             val wrongType = audioPayload(session = 1).also { it[0] = 99 }
             rx.offer(wrongType)
             rx.offer(ByteArray(0))
             assertEquals("a non-audio type byte must not reach the engine", 0, fake.offered.size)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     @Test
     fun ignoresMalformedProtobufBody() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             // Valid type byte, garbage body. MumbleTcpTransport's reader catches Throwable and
             // tears the whole session down, so an escaping parse failure would take chat with it.
             rx.offer(byteArrayOf(0, -1, -1, -1, -1, -1))
             assertEquals(0, fake.offered.size)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
-    /** Opens a spurt on session 1 and returns once the receiver has seen it. */
-    private fun openSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver) {
+    /** Opens a spurt on session 1: the next poll finds it audible. */
+    private fun TestScope.openSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver) {
         fake.liveSessions = setOf(1)
         fake.audibleSessions = setOf(1)
-        awaitTrue("the spurt never opened") { rx.speakingSessions.value == setOf(1) }
+        elapse(onePoll)
+        assertEquals("the spurt opens on the next poll", setOf(1), rx.speakingSessions.value)
     }
 
-    /**
-     * Closes the open spurt and returns once its closing sample is published *and* the speaking
-     * set has caught up. Both halves: the poll publishes the closing sample before it clears
-     * speakingSessions, so returning on the sample alone leaves the set still reading `{1}` — and
-     * the next openSpurt is then satisfied by that stale value without the poll ever seeing the
-     * new spurt, which never opens and so never closes. Measured at 2 in 30 runs.
-     */
-    private fun closeSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver, before: PlayoutStats?) {
+    /** Closes the open spurt: the next poll publishes its closing sample, then clears the speaking set. */
+    private fun TestScope.closeSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver) {
+        val before = rx.playoutStats.value
         fake.audibleSessions = emptySet()
-        awaitTrue("a spurt must publish stats when it ends") {
-            rx.playoutStats.value != null && rx.playoutStats.value !== before
-        }
-        awaitTrue("the spurt never cleared the speaking set") { rx.speakingSessions.value.isEmpty() }
+        elapse(onePoll)
+        assertTrue("a spurt must publish stats when it ends", rx.playoutStats.value.let { it != null && it !== before })
+        assertTrue("the spurt's end must clear the speaking set", rx.speakingSessions.value.isEmpty())
     }
 
     /**
@@ -320,32 +300,24 @@ class VoiceReceiverTest {
         // Underruns the stream counted before the spurt are its baseline, not its glitches.
         fake.counter(NativePlayout.COUNTER_UNDERRUNS, 7)
         fake.counter(NativePlayout.COUNTER_LATENCY_MICROS, 42_000)
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             val stats = rx.playoutStats.value!!
             assertEquals(0, stats.underruns)
             assertEquals(42.0, stats.latencyMs!!, 1e-9)
             assertEquals("a clean spurt has no gaps", 0, stats.concealedGaps)
             assertEquals("a clean spurt drops nothing", 0, stats.droppedPackets)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     @Test
     fun aLatencyOfMinusOneFromTheSeamReadsAsNull() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             assertNull("-1 from the seam is no reading, not a reading of -1 ms", rx.playoutStats.value!!.latencyMs)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -358,41 +330,33 @@ class VoiceReceiverTest {
     @Test
     fun concealedGapsDoesNotCarryAcrossSpurts() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_CONCEALED_GAPS, 1)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             val first = rx.playoutStats.value!!
             assertEquals(1, first.concealedGaps)
 
             openSpurt(fake, rx)
-            closeSpurt(fake, rx, first)
+            closeSpurt(fake, rx)
             assertEquals("a clean spurt must not inherit the previous spurt's count", 0, rx.playoutStats.value!!.concealedGaps)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     @Test
     fun droppedPacketsAreCountedFromTheSpurtBaseline() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_DROPPED_PACKETS, 5)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             val first = rx.playoutStats.value!!
             assertEquals(5, first.droppedPackets)
 
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_DROPPED_PACKETS, 8)
-            closeSpurt(fake, rx, first)
+            closeSpurt(fake, rx)
             assertEquals("a spurt must report its own drops, not the session's running total", 3, rx.playoutStats.value!!.droppedPackets)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -404,15 +368,11 @@ class VoiceReceiverTest {
     fun underrunsAreCountedFromTheSpurtBaseline() {
         val fake = FakePlayoutEngine()
         fake.counter(NativePlayout.COUNTER_UNDERRUNS, 3)
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_UNDERRUNS, 5)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             assertEquals(2, rx.playoutStats.value?.underruns)
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -421,16 +381,12 @@ class VoiceReceiverTest {
         val fake = FakePlayoutEngine()
         fake.depthsBySession = mapOf(1 to 960)
         fake.targetsBySession = mapOf(1 to 1440)
-        val rx = receiver(fake)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
-            closeSpurt(fake, rx, null)
+            closeSpurt(fake, rx)
             // Keyed by session so a per-speaker view needs no extra plumbing.
             assertEquals(960, rx.playoutStats.value!!.bufferedSamples[1])
             assertEquals(1440, rx.playoutStats.value!!.targetSamples[1])
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
@@ -444,62 +400,52 @@ class VoiceReceiverTest {
     fun aLongSpurtPublishesAPeriodicSampleWhileStillRunning() {
         val fake = FakePlayoutEngine()
         fake.depthsBySession = mapOf(1 to 480)
-        val clock = AtomicTimeSource()
-        val rx = receiver(fake, clock)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
-            clock += 1.seconds
-            awaitTrue("no periodic sample inside a long spurt") { rx.playoutStats.value != null }
+            elapse(VoiceReceiver.STATS_PERIOD)
+            assertNotNull("no periodic sample inside a long spurt", rx.playoutStats.value)
             assertEquals("the speaker must still be audible at the periodic sample", setOf(1), rx.speakingSessions.value)
             assertEquals(480, rx.playoutStats.value!!.bufferedSamples[1])
-        } finally {
-            runBlocking { rx.stop() }
         }
     }
 
     /**
-     * One sample per second inside a spurt is the contract; a poll that published on every read
-     * would sample twenty times a second. The clock is the test's, so a second jumped is one
-     * sample however many polls ran, and a starved poll only slows the waits.
+     * One sample per period inside a spurt is the contract; a poll that published on every read
+     * would sample twenty times a second. The poll and the stats clock share the scheduler, so
+     * the period is pinned from both sides: nothing on the poll before it, the sample on it.
      */
     @Test
     fun thePeriodicSampleIsRateLimited() {
         val fake = FakePlayoutEngine()
-        val clock = AtomicTimeSource()
-        val rx = receiver(fake, clock)
-        rx.start()
-        try {
+        polling(fake) { rx ->
             openSpurt(fake, rx)
-            awaitPolls(fake, 6)
+            elapse(VoiceReceiver.STATS_PERIOD - onePoll)
             assertNull("no sample before the period", rx.playoutStats.value)
 
-            clock += 1.seconds
-            awaitTrue("the first sample, a second in") { rx.playoutStats.value != null }
+            elapse(onePoll)
             val first = rx.playoutStats.value
+            assertNotNull("the first sample, a period in", first)
             // A distinct reading for the next sample, or the flow conflates it with the first.
             fake.counter(NativePlayout.COUNTER_FILL_MICROS_MAX, 7)
-            awaitPolls(fake, 6)
-            assertEquals("one sample per second, however many polls", first, rx.playoutStats.value)
+            elapse(VoiceReceiver.STATS_PERIOD - onePoll)
+            assertEquals("one sample per period, however many polls", first, rx.playoutStats.value)
 
-            clock += 1.seconds
-            awaitTrue("the second sample, another second in") { rx.playoutStats.value != first }
-        } finally {
-            runBlocking { rx.stop() }
+            elapse(onePoll)
+            assertNotEquals("the second sample, another period in", first, rx.playoutStats.value)
         }
     }
 
     @Test
     fun statsAreClearedWhenTheReceiverStops() {
         val fake = FakePlayoutEngine()
-        val rx = receiver(fake)
-        rx.start()
-        openSpurt(fake, rx)
-        closeSpurt(fake, rx, null)
-        runBlocking { rx.stop() }
-        // The poll owns the flow while alive and has to hand it back empty, or a stats page shows
-        // the previous call's numbers after a disconnect.
-        assertNull("stats outlived the receiver", rx.playoutStats.value)
+        polling(fake) { rx ->
+            openSpurt(fake, rx)
+            closeSpurt(fake, rx)
+            rx.stop()
+            // The poll owns the flow while alive and has to hand it back empty, or a stats page shows
+            // the previous call's numbers after a disconnect.
+            assertNull("stats outlived the receiver", rx.playoutStats.value)
+        }
     }
 
     /**
@@ -510,18 +456,16 @@ class VoiceReceiverTest {
     fun refusedStatsBuffersDoNotStopThePoll() {
         val fake = FakePlayoutEngine()
         fake.refuseBuffers = true
-        val rx = receiver(fake)
-        rx.start()
-        try {
-            awaitTrue("the stream must start regardless") { fake.started }
+        polling(fake) { rx ->
+            assertTrue("the stream must start regardless", fake.started)
             fake.liveSessions = setOf(3)
             fake.audibleSessions = setOf(3)
-            Thread.sleep(150)
+            elapse(onePoll * 3)
+            assertEquals("the poll ran on through the refusals", 4, fake.startAttempts.get())
             assertTrue("a refused read must not publish off stale scratch", rx.speakingSessions.value.isEmpty())
             fake.refuseBuffers = false
-            awaitTrue("the poll must recover once the read succeeds") { rx.speakingSessions.value == setOf(3) }
-        } finally {
-            runBlocking { rx.stop() }
+            elapse(onePoll)
+            assertEquals("the poll must recover on the first read that succeeds", setOf(3), rx.speakingSessions.value)
         }
     }
 
@@ -532,13 +476,13 @@ class VoiceReceiverTest {
     @Test
     fun anUnavailableEngineDisablesReceive() {
         val builds = AtomicInteger()
-        val rx = VoiceReceiver({ builds.incrementAndGet(); null })
-        rx.start()
-        rx.offer(audioPayload(session = 1))
-        assertEquals(emptySet<Int>(), rx.speakingSessions.value)
-        rx.start()
-        assertEquals("a refused start() must not be retried", 1, builds.get())
-        runBlocking { rx.stop() }
+        receiving({ builds.incrementAndGet(); null }) { rx ->
+            rx.start()
+            rx.offer(audioPayload(session = 1))
+            assertEquals(emptySet<Int>(), rx.speakingSessions.value)
+            rx.start()
+            assertEquals("a refused start() must not be retried", 1, builds.get())
+        }
     }
 
     /**
@@ -550,10 +494,11 @@ class VoiceReceiverTest {
     @Test
     fun stopWithoutEverStartingBuildsNoEngine() {
         val builds = AtomicInteger()
-        val rx = VoiceReceiver({ builds.incrementAndGet(); FakePlayoutEngine() })
-        runBlocking { rx.stop() }
-        assertEquals("a receiver that never started must never build an engine", 0, builds.get())
-        rx.start()
-        assertEquals(0, builds.get())
+        receiving({ builds.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+            rx.stop()
+            assertEquals("a receiver that never started must never build an engine", 0, builds.get())
+            rx.start()
+            assertEquals(0, builds.get())
+        }
     }
 }
