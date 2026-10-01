@@ -30,6 +30,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoute
@@ -57,7 +58,6 @@ import java.nio.channels.DatagramChannel
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HostnameVerifier
 import kotlin.concurrent.thread
@@ -1900,9 +1900,17 @@ class MumbleConnectionTest {
         var closed = false
         /** Per ping sent, whether the cipher was keyed when it went. */
         val pings = mutableListOf<Boolean>()
+        val sent = mutableListOf<ByteArray>()
+        /** Refuses every datagram, as a socket whose route has gone does. */
+        var refusing = false
 
         override fun open(address: InetSocketAddress) { openedOn = address }
-        override fun send(plaintext: ByteArray, len: Int) = true
+        // MumbleUdpTransport.send's refusals as well, so no test sees voice leave where the real one refuses.
+        override fun send(plaintext: ByteArray, len: Int): Boolean {
+            if (openedOn == null || closed || !crypt.isValid() || refusing) return false
+            sent += plaintext.copyOf(len)
+            return true
+        }
         override fun sendPing(): Boolean {
             pings += crypt.isValid()
             return true
@@ -2055,11 +2063,11 @@ class MumbleConnectionTest {
 
     // ---- which transport carries our voice ------------------------------------------------
 
-    /** A peer that answers every ping it can open while [answer] is set, and records everything. */
-    private fun answeringPeer(answer: AtomicBoolean = AtomicBoolean(true)): UdpPeer {
+    /** A peer that answers every ping it can open, and records everything. */
+    private fun answeringPeer(): UdpPeer {
         val server = serverCrypt()
         return UdpPeer(server) { plain ->
-            if (plain == null || plain[0] != 1.toByte() || !answer.get()) null
+            if (plain == null || plain[0] != 1.toByte()) null
             else ByteArray(plain.size + CryptState.HEADER_LEN).also { server.encrypt(plain, plain.size, it) }
         }
     }
@@ -2110,59 +2118,61 @@ class MumbleConnectionTest {
     }
 
     /** What other clients read about our path: once a reply is accepted, the next TCP ping
-     *  reports the UDP leg. The fake clock stands still, so the round trip reads 0 and only the
-     *  count says the leg was fed. */
-    @Test fun theTcpPingReportsTheUdpLegOnceAReplyIsAccepted() = runBlocking {
-        val peer = answeringPeer()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(
-            InMemoryPinStore(), newCapture = { null }, udpClock = udpClock, pingIntervalMs = 100,
-            newTransport = fakeAimedAt(peer) { fake = it },
-        )
-        connectToHandshaking(conn)
-        udpClock += 1.seconds
-        fake.listener!!.onFrame(keyExchange())
-        awaitOnRealThreads("the answered ping promotes") { conn.voicePath.value.onUdp }
-        fake.listener!!.onFrame(serverSync())   // the ping loop starts with the session
-        awaitOnRealThreads("the next ping must report the UDP leg") {
-            fake.sent.any { (type, m) -> type == TcpMessageType.Ping && (m as MumbleProtos.Ping).udpPackets >= 1 }
-        }
-        conn.disconnect()
-        peer.close()
+     *  reports the UDP leg. */
+    @Test fun theTcpPingReportsTheUdpLegOnceAReplyIsAccepted() = deterministic {
+        val conn = udpConnection()
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val fake = startedTransportAt(controlTransports, 0)
+        udps.single().listener.onPingReply(20.milliseconds)
+        fake.listener!!.onFrame(serverSync(1))   // the ping loop starts with the session
+
+        elapse(SessionStateMachine.PING_INTERVAL_MS.milliseconds)
+
+        val ping = fake.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
+        assertEquals("the accepted reply, counted", 1, ping.udpPackets)
+        assertEquals("and averaged", 20f, ping.udpPingAvg, 0f)
     }
 
     /**
-     * Demotion and recovery through the real ticker on a short interval: silence demotes on the
-     * transport's report, the next frame goes through the tunnel with the label and its number
-     * cleared together, and two replies bring voice back.
+     * Which transport carries our voice: silence demotes on the socket's report, with a tunneled
+     * ping to pull the downlink back; the next frame goes through the tunnel; two replies bring
+     * voice back to the socket; and a datagram the socket refuses goes through the tunnel in the
+     * same call, and demotes.
      */
-    @Test fun silenceMovesVoiceBackToTheTunnelAndRepliesBringItBack() = runBlocking {
-        val answer = AtomicBoolean(true)
-        val peer = answeringPeer(answer)
-        val handle = FakeCaptureHandle()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(
-            InMemoryPinStore(), newCapture = { handle }, udpClock = udpClock, pingIntervalMs = 100,
-            newTransport = fakeAimedAt(peer) { fake = it },
-        )
-        connectToHandshaking(conn)
-        udpClock += 1.seconds
-        fake.listener!!.onFrame(keyExchange())
-        awaitOnRealThreads("promoted") { conn.voicePath.value.onUdp }
+    @Test fun silenceMovesVoiceBackToTheTunnelAndRepliesBringItBack() = deterministic {
+        val handle = FakeCaptureHandle(blocking = false)
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), newCapture = { handle }, startPump = startPump, captureClock = clock,
+            udpClock = clock, context = dispatcher, blocking = dispatcher,
+            newUdp = fakeUdps, newTransport = aimedAtServer,
+        ))
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val fake = startedTransportAt(controlTransports, 0)
+        val udp = udps.single()
+        fun tunneled() = fake.sentRaw.filter { it.first == TcpMessageType.UDPTunnel }.map { it.second[0] }
+        fun speak() = handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), frameNumber = 1, terminator = false))
+        fake.listener!!.onFrame(keyExchange())   // the socket refuses voice on an unkeyed cipher
+        udp.listener.onPingReply(20.milliseconds)
         conn.requestCapture()
-        fake.listener!!.onFrame(serverSync())
-        answer.set(false)
+        assertSettled("promoted") { conn.voicePath.value.onUdp }
 
-        awaitOnRealThreads("the report of two unanswered pings demotes") { !conn.voicePath.value.onUdp }
-        assertEquals(VoicePath.State(), conn.voicePath.value)
-        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), frameNumber = 1, terminator = false))
-        awaitOnRealThreads("the next frame goes through the tunnel") {
-            fake.sentRaw.any { it.first == TcpMessageType.UDPTunnel && it.second[0] == 0.toByte() }
-        }
+        udp.listener.onPingsUnanswered()
 
-        answer.set(true)
-        awaitOnRealThreads("two replies re-promote") { conn.voicePath.value.onUdp }
-        conn.disconnect()
-        peer.close()
+        assertSettled("the report demotes") { conn.voicePath.value == VoicePath.State() }
+        assertEquals("with a tunneled ping, so no peer hears a blip", listOf<Byte>(1), tunneled())
+        speak()
+        assertSettled("the next frame goes through the tunnel") { tunneled() == listOf<Byte>(1, 0) }
+
+        udp.listener.onPingReply(20.milliseconds)
+        assertSettled("one reply is not enough after a demote") { !conn.voicePath.value.onUdp }
+        udp.listener.onPingReply(20.milliseconds)
+        assertSettled("two replies bring voice back") { conn.voicePath.value.onUdp }
+        speak()
+        assertSettled("on the socket") { udp.sent.size == 1 }
+
+        udp.refusing = true
+        speak()
+        assertSettled("a refused datagram goes through the tunnel in the same call") { tunneled() == listOf<Byte>(1, 0, 0) }
+        assertFalse("and demotes", conn.voicePath.value.onUdp)
     }
 }
