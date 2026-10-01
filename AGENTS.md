@@ -32,11 +32,11 @@ misunderstanding worth raising before writing code.
 
 ## Tests
 
-- Deterministic by default: `runTest` with one `StandardTestDispatcher` passed to the class's
-  dispatcher and clock seams. Drive (`runCurrent()`, `advanceTimeBy`), then assert. Never poll,
-  never `advanceUntilIdle()` in a test body, and tear the subject down before returning.
-- Real threads only when the subject is a socket, a native thread or a deliberate race. There: no
-  assertion on elapsed time; wait only for positive conditions, under a guard that exists only to
-  catch hangs; prove absence by waiting for a later event through the same path, never "sleep,
-  then assert nothing"; teardown in `finally`.
-- A new test earns its place by catching something no existing test catches.
+- Deterministic by default: `runTest` with one `StandardTestDispatcher` on the class's dispatcher
+  and clock seams. Drive with `runCurrent()` or `advanceTimeBy`, then assert. No polling, no
+  `advanceUntilIdle()` in a test body; tear the subject down before returning.
+- Real threads only for sockets, native threads and deliberate races. There: never assert on
+  elapsed time. Wait only for positive conditions, with a timeout whose only job is catching
+  hangs. Prove nothing happened by waiting for a later event on the same path, never by sleeping
+  and asserting nothing. Tear down in `finally`.
+- A new test must catch something no existing test catches.
