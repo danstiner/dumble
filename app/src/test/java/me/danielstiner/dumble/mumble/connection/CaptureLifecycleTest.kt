@@ -21,17 +21,19 @@ import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
+import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The capture lifecycle's regression suite. Each case here reproduced a real defect before the
@@ -49,10 +51,13 @@ class CaptureLifecycleTest {
     private fun Rig.connection(
         newCapture: () -> VoiceSender.CaptureHandle? = { null },
         call: VoiceCall = NoVoiceCall,
+        stuckPumpMillis: Long = 1_000L,
+        newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
+        newTransport: () -> FakeControlTransport = { FakeControlTransport { _, _ -> } },
     ) = own(MumbleConnection(
-        InMemoryPinStore(), newCapture = newCapture, call = call,
-        udpClock = clock, context = dispatcher, blocking = dispatcher,
-    ) { FakeControlTransport { _, _ -> } })
+        InMemoryPinStore(), newCapture = newCapture, newPlayout = newPlayout, call = call,
+        stuckPumpMillis = stuckPumpMillis, udpClock = clock, context = dispatcher, blocking = dispatcher,
+    ) { newTransport() })
 
     /** Connects and settles in Handshaking, where every test here stays: none sends a ServerSync. */
     private fun Rig.connectTo(conn: MumbleConnection, host: String = "localhost") {
@@ -226,35 +231,31 @@ class CaptureLifecycleTest {
      * The receiver's output stream follows the hold the same way the microphone does: paused while
      * the platform has the device, started again by the next claim once it is given back.
      */
-    @Test fun theReceiverPausesOnHoldAndStartsOnResume() = runBlocking {
+    @Test fun theReceiverPausesOnHoldAndStartsOnResume() = deterministic {
         val playout = FakePlayoutEngine()
         val call = FakeVoiceCall()
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newPlayout = { playout },
-            call = call,
-        ) { FakeControlTransport { _, _ -> }.also { fake = it } }
-        try {
-            conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            playout.liveSessions = setOf(9)
-            val audio = MumbleUdpProtos.Audio.newBuilder()
-                .setSenderSession(9)
-                .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
-                .build()
-            fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
-            awaitTrue("a live speaker must start the stream") { playout.started }
+        val conn = connection(
+            newPlayout = { playout }, call = call,
+            newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
+        )
+        connectTo(conn)
+        playout.liveSessions = setOf(9)
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
+            .build()
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        assertSettled("a live speaker must start the stream") { playout.started }
 
-            call.hold()
-            awaitTrue("a hold must pause the stream") { playout.calls.last() == "pause" }
+        call.hold()
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)   // the next poll reads the hold
+        assertEquals("a hold must pause the stream", "pause", playout.calls.last())
 
-            call.resume()
-            fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
-            awaitTrue("a resume must let the next claim start the stream") { playout.calls.last() == "start" }
-        } finally {
-            conn.disconnect()
-        }
+        call.resume()
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+        assertEquals("a resume must let the next claim start the stream", "start", playout.calls.last())
     }
 
     /** Counts destroy() so a double free would be visible rather than assumed impossible. */
@@ -309,136 +310,44 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * The one-microphone invariant across sessions. teardown queues the prior release
-     * synchronously, ahead of anything the new session can produce, and the
-     * release closes the stream before returning — so the first engine is always stopped before
-     * the second is created.
+     * The one-microphone invariant across sessions. connect() queues the prior's Release under the
+     * lock, ahead of anything the new session can ask, and the release stops the engine inline on
+     * the consumer (beginRelease: "the entire one-microphone invariant") — so the first engine is
+     * stopped before the second is created.
      *
-     * This pins ordering only loosely. Measured: this test's own setup — a full second `connect()`
-     * → `Handshaking` round trip before `requestCapture()` can run — gives `e0:stop` such a head
-     * start that a merely-asynchronous release still finishes first and does not flip the
-     * assertion, whether that means wrapping `stop()` in a `launch` or moving the prior session's
-     * `teardown()` send off the caller's thread. Only a release slow enough to lose that race
-     * outright (an artificial `delay(400)` ahead of `stop()`, in testing) reliably does.
+     * The second Acquire is queued before the scheduler runs, right behind that Release, so a
+     * release that stopped asynchronously would let the consumer create the second engine first.
+     * On one scheduler thread that ordering is exact, and every run checks it.
      */
-    @Test fun reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond() = runBlocking {
+    @Test fun reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond() = deterministic {
         val log = ConcurrentLinkedQueue<String>()
         val handles = CopyOnWriteArrayList<RecordingHandle>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(
+            newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } }, call = call,
+        )
 
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn, "first")
         conn.requestCapture()
-        awaitTrue("the first engine must open") { handles.size == 1 }
+        assertSettled("the first engine must open") { handles.size == 1 }
 
         conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         conn.requestCapture()
-        awaitTrue("the second engine must open") { handles.size == 2 }
-        awaitTrue("the first engine must be released") { handles[0].destroys.get() == 1 }
+        assertSettled("the second engine must open") { handles.size == 2 }
+        assertEquals("the first engine must be released", 1, handles[0].destroys.get())
 
         val order = log.toList()
         assertTrue(
             "the first stream must close before the second opens: $order",
             order.indexOf("e0:stop") < order.indexOf("e1:create"),
         )
-        // A plain check, not a wait: the default auto-grant supersedes during start(). Pins the
-        // supersede, not the Release handler's call.end — callEndFiresEvenWhenThePumpIsWedged
-        // pins that one, with no second call.start around to mask it.
+        // The default auto-grant supersedes during start(). Pins the supersede, not the Release
+        // handler's call.end — callEndFiresEvenWhenThePumpIsWedged pins that one, with no second
+        // call.start around to mask it.
         assertEquals("the superseded call must end exactly once", 1, call.ends)
 
         conn.disconnect()
-        awaitTrue("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
-    }
-
-    /** A handle whose stop() takes a while, like a slow HAL close. */
-    private class SlowStopHandle(private val stopMillis: Long) : VoiceSender.CaptureHandle {
-        private val pollGate = CountDownLatch(1)
-        override fun pollPacket(out: ByteArray, meta: LongArray): Int {
-            pollGate.await(); return NativeCapture.POLL_SHUTDOWN
-        }
-        override fun setGateOpen(open: Boolean) = Unit
-        override fun setTransmitMode(mode: TransmitMode) = Unit
-        override fun stop() { Thread.sleep(stopMillis); pollGate.countDown() }
-        override fun destroy() = Unit
-        override fun stats(): CaptureStats? = null
-    }
-
-    /**
-     * STRESS CASE, not a proof — see below for why a single trial cannot be one.
-     *
-     * Pins beginRelease's synchronous, inline session.stop() (the "entire one-microphone
-     * invariant" per its own comment): the gap between the second session's Acquire being sent and
-     * its engine actually opening must be at least as long as the first engine's own slow stop(),
-     * because a synchronous release cannot process anything queued behind it until stop() returns.
-     * reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond cannot catch an async stop()
-     * because its own round trip to the second Handshaking gives a merely-launched stop() such a
-     * head start that it still finishes first; a slow stop() removes that head start.
-     *
-     * Why repeated rather than single-shot: measured directly (repeated manual runs, thread dumps
-     * included) that a single trial's gap is bimodal under the async mutation — either near-zero
-     * (correctly caught) or, about half the time, equal to the full sleep anyway, indistinguishable
-     * from the synchronous case. The cause is environmental, not a flaw in the ordering being
-     * tested: `beginRelease`'s mutated `scope.launch { session.stop() }` runs on
-     * [kotlinx.coroutines.Dispatchers.Default], which shares its worker pool with the capture
-     * consumer's own [kotlinx.coroutines.Dispatchers.IO]; a raw `Thread.sleep` inside that launched
-     * coroutine occasionally ends up serialised behind the consumer's own queued work on the same
-     * shared pool regardless of the mutation. Confirmed independent of dispatcher pool size (tried
-     * up to 128 threads) and of sleep duration (reproduced at 80ms, 300ms and 600ms alike) — this
-     * is a scheduler artifact of the simulation, not of the code under test. It never produces a
-     * false failure under correct code (six separate manual runs, 6/6 green), so repeating below
-     * only buys detection power, not risk: correct code blocks the consumer inline regardless of
-     * this dispatcher-sharing quirk, so the gap is always the full sleep, every trial.
-     */
-    @Test fun aSlowFirstStopBlocksTheSecondSessionsOpenUntilItReturns() = runBlocking {
-        repeat(20) {
-            val t0 = System.nanoTime()
-            fun elapsedMs() = (System.nanoTime() - t0) / 1_000_000
-            val secondOpenAtMs = AtomicLong(-1)
-            val handles = CopyOnWriteArrayList<VoiceSender.CaptureHandle>()
-            var first = true
-            val call = FakeVoiceCall()
-            val conn = MumbleConnection(
-                InMemoryPinStore(),
-                newCapture = {
-                    if (first) {
-                        first = false
-                        SlowStopHandle(150).also { handles += it }
-                    } else {
-                        secondOpenAtMs.set(elapsedMs())
-                        FakeCaptureHandle().also { handles += it }
-                    }
-                },
-                call = call,
-            ) { FakeControlTransport { _, _ -> } }
-
-            conn.connect(MumbleEndpoint.parse("first"), "user", null)
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            conn.requestCapture()
-            awaitTrue("the first engine must open") { handles.size == 1 }
-
-            conn.connect(MumbleEndpoint.parse("second"), "user", null)
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            conn.requestCapture()
-            val secondSentAtMs = elapsedMs()
-
-            awaitTrue("the second engine must eventually open", timeoutMillis = 5_000) {
-                handles.size == 2
-            }
-            val gapMs = secondOpenAtMs.get() - secondSentAtMs
-            assertTrue(
-                "trial $it: the second engine opened only ${gapMs}ms after its Acquire — the first " +
-                    "engine's stop() must be awaited inline, not raced",
-                gapMs >= 100,
-            )
-
-            conn.disconnect()
-        }
+        assertSettled("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
     }
 
     /**
@@ -446,30 +355,20 @@ class CaptureLifecycleTest {
      * generation check, a stale hold latched onto the successor and killed transmit with nothing
      * able to clear it.
      */
-    @Test fun aStaleHoldDoesNotTouchTheLiveSession() = runBlocking {
+    @Test fun aStaleHoldDoesNotTouchTheLiveSession() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = { FakeCaptureHandle().also { handles += it } }, call = call)
 
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn, "first")
         val staleGen = 1   // the first connect's generation
 
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn, "second")
         conn.requestCapture()
-        awaitTrue("the live attempt must be capturing") { handles.any { !it.destroyed } }
+        assertSettled("the live attempt must be capturing") { handles.any { !it.destroyed } }
 
         call.holdFor(staleGen)
-        delay(300)
-        assertTrue(
-            "a stale hold must not release the live engine",
-            handles.any { !it.destroyed },
-        )
+        assertSettled("a stale hold must not release the live engine") { handles.any { !it.destroyed } }
         conn.disconnect()
     }
 
@@ -672,12 +571,13 @@ class CaptureLifecycleTest {
     /** A native stop() that throws — the JNI call into OboeCapture::close() is not exception-free. */
     private class ThrowingStopHandle : VoiceSender.CaptureHandle {
         private val unblock = CountDownLatch(1)
+        var stopCalled = false; private set
         override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             unblock.await(); return NativeCapture.POLL_SHUTDOWN
         }
         override fun setGateOpen(open: Boolean) = Unit
         override fun setTransmitMode(mode: TransmitMode) = Unit
-        override fun stop(): Unit = throw RuntimeException("stop blew up")
+        override fun stop() { stopCalled = true; throw RuntimeException("stop blew up") }
         override fun destroy() = Unit
         override fun stats(): CaptureStats? = null
         fun release() = unblock.countDown()
@@ -690,25 +590,25 @@ class CaptureLifecycleTest {
      * notification, and the only way out was hanging up the ghost from system UI — which is wired to
      * onEnded -> disconnect(). Ending first also keeps the call off an unbounded HAL close.
      */
-    @Test fun aThrowingReleaseStillEndsThePlatformCall() = runBlocking {
+    @Test fun aThrowingReleaseStillEndsThePlatformCall() = deterministic {
         val handle = ThrowingStopHandle()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { handle },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        var opens = 0
+        val conn = connection(newCapture = { opens++; handle }, call = call)
+        try {
+            connectTo(conn)
+            conn.requestCapture()
+            // Settled before the disconnect: an Acquire still queued behind it finds the session
+            // gone and opens nothing, which would leave no stop to throw.
+            assertSettled("the engine must open") { opens == 1 }
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.requestCapture()
-        delay(200)
-
-        conn.disconnect()
-        awaitTrue("the platform call must end even though the release threw") { call.ends == 1 }
-        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons.toList())
-
-        handle.release()
+            conn.disconnect()
+            assertSettled("the release must reach the throwing stop") { handle.stopCalled }
+            assertEquals("the platform call must end even though the release threw", 1, call.ends)
+            assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons.toList())
+        } finally {
+            handle.release()
+        }
     }
 
     /**
@@ -720,36 +620,26 @@ class CaptureLifecycleTest {
      * clear heldGen back to NO_GEN while the platform still holds the live call, reopening capture
      * against a device the platform owns.
      */
-    @Test fun aStaleResumeDoesNotClearTheLiveHold() = runBlocking {
+    @Test fun aStaleResumeDoesNotClearTheLiveHold() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = { FakeCaptureHandle().also { handles += it } }, call = call)
 
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn, "first")
         val staleGen = 1   // the first connect's generation
 
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn, "second")
         conn.requestCapture()
-        awaitTrue("the live attempt must open") { handles.size == 1 }
+        assertSettled("the live attempt must open") { handles.size == 1 }
 
         call.hold()   // holds the live generation (2)
-        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        assertSettled("the hold must release the engine") { handles[0].destroyed }
 
         call.resumeFor(staleGen)   // a resume for the superseded call (1), not the live hold
-        delay(300)
-        assertEquals(
-            "a stale resume must not reopen capture the platform still holds",
-            1, handles.size,
-        )
+        assertSettled("a stale resume must not reopen capture the platform still holds") { handles.size == 1 }
 
         call.resume()   // the genuine resume, for the live generation
-        awaitTrue("the genuine resume must rebuild") { handles.size == 2 }
+        assertSettled("the genuine resume must rebuild") { handles.size == 2 }
         conn.disconnect()
     }
 
@@ -759,24 +649,18 @@ class CaptureLifecycleTest {
      * recorded against the session that is about to publish, and a capture asked for afterwards
      * stays refused until the resume.
      */
-    @Test fun aHoldDeliveredInsideCallStartLeavesTheSessionNotCapturing() = runBlocking {
+    @Test fun aHoldDeliveredInsideCallStartLeavesTheSessionNotCapturing() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall(holdInsideStart = true)
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = { FakeCaptureHandle().also { handles += it } }, call = call)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
 
         conn.requestCapture()
-        delay(300)
-        assertEquals("a held call must open no engine", 0, handles.size)
+        assertSettled("a held call must open no engine") { handles.isEmpty() }
 
         call.resume()
-        awaitTrue("resuming must open one") { handles.size == 1 }
+        assertSettled("resuming must open one") { handles.size == 1 }
         conn.disconnect()
     }
 
@@ -916,28 +800,21 @@ class CaptureLifecycleTest {
      * pollsInFlightAtDestroy == -1 check — the engine is not freed while the pump is in flight — is
      * what stands in for it.
      */
-    @Test fun callEndFiresEvenWhenThePumpIsWedged() = runBlocking {
+    @Test fun callEndFiresEvenWhenThePumpIsWedged() = deterministic {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { handle },
-            call = call,
-            stuckPumpMillis = 100L,
-        ) { FakeControlTransport { _, _ -> } }
+        var opens = 0
+        val conn = connection(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
         try {
-            conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+            connectTo(conn)
             conn.requestCapture()
-            awaitTrue("the pump must be parked") { handle.pollsInFlight.get() == 1 }
+            assertSettled("the engine must open") { opens == 1 }
 
-            conn.disconnect()
-            awaitTrue("the call must end despite the wedged pump") { call.ends == 1 }
-            assertEquals(
-                "a wedged pump's engine must not be freed",
-                -1, handle.pollsInFlightAtDestroy,
-            )
-            delay(300)
+            conn.disconnect()   // the release's stop() waits out its whole one-second join
+            assertSettled("the call must end despite the wedged pump") { call.ends == 1 }
+            assertTrue("the release must reach the engine", handle.stopCalled)
+            elapse(300.milliseconds)   // past the wedge deadline: the watchdog only logs
+            assertEquals("a wedged pump's engine must not be freed", -1, handle.pollsInFlightAtDestroy)
             assertEquals("the call must end exactly once", 1, call.ends)
         } finally {
             handle.release()
@@ -995,12 +872,10 @@ class CaptureLifecycleTest {
     }
 
     /** Tracks whether the pump ever touched the handle, to prove a rejected open never attached it. */
-    private class GatedHandle(private val gate: CountDownLatch) : VoiceSender.CaptureHandle {
-        @Volatile var enteredNewCapture = false
-        @Volatile var stopped = false; private set
-        @Volatile var destroyed = false; private set
+    private class PollRecordingHandle : VoiceSender.CaptureHandle {
+        var stopped = false; private set
+        var destroyed = false; private set
         @Volatile var pollFrameCalled = false; private set
-        fun awaitGate() { enteredNewCapture = true; gate.await() }
         override fun pollPacket(out: ByteArray, meta: LongArray): Int {
             pollFrameCalled = true
             return NativeCapture.POLL_SHUTDOWN
@@ -1017,30 +892,20 @@ class CaptureLifecycleTest {
      * and `current` is still mutated on caller threads while it does, so a disconnect
      * landing in that window has already moved the world by the time the handle comes back. Without
      * the recheck the stale handle would attach and its pump would start — a leaked engine racing
-     * a `current` that no longer points at it.
+     * a `current` that no longer points at it. The fake lands the disconnect inside that window.
      */
-    @Test fun aDisconnectDuringNewCaptureLeavesTheStaleHandleUnattached() = runBlocking {
-        val gate = CountDownLatch(1)
-        lateinit var handle: GatedHandle
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { handle.awaitGate(); handle },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
-        handle = GatedHandle(gate)
+    @Test fun aDisconnectDuringNewCaptureLeavesTheStaleHandleUnattached() = deterministic {
+        val handle = PollRecordingHandle()
+        lateinit var conn: MumbleConnection
+        conn = connection(newCapture = { conn.disconnect(); handle })
+        connectTo(conn)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
         conn.requestCapture()
-        awaitTrue("the consumer must be parked inside newCapture()") { handle.enteredNewCapture }
 
-        conn.disconnect()   // moves `current` while newCapture() is still blocked
-        gate.countDown()    // let the now-stale handle come back
-
-        awaitTrue("the stale handle must be stopped") { handle.stopped }
-        awaitTrue("the stale handle must be destroyed") { handle.destroyed }
-        delay(200)
+        assertSettled("the stale handle must be stopped") { handle.stopped }
+        assertTrue("the stale handle must be destroyed", handle.destroyed)
+        // No wait: a wrongly started pump is stopped and joined by the Release the disconnect
+        // queued, inside the same assertSettled, so its poll would already show.
         assertFalse(
             "a stale open must never start the pump against a superseded attempt",
             handle.pollFrameCalled,
@@ -1048,26 +913,20 @@ class CaptureLifecycleTest {
     }
 
     /** A handler that throws must not kill the consumer — a dead one fails silently and forever. */
-    @Test fun aThrowingHandlerDoesNotKillTheConsumer() = runBlocking {
+    @Test fun aThrowingHandlerDoesNotKillTheConsumer() = deterministic {
         val opened = AtomicInteger()
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = {
-                // First open throws from inside the consumer; later ones behave.
-                if (opened.getAndIncrement() == 0) throw IllegalStateException("boom")
-                FakeCaptureHandle()
-            },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = {
+            // First open throws from inside the consumer; later ones behave.
+            if (opened.getAndIncrement() == 0) throw IllegalStateException("boom")
+            FakeCaptureHandle()
+        })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
         conn.requestCapture()
-        awaitTrue("the throwing open must have been attempted") { opened.get() >= 1 }
+        assertSettled("the throwing open must have been attempted") { opened.get() == 1 }
 
         conn.requestCapture()
-        awaitTrue("the consumer must still be alive") { opened.get() >= 2 }
+        assertSettled("the consumer must still be alive") { opened.get() == 2 }
         conn.disconnect()
     }
 
@@ -1077,26 +936,23 @@ class CaptureLifecycleTest {
      * coroutine and tell the platform nothing, wedging a DIALING call for the ~125 s until the
      * anomaly watchdog reaped it and blocking every connect in between.
      */
-    @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = runBlocking {
+    @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = deterministic {
         val call = FakeVoiceCall(autoGrant = false)
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            call = call,
-        ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
-        try {
-            conn.connect(MumbleEndpoint.parse("host"), "user", null)
-            awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
-            assertEquals("nothing may end before the platform grants control", 0, call.ends)
+        val conn = connection(
+            call = call, newTransport = { FakeControlTransport { _, _ -> throw IOException("refused") } },
+        )
 
-            call.grantPending()
-            awaitTrue("the grant must release the pending end") { call.ends == 1 }
-            assertEquals(
-                "a failed session is not a hang-up",
-                listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
-            )
-        } finally {
-            conn.disconnect()
-        }
+        conn.connect(MumbleEndpoint.parse("host"), "user", null)
+        assertSettled("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
+        assertTrue("the end must be waiting on the grant", call.hasPendingEnd)
+        assertEquals("nothing may end before the platform grants control", 0, call.ends)
+
+        call.grantPending()
+        assertEquals("the grant must release the pending end", 1, call.ends)
+        assertEquals(
+            "a failed session is not a hang-up",
+            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
+        )
     }
 
     /*
