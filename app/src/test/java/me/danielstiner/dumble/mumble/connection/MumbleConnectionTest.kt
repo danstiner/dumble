@@ -20,9 +20,11 @@ import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
+import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.TestTlsServer
+import me.danielstiner.dumble.mumble.net.UdpTransport
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
@@ -37,6 +39,7 @@ import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
 import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceCall
+import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.time.AtomicTimeSource
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -48,7 +51,6 @@ import org.junit.Rule
 import org.junit.Test
 import java.io.IOException
 import java.net.InetSocketAddress
-import java.net.SocketAddress
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
@@ -546,16 +548,6 @@ class MumbleConnectionTest {
 
         assertEquals(emptyList<String>(), call.routeRequests)
     }
-
-    /**
-     * Handshaking is published by sm.start(); receiver.start() — which builds the engine — runs
-     * several statements later, and a packet arriving before it is dropped by design (there is
-     * nothing yet to queue into). Delivering a tunneled frame on the status alone therefore races
-     * that gap: measured at one lost packet in 40 runs, which is the CI flake. The poll's first
-     * start() call is the earliest observable proof the engine exists.
-     */
-    private suspend fun awaitEngineBuilt(playout: FakePlayoutEngine) =
-        awaitOnRealThreads("the receiver's poll never started") { playout.startAttempts.get() > 0 }
 
     /** Polls under a wall-clock bound. Only for the tests that must run real threads — the TLS
      *  and loopback-UDP tests — and never inside [deterministic]: a converted test drives the
@@ -1838,11 +1830,12 @@ class MumbleConnectionTest {
         assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
     }
 
-    // ---- Real threads, by design. Everything below runs on runBlocking and the default
-    // dispatchers with awaitOnRealThreads, because the scheduler cannot reach it:
-    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking
-    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the nine `peer` tests
-    // A converted test lives above this line and never calls awaitOnRealThreads.
+    // ---- Real threads, by design. These run on runBlocking and the default dispatchers with
+    // awaitOnRealThreads, because the scheduler cannot reach them:
+    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking, below
+    //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the `peer` tests in
+    //     the UDP section
+    // Every other test drives the scheduler and never calls awaitOnRealThreads.
 
     @Test fun firstContactAwaitsTrustThenPinsAndReachesHandshaking() = runBlocking {
         val srv = TestTlsServer()
@@ -1880,9 +1873,10 @@ class MumbleConnectionTest {
 
     // ---- the UDP voice socket ------------------------------------------------------------
     //
-    // The fake control transport only names where the socket should aim, so a loopback peer
-    // keyed as the server — our client_nonce is its decrypt seed, its server_nonce our decrypt
-    // seed — stands in for Murmur's UDP side. Nothing below sends a UDPTunnel frame.
+    // MumbleUdpTransportTest owns what the socket does. Here a FakeUdp stands in for it and the
+    // tests pin the connection's wiring, on the scheduler. The tests with a `peer` run the real
+    // socket end to end instead, against a loopback peer keyed as the server: our client_nonce is
+    // its decrypt seed, its server_nonce ours.
 
     private val cryptKey = ByteArray(16) { it.toByte() }
     private val clientNonce = ByteArray(16) { (0x40 + it).toByte() }
@@ -1899,12 +1893,48 @@ class MumbleConnectionTest {
             .build().toByteArray(),
     )
 
-    /** A loopback UDP peer: records who wrote to it and every plaintext it could open, and
-     *  answers each datagram with whatever [reply] makes of that plaintext (null for none). */
+    /** A link's UDP socket: records what the connection asks of it, and keeps the listener the
+     *  connection built, so the test can play the server's side. */
+    private class FakeUdp(val crypt: CryptState, val listener: MumbleUdpTransport.Listener) : UdpTransport {
+        var openedOn: InetSocketAddress? = null
+        var closed = false
+        /** Per ping sent, whether the cipher was keyed when it went. */
+        val pings = mutableListOf<Boolean>()
+
+        override fun open(address: InetSocketAddress) { openedOn = address }
+        override fun send(plaintext: ByteArray, len: Int) = true
+        override fun sendPing(): Boolean {
+            pings += crypt.isValid()
+            return true
+        }
+        override fun close() { closed = true }
+    }
+
+    private val serverAddress = InetSocketAddress.createUnresolved("mumble.invalid", 64738)
+
+    // Each link's control transport and UDP socket, in link order, for the tests that build their
+    // connection from the two factories below.
+    private val controlTransports = mutableListOf<FakeControlTransport>()
+    private val udps = mutableListOf<FakeUdp>()
+
+    private val fakeUdps = { crypt: CryptState, listener: MumbleUdpTransport.Listener ->
+        FakeUdp(crypt, listener).also { udps += it }
+    }
+    /** Aimed at [serverAddress], so every link opens its socket. */
+    private val aimedAtServer = { _: String? ->
+        FakeControlTransport { _, _ -> }.apply { remote = serverAddress }.also { controlTransports += it }
+    }
+
+    private fun Rig.udpConnection(newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null }) = own(MumbleConnection(
+        InMemoryPinStore(), newPlayout = newPlayout, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        newUdp = fakeUdps, newTransport = aimedAtServer,
+    ))
+
+    /** A loopback UDP peer: records every plaintext it could open, and answers each datagram
+     *  with whatever [reply] makes of that plaintext (null for none). */
     private class UdpPeer(private val crypt: CryptState, private val reply: (ByteArray?) -> ByteArray? = { null }) {
         val channel: DatagramChannel = DatagramChannel.open().apply { bind(InetSocketAddress("127.0.0.1", 0)) }
         val address get() = channel.localAddress as InetSocketAddress
-        val from = LinkedBlockingQueue<SocketAddress>()
         val opened = LinkedBlockingQueue<ByteArray>()
         init {
             thread(isDaemon = true) {
@@ -1914,7 +1944,6 @@ class MumbleConnectionTest {
                     while (true) {
                         wire.clear()
                         val addr = channel.receive(wire) ?: break
-                        from.add(addr)
                         val len = crypt.decrypt(wire.array(), wire.position(), plain)
                         val packet = if (len >= 0) plain.copyOf(len).also { opened.add(it) } else null
                         reply(packet)?.let { channel.send(ByteBuffer.wrap(it), addr) }
@@ -1922,11 +1951,6 @@ class MumbleConnectionTest {
                 } catch (_: Exception) {
                 }
             }
-        }
-        fun sendTo(addr: SocketAddress, plaintext: ByteArray) {
-            val out = ByteArray(plaintext.size + CryptState.HEADER_LEN)
-            val n = crypt.encrypt(plaintext, plaintext.size, out)
-            channel.send(ByteBuffer.wrap(out, 0, n), addr)
         }
         fun close() = channel.close()
     }
@@ -1951,66 +1975,44 @@ class MumbleConnectionTest {
         FakeControlTransport { _, _ -> }.apply { remote = peer.address }.also(into)
     }
 
-    @Test fun keyingPingsTheServerOverUdp() = runBlocking {
-        val peer = UdpPeer(serverCrypt())
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), newTransport = fakeAimedAt(peer) { fake = it })
-        connectToHandshaking(conn)
+    @Test fun keyingPingsTheServerOverUdp() = deterministic {
+        val conn = udpConnection()
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val fake = startedTransportAt(controlTransports, 0)
+        val udp = udps.single()
+        assertEquals("aimed at the control connection's own remote", serverAddress, udp.openedOn)
+        assertEquals("no ping before the key", emptyList<Boolean>(), udp.pings)
 
         fake.listener!!.onFrame(keyExchange())
 
-        val plain = peer.opened.poll(5, TimeUnit.SECONDS)
-        assertNotNull("keying must send a ping the server can open", plain)
-        assertEquals("a ping, not audio", 1.toByte(), plain!![0])
-        conn.disconnect()
-        peer.close()
+        assertEquals("keying pings at once, on the cipher it keyed", listOf(true), udp.pings)
     }
 
     // The reason the socket lands with receive wired: a listener who has never transmitted
     // gets their downlink over UDP from the first ping on, and would otherwise hear nothing.
-    @Test fun inboundUdpAudioReachesThePlayoutEngine() = runBlocking {
-        val peer = UdpPeer(serverCrypt())
+    @Test fun inboundUdpAudioReachesThePlayoutEngine() = deterministic {
         val playout = FakePlayoutEngine()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), newPlayout = { playout }, newTransport = fakeAimedAt(peer) { fake = it })
-        connectToHandshaking(conn)
-        fake.listener!!.onFrame(keyExchange())
-        val us = peer.from.poll(5, TimeUnit.SECONDS)
-        assertNotNull("the ping registers our address", us)
-        awaitEngineBuilt(playout)
+        val conn = udpConnection(newPlayout = { playout })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(controlTransports, 0)
+        assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
 
-        peer.sendTo(us!!, audioPacket(session = 9))
+        // In a buffer longer than the packet, as the socket's is: the length bounds it.
+        val packet = audioPacket(session = 9)
+        udps.single().listener.onVoicePacket(packet + ByteArray(8), packet.size)
 
-        awaitOnRealThreads("UDP audio must reach the engine") { playout.offered.isNotEmpty() }
-        assertEquals(9, playout.offered.first().session)
-        conn.disconnect()
-        peer.close()
+        assertEquals(9, playout.offered.single().session)
     }
 
-    @Test fun aStalledDecryptAsksTheServerForItsCounter() = runBlocking {
-        val peer = UdpPeer(serverCrypt()) { ByteArray(24) { (it * 7).toByte() } }   // answers with junk
-        val clock = AtomicTimeSource()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(
-            InMemoryPinStore(), udpClock = clock, pingIntervalMs = 200,
-            newTransport = fakeAimedAt(peer) { fake = it },
-        )
-        connectToHandshaking(conn)
-        fake.listener!!.onFrame(keyExchange())
-        assertNotNull(peer.opened.poll(5, TimeUnit.SECONDS))   // its junk answer lands inside the grace
-        delay(100)
-        assertEquals(0, fake.sent.count { it.first == TcpMessageType.CryptSetup })
-        clock += 6.seconds   // the quiet period passes
+    @Test fun aStalledDecryptAsksTheServerForItsCounter() = deterministic {
+        val conn = udpConnection()
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val fake = startedTransportAt(controlTransports, 0)
 
-        fake.listener!!.onFrame(serverSync())   // starts the ticker; its next ping draws junk past the grace
+        udps.single().listener.requestCryptResync()
 
-        awaitOnRealThreads("a failed decrypt past the quiet period must ask for a resync") {
-            fake.sent.any { it.first == TcpMessageType.CryptSetup }
-        }
-        val request = fake.sent.last { it.first == TcpMessageType.CryptSetup }.second
+        val request = fake.sent.single { it.first == TcpMessageType.CryptSetup }.second
         assertEquals(MumbleProtos.CryptSetup.getDefaultInstance(), request)
-        conn.disconnect()
-        peer.close()
     }
 
     @Test fun disconnectClosesTheUdpSocket() = runBlocking {
@@ -2026,37 +2028,29 @@ class MumbleConnectionTest {
         peer.close()
     }
 
-    @Test fun aSessionThatFailsOnItsOwnClosesTheUdpSocket() = runBlocking {
-        val peer = UdpPeer(serverCrypt())
-        val before = readers()
-        lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(InMemoryPinStore(), newTransport = fakeAimedAt(peer) { fake = it })
-        connectToHandshaking(conn)
-        awaitOnRealThreads("the socket opens with the connection") { readersSince(before) == 1 }
+    @Test fun aSessionThatFailsOnItsOwnClosesTheUdpSocket() = deterministic {
+        val conn = udpConnection()
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val fake = startedTransportAt(controlTransports, 0)
 
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
 
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Error } }
-        awaitOnRealThreads("a retired session must not leak its socket") { readersSince(before) == 0 }
-        peer.close()
+        assertSettled("rejected") { conn.status.value is ConnectionStatus.Error }
+        assertTrue("a retired session must not leak its socket", udps.single().closed)
     }
 
-    @Test fun aSupersededSessionClosesItsUdpSocket() = runBlocking {
-        val peer = UdpPeer(serverCrypt())
-        val before = readers()
-        val conn = MumbleConnection(InMemoryPinStore(), newTransport = fakeAimedAt(peer) {})
-        connectToHandshaking(conn)
-        awaitOnRealThreads("the socket opens with the connection") { readersSince(before) == 1 }
-        val first = (readers() - before).single()
+    @Test fun aSupersededSessionClosesItsUdpSocket() = deterministic {
+        val conn = udpConnection()
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(controlTransports, 0)
 
         conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
-        awaitOnRealThreads("the superseded session's reader exits") { !first.isAlive }
-        awaitOnRealThreads("one live session, one socket") { readersSince(before) == 1 }
+        startedTransportAt(controlTransports, 1)
+        assertEquals("the superseded session's socket closed, the live one's open", listOf(true, false), udps.map { it.closed })
         conn.disconnect()
-        awaitOnRealThreads("and none after disconnect") { readersSince(before) == 0 }
-        peer.close()
+        assertSettled("and none after disconnect") { udps.all { it.closed } }
     }
 
     // ---- which transport carries our voice ------------------------------------------------
