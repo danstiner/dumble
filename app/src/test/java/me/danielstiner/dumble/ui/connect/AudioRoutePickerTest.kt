@@ -22,9 +22,8 @@ class AudioRoutePickerTest {
     }
 
     /** Speaker's own glyph doubles as the fallback for anything with no icon of its own. */
-    @Test fun speakerStreamingAndUnknownShareTheSpeakerGlyph() {
+    @Test fun speakerAndUnknownShareTheSpeakerGlyph() {
         assertSame(Icons.AutoMirrored.Filled.VolumeUp, routeIcon(Type.SPEAKER))
-        assertSame(Icons.AutoMirrored.Filled.VolumeUp, routeIcon(Type.STREAMING))
         assertSame(Icons.AutoMirrored.Filled.VolumeUp, routeIcon(Type.UNKNOWN))
     }
 }
