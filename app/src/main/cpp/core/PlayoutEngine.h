@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -175,6 +176,9 @@ public:
         heldForTest_ = false;
     }
     bool mutexHeldForTest() const { return heldForTest_.load(); }
+    /** Moves the arrival clock on by `by`, as if the test had slept that long before its next
+     *  offer(). Call from the thread that offers. */
+    void advanceArrivalClockForTest(std::chrono::milliseconds by) { arrivalOffsetForTest_ += by; }
 #endif
 
 private:
@@ -234,6 +238,7 @@ private:
     std::atomic<int32_t> lastLive_{0};
 #ifdef DUMBLE_TESTING
     std::atomic<bool> heldForTest_{false};
+    std::chrono::milliseconds arrivalOffsetForTest_{0};
 #endif
 
     std::mutex mutex_;

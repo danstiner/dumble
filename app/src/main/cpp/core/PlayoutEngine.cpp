@@ -55,7 +55,11 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
                          bool terminator) {
     // Stamped before the payload is judged, so our own parse cost is not laundered into the jitter
     // measurement.
+#ifdef DUMBLE_TESTING
+    const int64_t arrivalMillis = bootMillis() + arrivalOffsetForTest_.count();
+#else
     const int64_t arrivalMillis = bootMillis();
+#endif
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
