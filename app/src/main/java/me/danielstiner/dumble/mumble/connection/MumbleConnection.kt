@@ -30,6 +30,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
+import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -38,6 +39,7 @@ import me.danielstiner.dumble.mumble.net.NetworkWatch
 import me.danielstiner.dumble.mumble.net.NoNetworkWatch
 import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.net.PinStore
+import me.danielstiner.dumble.mumble.net.UdpTransport
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
@@ -101,9 +103,9 @@ class MumbleConnection internal constructor(
     // Seam: the clock of capture's two timers, the pump's stats cadence and the speaking hold, so
     // a test that steps the pump runs both on the scheduler's time.
     private val captureClock: TimeSource = TimeSource.Monotonic,
-    // Seams: the UDP transport's clock, so its wiring test can jump the resync throttle's quiet
-    // period rather than wait it out (it reads zero off-device, which is why the test must inject
-    // one), and the ping interval, so the unanswered-ping wiring test does not wait two out.
+    // Seams: the clock of everything that must count sleep — the sync stamp, the reconnect budget,
+    // the UDP transport — which reads zero off-device, so a test injects one; and the ping
+    // interval, so a test can keep the ticker out of its way.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
     private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
     // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
@@ -116,6 +118,10 @@ class MumbleConnection internal constructor(
     // dispatcher below here.
     private val context: CoroutineContext = Dispatchers.Default,
     private val blocking: CoroutineDispatcher = Dispatchers.IO,
+    // Seam: the UDP voice socket, so a test runs the connection's UDP wiring on virtual time
+    // against a fake instead of a socket and its reader thread.
+    private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
+        { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection {
     @Inject constructor(
@@ -631,7 +637,7 @@ class MumbleConnection internal constructor(
             pingIntervalMs = pingIntervalMs,
         )
         val path = VoicePath()
-        val udp = MumbleUdpTransport(stateMachine.crypt, object : MumbleUdpTransport.Listener {
+        val udp = newUdp(stateMachine.crypt, object : MumbleUdpTransport.Listener {
             private var heard = false   // the server chose UDP for our downlink; logged once
             override fun onVoicePacket(buf: ByteArray, len: Int) {
                 if (!heard) {
@@ -652,7 +658,7 @@ class MumbleConnection internal constructor(
                 transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
             }
             override fun requestCryptResync() { stateMachine.requestCryptResync() }
-        }, udpClock)
+        })
         return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 

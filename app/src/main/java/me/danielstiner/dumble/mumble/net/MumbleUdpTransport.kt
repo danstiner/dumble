@@ -36,7 +36,7 @@ class MumbleUdpTransport(
      * Android clock reads zero off-device.
      */
     private val clock: TimeSource.WithComparableMarks = BootTimeSource,
-) {
+) : UdpTransport {
     interface Listener {
         /** A decrypted voice datagram, `[u8 type][protobuf]`. [buf] is reused the moment this
          *  returns, and [len], not `buf.size`, bounds the packet. */
@@ -81,7 +81,7 @@ class MumbleUdpTransport(
      * own remote: the server holds crypt state only for the session at that address, and a name
      * can resolve differently twice.
      */
-    fun open(address: InetSocketAddress) {
+    override fun open(address: InetSocketAddress) {
         check(channel == null) { "open() twice" }
         val ch = DatagramChannel.open()
         try {
@@ -176,7 +176,7 @@ class MumbleUdpTransport(
      * cipher, or a failed send; a route gone from under us is the case that matters, and the
      * caller decides what it means. Throws only for a packet past the wire cap, a caller bug.
      */
-    fun send(plaintext: ByteArray, len: Int): Boolean {
+    override fun send(plaintext: ByteArray, len: Int): Boolean {
         val ch = channel ?: return false
         if (closed || !crypt.isValid()) return false
         synchronized(sendBuf) {
@@ -204,7 +204,7 @@ class MumbleUdpTransport(
      * back verbatim, so a reply dates itself. Floored at 1: a zero serialises to nothing, and
      * the server refuses a packet of the type byte alone.
      */
-    fun sendPing(): Boolean {
+    override fun sendPing(): Boolean {
         if (channel != null && previousPingWentUnanswered()) listener.onPingsUnanswered()
         val stamp = (clock.markNow() - origin).inWholeNanoseconds.coerceAtLeast(1)
         val body = MumbleUdpProtos.Ping.newBuilder().setTimestamp(stamp).build().toByteArray()
@@ -224,7 +224,7 @@ class MumbleUdpTransport(
     }
 
     /** Idempotent, any thread. Closing the channel ends the reader; nothing waits for it. */
-    fun close() {
+    override fun close() {
         val ch = synchronized(this) {
             if (closed) return
             closed = true
