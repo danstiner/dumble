@@ -37,7 +37,7 @@ public:
      *  A terminator with no payload is the ordinary way a spurt ends: `data` may be null when
      *  `len` is 0, and the latch is what releases a tail below the target.
      *
-     *  `frameNumber` is the sender's frame clock, counting 10 ms frames (kFrameNumberMillis), so
+     *  `frameNumber` is the sender's frame clock, counting 10 ms frames (kFrameNumberUnit), so
      *  a 20 ms packet advances it by two. A packet whose audio ends
      *  at or before the play cursor, or that is not ahead of the packet queued last, is refused and
      *  counted rather than stored. Both checks hold within one spurt only: they stand down for

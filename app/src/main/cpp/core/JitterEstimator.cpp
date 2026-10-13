@@ -1,14 +1,18 @@
 #include "core/JitterEstimator.h"
+#include <algorithm>
 
 namespace dumble::playout {
 
-int JitterEstimator::observe(uint64_t frameNumber, int samples, int64_t arrivalMillis) {
+using std::chrono::milliseconds;
+
+std::optional<milliseconds> JitterEstimator::observe(uint64_t frameNumber, int samples,
+                                                     BootClock::time_point arrival) {
     if (frameNumber > kMaxFrameNumber) {
         // Peer-controlled, and the multiplication below is where an absurd value would stop
         // meaning anything. Dropping the anchor makes the next packet a rebase.
         haveFrame_ = false;
         sawDiscontinuity_ = true;
-        return -1;
+        return std::nullopt;
     }
     const bool contiguous = haveFrame_ && frameNumber == nextFrameNumber_;
     if (!contiguous) sawDiscontinuity_ = true;
@@ -20,57 +24,56 @@ int JitterEstimator::observe(uint64_t frameNumber, int samples, int64_t arrivalM
     // discontinuous: permanently cold-start target, catch-up never allowed. Safe rather than
     // correct — cold start and no catch-up are exactly what a genuinely discontinuous stream
     // wants — but such a sender never earns the benefit of a jitter estimate.
-    nextFrameNumber_ = frameNumber + uint64_t(samples / (kFrameNumberMillis * kSamplesPerMilli));
+    nextFrameNumber_ = frameNumber + uint64_t(samples / samplesIn(kFrameNumberUnit));
 
-    const int64_t offset = arrivalMillis - int64_t(frameNumber) * kFrameNumberMillis;
-    const bool stale = arrivalMillis - bucketStartMillis_ >= 2 * kBaselineBucketMillis;
+    const milliseconds offset =
+        arrival.time_since_epoch() - int64_t(frameNumber) * kFrameNumberUnit;
+    const bool stale = arrival - bucketStart_ >= 2 * kBaselineBucket;
     if (!contiguous || !haveCurrent_ || stale) {
         currentMin_ = offset;
         haveCurrent_ = true;
         havePrevious_ = false;
-        bucketStartMillis_ = arrivalMillis;
-        return -1;
+        bucketStart_ = arrival;
+        return std::nullopt;
     }
-    if (arrivalMillis - bucketStartMillis_ >= kBaselineBucketMillis) {
+    if (arrival - bucketStart_ >= kBaselineBucket) {
         previousMin_ = currentMin_;
         havePrevious_ = true;
         currentMin_ = offset;
-        bucketStartMillis_ = arrivalMillis;
+        bucketStart_ = arrival;
     } else if (offset < currentMin_) {
         currentMin_ = offset;
     }
-    int64_t baseline = currentMin_;
+    milliseconds baseline = currentMin_;
     if (havePrevious_ && previousMin_ < baseline) baseline = previousMin_;
-    const int64_t raw = offset - baseline;
-    const int delay = raw > 0 ? int(raw) : 0;
-    hold(delay, arrivalMillis);
+    const milliseconds delay = std::max(offset - baseline, milliseconds::zero());
+    hold(delay, arrival);
     return delay;
 }
 
-void JitterEstimator::observeRelativeDelay(int delayMillis, int64_t arrivalMillis) {
-    hold(delayMillis, arrivalMillis);
+void JitterEstimator::observeRelativeDelay(milliseconds delay, BootClock::time_point arrival) {
+    hold(delay, arrival);
 }
 
-void JitterEstimator::hold(int delayMillis, int64_t arrivalMillis) {
+void JitterEstimator::hold(milliseconds delay, BootClock::time_point arrival) {
     if (!havePeak_) {
         havePeak_ = true;
-        peakStartMillis_ = arrivalMillis;
-        peakMillis_ = 0;
+        peakStart_ = arrival;
+        peak_ = milliseconds::zero();
     }
-    if (delayMillis > peakMillis_) peakMillis_ = delayMillis;
-    if (arrivalMillis - peakStartMillis_ < kPeakHoldMillis) return;
-    update(peakMillis_);
-    peakMillis_ = 0;
-    peakStartMillis_ = arrivalMillis;
+    if (delay > peak_) peak_ = delay;
+    if (arrival - peakStart_ < kPeakHold) return;
+    update(peak_);
+    peak_ = milliseconds::zero();
+    peakStart_ = arrival;
 }
 
-void JitterEstimator::update(int delayMillis) {
-    int index = delayMillis / kTargetBucketMillis;
-    if (index >= kTargetBuckets) index = kTargetBuckets - 1;
+void JitterEstimator::update(milliseconds delay) {
+    const int index = int(std::min<int64_t>(delay / kTargetBucket, kTargetBuckets - 1));
     // The forget factor ramps in from zero rather than starting at its steady-state value: an
     // empty histogram averaged against is an average with a phantom sample in it, and a cold
     // speaker would follow its own arrivals far too slowly. Reaches kForgetFactorQ15 after ~120
-    // updates, which at kPeakHoldMillis is about a minute of speech.
+    // updates, which at kPeakHold is about a minute of speech.
     int64_t forget = (int64_t(1) << 15) - ((int64_t(kStartForgetWeight) << 15) / (updates_ + 1));
     if (forget < 0) forget = 0;
     if (forget > kForgetFactorQ15) forget = kForgetFactorQ15;
@@ -84,7 +87,7 @@ void JitterEstimator::update(int delayMillis) {
 }
 
 int JitterEstimator::targetSamples() const {
-    int millis = kColdStartMillis;
+    milliseconds target = kColdStart;
     if (updates_ > 0) {
         const int64_t want =
             ((int64_t(1) << 30) * kTargetQuantileNumerator) / kTargetQuantileDenominator;
@@ -97,11 +100,9 @@ int JitterEstimator::targetSamples() const {
                 break;
             }
         }
-        millis = (1 + index) * kTargetBucketMillis + kSafetyMarginMillis;
+        target = (1 + index) * kTargetBucket + kSafetyMargin;
     }
-    if (millis < kMinTargetMillis) millis = kMinTargetMillis;
-    if (millis > kMaxTargetMillis) millis = kMaxTargetMillis;
-    return millis * kSamplesPerMilli;
+    return samplesIn(std::clamp(target, kMinTarget, kMaxTarget));
 }
 
 void JitterEstimator::seedFrom(const JitterEstimator& other) {

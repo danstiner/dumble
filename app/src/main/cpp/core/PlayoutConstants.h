@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 
 namespace dumble::playout {
@@ -22,6 +23,10 @@ constexpr int kMaxSpeakers = 8;
 // rather than the engine's runtime sampleRate_ so sample counts stay compile-time: durations are
 // the tuned quantities, and the sample counts derive from them.
 constexpr int kSamplesPerMilli = 48;
+
+constexpr int samplesIn(std::chrono::milliseconds duration) {
+    return int(duration.count()) * kSamplesPerMilli;
+}
 
 // The largest legal Opus packet, so a malformed or unusually long packet cannot overrun the
 // decode scratch. The sibling of kMaxPacketBytes: same object, one bound in samples and one in
@@ -73,16 +78,15 @@ constexpr int kMaxQueuedPackets = 32;
 constexpr int kMaxPacketBytes = 1276;
 
 // The unit MumbleUDP.Audio.frame_number counts in. Sibling of CaptureConstants.h's
-// kFrameSamples, in milliseconds because the estimator's arithmetic is millisecond-wide:
-// nanoseconds times a sample rate overflows int64 at plausible boot times.
-constexpr int kFrameNumberMillis = 10;
+// kFrameSamples.
+constexpr std::chrono::milliseconds kFrameNumberUnit{10};
 
 // Sliding-minimum bucket. Two are kept, so the baseline is the minimum over 1-2 s of arrivals —
 // NetEq's kPacketHistorySizeMs is 2000 over an exact deque, which at 64 tracked senders would be
 // 12800 entries to answer a running minimum. Two buckets answer it in O(1) state.
-constexpr int kBaselineBucketMillis = 1000;
+constexpr std::chrono::milliseconds kBaselineBucket{1000};
 
-// Past this a frame number times kFrameNumberMillis stops being worth reasoning about, and it is
+// Past this a frame number times kFrameNumberUnit stops being worth reasoning about, and it is
 // peer-controlled. ~317 years of 10 ms frames, so no honest sender reaches it.
 constexpr uint64_t kMaxFrameNumber = 1'000'000'000'000'000ULL;
 
@@ -90,11 +94,11 @@ constexpr uint64_t kMaxFrameNumber = 1'000'000'000'000'000ULL;
 // NetEq's resample_interval_ms. The pair (peak-hold interval, forget factor) is what sets the
 // estimate's time constant, so neither may be changed without the other: 0.983 per update at
 // 500 ms per update is roughly a 29 s memory.
-constexpr int kPeakHoldMillis = 500;
+constexpr std::chrono::milliseconds kPeakHold{500};
 
 // 32 buckets of 20 ms — 640 ms of range. NetEq uses 100 buckets to reach 2000 ms; kHighWaterSamples
 // caps us at 600, so the rest would never be addressed.
-constexpr int kTargetBucketMillis = 20;
+constexpr std::chrono::milliseconds kTargetBucket{20};
 constexpr int kTargetBuckets = 32;
 
 // The 95th percentile of the histogram, as a fraction. Integer so the quantile search needs no
@@ -112,11 +116,11 @@ constexpr int kStartForgetWeight = 2;
 // Added to the quantile before clamping. Mumble's own margin (Settings.h iJitterBufferSize = 1,
 // times a 10 ms frame), and in the same additive role: speexdsp subtracts it from every timing
 // sample rather than treating it as a floor.
-constexpr int kSafetyMarginMillis = 10;
+constexpr std::chrono::milliseconds kSafetyMargin{10};
 
 // A safety rail, not the operating point. On a clean link the lowest bucket already answers 20 ms,
 // so with the margin the target settles near 30 and the floor never binds.
-constexpr int kMinTargetMillis = 10;
+constexpr std::chrono::milliseconds kMinTarget{10};
 
 // 75 % of kHighWaterSamples — NetEq's rule that a target must stay clear of the buffer's
 // capacity, and derived so it tracks that capacity if it moves. It is not the tighter bound:
@@ -125,14 +129,14 @@ constexpr int kMinTargetMillis = 10;
 // is safe only because PacketQueue::pop treats a full ring as gate-open regardless of target —
 // without that check this clamp would leave the gate shut, and every further packet dropped as
 // overflow, for as long as the target stayed high.
-constexpr int kMaxTargetMillis = kHighWaterSamples / kSamplesPerMilli * 3 / 4;
+constexpr std::chrono::milliseconds kMaxTarget{kHighWaterSamples / kSamplesPerMilli * 3 / 4};
 
 // NetEq's kStartDelayMs. 20 ms worse than the fixed 60 ms margin it replaces, for the first
 // spurt of the first speaker in a session and nothing after — the engine-wide histogram seeds
 // every later newcomer. Kept at NetEq's measured value rather than tuned to match the old
 // behaviour, because we have no measurement of our own yet.
-constexpr int kColdStartMillis = 80;
-constexpr int kColdStartSamples = kColdStartMillis * kSamplesPerMilli;
+constexpr std::chrono::milliseconds kColdStart{80};
+constexpr int kColdStartSamples = samplesIn(kColdStart);
 
 // How far past the target a gate-open may sit before the backlog is trimmed rather than carried.
 // The same 100 ms span and the same reasoning as kConcealSamples: past about that long the break
@@ -151,7 +155,7 @@ constexpr int kShrinkCooldownSamples = 2000 * kSamplesPerMilli;
 
 // Senders whose estimate we keep. Not kMaxSpeakers: 8 is the simultaneous-mixing bound, but a
 // channel has many more members than that and turn-taking cycles through them, so the table wants
-// everyone who has spoken recently. 64 entries is about 11 KB, allocated once.
+// everyone who has spoken recently. 64 entries is about 13 KB, allocated once.
 constexpr int kEstimatorSlots = 64;
 
 // offer() status codes. Every one is a condition a misbehaving server can produce at will, so the
