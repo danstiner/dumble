@@ -77,8 +77,7 @@ constexpr int kMaxQueuedPackets = 32;
 // nothing that could send one is a peer we serve.
 constexpr int kMaxPacketBytes = 1276;
 
-// The unit MumbleUDP.Audio.frame_number counts in. Sibling of CaptureConstants.h's
-// kFrameSamples.
+// The unit MumbleUDP.Audio.frame_number counts in. Sibling of CaptureConstants.h's kFrameSamples.
 constexpr std::chrono::milliseconds kFrameNumberUnit{10};
 
 // Sliding-minimum bucket. Two are kept, so the baseline is the minimum over 1-2 s of arrivals —
@@ -155,7 +154,7 @@ constexpr int kShrinkCooldownSamples = 2000 * kSamplesPerMilli;
 
 // Senders whose estimate we keep. Not kMaxSpeakers: 8 is the simultaneous-mixing bound, but a
 // channel has many more members than that and turn-taking cycles through them, so the table wants
-// everyone who has spoken recently. 64 entries is about 13 KB, allocated once.
+// everyone who has spoken recently. 64 entries is about 14 KB, allocated once.
 constexpr int kEstimatorSlots = 64;
 
 // offer() status codes. Every one is a condition a misbehaving server can produce at will, so the

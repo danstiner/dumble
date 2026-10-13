@@ -209,7 +209,7 @@ private:
     // 100 ms of silence — the bug this table exists to fix.
     //
     // Split rather than an array of {session, estimator} structs because the only hot operation is
-    // the key scan. One estimator is 208 bytes, so scanning an array of them strides 13.3 KB to
+    // the key scan. One estimator is 208 bytes, so scanning those structs strides 13.8 KB to
     // read 64 session ids; the keys alone are 256 bytes, and the occupancy is one word. The bodies
     // are touched only on a hit.
     Bitmap estimatorUsed_;
