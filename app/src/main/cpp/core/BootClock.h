@@ -5,14 +5,14 @@ namespace dumble {
 
 /**
  * CLOCK_BOOTTIME as a std::chrono clock, which steady_clock is not: that is CLOCK_MONOTONIC on
- * bionic, and stops in deep sleep. frame_number is a sender-side wall-clock counter that keeps
- * advancing through our suspend; measured against a clock that stopped, the first packet after
- * resume would look impossibly early, become the window minimum, and leave every packet after it
- * reading as hugely late. BootTimeSource is the Kotlin side's, for the same reason.
+ * bionic, and stops in deep sleep. The jitter estimator's arrival intervals, its stale-baseline
+ * check above all, must count the time we spend suspended: a clock that stops there under-reads a
+ * packet delivered late across the suspend. BootTimeSource is the Kotlin side's, for the same
+ * reason.
  *
- * Milliseconds, the jitter estimator's unit: nanoseconds times a sample rate overflows int64 at
- * plausible boot times, and its histogram's resolution is 20 ms, so nothing finer would survive
- * bucketing.
+ * Milliseconds, so that a peer's frame number times kFrameNumberUnit fits the tick: in nanoseconds
+ * it overflows int64 past ~9.2e11, well under kMaxFrameNumber. Nothing finer would survive the
+ * histogram's 20 ms buckets anyway.
  */
 struct BootClock {
     using duration = std::chrono::milliseconds;

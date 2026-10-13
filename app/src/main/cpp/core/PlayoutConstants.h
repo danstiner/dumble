@@ -87,7 +87,7 @@ constexpr std::chrono::milliseconds kFrameNumberUnit{10};
 constexpr std::chrono::milliseconds kBaselineBucket{1000};
 
 // Past this a frame number times kFrameNumberUnit stops being worth reasoning about, and it is
-// peer-controlled. ~317 years of 10 ms frames, so no honest sender reaches it.
+// peer-controlled. ~317,000 years of 10 ms frames, so no honest sender reaches it.
 constexpr uint64_t kMaxFrameNumber = 1'000'000'000'000'000ULL;
 
 // One histogram update per 500 ms of arrivals, carrying that window's worst relative delay.
