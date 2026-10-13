@@ -22,7 +22,7 @@ static_assert(kMaxPacketSamples < (1 << 15));
 static_assert(kMaxPacketSamples <= kHighWaterSamples);
 
 // One frame of the wire's frame_number, the 10 ms it counts in, as samples.
-constexpr int kFrameSamples = kFrameNumberMillis * kSamplesPerMilli;
+constexpr int kFrameSamples = samplesIn(kFrameNumberUnit);
 
 // How many frames a packet spans on the frame clock. Rounded up, not down: a sub-10 ms packet
 // (120 or 240 samples, which AudioDecoder::packetSamples accepts) would otherwise leave the

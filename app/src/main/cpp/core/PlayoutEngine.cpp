@@ -9,29 +9,6 @@ namespace dumble::playout {
 
 namespace {
 
-// CLOCK_BOOTTIME and not CLOCK_MONOTONIC — which is what std::chrono::steady_clock gives on
-// bionic, so it cannot be used here. frame_number is a sender-side wall-clock counter that keeps
-// advancing through suspend; if our arrival clock stopped during deep sleep and the sender's did
-// not, the first packet after resume would look impossibly early, become the window minimum, and
-// leave every packet after it reading as hugely late. BootTimeSource made the same choice on the
-// Kotlin side for the same reason.
-//
-// Darwin has no CLOCK_BOOTTIME, and the host test build is the only thing that compiles this file
-// off Android. Its CLOCK_MONOTONIC is the right stand-in rather than a compromise: unlike Linux's,
-// it keeps advancing while the system is asleep, which is the property this needs. CLOCK_UPTIME_RAW
-// is the one that stops there, and is what a port reaching for the closest-looking name would pick.
-#if defined(CLOCK_BOOTTIME)
-constexpr clockid_t kArrivalClock = CLOCK_BOOTTIME;
-#else
-constexpr clockid_t kArrivalClock = CLOCK_MONOTONIC;
-#endif
-
-int64_t bootMillis() {
-    timespec ts{};
-    clock_gettime(kArrivalClock, &ts);
-    return int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
-}
-
 int64_t monotonicMicros() {
     timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -55,7 +32,7 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
                          bool terminator) {
     // Stamped before the payload is judged, so our own parse cost is not laundered into the jitter
     // measurement.
-    const int64_t arrivalMillis = bootMillis();
+    const BootClock::time_point arrival = BootClock::now();
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
@@ -79,12 +56,13 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
     const int slot = slotFor(session);
     // Before the cap's early return: a packet refused for want of a slot still arrived, and its
     // sender is exactly the one whose estimate we want warm for when a slot frees.
-    const int estimator = estimatorFor(session, arrivalMillis);
+    const int estimator = estimatorFor(session, arrival);
     // The slot's index into the table, so fillQuantum indexes rather than scanning. Set here
     // because this is the one place both the slot and the entry are resolved together.
     if (slot >= 0) estimatorIndex_[slot] = estimator;
-    const int relative = estimators_[estimator].observe(frameNumber, samples, arrivalMillis);
-    if (relative >= 0) downlink_.observeRelativeDelay(relative, arrivalMillis);
+    if (const auto relative = estimators_[estimator].observe(frameNumber, samples, arrival)) {
+        downlink_.observeRelativeDelay(*relative, arrival);
+    }
     // Charged to the engine because there is no queue to charge it to: a capped session's packets
     // are as lost as ones a live queue overflowed away.
     if (slot < 0) {
@@ -100,14 +78,14 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
     return verdict;
 }
 
-int PlayoutEngine::estimatorFor(int32_t session, int64_t arrivalMillis) {
+int PlayoutEngine::estimatorFor(int32_t session, BootClock::time_point arrival) {
     int free = -1;
     int oldest = -1;
     for (int i = 0; i < kEstimatorSlots; i++) {
         if (!estimatorUsed_.test(i)) {
             if (free < 0) free = i;
         } else if (estimatorSessions_[i] == session) {
-            estimatorLastArrival_[i] = arrivalMillis;
+            estimatorLastArrival_[i] = arrival;
             return i;
         } else if (oldest < 0 || estimatorLastArrival_[i] < estimatorLastArrival_[oldest]) {
             oldest = i;
@@ -117,7 +95,7 @@ int PlayoutEngine::estimatorFor(int32_t session, int64_t arrivalMillis) {
     estimators_[claimed].reset();
     estimatorUsed_.set(claimed);
     estimatorSessions_[claimed] = session;
-    estimatorLastArrival_[claimed] = arrivalMillis;
+    estimatorLastArrival_[claimed] = arrival;
     // Start from what the link has already shown us rather than from the cold constant. Only the
     // histogram travels; the baseline is per-sender and stays empty, so this sender's first packet
     // is still a rebase.

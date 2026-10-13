@@ -1,5 +1,8 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
+#include <optional>
+#include "core/BootClock.h"
 #include "core/PlayoutConstants.h"
 
 namespace dumble::playout {
@@ -12,9 +15,6 @@ namespace dumble::playout {
  * of these per session in a table that outlives slot retirement, which is the whole point: a
  * speaker who stops for thirty seconds must not come back with a cold estimate.
  *
- * Millisecond arithmetic throughout. Nanoseconds times a sample rate overflows int64 at plausible
- * boot times, and the histogram's resolution is 20 ms, so nothing finer would survive bucketing.
- *
  * Not internally synchronized. PlayoutEngine writes every field under its mutex, from offer(), and
  * reads under the same mutex once per fill.
  */
@@ -22,9 +22,8 @@ class JitterEstimator {
 public:
     /**
      * Records one arrival and returns its delay relative to the fastest packet in the last 1-2 s,
-     * in milliseconds — or -1 when the observation was skipped, which is a rebase and not an
-     * error. `frameNumber` is the packet's first frame, `samples` its duration and never
-     * negative, `arrivalMillis` a BOOTTIME reading.
+     * or nothing when the observation was skipped, which is a rebase and not an error.
+     * `frameNumber` is the packet's first frame, `samples` its duration and never negative.
      *
      * A packet that is not the exact successor of the last one latches the discontinuity flag and
      * rebases the baseline. Both halves matter and they are separate: the flag says "the sender's
@@ -33,16 +32,17 @@ public:
      * late. A stall is deliberately not either of these — its frame numbers stay contiguous, the
      * baseline is held, and that is exactly what makes the burst measurable as the lateness it is.
      */
-    int observe(uint64_t frameNumber, int samples, int64_t arrivalMillis);
+    std::optional<std::chrono::milliseconds> observe(uint64_t frameNumber, int samples,
+                                                     BootClock::time_point arrival);
 
     /** Feeds a relative delay measured against another sender's baseline. The engine-wide
      *  estimator's only input: frame_number origins are per-sender, so a raw (arrival - sendTime)
      *  carries an arbitrary offset and pooling those would let whichever sender has the largest
      *  one own the shared minimum. Relative delay has the offset already subtracted out, which
      *  makes it the only quantity meaningful across senders. */
-    void observeRelativeDelay(int delayMillis, int64_t arrivalMillis);
+    void observeRelativeDelay(std::chrono::milliseconds delay, BootClock::time_point arrival);
 
-    /** The playout target, in samples. kColdStartMillis until the first histogram update. */
+    /** The playout target, in samples. kColdStart until the first histogram update. */
     int targetSamples() const;
 
     /** Whether any histogram update has landed. The engine reads it to decide whether the
@@ -67,25 +67,25 @@ private:
     // Baseline: the minimum of (arrival - sendTime) over the current bucket and the previous one.
     bool haveCurrent_ = false;
     bool havePrevious_ = false;
-    int64_t bucketStartMillis_ = 0;
-    int64_t currentMin_ = 0;
-    int64_t previousMin_ = 0;
+    BootClock::time_point bucketStart_;
+    std::chrono::milliseconds currentMin_{};
+    std::chrono::milliseconds previousMin_{};
 
     // The sender's stream. nextFrameNumber_ is what the next packet must carry to be contiguous.
     bool haveFrame_ = false;
     bool sawDiscontinuity_ = false;
     uint64_t nextFrameNumber_ = 0;
 
-    /** Peak-holds `delayMillis` and closes the window when kPeakHoldMillis has passed. */
-    void hold(int delayMillis, int64_t arrivalMillis);
+    /** Peak-holds `delay` and closes the window when kPeakHold has passed. */
+    void hold(std::chrono::milliseconds delay, BootClock::time_point arrival);
 
     /** One histogram update, with the forgetting factor applied first. */
-    void update(int delayMillis);
+    void update(std::chrono::milliseconds delay);
 
-    // Peak-hold, feeding one histogram update per kPeakHoldMillis of arrivals.
+    // Peak-hold, feeding one histogram update per kPeakHold of arrivals.
     bool havePeak_ = false;
-    int64_t peakStartMillis_ = 0;
-    int peakMillis_ = 0;
+    BootClock::time_point peakStart_;
+    std::chrono::milliseconds peak_{};
 
     // The memory. Scaled so the buckets always sum to 1<<30, which is what lets the quantile
     // search be an integer prefix sum.

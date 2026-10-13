@@ -22,7 +22,7 @@ namespace pl = dumble::playout;
 constexpr int kFrame = 480;
 
 // Packets of one quantum needed to clear a cold speaker's gate. Derived, not written as 8, so it
-// cannot rot silently if kColdStartMillis moves.
+// cannot rot silently if kColdStart moves.
 constexpr int kColdStartPackets =
     (pl::kColdStartSamples + kFrame - 1) / kFrame;
 

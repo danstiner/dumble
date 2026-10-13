@@ -28,7 +28,7 @@ Packet packet(uint8_t tag, int samples = kPacket, int len = 40) {
 }
 
 // frame_number counts 10 ms frames, so a 20 ms packet advances it by 2.
-constexpr int kFrameSamples = pl::kFrameNumberMillis * pl::kSamplesPerMilli;  // 480
+constexpr int kFrameSamples = pl::samplesIn(pl::kFrameNumberUnit);  // 480
 constexpr uint64_t kFramesPerPacket = kPacket / kFrameSamples;                 // 2
 
 // A sender's frame clock. Threaded explicitly so a test can skip frames (loss) or jump them
@@ -519,8 +519,8 @@ TEST(PacketQueue, AFullRingOpensTheGateEvenBelowTheTarget) {
     // overflow, which is silence for as long as the target stays high.
     const int tenMs = 480;
     for (int i = 0; i < pl::kMaxQueuedPackets; i++) offer(q, packet(uint8_t(i), tenMs), clock.next());
-    ASSERT_LT(q.depthSamples(), pl::kMaxTargetMillis * pl::kSamplesPerMilli);
-    EXPECT_EQ(popTagAt(q, pl::kMaxTargetMillis * pl::kSamplesPerMilli), 0);
+    ASSERT_LT(q.depthSamples(), pl::samplesIn(pl::kMaxTarget));
+    EXPECT_EQ(popTagAt(q, pl::samplesIn(pl::kMaxTarget)), 0);
 }
 
 TEST(PacketQueue, InOrderReportsNoHole) {

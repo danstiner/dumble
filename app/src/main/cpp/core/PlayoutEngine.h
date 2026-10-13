@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "core/BootClock.h"
 #include "core/JitterEstimator.h"
 #include "core/PacketQueue.h"
 #include "core/PlayoutConstants.h"
@@ -197,7 +198,7 @@ private:
 
     /** Any thread; caller already holds mutex_. Index of this session's estimator, claiming or
      *  evicting one if needed. Never negative. */
-    int estimatorFor(int32_t session, int64_t arrivalMillis);
+    int estimatorFor(int32_t session, BootClock::time_point arrival);
 
     /** Any thread; caller already holds mutex_. This slot's estimator, or null when the table
      *  evicted it out from under a slot that is still live. */
@@ -208,12 +209,12 @@ private:
     // 100 ms of silence — the bug this table exists to fix.
     //
     // Split rather than an array of {session, estimator} structs because the only hot operation is
-    // the key scan. One estimator is 200 bytes, so scanning an array of them strides 13.8 KB to
+    // the key scan. One estimator is 208 bytes, so scanning those structs strides 13.8 KB to
     // read 64 session ids; the keys alone are 256 bytes, and the occupancy is one word. The bodies
     // are touched only on a hit.
     Bitmap estimatorUsed_;
     int32_t estimatorSessions_[kEstimatorSlots] = {};
-    int64_t estimatorLastArrival_[kEstimatorSlots] = {};
+    BootClock::time_point estimatorLastArrival_[kEstimatorSlots] = {};
     JitterEstimator estimators_[kEstimatorSlots];
     // Each live slot's index into that table, so the playback thread indexes instead of scanning.
     // A hint, not a handle: the table can evict an entry while its slot is still live, so every use
