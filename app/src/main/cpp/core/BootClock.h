@@ -4,14 +4,15 @@
 namespace dumble {
 
 /**
- * CLOCK_BOOTTIME as a std::chrono clock; steady_clock is CLOCK_MONOTONIC on bionic, which stops in
- * deep sleep. The jitter estimator's arrival intervals, its stale-baseline check above all, must
- * count suspended time: a clock that stops there under-reads a packet delivered late across the
- * suspend. BootTimeSource is the Kotlin side's, for the same reason.
+ * A std::chrono clock that keeps counting through deep sleep, which steady_clock does not on
+ * Android. The jitter estimator's windows are real time: a delay baseline older than two seconds
+ * is stale and rebuilt. On a clock that stops in suspend, a baseline from before the suspend still
+ * looks fresh, and the first packets after it are measured against it. BootTimeSource is the
+ * Kotlin side's.
  *
- * Milliseconds, so that a peer's frame number times kFrameNumberUnit fits the tick: in nanoseconds
- * it overflows int64 past ~9.2e11, well under kMaxFrameNumber. Nothing finer would survive the
- * histogram's 20 ms buckets anyway.
+ * Milliseconds because a peer's frame number times kFrameNumberUnit must fit the tick: in
+ * nanoseconds it overflows int64 past ~9.2e11 frames, under kMaxFrameNumber. Nothing finer
+ * survives the histogram's 20 ms buckets anyway.
  */
 struct BootClock {
     using duration = std::chrono::milliseconds;

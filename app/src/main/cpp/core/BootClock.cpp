@@ -5,9 +5,8 @@ namespace dumble {
 
 namespace {
 
-// Darwin has no CLOCK_BOOTTIME, and only the host test build compiles this file off Android.
-// Darwin's CLOCK_MONOTONIC, unlike Linux's, keeps advancing while the system is asleep, so it is
-// an exact stand-in. CLOCK_UPTIME_RAW is the closest-looking name and the one that stops there.
+// For the host tests on macOS, which has no CLOCK_BOOTTIME. Its CLOCK_MONOTONIC counts sleep,
+// unlike Linux's; CLOCK_UPTIME_RAW is the one that stops.
 #if defined(CLOCK_BOOTTIME)
 constexpr clockid_t kClock = CLOCK_BOOTTIME;
 #else
