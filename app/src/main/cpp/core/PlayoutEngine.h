@@ -64,9 +64,11 @@ public:
      *
      *  Returns one of the kOffer* codes. `data` may be null when `len` is 0; a payload-free
      *  terminator is accepted, since it carries no samples by definition. `frameNumber` is the
-     *  sender's own wall-clock frame counter, peer-controlled and sanity-checked by the estimator
-     *  rather than here. */
-    int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator);
+     *  sender's own frame counter, peer-controlled and sanity-checked by the estimator rather than
+     *  here. `arrival` is when the packet became ready to queue: delay before that, local or
+     *  network, is jitter the target must cover. */
+    int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
+              BootClock::time_point arrival);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement

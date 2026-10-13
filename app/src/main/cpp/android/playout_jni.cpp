@@ -2,6 +2,7 @@
 #include <cmath>
 #include <memory>
 #include "android/OboePlayout.h"
+#include "core/BootClock.h"
 #include "core/PlayoutConstants.h"
 #include "core/PlayoutEngine.h"
 
@@ -69,6 +70,7 @@ JNIEXPORT void JNICALL FN(pause)(JNIEnv*, jobject, jlong h) {
 JNIEXPORT jint JNICALL
 FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
           jboolean terminator) {
+    const auto arrival = dumble::BootClock::now();
     const jsize len = env->GetArrayLength(opusData);
     if (len > pl::kMaxPacketBytes) {
         // Refused here rather than by the engine, because the copy below is what we cannot afford
@@ -76,7 +78,7 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
         // payload is garbage, so the end of the spurt is handed over on its own. Same answer the
         // engine gives an oversized payload, reached one step earlier.
         if (terminator == JNI_TRUE)
-            self(h)->engine->offer(session, nullptr, 0, uint64_t(frameNumber), true);
+            self(h)->engine->offer(session, nullptr, 0, uint64_t(frameNumber), true, arrival);
         return pl::kOfferPacketTooLarge;
     }
     // Region copy onto the stack rather than a pin: the payload is at most kMaxPacketBytes, and a
@@ -84,7 +86,7 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     uint8_t packet[pl::kMaxPacketBytes];
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
     return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
-                                  uint64_t(frameNumber), terminator == JNI_TRUE);
+                                  uint64_t(frameNumber), terminator == JNI_TRUE, arrival);
 }
 
 JNIEXPORT jint JNICALL

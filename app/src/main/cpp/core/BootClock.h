@@ -21,6 +21,8 @@ struct BootClock {
     using time_point = std::chrono::time_point<BootClock>;
     static constexpr bool is_steady = true;
 
+    /** Defined only in the Android build: host tests pass their own times, and a call from one
+     *  fails to link rather than making the test depend on how fast it runs. */
     static time_point now();
 };
 
