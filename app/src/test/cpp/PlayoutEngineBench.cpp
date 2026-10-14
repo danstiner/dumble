@@ -62,7 +62,9 @@ struct Rig {
 
     // One 20 ms packet to each of the eight speakers.
     void offerAll() {
-        for (int s = 1; s <= pl::kMaxSpeakers; s++) e->offer(s, packet.data(), int(packet.size()), frame, false);
+        const dumble::BootClock::time_point arrival{int64_t(frame) * pl::kFrameNumberUnit};
+        for (int s = 1; s <= pl::kMaxSpeakers; s++)
+            e->offer(s, packet.data(), int(packet.size()), frame, false, arrival);
         frame += 2;
         supplied += 960;
     }

@@ -29,10 +29,7 @@ std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuan
 }
 
 int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber,
-                         bool terminator) {
-    // Stamped before the payload is judged, so our own parse cost is not laundered into the jitter
-    // measurement.
-    const BootClock::time_point arrival = BootClock::now();
+                         bool terminator, BootClock::time_point arrival) {
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;

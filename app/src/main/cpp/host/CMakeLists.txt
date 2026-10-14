@@ -44,8 +44,7 @@ add_executable(dumble_core_tests ${CORE_TESTS})
 # a relative path.
 target_compile_definitions(dumble_core_tests PRIVATE
     DUMBLE_ASSETS_DIR="${REPO_ROOT}/app/src/main/assets"
-    DUMBLE_TEST_DATA_DIR="${REPO_ROOT}/app/src/test/resources"
-    DUMBLE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+    DUMBLE_TEST_DATA_DIR="${REPO_ROOT}/app/src/test/resources")
 target_link_libraries(dumble_core_tests dumble_core GTest::gtest_main)
 target_compile_options(dumble_core_tests PRIVATE -Wall -Wextra -Werror)
 include(GoogleTest)
