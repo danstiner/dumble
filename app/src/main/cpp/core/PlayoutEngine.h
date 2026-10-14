@@ -163,7 +163,7 @@ public:
     /** Any thread. In realtime mode every mutex_ acquisition on the fill path is a try_lock: a
      *  fill that finds the reader inside offer() outputs silence, touches no per-speaker state,
      *  and counts one in Stats::contendedFills, rather than blocking a realtime thread behind a
-     *  normal-priority one — bionic's std::mutex has no priority inheritance, and AAudio's
+     *  normal-priority one — std::mutex has no priority inheritance, and AAudio's
      *  callback contract forbids waiting on one. Off by default: the push loop's own thread is
      *  the only other caller, and blocking there is harmless. */
     void setRealtime(bool realtime);

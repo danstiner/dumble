@@ -39,7 +39,7 @@ another. So the adapter and the engine have plain lifetimes, and there is no reo
 `tune()`, and `setWriteAheadSamples` when the tuner changed the buffer; nothing else — no
 logging, no allocation, no other stream call — because it runs on AAudio's realtime thread
 under that API's contract. A fill that finds the reader holding the engine's mutex answers one
-burst of silence and counts it (`contended`) rather than block: bionic's mutex has no priority
+burst of silence and counts it (`contended`) rather than block: `std::mutex` has no priority
 inheritance.
 
 **JNI seam** (`android/playout_jni.cpp`): one `jlong` handle to a session — engine and adapter
