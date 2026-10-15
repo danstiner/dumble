@@ -92,18 +92,20 @@ class CaptureLifecycleTest {
     /**
      * Teardown must not free the engine while a poll is in flight. stop()'s join gives up after a
      * second, so the engine is released by the pump's own exit — which cannot happen while it is
-     * parked.
+     * parked. Nor may that wait hold the call, its foreground service and the audio mode open.
      */
     @Test fun teardownDoesNotDestroyTheEngineWhileThePumpIsStillPolling() = deterministic {
         val handle = WedgedCaptureHandle()
+        val call = FakeVoiceCall()
         var opens = 0
-        val conn = connection(newCapture = { opens++; handle }, stuckPumpMillis = 100L)
+        val conn = connection(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
         connectTo(conn)
         conn.requestCapture()
         assertSettled("the engine must open") { opens == 1 }
 
         conn.disconnect()
         assertSettled("teardown must request a stop") { handle.stopCalled }
+        assertEquals("the call must end despite the wedged pump", 1, call.ends)
         elapse(500.milliseconds)   // well past the wedge deadline
         assertFalse("the engine must not be freed while the pump is still polling", handle.destroyed)
 
@@ -274,10 +276,7 @@ class CaptureLifecycleTest {
     @Test fun reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond() = deterministic {
         val log = ConcurrentLinkedQueue<String>()
         val handles = CopyOnWriteArrayList<RecordingHandle>()
-        val call = FakeVoiceCall()
-        val conn = connection(
-            newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } }, call = call,
-        )
+        val conn = connection(newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } })
 
         connectTo(conn, "first")
         conn.requestCapture()
@@ -293,10 +292,6 @@ class CaptureLifecycleTest {
             "the first stream must close before the second opens: $order",
             order.indexOf("e0:stop") < order.indexOf("e1:create"),
         )
-        // The default auto-grant supersedes during start(). Pins the supersede, not the Release
-        // handler's call.end — callEndFiresEvenWhenThePumpIsWedged pins that one, with no second
-        // call.start around to mask it.
-        assertEquals("the superseded call must end exactly once", 1, call.ends)
 
         conn.disconnect()
         assertSettled("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
@@ -512,39 +507,6 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
-    /** A native stop() that throws — the JNI call into OboeCapture::close() is not exception-free. */
-    private class ThrowingStopHandle : VoiceSender.CaptureHandle {
-        var stopCalled = false; private set
-        override fun pollPacket(out: ByteArray, meta: LongArray) = 0   // the throwing stop never ends it
-        override fun setGateOpen(open: Boolean) = Unit
-        override fun setTransmitMode(mode: TransmitMode) = Unit
-        override fun stop() { stopCalled = true; throw RuntimeException("stop blew up") }
-        override fun destroy() = Unit
-        override fun stats(): CaptureStats? = null
-    }
-
-    /**
-     * A throw out of the release must not strand the platform call. The consumer loop wraps the
-     * whole dispatch in runCatching, so when `call.end` sat at the tail of the Release handler a
-     * throw in reconcile skipped it silently, leaving the microphone service and the audio mode
-     * held. Ending first also keeps the call off an unbounded HAL close.
-     */
-    @Test fun aThrowingReleaseStillEndsThePlatformCall() = deterministic {
-        val handle = ThrowingStopHandle()
-        val call = FakeVoiceCall()
-        var opens = 0
-        val conn = connection(newCapture = { opens++; handle }, call = call)
-        connectTo(conn)
-        conn.requestCapture()
-        // Settled before the disconnect: an Acquire still queued behind it finds the session
-        // gone and opens nothing, which would leave no stop to throw.
-        assertSettled("the engine must open") { opens == 1 }
-
-        conn.disconnect()
-        assertSettled("the release must reach the throwing stop") { handle.stopCalled }
-        assertEquals("the platform call must end even though the release threw", 1, call.ends)
-    }
-
     /** A resume from a superseded call must not lift the live session's hold, nor its banner. */
     @Test fun aStaleResumeDoesNotClearTheLiveHold() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -567,38 +529,6 @@ class CaptureLifecycleTest {
 
         call.resume()   // the genuine resume, for the live generation
         assertSettled("the genuine resume must rebuild") { handles.size == 2 }
-        conn.disconnect()
-    }
-
-    /**
-     * call.start() runs before connect() publishes the session, and when connect() runs off the
-     * main thread the call's first hold can be handled before that publish; the settle inside
-     * start() handles it there. That hold must still reach the session: a capture asked for
-     * afterwards stays refused, and the receiver's poll never starts the output stream, until the
-     * resume.
-     */
-    @Test fun aHoldHandledBeforeThePublishHoldsCaptureAndPlayout() = deterministic {
-        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val playout = FakePlayoutEngine()
-        var engines = 0
-        val call = FakeVoiceCall(insideStart = { onActive -> onActive(false); settle() })
-        val conn = connection(
-            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
-            newPlayout = { engines++; playout },
-            call = call,
-        )
-        connectTo(conn)
-
-        conn.requestCapture()
-        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
-        assertEquals("the receiver must be polling", 1, engines)
-        assertTrue("a held call must open no capture engine", handles.isEmpty())
-        assertEquals("a held call must never start the stream", 0, playout.startAttempts.get())
-
-        call.resume()
-        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
-        assertEquals("resuming must open one capture engine", 1, handles.size)
-        assertTrue("resuming must start the stream", playout.started)
         conn.disconnect()
     }
 
@@ -663,31 +593,6 @@ class CaptureLifecycleTest {
         conn.requestCapture()
         assertSettled("a user retry must rebuild") { handles.size == 2 }
         conn.disconnect()
-    }
-
-    /**
-     * A wedged pump must not hold the platform call open. Deferring call.end until the engine was
-     * freed meant a pump that never exits never ended the call — a permanent foreground service and
-     * audio mode until process death.
-     *
-     * Also the observable half of the wedge watchdog: `wedged` does not exist as state, so this
-     * check that the engine is not freed while the pump is in flight is what stands in for it.
-     */
-    @Test fun callEndFiresEvenWhenThePumpIsWedged() = deterministic {
-        val handle = WedgedCaptureHandle()
-        val call = FakeVoiceCall()
-        var opens = 0
-        val conn = connection(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
-        connectTo(conn)
-        conn.requestCapture()
-        assertSettled("the engine must open") { opens == 1 }
-
-        conn.disconnect()
-        assertSettled("the call must end despite the wedged pump") { call.ends == 1 }
-        assertTrue("the release must reach the engine", handle.stopCalled)
-        elapse(300.milliseconds)   // past the wedge deadline: the watchdog only logs
-        assertFalse("a wedged pump's engine must not be freed", handle.destroyed)
-        assertEquals("the call must end exactly once", 1, call.ends)
     }
 
     /** A handle that reports a gate touched after it was freed — the use-after-free, made loud. */

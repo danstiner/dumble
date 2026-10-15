@@ -381,8 +381,11 @@ class MumbleConnectionTest {
         assertSettled("no engine may be built for a dead session") { handles.size == 1 }
     }
 
-    /** Asserted on the ends asked for: the fake's own supersede would satisfy a count. */
-    @Test fun connectingOverALiveConnectionEndsThePriorCall() = deterministic {
+    /**
+     * An end for the prior call would reach the platform before the new start, closing a headset's
+     * call link only to reopen it and dropping the route the user picked.
+     */
+    @Test fun connectingOverALiveConnectionSupersedesThePriorCall() = deterministic {
         val call = FakeVoiceCall()
         val conn = own(MumbleConnection(
             InMemoryPinStore(), newCapture = { null }, call = call,
@@ -395,10 +398,10 @@ class MumbleConnectionTest {
         handshaking(conn)
 
         assertEquals(listOf("first", "second"), call.starts)
-        assertSettled("the superseded call must end") { call.endRequests == call.startedGens.take(1) }
+        assertSettled("the prior call must be superseded, not ended") { call.endRequests == 0 }
 
         conn.disconnect()
-        assertSettled("disconnecting must end the second call") { call.endRequests == call.startedGens }
+        assertSettled("disconnecting must end the call once") { call.endRequests == 1 }
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the call's service. */

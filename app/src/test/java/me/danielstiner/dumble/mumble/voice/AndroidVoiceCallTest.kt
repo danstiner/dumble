@@ -53,8 +53,8 @@ class AndroidVoiceCallTest {
         idle()
     }
 
-    private fun end(gen: Int) {
-        call.end(gen)
+    private fun end() {
+        call.end()
         idle()
     }
 
@@ -177,32 +177,14 @@ class AndroidVoiceCallTest {
 
     @Test fun endReleasesTheModeAndRoute() {
         start(1)
-        end(1)
+        end()
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
         assertNull(audio.communicationDevice)
     }
 
-    @Test fun aStaleEndIsIgnored() {
-        start(1)
-        start(2)
-        end(1)
-        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
-        assertEquals(earpiece.id, audio.communicationDevice?.id)
-    }
-
-    /** Two connects on two threads can post their starts out of order. */
-    @Test fun anOlderStartPostedLateIsIgnored() {
-        start(2)
-        start(1)
-        end(1)
-        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
-        pick(2, "3")
-        assertEquals(speaker.id, audio.communicationDevice?.id)
-    }
-
     @Test fun afterEndNothingIsPublished() {
         start(1)
-        end(1)
+        end()
         val last = routes[1]
         shadow.addAvailableCommunicationDevice(headset, true)
         idle()
@@ -213,7 +195,7 @@ class AndroidVoiceCallTest {
     @Test fun aCallStartsAgainAfterAnEnd() {
         start(1)
         pick(1, "3")
-        end(1)
+        end()
         start(2)
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
         assertEquals(earpiece.id, audio.communicationDevice?.id)
@@ -233,7 +215,7 @@ class AndroidVoiceCallTest {
         assertEquals(VoiceService::class.java.name, supersedeStart?.component?.className)
         assertEquals("beta", supersedeStart?.getStringExtra(VoiceService.EXTRA_SERVER))
 
-        end(2)
+        end()
         val stopped = application.nextStartedService
         // VoiceService.stop is a startService carrying a stop action, not a stopService call.
         assertEquals(VoiceService::class.java.name, stopped?.component?.className)
@@ -344,7 +326,7 @@ class AndroidVoiceCallTest {
 
     @Test fun afterEndAHoldIsNotReported() {
         start(1)
-        end(1)
+        end()
         phone(AudioManager.MODE_IN_CALL)
         assertNull(active[1])
     }
