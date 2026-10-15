@@ -157,6 +157,21 @@ class VoiceReceiverTest {
         }
     }
 
+    /** Connecting during a phone call: the hold lands before the link is up to start the receiver. */
+    @Test
+    fun aHoldBeforeStartKeepsTheStreamClosedUntilTheResume() {
+        val fake = FakePlayoutEngine()
+        receiving({ fake }) { rx ->
+            rx.setHeld(true)
+            rx.start()
+            elapse(onePoll * 2)
+            assertEquals("held: the stream must never be started", 0, fake.startAttempts.get())
+            rx.setHeld(false)
+            elapse(onePoll)
+            assertTrue("a resume must start the stream on the next poll", fake.started)
+        }
+    }
+
     @Test
     fun stopJoinsThePollDestroysOnceAndDropsALateOffer() {
         val fake = FakePlayoutEngine()
@@ -486,8 +501,8 @@ class VoiceReceiverTest {
     }
 
     /**
-     * Mirrors MumbleConnection.teardown(): an attempt superseded before publish or failing in
-     * connect() calls stop() on a receiver whose start() was never reached. newEngine must never
+     * Mirrors MumbleConnection.teardown(): an attempt superseded or failing before its link comes
+     * up calls stop() on a receiver whose start() was never reached. newEngine must never
      * run on that path — the bug this guards against built the engine eagerly at construction,
      * leaking one per such attempt.
      */
