@@ -156,7 +156,7 @@ class AndroidVoiceCall(
             Log.i(TAG, "${if (held) "held" else "resumed"} gen=${l.gen} mode=${audio.mode}")
             l.onActive(!held)
         }
-        l.onRoutes(AudioRoutes(routes.distinctBy { it.id }.sorted(), audio.communicationDevice?.toAudioRoute()))
+        l.onRoutes(AudioRoutes(routes.sorted(), audio.communicationDevice?.toAudioRoute()))
     }
 
     /** Route before mode: the other way round spends ~1 s on the earpiece (measured). */
