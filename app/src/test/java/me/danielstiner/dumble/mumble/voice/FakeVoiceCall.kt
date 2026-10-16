@@ -16,7 +16,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class FakeVoiceCall(
     private val autoGrant: Boolean = true,
-    private val holdInsideStart: Boolean = false,
+    /** Runs at the end of start() with its onActive: a hold from inside the platform's own start,
+     *  before connect() has published the session. */
+    private val insideStart: (onActive: (Boolean) -> Unit) -> Unit = {},
 ) : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
     val starts = CopyOnWriteArrayList<String>()
@@ -73,8 +75,7 @@ class FakeVoiceCall(
             this.onEnded[gen] = onEnded
         }
         if (autoGrant) grant(gen)
-        // A hold from inside the platform's own start, before connect() has published the session.
-        if (holdInsideStart) onActive(false)
+        insideStart(onActive)
     }
 
     /**

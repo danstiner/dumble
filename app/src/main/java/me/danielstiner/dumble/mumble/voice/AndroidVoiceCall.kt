@@ -14,8 +14,9 @@ import me.danielstiner.dumble.service.VoiceService
 /**
  * Takes MODE_IN_COMMUNICATION and a communication device itself, with no Telecom call and no
  * audio focus. Without a Telecom call no dialer draws over our screen, and a Bluetooth headset
- * still gets its call link (SCO, the two-way link that carries its microphone), which a Telecom
- * call hidden from dialers does not. Without focus, other apps' media keeps playing.
+ * still gets its call link (the two-way link that carries its microphone, SCO on a classic
+ * headset), which a Telecom call hidden from dialers does not. Without focus, other apps' media
+ * keeps playing.
  *
  * Two things hold the session: the phone taking the audio, and another app capturing voice. The
  * mode and the recording callback report both ends, so a hold resumes by itself.
@@ -45,6 +46,12 @@ class AndroidVoiceCall(
 
     // Main only, like everything below.
     private var live: Live? = null
+    /**
+     * Connects run on two threads (the UI's, and trust-and-connect's), so their starts can post out
+     * of order. An older start would otherwise supersede the newer call, and its own end then tear
+     * that call down.
+     */
+    private var newestGen = Int.MIN_VALUE
     /** Deferred while a call starts held, so connecting mid-call takes neither route nor mode. */
     private var routed = false
     /**
@@ -104,6 +111,8 @@ class AndroidVoiceCall(
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
+        if (gen < newestGen) return
+        newestGen = gen
         val superseding = live != null
         val l = Live(gen, onActive, onRoutes)
         live = l
@@ -165,8 +174,6 @@ class AndroidVoiceCall(
     private fun routes() = audio.availableCommunicationDevices.map { it.toAudioRoute() }
 
     private fun route(id: String) {
-        // A pick or an arrival during a hold is kept; take() must not replace it on resume.
-        routed = true
         val device = audio.availableCommunicationDevices.firstOrNull { it.id.toString() == id }
         if (device == null) {
             // Gone since the menu was drawn; the next device event redraws it.
@@ -180,6 +187,8 @@ class AndroidVoiceCall(
             Log.w(TAG, "route ${device.productName}/$id threw", e)
             false
         }
+        // A pick or an arrival during a hold is kept; take() must not replace it on resume.
+        if (moved) routed = true
         Log.i(TAG, "route ${device.productName}/$id moved=$moved")
     }
 
