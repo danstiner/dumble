@@ -115,6 +115,8 @@ class AndroidVoiceCall(
     }
 
     private fun handleEnd() {
+        // The listener removals below throw for listeners that are not registered.
+        if (live == null) return
         live = null
         routed = false
         modeTaken = false

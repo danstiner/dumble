@@ -104,8 +104,8 @@ class CaptureLifecycleTest {
         assertSettled("the engine must open") { opens == 1 }
 
         conn.disconnect()
+        assertEquals("disconnect must end the call without waiting for the pump", 1, call.ends)
         assertSettled("teardown must request a stop") { handle.stopCalled }
-        assertEquals("the call must end despite the wedged pump", 1, call.ends)
         elapse(500.milliseconds)   // well past the wedge deadline
         assertFalse("the engine must not be freed while the pump is still polling", handle.destroyed)
 

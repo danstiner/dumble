@@ -182,6 +182,14 @@ class AndroidVoiceCallTest {
         assertNull(audio.communicationDevice)
     }
 
+    @Test fun anEndWithNoCallDoesNothing() {
+        end()
+        start(1)
+        end()
+        end()
+        assertEquals(AudioManager.MODE_NORMAL, audio.mode)
+    }
+
     @Test fun afterEndNothingIsPublished() {
         start(1)
         end()

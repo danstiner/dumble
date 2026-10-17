@@ -259,8 +259,7 @@ class MumbleConnection internal constructor(
         /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
         data class Acquire(val session: Session) : CaptureCommand
-        /** The platform has taken, or returned, the input device for [session]'s call. Can arrive
-         *  before connect() publishes [session] as `current`, so onHeld acts on the one carried. */
+        /** The platform has taken, or returned, the input device for [session]'s call. */
         data class Held(val session: Session, val held: Boolean) : CaptureCommand
         data class Release(val session: Session) : CaptureCommand
         data class PumpExited(val session: Session, val sender: VoiceSender) : CaptureCommand
