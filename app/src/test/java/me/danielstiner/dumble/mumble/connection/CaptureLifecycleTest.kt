@@ -322,13 +322,13 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A Talk press held across a hold must transmit once the call comes back. Transmit intent used
+     * A Talk press made during a hold must transmit once the call comes back. Transmit intent used
      * to be an edge straight to the live session — during a hold there is none, so the press was
      * dropped, and the session reconcile() then built came up with its gate closed under a button
      * the user was still holding. Found on-device: the first press after a cellular call transmitted
      * nothing for as long as it was held, and only the second worked.
      */
-    @Test fun aTalkPressHeldThroughAHoldTransmitsOnResume() = deterministic {
+    @Test fun aTalkPressDuringAHoldTransmitsOnResume() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
@@ -341,9 +341,9 @@ class CaptureLifecycleTest {
         call.hold()
         assertSettled("the hold must release the engine") { handles[0].destroyed }
 
-        // The press alone, no paired requestCapture(): there is no session for the gate to reach
-        // while held, so the intent lands on the level alone, ready for the resume to pick up.
+        // While held there is no capture session for the press to reach; it lands on the level.
         conn.setTransmitting(true)
+        assertSettled("a press while held must open nothing") { handles.size == 1 }
 
         call.resume()
         assertSettled("the resume must rebuild") { handles.size == 2 }
