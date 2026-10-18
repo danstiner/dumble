@@ -30,8 +30,8 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
  * deciding anything.
  *
  * Selecting sends the id and closes; nothing here marks the new route as current. The check moves
- * only when the platform confirms through `currentCallEndpoint`, the same discipline deafen uses in
- * reading itself back from the channel tree.
+ * only when the platform confirms the move, the same discipline deafen uses in reading itself back
+ * from the channel tree.
  */
 @Composable
 fun AudioRouteMenu(
@@ -70,7 +70,6 @@ internal fun routeIcon(type: AudioRoute.Type): ImageVector = when (type) {
     AudioRoute.Type.BLUETOOTH -> Icons.Filled.BluetoothAudio
     AudioRoute.Type.WIRED_HEADSET -> Icons.Filled.Headset
     AudioRoute.Type.EARPIECE -> Icons.Filled.PhoneInTalk
-    // Speaker's own glyph doubles as the fallback: an unknown or streaming route is still output.
-    AudioRoute.Type.SPEAKER, AudioRoute.Type.STREAMING, AudioRoute.Type.UNKNOWN ->
-        Icons.AutoMirrored.Filled.VolumeUp
+    // Speaker's own glyph doubles as the fallback: an unknown route is still output.
+    AudioRoute.Type.SPEAKER, AudioRoute.Type.UNKNOWN -> Icons.AutoMirrored.Filled.VolumeUp
 }
