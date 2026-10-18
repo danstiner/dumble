@@ -651,10 +651,9 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * The retire, the call's start and the publish are one critical section. Connects run on two
-     * threads (the UI's, and trust-and-connect's), and this is what hands the call their starts in
-     * generation order. Every end goes out under the same lock, so it reaches the call ahead of
-     * any later start.
+     * Retire, call start and publish are one critical section: connects run on two threads (the
+     * UI's and trust-and-connect's), and [lock] hands the call their starts in generation order.
+     * Every end goes out under it too, so none can land after a later start.
      */
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         val prior: Session?

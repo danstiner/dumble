@@ -11,8 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * after start() returns; a fake that superseded inside start() could not express the defects that
  * live in that window.
  *
- * [autoGrant] only moves *when* the grant fires: the default grants immediately, so observable
- * counts at assertion time are unchanged.
+ * [autoGrant] grants inside start(); without it the grant waits for [grant] or [grantPending].
  */
 class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */

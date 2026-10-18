@@ -502,9 +502,8 @@ class VoiceReceiverTest {
 
     /**
      * Mirrors MumbleConnection.teardown(): an attempt superseded or failing before its link comes
-     * up calls stop() on a receiver whose start() was never reached. newEngine must never
-     * run on that path — the bug this guards against built the engine eagerly at construction,
-     * leaking one per such attempt.
+     * up calls stop() on a receiver whose start() was never reached. newEngine must never run on
+     * that path: an engine built at construction would leak one per such attempt.
      */
     @Test
     fun stopWithoutEverStartingBuildsNoEngine() {
