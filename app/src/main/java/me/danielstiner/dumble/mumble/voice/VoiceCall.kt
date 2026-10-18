@@ -16,7 +16,8 @@ interface VoiceCall {
      *
      * Calls here apply in send order on a single consumer — an [end] arriving before the call has
      * started is ordered, not lost — and return before their effects apply. A start while a call is
-     * live supersedes it, and what that call took carries over.
+     * live supersedes it, and what that call took carries over. Nothing here checks generations on
+     * start or end: callers send them in generation order, as MumbleConnection does under its lock.
      */
     fun start(
         gen: Int,

@@ -533,6 +533,38 @@ class CaptureLifecycleTest {
     }
 
     /**
+     * Connecting during a phone call: the call reports the hold as it starts, before the link is up
+     * and the receiver started. A capture asked for afterwards stays refused, and the receiver's
+     * poll never starts the output stream, until the resume.
+     */
+    @Test fun aCallThatStartsHeldHoldsCaptureAndPlayout() = deterministic {
+        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val playout = FakePlayoutEngine()
+        var engines = 0
+        val call = FakeVoiceCall()
+        val conn = connection(
+            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
+            newPlayout = { engines++; playout },
+            call = call,
+        )
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        call.hold()
+        handshaking(conn)
+
+        conn.requestCapture()
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+        assertEquals("the receiver must be polling", 1, engines)
+        assertTrue("a held call must open no capture engine", handles.isEmpty())
+        assertEquals("a held call must never start the stream", 0, playout.startAttempts.get())
+
+        call.resume()
+        elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+        assertEquals("resuming must open one capture engine", 1, handles.size)
+        assertTrue("resuming must start the stream", playout.started)
+        conn.disconnect()
+    }
+
+    /**
      * A resume arriving while a release is still in flight must not be dropped. reconcile refuses to
      * open while `releasing`, so the only thing that rebuilds is onPumpExited's trailing reconcile —
      * this is what pins it.
