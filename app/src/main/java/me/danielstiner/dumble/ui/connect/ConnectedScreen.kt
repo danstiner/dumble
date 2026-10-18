@@ -1,7 +1,6 @@
 package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -87,7 +86,6 @@ fun ConnectedScreen(
     onTransmitting: (Boolean) -> Unit,
     onToggleDeafen: () -> Unit,
     onToggleMute: () -> Unit,
-    onResume: () -> Unit,
     onSelectRoute: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -176,9 +174,9 @@ fun ConnectedScreen(
         },
         bottomBar = {
             // In the bottom bar, above the controls: the banner explains why the mic button is
-            // inert, near the thumb. The session resumes by itself; the tap only re-checks.
+            // inert, near the thumb.
             Column {
-                if (callHeld) HeldBanner(onResume)
+                if (callHeld) HeldBanner()
                 CallControls(
                     talkBlock = talkBlock,
                     deafened = deafened,
@@ -226,14 +224,11 @@ fun ConnectedScreen(
     }
 }
 
-/**
- * Shown while another call — the phone's or another app's — has the microphone. The session
- * resumes by itself when that call ends; a tap only re-checks.
- */
+/** Shown while another call — the phone's or another app's — has the microphone. */
 @Composable
-private fun HeldBanner(onResume: () -> Unit) {
+private fun HeldBanner() {
     Surface(
-        Modifier.fillMaxWidth().clickable(onClick = onResume),
+        Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.secondaryContainer,
     ) {
         Row(

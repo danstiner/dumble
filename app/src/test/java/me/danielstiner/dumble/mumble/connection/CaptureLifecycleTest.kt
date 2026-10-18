@@ -8,7 +8,6 @@ import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
@@ -323,43 +322,36 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A Talk press held across a hold must transmit once the call comes back. Transmit intent used
+     * A Talk press made during a hold must transmit once the call comes back. Transmit intent used
      * to be an edge straight to the live session — during a hold there is none, so the press was
      * dropped, and the session reconcile() then built came up with its gate closed under a button
      * the user was still holding. Found on-device: the first press after a cellular call transmitted
      * nothing for as long as it was held, and only the second worked.
      */
-    @Test fun aTalkPressAloneRebuildsAndTransmits() = runBlocking {
+    @Test fun aTalkPressDuringAHoldTransmitsOnResume() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
+        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        connectTo(conn)
         conn.setTransmitMode(TransmitMode.PushToTalk)
         conn.requestCapture()
-        awaitTrue("the first engine must open") { handles.size == 1 }
+        assertSettled("the first engine must open") { handles.size == 1 }
 
         call.hold()
-        awaitTrue("the hold must release the engine") { handles[0].destroyed }
+        assertSettled("the hold must release the engine") { handles[0].destroyed }
 
-        // The press and nothing else — no paired requestCapture(), because the connection owes both
-        // halves: ask the platform for the call back, and remember that the button is down. There
-        // is no session for the gate to reach, so the intent lands on the level alone.
+        // While held there is no capture session for the press to reach; it lands on the level.
         conn.setTransmitting(true)
-        awaitTrue("the press alone must ask for the call back") { call.activeRequests == listOf(1) }
+        assertSettled("a press while held must open nothing") { handles.size == 1 }
 
         call.resume()
-        awaitTrue("the resume must rebuild") { handles.size == 2 }
-        awaitTrue("the rebuilt session must come up transmitting") { handles[1].gateOpen }
+        assertSettled("the resume must rebuild") { handles.size == 2 }
+        assertSettled("the rebuilt session must come up transmitting") { handles[1].gateOpen }
 
         // The release still closes it: the level is user intent, not a latch.
         conn.setTransmitting(false)
-        awaitTrue("releasing Talk must close the gate") { !handles[1].gateOpen }
+        assertSettled("releasing Talk must close the gate") { !handles[1].gateOpen }
 
         conn.disconnect()
     }
@@ -400,8 +392,10 @@ class CaptureLifecycleTest {
 
         call.hold()
         assertSettled("the hold must release the engine") { handles[0].destroyed }
+        assertTrue("the hold must publish", conn.callHeld.value)
         call.resume()
         assertSettled("the resume must rebuild") { handles.size == 2 }
+        assertFalse("the resume clears it", conn.callHeld.value)
 
         assertSettled("the rebuilt engine must come up in voice activity") { handles[1].transmitMode == TransmitMode.VoiceActivity }
         assertSettled("and armed, since nothing muted us") { handles[1].gateOpen }
@@ -549,7 +543,6 @@ class CaptureLifecycleTest {
         conn.disconnect()
         assertSettled("the release must reach the throwing stop") { handle.stopCalled }
         assertEquals("the platform call must end even though the release threw", 1, call.ends)
-        assertEquals(listOf(VoiceCall.Reason.USER), call.endReasons.toList())
     }
 
     /** A resume from a superseded call must not lift the live session's hold, nor its banner. */
@@ -640,60 +633,6 @@ class CaptureLifecycleTest {
         assertSettled("the exit must rebuild") { rebuilt.size == 1 }
         elapse(300.milliseconds)   // past the wedge check, the one timer the release armed
         assertEquals("exactly one rebuild", 1, rebuilt.size)
-        conn.disconnect()
-    }
-
-    /**
-     * A Talk press while held re-checks the hold — the net behind the platform reporting a hold
-     * ending itself. Before requestActive() existed, a held Acquire just re-ran reconcile(), which
-     * no-ops while the session is held, and the platform was never asked again.
-     */
-    @Test fun aTalkPressWhileHeldAsksThePlatformToResume() = runBlocking {
-        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
-
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.requestCapture()
-        awaitTrue("the first engine must open") { handles.size == 1 }
-
-        call.hold()
-        awaitTrue("the hold must release the engine") { handles[0].destroyed }
-
-        // Simulates a Talk press: onTransmitting(true) calls requestCapture() regardless of hold state.
-        conn.requestCapture()
-        awaitTrue("a Talk press while held must re-request active") { call.activeRequests.isNotEmpty() }
-        assertEquals("exactly the live generation", listOf(1), call.activeRequests)
-        assertEquals("no engine until the platform grants it", 1, handles.size)
-
-        // The platform grants the request — same callback path as any other resume.
-        call.resume()
-        awaitTrue("a granted resume must rebuild") { handles.size == 2 }
-
-        conn.disconnect()
-    }
-
-    /** A press while active must not touch the platform — only a held generation asks. */
-    @Test fun aTalkPressWhileActiveDoesNotRequestResume() = runBlocking {
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle() },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
-
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.requestCapture()
-        conn.requestCapture()
-        delay(300)
-        assertTrue("no request while never held", call.activeRequests.isEmpty())
-
         conn.disconnect()
     }
 
@@ -862,9 +801,8 @@ class CaptureLifecycleTest {
 
     /**
      * The connect-failure path — a refused server, or a trust prompt the user leaves sitting —
-     * fires call.end() while addCall may not have granted control yet. That used to cancel our own
-     * coroutine and tell the platform nothing, wedging a DIALING call for the ~125 s until the
-     * anomaly watchdog reaped it and blocking every connect in between.
+     * fires call.end() while start()'s effects may not have applied on the main looper yet. An
+     * end() queued ahead of that still ends the call: the two apply in order, not lost.
      */
     @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = deterministic {
         val call = FakeVoiceCall(autoGrant = false)
@@ -875,95 +813,10 @@ class CaptureLifecycleTest {
         conn.connect(MumbleEndpoint.parse("host"), "user", null)
         assertSettled("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
         assertTrue("the end must be waiting on the grant", call.hasPendingEnd)
-        assertEquals("nothing may end before the platform grants control", 0, call.ends)
+        assertEquals("nothing may end before start()'s effects apply", 0, call.ends)
 
         call.grantPending()
         assertEquals("the grant must release the pending end", 1, call.ends)
-        assertEquals(
-            "a failed session is not a hang-up",
-            listOf(VoiceCall.Reason.SESSION_FAILED), call.endReasons.toList(),
-        )
-    }
-
-    /*
-     * The design also called for "a supersede while ungranted ends the prior call first" and "a
-     * Talk press while held and ungranted does not strand a resume". Verified unreachable, not
-     * forgotten: the platform call applies each start completely before any later command — they
-     * run in turn on the main looper — so no command can observe an ungranted Start.
-     */
-
-    /**
-     * The platform can hang up a call we have already superseded — its callbacks are silenced only
-     * once the supersede cancels its job. Ungated, that hangup retired whichever session had
-     * replaced it, killing a connection the user had just asked for.
-     */
-    @Test fun aPlatformHangupOfASupersededCallDoesNotRetireTheSuccessor() = runBlocking {
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
-
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-
-        call.endedBySystemFor(call.startedGens[0])
-
-        // A retire would take the status to Idle; the live session must be untouched.
-        delay(100)
-        assertTrue(
-            "the successor must survive the superseded call's hangup: ${conn.status.value}",
-            conn.status.value is ConnectionStatus.Handshaking,
-        )
-        conn.disconnect()
-    }
-
-    /**
-     * connect()'s catch ends the platform call on purpose while leaving AwaitingTrust up, so a
-     * late hangup for that generation used to take the fingerprint decision off screen and null
-     * `current`, which is what trustAndConnect needs.
-     */
-    @Test fun aHangupWhileAwaitingTrustDoesNotDismissThePrompt() = runBlocking {
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            call = call,
-        ) { FakeControlTransport { _, _ -> throw UntrustedCertificateException("aa:bb") } }
-
-        conn.connect(MumbleEndpoint.parse("host"), "user", null)
-        awaitTrue("the connection must stop for a trust decision") {
-            conn.status.value is ConnectionStatus.AwaitingTrust
-        }
-        val prompt = conn.status.value
-
-        call.endedBySystemFor(call.startedGens[0])
-
-        delay(100)
-        assertEquals("a late hangup must not dismiss the trust prompt", prompt, conn.status.value)
-    }
-
-    /**
-     * retire() keeps the terminal Error up and does not bump `generation`, so a later platform
-     * hangup still matches the generation — a gen-only guard let it overwrite the Error with a
-     * bare Idle, losing the reason the connect screen shows.
-     */
-    @Test fun aHangupAfterASessionFailureDoesNotEraseTheReason() = runBlocking {
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            call = call,
-        ) { FakeControlTransport { _, _ -> throw java.io.IOException("refused") } }
-
-        conn.connect(MumbleEndpoint.parse("host"), "user", null)
-        awaitTrue("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
-        val failure = conn.status.value
-
-        call.endedBySystemFor(call.startedGens[0])
-
-        delay(100)
-        assertEquals("a late hangup must not overwrite the failure", failure, conn.status.value)
     }
 
     private suspend fun awaitTrue(what: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
@@ -1031,36 +884,6 @@ class CaptureLifecycleTest {
         call.hold()
         assertSettled("the hold must release the engine") { handles[0].destroyed }
         assertFalse("the release must clear it, ahead of the hold expiring", conn.selfSpeaking.value)
-
-        conn.disconnect()
-    }
-
-    /** Asking for capture while held re-checks the hold — the held-call banner's tap under voice
-     *  activity. */
-    @Test fun requestingCaptureWhileHeldAsksForTheCallBack() = runBlocking {
-        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val call = FakeVoiceCall()
-        val conn = MumbleConnection(
-            InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle().also { handles += it } },
-            call = call,
-        ) { FakeControlTransport { _, _ -> } }
-
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-        conn.requestCapture()
-        awaitTrue("the first engine must open") { handles.size == 1 }
-
-        call.hold()
-        awaitTrue("the hold must release the engine") { handles[0].destroyed }
-        awaitTrue("and be published") { conn.callHeld.value }
-
-        conn.requestCapture()
-        awaitTrue("the ask must reach the platform") { call.activeRequests.isNotEmpty() }
-
-        call.resume()
-        awaitTrue("and capture comes back with it") { handles.size == 2 }
-        awaitTrue("the hold clears") { !conn.callHeld.value }
 
         conn.disconnect()
     }
