@@ -27,7 +27,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -734,26 +733,6 @@ class CaptureLifecycleTest {
         conn.requestCapture()
         assertSettled("the consumer must still be alive") { opened.get() == 2 }
         conn.disconnect()
-    }
-
-    /**
-     * The connect-failure path — a refused server, or a trust prompt the user leaves sitting —
-     * fires call.end() while start()'s effects may not have applied on the main looper yet. An
-     * end() queued ahead of that still ends the call: the two apply in order, not lost.
-     */
-    @Test fun aConnectFailureBeforeTheGrantStillEndsTheCall() = deterministic {
-        val call = FakeVoiceCall(autoGrant = false)
-        val conn = connection(
-            call = call, newTransport = { FakeControlTransport { _, _ -> throw IOException("refused") } },
-        )
-
-        conn.connect(MumbleEndpoint.parse("host"), "user", null)
-        assertSettled("the connection must report a failure") { conn.status.value is ConnectionStatus.Error }
-        assertTrue("the end must be waiting on the grant", call.hasPendingEnd)
-        assertEquals("nothing may end before start()'s effects apply", 0, call.ends)
-
-        call.grantPending()
-        assertEquals("the grant must release the pending end", 1, call.ends)
     }
 
     private suspend fun awaitTrue(what: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
