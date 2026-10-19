@@ -64,10 +64,10 @@ interface Connection {
     val userStats: StateFlow<UserStats?>
 
     /**
-     * What the platform offers for call audio and what it is using. Cleared to empty by connect()
-     * and disconnect() — but not by a session that fails on its own: retiring it deliberately
-     * leaves every published flow, this one included, holding the dead session's last values until
-     * the next connect() clears them, the same as `status` staying on its terminal `Error`.
+     * What the platform offers for call audio and what it is using. Cleared to empty by connect(),
+     * disconnect(), and a session that fails on its own. The other flows keep a failed session's
+     * last values, the same as `status` staying on its terminal `Error`; this one and [callHeld]
+     * describe its call, which has ended.
      */
     val audioRoutes: StateFlow<AudioRoutes>
     fun connect(endpoint: MumbleEndpoint, username: String, password: String?)
