@@ -24,23 +24,23 @@ class FakeVoiceCall : VoiceCall {
      *  connection's own idea of "connected" and the platform's idea of "a call exists" agree. */
     val hasLiveCall: Boolean get() = synchronized(lock) { liveGen != NO_CALL }
     // Per generation, not one field: a stale hold from a superseded call is exactly the failure the
-    // connection's generation check exists to stop, and a single field cannot express one.
-    private val onActive = ConcurrentHashMap<Int, (Boolean) -> Unit>()
-    // Per generation for the same reason onActive is: a route update from a superseded call is
-    // exactly what the connection's generation guard exists to drop.
+    // connection's liveness check exists to stop, and a single field cannot express one.
+    private val onHeld = ConcurrentHashMap<Int, (Boolean) -> Unit>()
+    // Per generation for the same reason onHeld is: a route update from a superseded call is
+    // exactly what the connection's liveness check exists to drop.
     private val onRoutes = ConcurrentHashMap<Int, (AudioRoutes) -> Unit>()
 
     override fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        onActive: (Boolean) -> Unit,
+        onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
         synchronized(lock) {
             starts += endpoint.host
             startedGens += gen
             liveGen = gen
-            this.onActive[gen] = onActive
+            this.onHeld[gen] = onHeld
             this.onRoutes[gen] = onRoutes
         }
     }
@@ -51,12 +51,10 @@ class FakeVoiceCall : VoiceCall {
         ends++
     }
 
-    override fun requestRoute(gen: Int, routeId: String): Unit = synchronized(lock) {
-        // Mirrors the real generation guard. Deliberately does not echo the route back: the
-        // platform confirms through onRoutes, so a test drives that itself via emitRoutes().
-        if (gen != liveGen) return
-        routeRequests += routeId
-        Unit
+    // Dropped with no live call, as the real one does. Deliberately does not echo the route back:
+    // the platform confirms through onRoutes, so a test drives that itself via emitRoutes().
+    override fun requestRoute(routeId: String): Unit = synchronized(lock) {
+        if (liveGen != NO_CALL) routeRequests += routeId
     }
 
     /** Deliver a route update to a specific generation, live or not — same reason as [holdFor]. */
@@ -74,9 +72,9 @@ class FakeVoiceCall : VoiceCall {
      * Deliver a hold to a specific generation, live or not — the platform does not fence a callback
      * already in flight, so a superseded call can still call back.
      */
-    fun holdFor(gen: Int) { onActive[gen]?.invoke(false) }
+    fun holdFor(gen: Int) { onHeld[gen]?.invoke(true) }
 
-    fun resumeFor(gen: Int) { onActive[gen]?.invoke(true) }
+    fun resumeFor(gen: Int) { onHeld[gen]?.invoke(false) }
 
     private companion object {
         const val NO_CALL = -1
