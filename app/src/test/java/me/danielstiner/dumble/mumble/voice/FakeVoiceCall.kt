@@ -6,35 +6,23 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Lets a test drive a hold or a resume synchronously, without AndroidVoiceCall's main-looper hop.
- *
- * The grant is its own event because the real call applies start() later, on the main looper,
- * after start() returns; a fake that superseded inside start() could not express the defects that
- * live in that window.
- *
- * [autoGrant] grants inside start(); without it the grant waits for [grant] or [grantPending].
+ * Commands apply inside the call, in the order the real call's looper would apply them: a start
+ * supersedes silently, and an end with no live call throws, since the caller contract rules it out.
  */
-class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
+class FakeVoiceCall : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
     val starts = CopyOnWriteArrayList<String>()
     /** Generation per start(), in order — so a test can address a superseded call by generation. */
     val startedGens = CopyOnWriteArrayList<Int>()
     var ends = 0; private set
-    /** Every end() asked for, applied or not — [ends] also counts a grant's supersede. */
-    var endRequests = 0; private set
     /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
     val routeRequests = CopyOnWriteArrayList<String>()
 
     private val lock = Any()
     private var liveGen = NO_CALL
-    private var pendingGen = NO_CALL
-    /** An end() that arrived before the grant; applied when it lands, never dropped. */
-    private var pendingEnd = false
-    /** Whether the platform currently holds a granted, un-ended call — for a test to check that
-     *  the connection's own idea of "connected" and the platform's idea of "a call exists" agree. */
+    /** Whether the platform currently holds an un-ended call — for a test to check that the
+     *  connection's own idea of "connected" and the platform's idea of "a call exists" agree. */
     val hasLiveCall: Boolean get() = synchronized(lock) { liveGen != NO_CALL }
-    /** Whether an end() is parked awaiting the still-outstanding start's grant — for a test to
-     *  observe that a queued end actually arrived, rather than racing a fixed delay against it. */
-    val hasPendingEnd: Boolean get() = synchronized(lock) { pendingEnd }
     // Per generation, not one field: a stale hold from a superseded call is exactly the failure the
     // connection's generation check exists to stop, and a single field cannot express one.
     private val onActive = ConcurrentHashMap<Int, (Boolean) -> Unit>()
@@ -49,47 +37,16 @@ class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
         onRoutes: (AudioRoutes) -> Unit,
     ) {
         synchronized(lock) {
-            // A pending start's queued end is recorded before the new start supersedes it,
-            // mirroring the real consumer's ordered queue.
-            if (pendingGen != NO_CALL && pendingEnd) ends++
             starts += endpoint.host
             startedGens += gen
-            pendingGen = gen
-            pendingEnd = false
+            liveGen = gen
             this.onActive[gen] = onActive
             this.onRoutes[gen] = onRoutes
         }
-        if (autoGrant) grant(gen)
-    }
-
-    /**
-     * start()'s effects landing for [gen], standing in for AndroidVoiceCall's main-looper hop.
-     * This — not start() — is where a live call is superseded, counted in [ends].
-     */
-    fun grant(gen: Int): Unit = synchronized(lock) {
-        if (gen == NO_CALL) return
-        if (gen != pendingGen) return
-        if (liveGen != NO_CALL) endNow()
-        liveGen = gen
-        pendingGen = NO_CALL
-        if (pendingEnd) { pendingEnd = false; endNow() }
-    }
-
-    /** Grant whatever start() is outstanding. No-op when there is none. */
-    fun grantPending(): Unit = synchronized(lock) {
-        grant(pendingGen)
     }
 
     override fun end(): Unit = synchronized(lock) {
-        endRequests++
-        // Ordered, not lost: the real call applies an end queued behind a start once that start's
-        // effects have applied on the main looper.
-        if (pendingGen != NO_CALL) { check(!pendingEnd) { "end() twice" }; pendingEnd = true; return }
         check(liveGen != NO_CALL) { "end() with no call to end" }
-        endNow()
-    }
-
-    private fun endNow() {
         liveGen = NO_CALL
         ends++
     }
