@@ -26,7 +26,10 @@ generation and builds a `Session` — endpoint, credentials, the platform call, 
 capture state as one unit — whose driver coroutine opens one `Link`: the TLS transport, the state
 machine on it, the UDP socket keyed by that session's cipher, and the collectors that republish
 its flows. The split is what a reconnect needs: a link can be replaced under a session without
-ending the call. The generation exists because a blocking handshake cannot be preempted: a
+ending the call. Nor does a new session: `connect()` retires the old one, starts the call and
+publishes the new one under one lock, so starts reach the platform call in generation order and
+each supersedes the last, keeping its mode and route; only a disconnect or a retired session ends
+it. The generation exists because a blocking handshake cannot be preempted: a
 superseded link can complete late, so every flow write is generation-checked under the same lock
 that bumps, turning late writes into no-ops instead of corruption; a link's own flows are checked
 against the link's identity as well. Sessions end two deliberately different ways:

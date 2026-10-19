@@ -15,8 +15,9 @@ interface VoiceCall {
      * call — the phone, or another app's call, taking the audio — and resuming it.
      *
      * Calls here apply in send order on a single consumer — an [end] arriving before the call has
-     * started is ordered, not lost — and return before their effects apply. A start older than one
-     * already seen is ignored: connects on two threads can send out of order.
+     * started is ordered, not lost — and return before their effects apply. A start while a call is
+     * live supersedes it, keeping the mode and route it took. Callers send starts and ends in
+     * generation order; nothing here checks.
      */
     fun start(
         gen: Int,
@@ -25,12 +26,8 @@ interface VoiceCall {
         onRoutes: (AudioRoutes) -> Unit,
     )
 
-    /**
-     * Ignored unless [gen] is the live call. Connecting tears the prior attempt down and starts the
-     * next call in the same breath, so without the generation a superseded attempt's teardown would
-     * end its successor.
-     */
-    fun end(gen: Int)
+    /** Ends the live call; sent only while there is one. A call being replaced gets no end. */
+    fun end()
 
     /**
      * Route call audio to [routeId] — one of the ids last reported through [start]'s `onRoutes`.
@@ -49,6 +46,6 @@ object NoVoiceCall : VoiceCall {
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) = Unit
-    override fun end(gen: Int) = Unit
+    override fun end() = Unit
     override fun requestRoute(gen: Int, routeId: String) = Unit
 }

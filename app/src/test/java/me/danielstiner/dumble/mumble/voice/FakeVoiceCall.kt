@@ -11,22 +11,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * after start() returns; a fake that superseded inside start() could not express the defects that
  * live in that window.
  *
- * [autoGrant] only moves *when* the grant fires: the default grants immediately, so observable
- * counts at assertion time are unchanged.
+ * [autoGrant] grants inside start(); without it the grant waits for [grant] or [grantPending].
  */
-class FakeVoiceCall(
-    private val autoGrant: Boolean = true,
-    /** Runs at the end of start() with its onActive: a hold from inside the platform's own start,
-     *  before connect() has published the session. */
-    private val insideStart: (onActive: (Boolean) -> Unit) -> Unit = {},
-) : VoiceCall {
+class FakeVoiceCall(private val autoGrant: Boolean = true) : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
     val starts = CopyOnWriteArrayList<String>()
     /** Generation per start(), in order — so a test can address a superseded call by generation. */
     val startedGens = CopyOnWriteArrayList<Int>()
     var ends = 0; private set
-    /** Generation per end(), in order, applied or not — [ends] also counts a grant's supersede. */
-    val endRequests = CopyOnWriteArrayList<Int>()
+    /** Every end() asked for, applied or not — [ends] also counts a grant's supersede. */
+    var endRequests = 0; private set
     /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
     val routeRequests = CopyOnWriteArrayList<String>()
 
@@ -66,13 +60,11 @@ class FakeVoiceCall(
             this.onRoutes[gen] = onRoutes
         }
         if (autoGrant) grant(gen)
-        insideStart(onActive)
     }
 
     /**
      * start()'s effects landing for [gen], standing in for AndroidVoiceCall's main-looper hop.
-     * This — not start() — is where the call being replaced ends, mirroring the real call's
-     * supersede ordering.
+     * This — not start() — is where a live call is superseded, counted in [ends].
      */
     fun grant(gen: Int): Unit = synchronized(lock) {
         if (gen == NO_CALL) return
@@ -88,13 +80,12 @@ class FakeVoiceCall(
         grant(pendingGen)
     }
 
-    override fun end(gen: Int): Unit = synchronized(lock) {
-        endRequests += gen
-        // Ordered, not lost: the real consumer handles an End queued behind a Start after that
-        // Start's effects have applied on the main looper.
-        if (gen == pendingGen) { pendingEnd = true; return }
-        // Mirrors the real generation guard, so a test that supersedes a session exercises it.
-        if (gen != liveGen) return
+    override fun end(): Unit = synchronized(lock) {
+        endRequests++
+        // Ordered, not lost: the real call applies an end queued behind a start once that start's
+        // effects have applied on the main looper.
+        if (pendingGen != NO_CALL) { check(!pendingEnd) { "end() twice" }; pendingEnd = true; return }
+        check(liveGen != NO_CALL) { "end() with no call to end" }
         endNow()
     }
 

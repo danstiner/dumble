@@ -46,12 +46,6 @@ class AndroidVoiceCall(
 
     // Main only, like everything below.
     private var live: Live? = null
-    /**
-     * Connects run on two threads (the UI's, and trust-and-connect's), so their starts can post out
-     * of order. An older start would otherwise supersede the newer call, and its own end then tear
-     * that call down.
-     */
-    private var newestGen = Int.MIN_VALUE
     /** Deferred while a call starts held, so connecting mid-call takes neither route nor mode. */
     private var routed = false
     /**
@@ -86,8 +80,8 @@ class AndroidVoiceCall(
         main.post { handleStart(gen, endpoint.host, onActive, onRoutes) }
     }
 
-    override fun end(gen: Int) {
-        main.post { handleEnd(gen) }
+    override fun end() {
+        main.post { handleEnd() }
     }
 
     override fun requestRoute(gen: Int, routeId: String) {
@@ -104,8 +98,6 @@ class AndroidVoiceCall(
         onActive: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
-        if (gen < newestGen) return
-        newestGen = gen
         val superseding = live != null
         val l = Live(gen, onActive, onRoutes)
         live = l
@@ -122,8 +114,9 @@ class AndroidVoiceCall(
         reconcile(l)
     }
 
-    private fun handleEnd(gen: Int) {
-        if (live?.gen != gen) return
+    private fun handleEnd() {
+        // The listener removals below throw for listeners that are not registered.
+        if (live == null) return
         live = null
         routed = false
         modeTaken = false

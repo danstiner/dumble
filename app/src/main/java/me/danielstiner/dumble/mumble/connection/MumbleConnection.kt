@@ -259,8 +259,7 @@ class MumbleConnection internal constructor(
         /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
         data class Acquire(val session: Session) : CaptureCommand
-        /** The platform has taken, or returned, the input device for [session]'s call. Can arrive
-         *  before connect() publishes [session] as `current`, so onHeld acts on the one carried. */
+        /** The platform has taken, or returned, the input device for [session]'s call. */
         data class Held(val session: Session, val held: Boolean) : CaptureCommand
         data class Release(val session: Session) : CaptureCommand
         data class PumpExited(val session: Session, val sender: VoiceSender) : CaptureCommand
@@ -361,7 +360,7 @@ class MumbleConnection internal constructor(
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
      * consumer lives on [blockingScope], which is never cancelled. Checked because the failure would be
-     * silent and permanent — a dropped Release strands both a microphone and the platform call.
+     * silent and permanent — a dropped Release strands a microphone.
      */
     private fun send(cmd: CaptureCommand) {
         if (captureCommands.trySend(cmd).isFailure) Log.e(TAG, "capture command dropped: $cmd")
@@ -432,9 +431,6 @@ class MumbleConnection internal constructor(
      * hold and rebuilds it on a resume. Lifecycle consumer only.
      */
     private fun onHeld(session: Session, held: Boolean) {
-        // Checked against the generation, not `current`: connect() starts the call before it
-        // publishes `current`, and when connect() runs off the main thread the call's first hold,
-        // posted to the main looper, can beat that publish.
         // Published under the check's lock: a connect() between the two would clear the banner
         // only for this stale hold to set it again on the new session.
         val live = synchronized(lock) {
@@ -448,8 +444,6 @@ class MumbleConnection internal constructor(
             // The output stream follows the hold too: the platform has the device, and the
             // receiver's poll is the one owner of that stream.
             session.receiver.setHeld(held)
-            // Safe even before the session is published: reconcile() only acts when `wanted` and
-            // `capture` say there is something to do, and neither is ever true yet.
             reconcile(session)
         } else {
             Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=${session.gen}")
@@ -457,17 +451,12 @@ class MumbleConnection internal constructor(
     }
 
     /**
-     * [session] is being torn down: lower its want, end its platform call, and close any capture
-     * session it still holds. Queued synchronously by [teardown], which is what orders this ahead
-     * of anything a replacing session can produce on the same channel. Lifecycle consumer only.
+     * [session] is being torn down: lower its want and close any capture session it still holds.
+     * Queued under [lock] by whoever unpublished it, which is what orders this ahead of anything a
+     * replacing session can produce on the same channel. Lifecycle consumer only.
      */
     private fun onRelease(session: Session) {
         session.wanted = false
-        // Before reconcile, needing nothing from it but the generation: reconcile blocks on
-        // the HAL close and can throw (the consumer loop swallows it), either of which
-        // would strand the call. Not deferred to the pump's exit either — a wedged pump
-        // would never end it.
-        call.end(session.gen)
         reconcile(session)
     }
 
@@ -661,43 +650,39 @@ class MumbleConnection internal constructor(
         return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 
+    /**
+     * Retire, call start and publish are one critical section: connects run on two threads (the
+     * UI's and trust-and-connect's), and [lock] hands the call their starts in generation order.
+     * Every end goes out under it too, so none can land after a later start.
+     */
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
-        val gen: Int
         val prior: Session?
+        val session: Session
         synchronized(lock) {
             prior = retireAndClearLocked(ConnectionStatus.Connecting)
-            gen = generation
+            val gen = generation
+            // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
+            // only a session whose link comes up ever reaches — building eagerly would leak one per
+            // session that fails or is superseded before that.
+            session = Session(
+                gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+                CoroutineScope(scope.coroutineContext + SupervisorJob()),
+            )
+            // Here rather than in requestCapture(): tying the call to the connection, not the
+            // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
+            // survives backgrounding. The service starts a main-looper hop after this returns, while
+            // the connect tap still has the app in front — a microphone service cannot start later.
+            // No end for the prior's call: this start supersedes it, carrying its mode and route.
+            call.start(
+                gen, endpoint,
+                onActive = { active -> send(CaptureCommand.Held(session, !active)) },
+                onRoutes = { r -> publishRoutes(gen, r) },
+            )
+            current = session
         }
         prior?.let { teardown(it) }
-        // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which only
-        // a session whose link comes up ever reaches — building eagerly would leak one per
-        // session that fails or is superseded before that.
-        val session = Session(
-            gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
-            CoroutineScope(scope.coroutineContext + SupervisorJob()),
-        )
-        // Here rather than in requestCapture(): tying the call to the connection, not the
-        // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
-        // survives backgrounding. The service starts a main-looper hop after this returns, while
-        // the connect tap still has the app in front — a microphone service cannot start later.
-        // Still ahead of the publish below: the prior's Release is queued first (above), and
-        // end(gen) must never be queued ahead of that start(gen).
-        call.start(
-            gen, endpoint,
-            onActive = { active -> send(CaptureCommand.Held(session, !active)) },
-            onRoutes = { r -> publishRoutes(gen, r) },
-        )
-        // Published after the prior's Release was queued above, so nothing this session asks of
-        // the capture consumer is ordered ahead of that release; and under the lock, so a
-        // disconnect() that landed since leaves it unpublished.
-        val live = synchronized(lock) { if (gen == generation) { current = session; true } else false }
-        if (!live) {
-            send(CaptureCommand.Release(session))
-            teardown(session)
-            return
-        }
-        session.scope.launch { session.receiver.speakingSessions.collect { publishSpeaking(gen, it) } }
-        session.scope.launch { session.receiver.playoutStats.collect { publishPlayoutStats(gen, it) } }
+        session.scope.launch { session.receiver.speakingSessions.collect { publishSpeaking(session.gen, it) } }
+        session.scope.launch { session.receiver.playoutStats.collect { publishPlayoutStats(session.gen, it) } }
         session.scope.launch { drive(session) }
     }
 
@@ -1027,7 +1012,9 @@ class MumbleConnection internal constructor(
     override fun cancelTrust() = disconnect()
 
     override fun disconnect() {
-        val prior = synchronized(lock) { retireAndClearLocked(ConnectionStatus.Idle) }
+        val prior = synchronized(lock) {
+            retireAndClearLocked(ConnectionStatus.Idle)?.also { call.end() }
+        }
         prior?.let { teardown(it) }
     }
 
@@ -1117,6 +1104,7 @@ class MumbleConnection internal constructor(
                 current = null
                 // Under the lock, for the same ordering retireAndClearLocked keeps.
                 send(CaptureCommand.Release(session))
+                call.end()
                 true
             } else false
         }
