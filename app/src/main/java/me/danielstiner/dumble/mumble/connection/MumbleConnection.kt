@@ -343,7 +343,6 @@ class MumbleConnection internal constructor(
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == generation) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == generation) _playoutStats.value = p }
     private fun publishCaptureStats(gen: Int, c: CaptureStats?) = synchronized(lock) { if (gen == generation) _captureStats.value = c }
-    private fun publishRoutes(gen: Int, r: AudioRoutes) = synchronized(lock) { if (gen == generation) _audioRoutes.value = r }
 
     /**
      * A link's own flow, guarded on the link's identity and its close flag as well as the
@@ -365,6 +364,10 @@ class MumbleConnection internal constructor(
     private fun send(cmd: CaptureCommand) {
         if (captureCommands.trySend(cmd).isFailure) Log.e(TAG, "capture command dropped: $cmd")
     }
+
+    // The call's own flow: a retired session's call is ended, so its late updates are dropped too.
+    private fun publishRoutes(session: Session, r: AudioRoutes) =
+        synchronized(lock) { if (session.gen == generation && current === session) _audioRoutes.value = r }
 
     /** Whether [session] is still the published, live session — the gate every open decision
      *  takes. Both halves matter: retire() clears `current` without bumping `generation`. */
@@ -434,10 +437,10 @@ class MumbleConnection internal constructor(
         // Published under the check's lock: a connect() between the two would clear the banner
         // only for this stale hold to set it again on the new session.
         val live = synchronized(lock) {
-            (session.gen == generation).also { if (it) _callHeld.value = held }
+            (session.gen == generation && current === session).also { if (it) _callHeld.value = held }
         }
-        // A superseded call's hold changes nothing: its session is released, and the banner
-        // belongs to the live one.
+        // A superseded or retired call's hold changes nothing: its session is released, and the
+        // banner belongs to the live one.
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
             session.held = held
@@ -446,7 +449,7 @@ class MumbleConnection internal constructor(
             session.receiver.setHeld(held)
             reconcile(session)
         } else {
-            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: stale gen=${session.gen}")
+            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: gen=${session.gen} not live")
         }
     }
 
@@ -650,15 +653,22 @@ class MumbleConnection internal constructor(
         return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 
+    override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
+        connect(endpoint, username, password, answering = null)
+
     /**
      * Retire, call start and publish are one critical section: connects run on two threads (the
      * UI's and trust-and-connect's), and [lock] hands the call their starts in generation order.
      * Every end goes out under it too, so none can land after a later start.
+     *
+     * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
+     * dismissed it, and then this does nothing.
      */
-    override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
+    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, answering: Session?) {
         val prior: Session?
         val session: Session
         synchronized(lock) {
+            if (answering != null && trustPrompt !== answering) return
             prior = retireAndClearLocked(ConnectionStatus.Connecting)
             val gen = generation
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
@@ -676,7 +686,7 @@ class MumbleConnection internal constructor(
             call.start(
                 gen, endpoint,
                 onActive = { active -> send(CaptureCommand.Held(session, !active)) },
-                onRoutes = { r -> publishRoutes(gen, r) },
+                onRoutes = { r -> publishRoutes(session, r) },
             )
             current = session
         }
@@ -1005,7 +1015,7 @@ class MumbleConnection internal constructor(
         val presented = session.presented ?: return
         scope.launch {
             pinStore.put(session.endpoint.address, presented)
-            connect(session.endpoint, session.username, session.password)
+            connect(session.endpoint, session.username, session.password, answering = session)
         }
     }
 
@@ -1094,9 +1104,10 @@ class MumbleConnection internal constructor(
 
     /**
      * Release a still-current session whose link died on its own, or never came up. Deliberately
-     * does not bump [generation] or reset any published state — the terminal Error status is what
-     * the user is looking at. Clearing [current] is what makes this at-most-once: a later
-     * disconnect() sees no prior and a later connect() has nothing to tear down.
+     * does not bump [generation] or reset published state beyond the call's own — the terminal
+     * Error status is what the user is looking at. Clearing [current] is what makes this
+     * at-most-once: a later disconnect() sees no prior and a later connect() has nothing to tear
+     * down.
      */
     private fun retire(session: Session) {
         val live = synchronized(lock) {
@@ -1105,6 +1116,8 @@ class MumbleConnection internal constructor(
                 // Under the lock, for the same ordering retireAndClearLocked keeps.
                 send(CaptureCommand.Release(session))
                 call.end()
+                _callHeld.value = false
+                _audioRoutes.value = AudioRoutes()
                 true
             } else false
         }

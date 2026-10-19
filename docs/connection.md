@@ -35,8 +35,9 @@ that bumps, turning late writes into no-ops instead of corruption; a link's own 
 against the link's identity as well. Sessions end two deliberately different ways:
 supersede/disconnect clears every published flow atomically with the bump, while a failed
 connect or a dying link retires the session without clearing — the terminal status is what the
-user is looking at. A trust prompt retires its session the same way but keeps it aside for
-`trustAndConnect()` to reconnect from.
+user is looking at — except the call's hold and routes, which describe a call it has ended. A
+trust prompt retires its session the same way but keeps it aside for `trustAndConnect()` to
+reconnect from.
 
 **Reconnect.** A link that dies after it synchronized is replaced under the same session. The
 driver publishes `Reconnecting`, closes the dead link, and opens replacements with a backoff of 0, 1,
