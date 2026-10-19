@@ -51,19 +51,14 @@ fun ConnectScreen(
     val context = LocalContext.current
 
     // All of them at Connect, not at launch: they are meaningless out of context. Connecting
-    // proceeds whatever the answers are — none of them is ours to override, a public server needs
-    // no local-network grant, and a session with no microphone still receives.
+    // proceeds whatever the answers are — none of them is ours to override, and a session with no
+    // microphone still receives.
     //
     // The microphone is asked here rather than on the connected screen because the call's
     // foreground service starts a main-looper hop after connect() returns, while the Connect tap
     // still has the app in front, and picks its type from this permission. Asked any later, the
     // first service of every install is mediaPlayback-typed and that session can never transmit
     // from the background.
-    //
-    // No SDK guard on the local-network permission. Its gate is targetSdkVersion, fixed for every
-    // build we ship, so a device check would only ask "does this permission exist here" — and below
-    // 37 it does not, so the request resolves to denied and we connect regardless. Verified on an
-    // API 36 device: unguarded, it reaches the server normally.
     val reportMicrophone = {
         onMicrophonePermissionResult(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -74,11 +69,7 @@ fun ConnectScreen(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { reportMicrophone(); onConnect() }
     val connect: () -> Unit = {
-        // Only the ones still outstanding. Below API 37 the local-network permission does not
-        // exist, so checkSelfPermission always reports it denied and every connect trampolines
-        // through the system dialog activity — the same round trip this screen already made before
-        // the microphone joined the set, so no regression, but not free either.
-        val missing = connectPermissions().filter {
+        val missing = connectPermissions(state.draft.host).filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isEmpty()) {
@@ -141,12 +132,15 @@ fun ConnectScreen(
     }
 }
 
-/** Inlined rather than referenced: the constant does not exist in older platform jars. */
-private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
-
-/** Notifications are the only one that is version-gated; the others exist on every SDK we ship. */
-private fun connectPermissions(): List<String> = buildList {
-    add(LOCAL_NETWORK_PERMISSION)
+/**
+ * Local network only for a [host] that reads as local; a local server reached by name needs the
+ * Settings switch. Below 37 that permission does not exist and checkSelfPermission reports it
+ * denied, so asking there would send every connect through a permission request for nothing.
+ */
+private fun connectPermissions(host: String): List<String> = buildList {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN && isLocalNetworkHost(host)) {
+        add(Manifest.permission.ACCESS_LOCAL_NETWORK)
+    }
     add(Manifest.permission.RECORD_AUDIO)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)
