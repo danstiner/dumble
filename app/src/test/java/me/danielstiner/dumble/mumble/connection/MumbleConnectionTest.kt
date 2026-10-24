@@ -335,6 +335,28 @@ class MumbleConnectionTest {
         assertEquals(1, call.ends)
     }
 
+    /** trustAndConnect() writes the pin before it connects; a Cancel landing during that write
+     *  must still be the user's last word. */
+    @Test fun aCancelRightAfterTrustStaysCancelled() = deterministic {
+        val call = FakeVoiceCall()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin ->
+            FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("ab12") }
+                .also { transports += it }
+        })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
+
+        conn.trustAndConnect()
+        conn.cancelTrust()
+
+        assertSettled("the cancel must stand") { conn.status.value == ConnectionStatus.Idle }
+        assertEquals(1, call.starts.size)
+        assertEquals(1, transports.size)
+    }
+
     /** The generation is the UI's handle on "which call": one per connect(), whatever session id
      *  the server hands out. */
     @Test fun connectedCarriesTheSessionsGeneration() = deterministic {
@@ -479,6 +501,30 @@ class MumbleConnectionTest {
         conn.disconnect()
 
         assertSettled("teardown must clear the routes") { conn.audioRoutes.value == AudioRoutes() }
+    }
+
+    /**
+     * A session that fails ends its call, and the call's state goes with it: a hold or a route
+     * update queued before the end, or landing after it, must not paint the error screen.
+     */
+    @Test fun aFailedSessionsCallLeavesNothingPublished() = deterministic {
+        val call = FakeVoiceCall()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> throw IOException("connection refused") } })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val gen = call.startedGens.single()
+        call.emitRoutes(routes(AudioRoute.Type.SPEAKER, current = AudioRoute.Type.SPEAKER))
+        call.hold()
+        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
+        assertFalse("the end clears the hold", conn.callHeld.value)
+        assertEquals("the end clears the routes", AudioRoutes(), conn.audioRoutes.value)
+
+        call.holdFor(gen)
+        call.emitRoutesFor(gen, routes(AudioRoute.Type.EARPIECE, current = AudioRoute.Type.EARPIECE))
+
+        assertSettled("a late hold must not raise the banner") { !conn.callHeld.value }
+        assertEquals("late routes must be dropped", AudioRoutes(), conn.audioRoutes.value)
     }
 
     /** The UI carries no generation, so the connection has to supply the live one. */
