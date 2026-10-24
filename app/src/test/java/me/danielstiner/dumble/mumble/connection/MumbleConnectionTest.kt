@@ -395,10 +395,11 @@ class MumbleConnectionTest {
         handshaking(conn)
         conn.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
+        val gen = call.startedGens.single()
 
         conn.disconnect()
         assertSettled("disconnect must end the call") { call.ends == 1 }
-        call.resume()
+        call.resumeFor(gen)
 
         assertSettled("no engine may be built for a dead session") { handles.size == 1 }
     }
@@ -464,8 +465,8 @@ class MumbleConnectionTest {
     }
 
     /**
-     * A superseded generation's collector can still emit — cancellation is asynchronous — so the
-     * generation guard is what stops a dead call repainting the live one's control.
+     * The platform does not fence a callback already in flight, so a superseded call can still
+     * report routes; the liveness check is what stops it repainting the live one's control.
      */
     @Test fun routesFromASupersededCallAreDropped() = deterministic {
         val call = FakeVoiceCall()
@@ -527,8 +528,7 @@ class MumbleConnectionTest {
         assertEquals("late routes must be dropped", AudioRoutes(), conn.audioRoutes.value)
     }
 
-    /** The UI carries no generation, so the connection has to supply the live one. */
-    @Test fun selectingARouteAddressesTheLiveCall() = deterministic {
+    @Test fun selectingARouteReachesTheCall() = deterministic {
         val call = FakeVoiceCall()
         val conn = own(MumbleConnection(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
@@ -540,18 +540,6 @@ class MumbleConnectionTest {
         conn.requestAudioRoute("id-SPEAKER")
 
         assertSettled("the pick must reach the call") { call.routeRequests == listOf("id-SPEAKER") }
-    }
-
-    @Test fun selectingARouteWithNothingConnectedIsANoOp() = deterministic {
-        val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
-            InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
-            udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { FakeControlTransport { _, _ -> } })
-
-        conn.requestAudioRoute("id-SPEAKER")
-
-        assertEquals(emptyList<String>(), call.routeRequests)
     }
 
     /** Polls under a wall-clock bound. Only for the tests that must run real threads — the TLS

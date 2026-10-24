@@ -215,6 +215,38 @@ class CaptureLifecycleTest {
         assertEquals("a resume must let the next claim start the stream", "start", playout.calls.last())
     }
 
+    /**
+     * The hold reaches the receiver straight from the call, not through the capture consumer, so
+     * the stream pauses even while that consumer is stuck opening the microphone. Real threads:
+     * the consumer has to be stuck for real.
+     */
+    @Test fun aHoldPausesTheStreamWhileTheMicrophoneIsStillOpening() = runBlocking {
+        val playout = FakePlayoutEngine()
+        val call = FakeVoiceCall()
+        val opening = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val conn = MumbleConnection(
+            InMemoryPinStore(),
+            newCapture = { opening.countDown(); release.await(); null },
+            newPlayout = { playout },
+            call = call,
+        ) { FakeControlTransport { _, _ -> } }
+        try {
+            conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+            awaitTrue("the receiver must start the stream") { playout.started }
+            conn.requestCapture()
+            opening.await()
+
+            call.hold()
+            awaitTrue("a hold must pause the stream while the microphone is still opening") {
+                playout.calls.last() == "pause"
+            }
+        } finally {
+            release.countDown()
+            conn.disconnect()
+        }
+    }
+
     /** Counts destroy() so a double free would be visible rather than assumed impossible. */
     private class DestroyCountingHandle : VoiceSender.CaptureHandle {
         val destroys = AtomicInteger()

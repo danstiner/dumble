@@ -32,8 +32,8 @@ class AndroidVoiceCallTest {
     private val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, 3, "Pixel 7a")
     private val headset = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, 7, "WH-1000XM5")
     private val call = AndroidVoiceCall(context, captureSession = OURS)
-    /** What each generation was told through onActive, in order. */
-    private val active = mutableMapOf<Int, MutableList<Boolean>>()
+    /** What each generation was told through onHeld, in order. */
+    private val held = mutableMapOf<Int, MutableList<Boolean>>()
     /** The last routes each generation was given. */
     private val routes = mutableMapOf<Int, AudioRoutes>()
 
@@ -47,7 +47,7 @@ class AndroidVoiceCallTest {
     private fun start(gen: Int, host: String = "host") {
         call.start(
             gen, MumbleEndpoint.parse(host),
-            onActive = { active.getOrPut(gen) { mutableListOf() } += it },
+            onHeld = { held.getOrPut(gen) { mutableListOf() } += it },
             onRoutes = { routes[gen] = it },
         )
         idle()
@@ -58,8 +58,8 @@ class AndroidVoiceCallTest {
         idle()
     }
 
-    private fun pick(gen: Int, routeId: String) {
-        call.requestRoute(gen, routeId)
+    private fun pick(routeId: String) {
+        call.requestRoute(routeId)
         idle()
     }
 
@@ -104,17 +104,17 @@ class AndroidVoiceCallTest {
 
     @Test fun aPickIsApplied() {
         start(1)
-        pick(1, "3")
+        pick("3")
         assertEquals(speaker.id, audio.communicationDevice?.id)
         platformConfirmsRoute()
         assertEquals("3", routes[1]?.current?.id)
     }
 
-    @Test fun aStaleGenerationsPickIsDropped() {
+    @Test fun aPickAfterTheEndIsDropped() {
         start(1)
-        start(2)
-        pick(1, "3")
-        assertEquals(earpiece.id, audio.communicationDevice?.id)
+        end()
+        pick("3")
+        assertNull(audio.communicationDevice)
     }
 
     /** The headset leaves unannounced, as it can between the menu rendering and the tap. */
@@ -123,14 +123,14 @@ class AndroidVoiceCallTest {
         start(1)
         shadow.removeAvailableCommunicationDevice(headset, false)
         val before = audio.communicationDevice?.id
-        pick(1, "7")
+        pick("7")
         assertEquals(before, audio.communicationDevice?.id)
     }
 
     /** As for a phone call, even from a speaker the user picked. */
     @Test fun anArrivingHeadsetTakesTheRoute() {
         start(1)
-        pick(1, "3")
+        pick("3")
         shadow.addAvailableCommunicationDevice(headset, true)
         idle()
         assertEquals(headset.id, audio.communicationDevice?.id)
@@ -150,14 +150,14 @@ class AndroidVoiceCallTest {
         start(1)
         shadow.addAvailableCommunicationDevice(headset, true)
         idle()
-        pick(1, "3")
+        pick("3")
         platformConfirmsRoute()
         assertEquals(speaker.id, audio.communicationDevice?.id)
     }
 
     @Test fun aSupersedeKeepsTheRouteAndMode() {
         start(1)
-        pick(1, "3")
+        pick("3")
         var modeChanges = 0
         audio.addOnModeChangedListener(Runnable::run) { modeChanges++ }
         start(2)
@@ -184,7 +184,7 @@ class AndroidVoiceCallTest {
 
     /** The connection sends an end right behind its start; the end must queue behind it, not find no call. */
     @Test fun anEndSentBeforeItsStartAppliesStillEndsIt() {
-        call.start(1, MumbleEndpoint.parse("host"), onActive = {}, onRoutes = {})
+        call.start(1, MumbleEndpoint.parse("host"), onHeld = {}, onRoutes = {})
         call.end()
         idle()
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
@@ -213,7 +213,7 @@ class AndroidVoiceCallTest {
     /** A start after an end sets everything up afresh; only a supersede skips that. */
     @Test fun aCallStartsAgainAfterAnEnd() {
         start(1)
-        pick(1, "3")
+        pick("3")
         end()
         start(2)
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
@@ -246,7 +246,7 @@ class AndroidVoiceCallTest {
         phone(AudioManager.MODE_RINGTONE)
         phone(AudioManager.MODE_IN_CALL)
         phone(AudioManager.MODE_NORMAL)
-        assertEquals(listOf(false, true), active[1])
+        assertEquals(listOf(true, false), held[1])
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
     }
 
@@ -254,13 +254,13 @@ class AndroidVoiceCallTest {
         start(1)
         otherAppCaptures(99)
         otherAppCaptures()
-        assertEquals(listOf(false, true), active[1])
+        assertEquals(listOf(true, false), held[1])
     }
 
     @Test fun ourOwnCaptureDoesNotHold() {
         start(1)
         otherAppCaptures(OURS)
-        assertNull(active[1])
+        assertNull(held[1])
     }
 
     /**
@@ -270,11 +270,11 @@ class AndroidVoiceCallTest {
     @Test fun connectingDuringAnotherAppsCallStartsHeldAndTakesNothing() {
         otherAppCaptures(99)
         start(1)
-        assertEquals(listOf(false), active[1])
+        assertEquals(listOf(true), held[1])
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
         assertNull(audio.communicationDevice)
         otherAppCaptures()
-        assertEquals(listOf(false, true), active[1])
+        assertEquals(listOf(true, false), held[1])
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
         assertEquals(earpiece.id, audio.communicationDevice?.id)
     }
@@ -282,7 +282,7 @@ class AndroidVoiceCallTest {
     @Test fun connectingDuringACellularCallStartsHeld() {
         phone(AudioManager.MODE_IN_CALL)
         start(1)
-        assertEquals(listOf(false), active[1])
+        assertEquals(listOf(true), held[1])
         assertNull(audio.communicationDevice)
     }
 
@@ -290,15 +290,15 @@ class AndroidVoiceCallTest {
         start(1)
         phone(AudioManager.MODE_IN_CALL)
         start(2)
-        assertEquals(listOf(false), active[2])
+        assertEquals(listOf(true), held[2])
         phone(AudioManager.MODE_NORMAL)
-        assertEquals(listOf(false, true), active[2])
+        assertEquals(listOf(true, false), held[2])
     }
 
     @Test fun aSuccessorThatIsNotHeldIsToldNothing() {
         start(1)
         start(2)
-        assertNull(active[2])
+        assertNull(held[2])
     }
 
     @Test fun aHeadsetArrivingDuringAHoldIsTheRouteOnResume() {
@@ -326,7 +326,7 @@ class AndroidVoiceCallTest {
     @Test fun aPickDuringAHoldIsTheRouteOnResume() {
         phone(AudioManager.MODE_IN_CALL)
         start(1)
-        pick(1, "3")
+        pick("3")
         phone(AudioManager.MODE_NORMAL)
         assertEquals(speaker.id, audio.communicationDevice?.id)
     }
@@ -335,9 +335,9 @@ class AndroidVoiceCallTest {
     @Test fun aPickThatFailsDuringAHoldLeavesTheResumeItsOwnPick() {
         phone(AudioManager.MODE_IN_CALL)
         start(1)
-        pick(1, "7")
+        pick("7")
         shadow.lockCommunicationDevice(true)
-        pick(1, "3")
+        pick("3")
         shadow.lockCommunicationDevice(false)
         phone(AudioManager.MODE_NORMAL)
         assertEquals(earpiece.id, audio.communicationDevice?.id)
@@ -347,7 +347,7 @@ class AndroidVoiceCallTest {
         start(1)
         end()
         phone(AudioManager.MODE_IN_CALL)
-        assertNull(active[1])
+        assertNull(held[1])
     }
 
     @Test
@@ -375,7 +375,7 @@ class AndroidVoiceCallTest {
         idle()
         assertEquals(callsAfterTheDrop, modeCalls.setModeCalls)
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
-        assertNull(active[1])
+        assertNull(held[1])
     }
 
     private companion object {
