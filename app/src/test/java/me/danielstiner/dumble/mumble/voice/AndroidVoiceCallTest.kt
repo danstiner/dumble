@@ -182,6 +182,17 @@ class AndroidVoiceCallTest {
         assertNull(audio.communicationDevice)
     }
 
+    /** The connection sends an end right behind its start; the end must queue behind it, not find no call. */
+    @Test fun anEndSentBeforeItsStartAppliesStillEndsIt() {
+        call.start(1, MumbleEndpoint.parse("host"), onActive = {}, onRoutes = {})
+        call.end()
+        idle()
+        assertEquals(AudioManager.MODE_NORMAL, audio.mode)
+        assertNull(audio.communicationDevice)
+        assertEquals("host", application.nextStartedService?.getStringExtra(VoiceService.EXTRA_SERVER))
+        assertEquals(VoiceService.ACTION_STOP, application.nextStartedService?.action)
+    }
+
     @Test fun anEndWithNoCallDoesNothing() {
         end()
         start(1)

@@ -14,10 +14,9 @@ interface VoiceCall {
      * [gen] is the connection attempt's generation. [onActive] reports the platform holding the
      * call — the phone, or another app's call, taking the audio — and resuming it.
      *
-     * Calls here apply in send order on a single consumer — an [end] arriving before the call has
-     * started is ordered, not lost — and return before their effects apply. A start while a call is
-     * live supersedes it, keeping the mode and route it took. Callers send starts and ends in
-     * generation order; nothing here checks.
+     * Calls here apply in send order on a single consumer, and return before their effects apply.
+     * A start while a call is live supersedes it, keeping the mode and route it took. Callers send
+     * starts and ends in generation order; nothing here checks.
      */
     fun start(
         gen: Int,

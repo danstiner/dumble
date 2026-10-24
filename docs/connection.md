@@ -153,6 +153,5 @@ what is published is the instant of the last server reply, not an age — an age
 it is published, and a dozed device fires no tick to refresh it. Tunneled voice bypasses the flows
 as a callback: `StateFlow` conflates, and a dropped emission would be dropped audio.
 
-Invariants are pinned by `MumbleConnectionTest`, `VoiceCallLifecycleChaosTest`,
-`MumbleTcpTransportTest`, `MumbleUdpTransportTest`, `VoicePathTest`, `MumbleTrustManagerTest`,
-and `SessionStateMachineTest`.
+Invariants are pinned by `MumbleConnectionTest`, `MumbleTcpTransportTest`,
+`MumbleUdpTransportTest`, `VoicePathTest`, `MumbleTrustManagerTest`, and `SessionStateMachineTest`.
