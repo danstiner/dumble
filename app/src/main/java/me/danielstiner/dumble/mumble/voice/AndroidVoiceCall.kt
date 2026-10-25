@@ -34,7 +34,7 @@ class AndroidVoiceCall(
 
     private class Live(
         val gen: Int,
-        val onActive: (Boolean) -> Unit,
+        val onHeld: (Boolean) -> Unit,
         val onRoutes: (AudioRoutes) -> Unit,
     ) {
         /**
@@ -74,18 +74,18 @@ class AndroidVoiceCall(
     override fun start(
         gen: Int,
         endpoint: MumbleEndpoint,
-        onActive: (active: Boolean) -> Unit,
+        onHeld: (held: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
-        main.post { handleStart(gen, endpoint.host, onActive, onRoutes) }
+        main.post { handleStart(gen, endpoint.host, onHeld, onRoutes) }
     }
 
     override fun end() {
         main.post { handleEnd() }
     }
 
-    override fun requestRoute(gen: Int, routeId: String) {
-        main.post { if (live?.gen == gen) route(routeId) }
+    override fun requestRoute(routeId: String) {
+        main.post { if (live != null) route(routeId) }
     }
 
     /**
@@ -95,11 +95,11 @@ class AndroidVoiceCall(
     private fun handleStart(
         gen: Int,
         host: String,
-        onActive: (Boolean) -> Unit,
+        onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
         val superseding = live != null
-        val l = Live(gen, onActive, onRoutes)
+        val l = Live(gen, onHeld, onRoutes)
         live = l
         // Again on a supersede, only to show the new host.
         VoiceService.start(context, host)
@@ -116,7 +116,11 @@ class AndroidVoiceCall(
 
     private fun handleEnd() {
         // The listener removals below throw for listeners that are not registered.
-        if (live == null) return
+        if (live == null) {
+            // The caller contract rules this out: a log is all that shows it broke.
+            Log.w(TAG, "end with no live call")
+            return
+        }
         live = null
         routed = false
         modeTaken = false
@@ -140,7 +144,7 @@ class AndroidVoiceCall(
         if (held != l.held) {
             l.held = held
             Log.i(TAG, "${if (held) "held" else "resumed"} gen=${l.gen} mode=${audio.mode}")
-            l.onActive(!held)
+            l.onHeld(held)
         }
         l.onRoutes(AudioRoutes(routes.sorted(), audio.communicationDevice?.toAudioRoute()))
     }

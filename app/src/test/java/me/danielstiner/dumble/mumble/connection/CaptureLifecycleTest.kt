@@ -1,9 +1,12 @@
 package me.danielstiner.dumble.mumble.connection
 
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
@@ -53,10 +56,11 @@ class CaptureLifecycleTest {
         stuckPumpMillis: Long = 1_000L,
         newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
         newTransport: () -> FakeControlTransport = { FakeControlTransport { _, _ -> } },
+        blocking: CoroutineDispatcher = dispatcher,
     ) = own(MumbleConnection(
         InMemoryPinStore(), newCapture = newCapture, newPlayout = newPlayout, call = call,
         stuckPumpMillis = stuckPumpMillis, startPump = startPump, captureClock = clock,
-        udpClock = clock, context = dispatcher, blocking = dispatcher,
+        udpClock = clock, context = dispatcher, blocking = blocking,
     ) { newTransport() })
 
     /** Connects and settles in Handshaking, where every test here stays: none sends a ServerSync. */
@@ -213,6 +217,39 @@ class CaptureLifecycleTest {
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
         elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
         assertEquals("a resume must let the next claim start the stream", "start", playout.calls.last())
+    }
+
+    /**
+     * The hold reaches the receiver straight from the call, not through the capture consumer, so
+     * the stream pauses even while that consumer is stuck opening the microphone — here, on a
+     * dispatcher nothing advances.
+     */
+    @Test fun aHoldPausesTheStreamWhileTheMicrophoneIsStillOpening() = deterministic {
+        val playout = FakePlayoutEngine()
+        val call = FakeVoiceCall()
+        val stuck = TestCoroutineScheduler()
+        lateinit var fake: FakeControlTransport
+        val conn = connection(
+            newPlayout = { playout }, call = call, blocking = StandardTestDispatcher(stuck),
+            newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
+        )
+        connectTo(conn)
+        playout.liveSessions = setOf(9)
+        val audio = MumbleUdpProtos.Audio.newBuilder()
+            .setSenderSession(9)
+            .setOpusData(ByteString.copyFrom(byteArrayOf(1)))
+            .build()
+        fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
+        assertSettled("a live speaker must start the stream") { playout.started }
+
+        try {
+            call.hold()
+            elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
+            assertEquals("a hold must pause the stream without the capture consumer", "pause", playout.calls.last())
+        } finally {
+            conn.disconnect()
+            stuck.runCurrent()   // the receiver's stop is queued there; it ends the poll
+        }
     }
 
     /** Counts destroy() so a double free would be visible rather than assumed impossible. */

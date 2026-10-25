@@ -80,8 +80,9 @@ import kotlin.time.TimeSource
  * One live [Session] at a time, guarded by [generation]; each session's driver opens its [Link].
  * A blocking handshake cannot be preempted by teardown — the socket is not owned until it
  * publishes — so a superseded link can complete late and would otherwise clobber a newer
- * session's status. Every write is therefore gated on the generation under [lock], and a link's
- * own flows on the link's identity as well, so a superseded writer's late writes become no-ops.
+ * session's status. Every write is therefore checked under [lock] — on the generation, or for the
+ * call's hold and routes on the live session — and a link's own flows on the link's identity as
+ * well, so a superseded writer's late writes become no-ops.
  *
  * The audio-capture half of this class — the command channel, its single consumer, and the
  * level/reconcile model — is documented in `docs/capture.md`.
@@ -367,12 +368,13 @@ class MumbleConnection internal constructor(
 
     // The call's own flow: a retired session's call is ended, so its late updates are dropped too.
     private fun publishRoutes(session: Session, r: AudioRoutes) =
-        synchronized(lock) { if (session.gen == generation && current === session) _audioRoutes.value = r }
+        synchronized(lock) { if (current === session) _audioRoutes.value = r }
 
     /** Whether [session] is still the published, live session — the gate every open decision
-     *  takes. Both halves matter: retire() clears `current` without bumping `generation`. */
+     *  takes. [current] alone decides it: only retireAndClearLocked bumps [generation], and it
+     *  clears [current] in the same step. */
     private fun isLive(session: Session) =
-        synchronized(lock) { session.gen == generation && current === session }
+        synchronized(lock) { current === session }
 
     /** Lifecycle consumer only — every capture transition is serialised through here. */
     private fun dispatch(cmd: CaptureCommand) {
@@ -430,23 +432,20 @@ class MumbleConnection internal constructor(
     /**
      * The platform took the input device out from under [session]'s call — another call, the
      * phone's or another app's, is the case that matters — or gave it back. Records the hold as a
-     * level, tells the receiver directly, and reconciles, which releases the capture session on a
-     * hold and rebuilds it on a resume. Lifecycle consumer only.
+     * level and reconciles, which releases the capture session on a hold and rebuilds it on a
+     * resume. Lifecycle consumer only.
      */
     private fun onHeld(session: Session, held: Boolean) {
         // Published under the check's lock: a connect() between the two would clear the banner
         // only for this stale hold to set it again on the new session.
         val live = synchronized(lock) {
-            (session.gen == generation && current === session).also { if (it) _callHeld.value = held }
+            (current === session).also { if (it) _callHeld.value = held }
         }
         // A superseded or retired call's hold changes nothing: its session is released, and the
         // banner belongs to the live one.
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
             session.held = held
-            // The output stream follows the hold too: the platform has the device, and the
-            // receiver's poll is the one owner of that stream.
-            session.receiver.setHeld(held)
             reconcile(session)
         } else {
             Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: gen=${session.gen} not live")
@@ -490,8 +489,8 @@ class MumbleConnection internal constructor(
             onStats = { publishCaptureStats(session.gen, it) },
             clock = captureClock,
         )
-        // Recheck: `generation`/`current` are still mutated on caller threads while newCapture()
-        // blocks, so a disconnect landing in that window has already moved the world.
+        // Recheck: `current` is still mutated on caller threads while newCapture() blocks, so a
+        // disconnect landing in that window has already moved the world.
         if (!isLive(session)) { handle.stop(); handle.destroy(); return }
         val capture = CaptureSession(handle, sender)
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
@@ -585,9 +584,9 @@ class MumbleConnection internal constructor(
      * a silent bug — the survivor is a flow the next screen renders with the last session's data.
      * The status is the only thing that legitimately differs, so it is the only parameter.
      *
-     * Bumping `generation` and queuing the prior's Release under the same lock is what makes the
-     * writes safe: every publish helper is gen-checked, and the release is ordered ahead of
-     * anything the successor asks. Caller holds [lock].
+     * Clearing `current`, bumping `generation` and queuing the prior's Release under the same lock
+     * is what makes the writes safe: every publish helper checks one of the two under it, and the
+     * release is ordered ahead of anything the successor asks. Caller holds [lock].
      */
     private fun retireAndClearLocked(status: ConnectionStatus): Session? {
         val prior = current
@@ -678,6 +677,7 @@ class MumbleConnection internal constructor(
                 gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
+            current = session
             // Here rather than in requestCapture(): tying the call to the connection, not the
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
             // survives backgrounding. The service starts a main-looper hop after this returns, while
@@ -685,10 +685,15 @@ class MumbleConnection internal constructor(
             // No end for the prior's call: this start supersedes it, carrying its mode and route.
             call.start(
                 gen, endpoint,
-                onActive = { active -> send(CaptureCommand.Held(session, !active)) },
+                onHeld = { held ->
+                    // The output stream follows the hold too: straight to the receiver, not through
+                    // the capture consumer, which can be blocked in newCapture() or stop(). The
+                    // receiver is this session's own, so a dead session's hold reaches nothing live.
+                    session.receiver.setHeld(held)
+                    send(CaptureCommand.Held(session, held))
+                },
                 onRoutes = { r -> publishRoutes(session, r) },
             )
-            current = session
         }
         prior?.let { teardown(it) }
         session.scope.launch { session.receiver.speakingSessions.collect { publishSpeaking(session.gen, it) } }
@@ -714,7 +719,7 @@ class MumbleConnection internal constructor(
             // finds the link and closes it; see Link.close for what the transport does with a
             // handshake that finishes around that close.
             val live = synchronized(lock) {
-                if (gen == generation && current === session) { session.link = link; true } else false
+                if (current === session) { session.link = link; true } else false
             }
             if (!live) { link.close(); return }   // superseded during the pin lookup
 
@@ -908,7 +913,7 @@ class MumbleConnection internal constructor(
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.
             val live = synchronized(lock) {
-                if (gen == generation && current === session) { session.next = next; true } else false
+                if (current === session) { session.next = next; true } else false
             }
             if (!live) { next.close(); return null }
             // A change between the dial and the publish is one the collector could not have seen.
@@ -944,7 +949,7 @@ class MumbleConnection internal constructor(
                 continue
             }
             val swapped = synchronized(lock) {
-                if (gen == generation && current === session) {
+                if (current === session) {
                     session.carried = _messages.value
                     session.link = next
                     session.next = null
@@ -1034,13 +1039,7 @@ class MumbleConnection internal constructor(
 
     override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
 
-    override fun requestAudioRoute(routeId: String) {
-        // The live session supplies the generation the UI does not carry. The call re-checks it
-        // on its own thread, so a route tapped as a session dies is dropped rather than applied to
-        // its successor.
-        val session = current ?: return
-        call.requestRoute(session.gen, routeId)
-    }
+    override fun requestAudioRoute(routeId: String) = call.requestRoute(routeId)
 
     override fun requestCapture() {
         val session = current ?: return
@@ -1111,7 +1110,7 @@ class MumbleConnection internal constructor(
      */
     private fun retire(session: Session) {
         val live = synchronized(lock) {
-            if (session.gen == generation && current === session) {
+            if (current === session) {
                 current = null
                 // Under the lock, for the same ordering retireAndClearLocked keeps.
                 send(CaptureCommand.Release(session))

@@ -66,7 +66,8 @@ ending, so the session resumes by itself; a Talk press held through the hold tra
 
 The invariants — never two open input streams, the engine freed only after its pump exits (a
 wedged pump leaks deliberately rather than risk a use-after-free), no auto-reopen after a terminal
-failure, generation-keyed hold callbacks — are pinned by `CaptureLifecycleTest`,
+failure, a hold that reaches only the live session and pauses playout without waiting on the
+capture consumer — are pinned by `CaptureLifecycleTest`,
 `CaptureLifecycleChaosTest`, and `VoiceSenderTest`.
 
 ## Voice activity detection
