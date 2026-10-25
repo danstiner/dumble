@@ -233,6 +233,9 @@ class CaptureLifecycleChaosTest {
         // random — then check the two things that must be true no matter which: the consumer is
         // still alive, and it leaked nothing.
         conn.disconnect()
+        // disconnect() ends the call under the lock every start and end take, so a call still live
+        // here leaked through a race between the two.
+        if (call.hasLiveCall) c.violations += "seed=$seed: the platform call outlived the disconnect"
         awaitTrue(c.violations, "seed=$seed: engine count did not reach zero after the storm settled") {
             c.engineLive.get() == 0
         }

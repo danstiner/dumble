@@ -398,10 +398,10 @@ class MumbleConnectionTest {
         handshaking(conn)
 
         assertEquals(listOf("first", "second"), call.starts)
-        assertSettled("the prior call must be superseded, not ended") { call.endRequests == 0 }
+        assertSettled("the prior call must be superseded, not ended") { call.ends == 0 }
 
         conn.disconnect()
-        assertSettled("disconnecting must end the call once") { call.endRequests == 1 }
+        assertSettled("disconnecting must end the call once") { call.ends == 1 }
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the call's service. */
