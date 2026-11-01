@@ -129,7 +129,7 @@ class MumbleTcpTransport(
             connecting = s
         }
         try {
-            s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+            s.connectUnlessBlocked(InetSocketAddress(host, port), connectTimeoutMs)
             // Nagle is on by default, and voice's 137-byte tunnel writes at 50 Hz are exactly the
             // pattern it delays.
             s.tcpNoDelay = true

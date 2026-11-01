@@ -77,13 +77,22 @@ it has not heard from at 30 s, so the replacement is dialed while our ghost may 
 name, which the ghost rule above covers.
 The first link of a session is never retried: its failure is the connect failing. A trust prompt
 on a reconnect retires the session with the prompt up and keeps it aside for `trustAndConnect()`,
-as a fresh connect does.
+as a fresh connect does. A replacement Android blocks for lack of local network access ends the
+session too: it waits on the user, and the connect screen asks only from that error.
 
 **Transport** (`net/MumbleTcpTransport`). Connect-once per instance; reconnection is a new
 instance, so no teardown state can leak between links. One reader coroutine delivers frames,
 and its `finally` is the sole delivery point of `onClosed` — exactly once, never nested inside
 `onFrame`, so listeners need no locking. The send queue is deliberately small: this is a
 low-volume control channel, and a larger buffer would only let a stalled socket hide longer.
+
+**Local network access.** To Java a connect Android blocks is a timeout like any dead server's, so
+from API 37 the connect runs beside a watcher reading `android_getnetworkblockedreason` through a
+duplicate descriptor, and aborts on the first block. The connect screen asks for the permission
+from that block rather than from the host text, because Android decides by destination (measured:
+an on-link address is blocked, a private address reached through the gateway is not) and a public
+name can resolve to a local address. A `.local` name needs no case of its own: measured, its lookup
+succeeds without the permission and Android then blocks its socket like any other.
 
 **UDP voice** (`net/MumbleUdpTransport`). A connected `DatagramChannel` aimed at the control
 connection's own remote address, with `CryptState` sealing and opening every datagram, and one

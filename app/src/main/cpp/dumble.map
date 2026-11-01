@@ -4,6 +4,7 @@
 DUMBLE_JNI {
   global:
     Java_me_danielstiner_dumble_mumble_voice_*;
+    Java_me_danielstiner_dumble_mumble_net_*;
   local:
     *;
 };

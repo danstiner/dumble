@@ -24,6 +24,7 @@ import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.connection.mySession
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
@@ -60,6 +61,12 @@ data class ConnectUiState(
     val portError: String? = null,
     val hostError: String? = null,
     val status: ConnectionStatus = ConnectionStatus.Idle,
+    /**
+     * Whether the block now showing has been asked about; each connect resets it. Held here because
+     * the error outlives the screen, which would forget and ask again when the user comes back, and
+     * Android stops asking after two denials.
+     */
+    val localNetworkAsked: Boolean = false,
     val roundTripTime: Duration? = null,
     val voicePath: VoicePath.State = VoicePath.State(),
     val lastServerReplyAt: ComparableTimeMark? = null,
@@ -106,7 +113,15 @@ data class ConnectUiState(
     // matched against [selectedSession]: the reply is asynchronous, so one for the user whose
     // sheet just closed must never be read under whoever is on screen now.
     val userStats: UserStats? = null,
-)
+) {
+    /**
+     * True once for each connect Android blocks. Tracked with a flag, not by watching the status
+     * change: a new block can land within one frame, and the screen then reads blocked before and
+     * after the connect, with no change to see.
+     */
+    val askLocalNetwork: Boolean
+        get() = (status as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED && !localNetworkAsked
+}
 
 private data class ConnSnapshot(
     val status: ConnectionStatus,
@@ -149,7 +164,14 @@ class ConnectViewModel internal constructor(
             PackageManager.PERMISSION_GRANTED
     })
 
-    private val form = MutableStateFlow(ConnectUiState(microphoneGranted = microphoneHeld()))
+    private val form = MutableStateFlow(
+        ConnectUiState(
+            microphoneGranted = microphoneHeld(),
+            // The status outlives this view model, so an error already showing is not new: the one
+            // before asked, or, if none was open when it landed, the next Connect will.
+            localNetworkAsked = connection.status.value is ConnectionStatus.Error,
+        ),
+    )
 
     // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
     // keep the top-level inside it too. Split by what they describe rather than by arity.
@@ -302,9 +324,14 @@ class ConnectViewModel internal constructor(
                 form.value = f.copy(draft = profile, portError = null, hostError = null)
                 viewModelScope.launch { configStore.saveLastUsed(profile) }
                 connection.connect(endpoint, profile.username, f.password.ifBlank { null })
+                // Only after connect() has replaced the status: any sooner, the old block would be
+                // asked about again.
+                form.value = form.value.copy(localNetworkAsked = false)
             }
         }
     }
+
+    fun onLocalNetworkAsked() { form.value = form.value.copy(localNetworkAsked = true) }
 
     fun onTrust() = connection.trustAndConnect()
     fun onCancelTrust() = connection.cancelTrust()

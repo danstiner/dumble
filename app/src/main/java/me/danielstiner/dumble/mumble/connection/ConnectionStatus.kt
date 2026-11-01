@@ -28,7 +28,7 @@ val ConnectionStatus.mySession: Int?
         else -> null
     }
 
-enum class ErrorKind { CONNECT_FAILED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD, KICKED, BANNED }
+enum class ErrorKind { CONNECT_FAILED, LOCAL_NETWORK_BLOCKED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD, KICKED, BANNED }
 
 /**
  * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state

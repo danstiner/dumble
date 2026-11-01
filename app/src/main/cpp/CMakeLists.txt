@@ -34,9 +34,10 @@ add_library(dumble SHARED
     android/OboeCapture.cpp
     android/OboePlayout.cpp
     android/capture_jni.cpp
+    android/local_network_jni.cpp
     android/playout_jni.cpp)
 target_include_directories(dumble PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(dumble opus oboe::oboe log)
+target_link_libraries(dumble opus oboe::oboe log android)
 target_compile_options(dumble PRIVATE -Wall -Wextra -Werror)
 set(DUMBLE_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/dumble.map)
 target_link_options(dumble PRIVATE

@@ -49,8 +49,10 @@ class FakeConnection : Connection {
     val routeRequests = mutableListOf<String>()
     val userStatsRequests = mutableListOf<Int>()
 
+    var onConnect: () -> Unit = {}
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         connectCalls++; lastEndpoint = endpoint
+        onConnect()
     }
     override fun trustAndConnect() { trustCalls++ }
     override fun cancelTrust() { cancelCalls++ }
