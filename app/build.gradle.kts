@@ -29,6 +29,9 @@ android {
                 // configure time. Shared is also the only correct answer: one libc++ per process, or
                 // the libdumble.so <-> liboboe.so boundary becomes an ODR and unwinding hazard.
                 arguments += "-DANDROID_STL=c++_shared"
+                // APIs newer than minSdk link weakly, so libdumble.so still loads below them, and
+                // the compiler rejects a call that __builtin_available doesn't guard.
+                arguments += "-DANDROID_WEAK_API_DEFS=ON"
             }
         }
     }

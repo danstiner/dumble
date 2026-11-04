@@ -31,6 +31,7 @@ import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
+import me.danielstiner.dumble.mumble.net.LocalNetworkBlockedException
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
@@ -923,8 +924,11 @@ class MumbleConnection internal constructor(
             val failure = open(session, next)
             if (failure != null) {
                 drop(session, next)
-                // The server's certificate changed: the prompt, as a fresh connect would give it.
-                if (failure is ConnectionStatus.AwaitingTrust || failure is ConnectionStatus.PinMismatch) {
+                // The server's certificate changed, or Android is blocking this address. Both wait
+                // on the user, so end the session and show the prompt a fresh connect would.
+                if (failure is ConnectionStatus.AwaitingTrust || failure is ConnectionStatus.PinMismatch ||
+                    (failure as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
+                ) {
                     fail(session, failure)
                     return null
                 }
@@ -1148,6 +1152,7 @@ class MumbleConnection internal constructor(
             session.presented = it.presented
             return ConnectionStatus.PinMismatch(it.stored, it.presented)
         }
+        if (chain.any { it is LocalNetworkBlockedException }) return ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, t.message)
         if (chain.any { it is SocketTimeoutException }) return ConnectionStatus.Error(ErrorKind.TIMEOUT, t.message)
         return ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, t.message)
     }

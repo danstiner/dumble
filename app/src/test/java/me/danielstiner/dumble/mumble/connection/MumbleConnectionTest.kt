@@ -18,6 +18,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
+import me.danielstiner.dumble.mumble.net.LocalNetworkBlockedException
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
@@ -80,6 +81,26 @@ class MumbleConnectionTest {
         assertSettled("error") { conn.status.value is ConnectionStatus.Error }
         val err = conn.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.TIMEOUT, err.kind)
+    }
+
+    /** Retrying can't help until the user answers, and they are only asked once the session ends. */
+    @Test fun aBlockOnAReconnectEndsTheSession() = deterministic {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) {
+            val replacement = transports.size == 1
+            FakeControlTransport { _, _ -> if (replacement) throw LocalNetworkBlockedException() }.also { transports += it }
+        })
+        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        connected(conn)
+
+        transports[0].listener!!.onClosed(IOException("reset"))
+
+        assertSettled("the block ends the session") {
+            (conn.status.value as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
+        }
     }
 
     @Test fun channelTreeSurfacesReducedFrames() = deterministic {

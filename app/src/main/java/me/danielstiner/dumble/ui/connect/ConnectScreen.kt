@@ -1,8 +1,11 @@
 package me.danielstiner.dumble.ui.connect
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings as SystemSettings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,14 +24,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.ErrorKind
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +45,7 @@ fun ConnectScreen(
     onUsername: (String) -> Unit,
     onPassword: (String) -> Unit,
     onConnect: () -> Unit,
+    onLocalNetworkAsked: () -> Unit,
     onMicrophonePermissionResult: (Boolean) -> Unit,
     onTrust: () -> Unit,
     onCancelTrust: () -> Unit,
@@ -49,38 +56,38 @@ fun ConnectScreen(
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
 
     val context = LocalContext.current
+    fun denied(permission: String) =
+        ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
 
-    // All of them at Connect, not at launch: they are meaningless out of context. Connecting
-    // proceeds whatever the answers are — none of them is ours to override, a public server needs
-    // no local-network grant, and a session with no microphone still receives.
+    // The permissions in connectPermissions are asked at Connect, not at launch: they are
+    // meaningless out of context. Connecting proceeds whatever the answers are — none of them is
+    // ours to override, and a session with no microphone still receives.
     //
     // The microphone is asked here rather than on the connected screen because the call's
     // foreground service starts a main-looper hop after connect() returns, while the Connect tap
     // still has the app in front, and picks its type from this permission. Asked any later, the
     // first service of every install is mediaPlayback-typed and that session can never transmit
     // from the background.
-    //
-    // No SDK guard on the local-network permission. Its gate is targetSdkVersion, fixed for every
-    // build we ship, so a device check would only ask "does this permission exist here" — and below
-    // 37 it does not, so the request resolves to denied and we connect regardless. Verified on an
-    // API 36 device: unguarded, it reaches the server normally.
-    val reportMicrophone = {
-        onMicrophonePermissionResult(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-        )
+    val reportMicrophone = { onMicrophonePermissionResult(!denied(Manifest.permission.RECORD_AUDIO)) }
+    // Local network access is asked for once Android has blocked a connect, because only Android
+    // knows whether an address is on the local network. Skipped when already granted: asking would
+    // answer at once and retry, so a connect still blocked after a grant would loop.
+    val requestLocalNetwork = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onConnect() }
+    LaunchedEffect(state.askLocalNetwork) {
+        if (state.askLocalNetwork) {
+            onLocalNetworkAsked()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN && denied(Manifest.permission.ACCESS_LOCAL_NETWORK)) {
+                requestLocalNetwork.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            }
+        }
     }
     val requestPermissions = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { reportMicrophone(); onConnect() }
     val connect: () -> Unit = {
-        // Only the ones still outstanding. Below API 37 the local-network permission does not
-        // exist, so checkSelfPermission always reports it denied and every connect trampolines
-        // through the system dialog activity — the same round trip this screen already made before
-        // the microphone joined the set, so no regression, but not free either.
-        val missing = connectPermissions().filter {
-            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-        }
+        val missing = connectPermissions().filter(::denied)
         if (missing.isEmpty()) {
             reportMicrophone()
             onConnect()
@@ -130,7 +137,16 @@ fun ConnectScreen(
                 Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
             }
             when (val s = state.status) {
-                is ConnectionStatus.Error -> Text("${s.kind}: ${s.detail ?: ""}")
+                is ConnectionStatus.Error -> {
+                    Text("${s.kind}: ${s.detail ?: ""}")
+                    if (s.kind == ErrorKind.LOCAL_NETWORK_BLOCKED) {
+                        TextButton(onClick = {
+                            context.startActivity(
+                                Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        }) { Text("Allow in system settings") }
+                    }
+                }
                 else -> {}
             }
         }
@@ -141,12 +157,7 @@ fun ConnectScreen(
     }
 }
 
-/** Inlined rather than referenced: the constant does not exist in older platform jars. */
-private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
-
-/** Notifications are the only one that is version-gated; the others exist on every SDK we ship. */
 private fun connectPermissions(): List<String> = buildList {
-    add(LOCAL_NETWORK_PERMISSION)
     add(Manifest.permission.RECORD_AUDIO)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)

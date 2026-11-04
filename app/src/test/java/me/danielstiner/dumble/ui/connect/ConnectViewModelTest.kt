@@ -108,6 +108,47 @@ class ConnectViewModelTest {
         assertEquals(ServerProfile("h", 64738, "u"), store.saved)
     }
 
+    /** The status never stops reading blocked, as when a new block lands within one frame. */
+    @Test fun localNetworkIsAskedOncePerConnect() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
+        conn.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        runCurrent()
+        assertTrue(vm.uiState.value.askLocalNetwork)
+        vm.onLocalNetworkAsked()
+        runCurrent()
+        assertFalse(vm.uiState.value.askLocalNetwork)
+        vm.onConnect()
+        runCurrent()
+        assertTrue(vm.uiState.value.askLocalNetwork)
+    }
+
+    /** On the main thread collectors can run inside the connect, so the old block must not read as unasked there. */
+    @Test fun theOldBlockIsNotAskedAboutDuringAConnect() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
+        conn.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        runCurrent()
+        vm.onLocalNetworkAsked()
+        var askedDuringConnect = false
+        conn.onConnect = {
+            runCurrent()
+            askedDuringConnect = vm.uiState.value.askLocalNetwork
+        }
+        vm.onConnect()
+        assertFalse(askedDuringConnect)
+    }
+
+    @Test fun aBlockFromBeforeThisViewModelIsNotAskedAgain() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        conn.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        runCurrent()
+        assertFalse(vm.uiState.value.askLocalNetwork)
+    }
+
     @Test fun channelTreeFromConnectionAppearsInUiState() = runTest(dispatcher) {
         val conn = FakeConnection()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
