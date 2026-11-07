@@ -154,20 +154,6 @@ class VoiceSenderTest {
         assertEquals(listOf(true, false), speaking)
     }
 
-    /** A dead stream sends no terminator, and its reopen can block for longer than the stall. */
-    @Test
-    fun aStreamGoingDownEndsSpeechAtOnce() {
-        val fake = FakeCaptureHandle(blocking = false)
-        fake.script(
-            FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false),
-            FakeCaptureHandle.Step.Retry,
-        )
-        val speaking = mutableListOf<Boolean>()
-        val sender = VoiceSender(fake, { true }, onExit = { }, onSpeaking = { speaking += it })
-        repeat(2) { sender.step() }
-        assertEquals(listOf(true, false), speaking)
-    }
-
     @Test
     fun anEndingPumpLeavesSpeakingDown() {
         val fake = FakeCaptureHandle(blocking = false)

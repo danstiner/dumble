@@ -21,7 +21,6 @@ struct Session {
     // adapter is ours alone. Declared in this order so the adapter, and its stream, go first.
     const std::shared_ptr<dumble::CaptureEngine> engine;
     const std::unique_ptr<dumble::OboeCapture> capture;
-    bool reopenPending = false;   // the pump's alone
 
 private:
     Session(std::shared_ptr<dumble::CaptureEngine> e, int32_t sessionId)
@@ -85,17 +84,11 @@ FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
     uint8_t buf[dumble::kMaxPacketBytes];
     uint64_t frameNumber = 0;
     uint32_t flags = 0;
-    Session& s = *self(h);
+    const int n = self(h)->engine->pollPacket(buf, int(sizeof(buf)), &frameNumber, &flags);
     // The pump is the stream's only thread, so the stream's recovery and its close ride on the
-    // poll: a down stream is reopened by the poll after the one that found it, so the pump hears
-    // it went down before the reopen blocks, and the poll that ends the pump closes it.
-    if (s.reopenPending) {
-        s.reopenPending = false;
-        s.capture->start();
-    }
-    const int n = s.engine->pollPacket(buf, int(sizeof(buf)), &frameNumber, &flags);
-    if (n == dumble::kPollRetry) s.reopenPending = true;
-    else if (n == dumble::kPollShutdown) s.capture->close();
+    // poll: a down stream is reopened here, and the poll that ends the pump closes it.
+    if (n == dumble::kPollRetry) self(h)->capture->start();
+    else if (n == dumble::kPollShutdown) self(h)->capture->close();
     if (n > 0) {
         env->SetByteArrayRegion(out, 0, n, reinterpret_cast<const jbyte*>(buf));
         jlong m[2] = {jlong(frameNumber), jlong(flags)};

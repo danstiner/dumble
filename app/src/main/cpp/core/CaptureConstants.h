@@ -43,7 +43,7 @@ constexpr uint32_t kFlagHangover = 2u;
 // Hysteresis + hangover; sweep results in docs/capture.md.
 constexpr float kOpenLevel = 0.60f;
 constexpr float kCloseLevel = 0.45f;
-// Deliberate twin of NativeCapture.kt HANGOVER_MILLIS, the halo's fade-out.
+// Deliberate twin of AudioConstants.kt HANGOVER_MILLIS, the halo's fade-out.
 constexpr int kHangoverFrames = 20;   // 200 ms
 
 constexpr int kPrerollFrames = 6;   // 60 ms burst at gate-open

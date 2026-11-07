@@ -23,8 +23,8 @@ class VoiceSender(
     /** Fired once, by the [step] that ends the pump, after its last use of [handle]. */
     private val onExit: (VoiceSender) -> Unit,
     /** Fired on the pump thread when we start or stop speaking. A packet of speech that reaches
-     *  the wire raises it; a hangover packet, a terminator, a refused send, a stream going down,
-     *  [SPEECH_STALL] with no packet, and the pump's end lower it. */
+     *  the wire raises it; a hangover packet, a terminator, a refused send, [SPEECH_STALL] with no
+     *  packet, and the pump's end lower it. */
     private val onSpeaking: (Boolean) -> Unit = {},
     /** Fired on the pump thread every [statsInterval] with the engine's counters, [droppedFrames]
      *  filled in. */
@@ -129,10 +129,7 @@ class VoiceSender(
         if (speaking && lastSpeech.elapsedNow() >= SPEECH_STALL) speak(false)
         when (n) {
             0 -> return true   // not a spin — pollPacket already blocked
-            NativeCapture.POLL_RETRY -> {   // stream down; the next poll reopens it
-                speak(false)
-                return true
-            }
+            NativeCapture.POLL_RETRY -> return true   // stream down; that poll reopened it or will
             NativeCapture.POLL_SHUTDOWN -> stopReason = StopReason.REQUESTED
             NativeCapture.POLL_UNAVAILABLE -> {
                 Log.w(TAG, "capture engine unavailable; transmit stopped for this session")

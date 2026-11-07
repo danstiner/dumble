@@ -42,7 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.R
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
-import me.danielstiner.dumble.mumble.voice.NativeCapture
+import me.danielstiner.dumble.mumble.voice.HANGOVER_MILLIS
 
 @Composable
 fun ChannelTreeView(
@@ -147,7 +147,7 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
     // dark when the spurt ends.
     val haloAlpha by animateFloatAsState(
         targetValue = if (u.isSpeaking) 1f else 0f,
-        animationSpec = if (u.isSpeaking) snap() else tween(NativeCapture.HANGOVER_MILLIS, easing = LinearEasing),
+        animationSpec = if (u.isSpeaking) snap() else tween(HANGOVER_MILLIS, easing = LinearEasing),
         label = "halo",
     )
     Box(
