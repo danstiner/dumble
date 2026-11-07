@@ -534,6 +534,35 @@ TEST(CaptureEngine, VoiceActivityEndsTheSpurtWithATerminatorWhenSpeechStops) {
         << "the spurt's final packet must carry the terminator";
 }
 
+TEST(CaptureEngine, VoiceActivityMarksThePacketsOfTheHangover) {
+    auto e = engine();
+    ASSERT_TRUE(e);
+    e->setTransmitMode(dumble::TransmitMode::VoiceActivity);
+    e->setGateOpen(true);
+    const auto pcm = dumble::fixture::readWav(
+        dumble::fixture::referencePath("synthetic.wav"));
+    uint8_t out[dumble::kMaxPacketBytes]; uint64_t fn; uint32_t flags;
+    std::vector<uint32_t> sent;
+    auto feed = [&](const int16_t* p) {
+        e->onPcm(p, dumble::kTxPacketSamples);
+        while (e->pollPacket(out, sizeof(out), &fn, &flags) > 0) sent.push_back(flags);
+    };
+    for (size_t at = 0; at + dumble::kTxPacketSamples <= pcm.size(); at += dumble::kTxPacketSamples)
+        feed(pcm.data() + at);
+    const std::vector<int16_t> quiet(dumble::kTxPacketSamples, 0);
+    for (int i = 0; i < 30; i++) feed(quiet.data());
+
+    ASSERT_GT(sent.size(), 12u);
+    ASSERT_EQ(dumble::kFlagTerminator, sent.back() & dumble::kFlagTerminator);
+    EXPECT_EQ(0u, sent.front() & dumble::kFlagHangover) << "the spurt opens on speech";
+    size_t tail = 0;
+    while (tail + 1 < sent.size() && (sent[sent.size() - 2 - tail] & dumble::kFlagHangover)) tail++;
+    // The hangover's frames before the closing one, two to a packet, as the packets fall.
+    constexpr size_t kPackets = dumble::kHangoverFrames / dumble::kFramesPerPacket;
+    EXPECT_GE(tail, kPackets - 1);
+    EXPECT_LE(tail, kPackets);
+}
+
 TEST(CaptureEngine, VoiceActivityDrainsTheRingWhileSilent) {
     auto e = engine();
     ASSERT_TRUE(e);

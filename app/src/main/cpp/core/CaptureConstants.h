@@ -37,6 +37,8 @@ constexpr int kPollNoSession = -4;      // null handle
 constexpr int kPollBufferTooSmall = -5; // out array too small
 
 constexpr uint32_t kFlagTerminator = 1u;
+// Sent during the voice-activity hangover: speech has stopped and the spurt has not yet closed.
+constexpr uint32_t kFlagHangover = 2u;
 
 // Hysteresis + hangover; sweep results in docs/capture.md.
 constexpr float kOpenLevel = 0.60f;
