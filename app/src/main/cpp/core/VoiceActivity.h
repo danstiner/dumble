@@ -27,6 +27,8 @@ public:
 
     Decision update(float level);
     void reset() { *this = SpeechGate(); }
+    /** Speech has stopped and the spurt is still going out, until it closes or speech returns. */
+    bool inHangover() const { return transmitting_ && hangoverFrames_ > 0; }
 
 private:
     bool transmitting_ = false;
@@ -59,6 +61,7 @@ public:
     void reset();
 
     float lastProbability() const { return held_; }
+    bool inHangover() const { return gate_.inHangover(); }
     /** Inferences since the last reset. The gate does not use it; the tests pin the cycle with it. */
     int inferences() const { return inferences_; }
 

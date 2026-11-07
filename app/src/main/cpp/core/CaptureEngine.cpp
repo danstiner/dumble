@@ -162,6 +162,7 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
     bool haveFrame = false;
     uint64_t candidateFrameNumber = 0;
     bool haveTerminator = false;
+    bool haveHangover = false;
 
     if (resetDetectorPending_.exchange(false, std::memory_order_acq_rel)) {
         voiceActivity_->reset();
@@ -272,6 +273,7 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
             if (readyFrames_ >= kFramesPerPacket || (closing && readyFrames_ > 0)) {
                 candidateFrameNumber = popPacket();
                 haveTerminator = closing;
+                haveHangover = voiceActivity_->inHangover();
                 haveFrame = true;
             }
         }
@@ -309,6 +311,7 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
     *frameNumber = emittedFn;
     frameNumber_ = emittedFn + kFramesPerPacket;
     if (haveTerminator) *flags |= kFlagTerminator;
+    if (haveHangover) *flags |= kFlagHangover;
     encodedPackets_.fetch_add(1, std::memory_order_relaxed);
     return bytes;
 }

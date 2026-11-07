@@ -57,6 +57,23 @@ TEST(SpeechGate, SpeechInsideTheHangoverRearmsItWithoutClosing) {
     EXPECT_TRUE(gate.update(0.0f).closing);
 }
 
+TEST(SpeechGate, TheHangoverRunsFromTheFirstQuietFrameUntilSpeechReturnsOrTheGateCloses) {
+    SpeechGate gate;
+    gate.update(1.0f);
+    EXPECT_FALSE(gate.inHangover()) << "speech";
+    gate.update(kBetween);
+    EXPECT_FALSE(gate.inHangover()) << "above the close level is still speech";
+    for (int frame = 1; frame < dumble::kHangoverFrames; frame++) {
+        gate.update(0.0f);
+        EXPECT_TRUE(gate.inHangover()) << "hangover frame " << frame;
+    }
+    gate.update(1.0f);
+    EXPECT_FALSE(gate.inHangover()) << "speech came back";
+    for (int frame = 1; frame < dumble::kHangoverFrames; frame++) gate.update(0.0f);
+    ASSERT_TRUE(gate.update(0.0f).closing);
+    EXPECT_FALSE(gate.inHangover()) << "a closed gate has no hangover";
+}
+
 TEST(SpeechGate, ResetShutsAnOpenGateWithoutAClosingFrame) {
     SpeechGate gate;
     ASSERT_TRUE(gate.update(1.0f).transmit);
