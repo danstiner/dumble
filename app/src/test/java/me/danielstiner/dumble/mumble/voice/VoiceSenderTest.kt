@@ -103,6 +103,85 @@ class VoiceSenderTest {
         assertEquals(2, sender.droppedFrames)
     }
 
+    /** The halo starts fading where the detector stops hearing speech, not where the spurt ends. */
+    @Test
+    fun speakingFollowsSpeechAndDropsForTheHangover() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(
+            FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(2), 2L, terminator = false),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(3), 4L, terminator = false, hangover = true),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(4), 6L, terminator = false),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(5), 8L, terminator = true),
+        )
+        val speaking = mutableListOf<Boolean>()
+        val sender = VoiceSender(fake, { true }, onExit = { }, onSpeaking = { speaking += it })
+        repeat(5) { sender.step() }
+        assertEquals("raised by speech, lowered by the hangover, back with speech, off at the terminator",
+                     listOf(true, false, true, false), speaking)
+    }
+
+    @Test
+    fun aRefusedSendIsNotSpeaking() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(
+            FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(2), 2L, terminator = false),
+        )
+        var accept = true
+        val speaking = mutableListOf<Boolean>()
+        val sender = VoiceSender(fake, { accept }, onExit = { }, onSpeaking = { speaking += it })
+        sender.step()
+        accept = false
+        sender.step()
+        assertEquals(listOf(true, false), speaking)
+    }
+
+    /** A spurt ends on a terminator, but one the encoder fails on is dropped. */
+    @Test
+    fun speakingDropsOnceSpeechStallsWithoutATerminator() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
+        val clock = TestTimeSource()
+        val speaking = mutableListOf<Boolean>()
+        val sender = VoiceSender(fake, { true }, onExit = { }, onSpeaking = { speaking += it }, clock = clock)
+        sender.step()
+        clock += VoiceSender.SPEECH_STALL - 1.milliseconds
+        sender.step()   // an empty poll
+        assertEquals("still inside the stall bound", listOf(true), speaking)
+        clock += 1.milliseconds
+        sender.step()
+        assertEquals(listOf(true, false), speaking)
+    }
+
+    /** A dead stream sends no terminator, and its reopen can block for longer than the stall. */
+    @Test
+    fun aStreamGoingDownEndsSpeechAtOnce() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(
+            FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false),
+            FakeCaptureHandle.Step.Retry,
+        )
+        val speaking = mutableListOf<Boolean>()
+        val sender = VoiceSender(fake, { true }, onExit = { }, onSpeaking = { speaking += it })
+        repeat(2) { sender.step() }
+        assertEquals(listOf(true, false), speaking)
+    }
+
+    @Test
+    fun anEndingPumpLeavesSpeakingDown() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(
+            FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false),
+            FakeCaptureHandle.Step.Unavailable,
+        )
+        val speaking = mutableListOf<Boolean>()
+        val sender = VoiceSender(fake, { true }, onExit = { }, onSpeaking = { speaking += it })
+        sender.step()
+        assertFalse(sender.step())
+        assertEquals(listOf(true, false), speaking)
+    }
+
     @Test
     fun anUnrecognisedCodeStopsThePumpRatherThanPollingOnIt() {
         // Native could grow an outcome before this side learns it. Whether it blocks before

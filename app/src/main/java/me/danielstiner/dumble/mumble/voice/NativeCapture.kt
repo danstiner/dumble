@@ -18,6 +18,11 @@ object NativeCapture {
     const val POLL_NO_SESSION = -4
     const val POLL_BUFFER_TOO_SMALL = -5
     const val FLAG_TERMINATOR = 1L
+    const val FLAG_HANGOVER = 2L
+
+    /** The voice-activity gate's hangover, kHangoverFrames of 10 ms. Const, so the UI reads it
+     *  without loading the library. */
+    const val HANGOVER_MILLIS = 200
 
     const val META_FRAME_NUMBER = 0
     const val META_FLAGS = 1
