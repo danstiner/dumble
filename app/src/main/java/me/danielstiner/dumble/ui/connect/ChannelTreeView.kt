@@ -1,6 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -139,9 +140,10 @@ private const val GlowExtent = 1.30f
 private fun Avatar(u: ChannelTreeRow.UserRow) {
     val cs = MaterialTheme.colorScheme
     val halo = cs.primary
+    // On at once: a fade-in only delays the cue, and our own already waits on the speech gate.
     val haloAlpha by animateFloatAsState(
         targetValue = if (u.isSpeaking) 1f else 0f,
-        animationSpec = tween(durationMillis = 150),
+        animationSpec = if (u.isSpeaking) snap() else tween(durationMillis = 150),
         label = "halo",
     )
     Box(
