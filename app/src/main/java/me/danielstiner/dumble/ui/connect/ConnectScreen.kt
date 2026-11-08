@@ -130,7 +130,7 @@ fun ConnectScreen(
             )
             OutlinedTextField(state.draft.username, onUsername, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
-                state.password, onPassword, label = { Text("Password (optional)") }, singleLine = true,
+                state.password, onPassword, label = { Text("Password") }, singleLine = true,
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
             )
             Button(onClick = connect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {

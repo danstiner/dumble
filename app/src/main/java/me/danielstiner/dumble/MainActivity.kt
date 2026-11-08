@@ -85,7 +85,9 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     onBack = vm::closeChat,
                     modifier = m,
                 ) else ConnectedScreen(
-                    server = "${state.draft.host}:${state.draft.port}",
+                    // Empty until the saved profile loads, which a recreated activity can render
+                    // mid-call.
+                    server = runCatching { state.draft.endpoint.label }.getOrDefault(""),
                     sessionId = mySession,
                     reconnecting = state.status is ConnectionStatus.Reconnecting,
                     connectedSince = state.connectedSince,
