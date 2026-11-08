@@ -17,3 +17,7 @@ const val FRAME_SAMPLES = 480
  *  the arrays the playback loop hands across the JNI seam, and the seam validates their lengths
  *  against native's own cap. Undersize them and every call is refused, so these must not drift. */
 const val MAX_SPEAKERS = 8
+
+/** Twin of the voice-activity gate's kHangoverFrames (CaptureConstants.h), in milliseconds: how
+ *  long a spurt runs on once speech stops, and so how long the speaking halo takes to fade. */
+const val HANGOVER_MILLIS = 200

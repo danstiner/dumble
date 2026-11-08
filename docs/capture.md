@@ -20,9 +20,12 @@ stream stays open and warm across presses.
 
 **VoiceSender** (Kotlin pump): one daemon thread parked in `pollPacket`, wrapping each packet for
 the transport. Its exit callback is the only signal the pump is gone; nothing may destroy the
-engine while the pump can still touch it. It also reports each packet of speech that reaches the
-wire — not terminators, not refused sends; `MumbleConnection` holds that ~200 ms past the last
-packet as `selfSpeaking`, which is what lights the speaking indicator under either mode.
+engine while the pump can still touch it. It also reports whether we are speaking, which
+`MumbleConnection` publishes as `selfSpeaking` to light the speaking indicator under either mode: a
+packet of speech that reaches the wire raises it, and the first packet of the hangover lowers it
+(the engine flags those packets `kFlagHangover`), as do a terminator, a refused send, 100 ms
+with no packet, and the pump's end. The indicator then fades over the 200 ms hangover, so it goes
+dark as the spurt ends.
 
 **What our own sheet shows** (`SelfDetailSheet`, from the row marked YOU; the peer sheet's rows
 are all absent for ourselves): the send-side counterpart of the playout sheet in

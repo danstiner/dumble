@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.ui.connect
 
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.R
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
+import me.danielstiner.dumble.mumble.voice.HANGOVER_MILLIS
 
 @Composable
 fun ChannelTreeView(
@@ -141,9 +143,11 @@ private fun Avatar(u: ChannelTreeRow.UserRow) {
     val cs = MaterialTheme.colorScheme
     val halo = cs.primary
     // On at once: a fade-in only delays the cue, and our own already waits on the speech gate.
+    // Off over the gate's hangover, linearly: our own halo dims as the hangover runs out and is
+    // dark when the spurt ends.
     val haloAlpha by animateFloatAsState(
         targetValue = if (u.isSpeaking) 1f else 0f,
-        animationSpec = if (u.isSpeaking) snap() else tween(durationMillis = 150),
+        animationSpec = if (u.isSpeaking) snap() else tween(HANGOVER_MILLIS, easing = LinearEasing),
         label = "halo",
     )
     Box(

@@ -7,6 +7,7 @@ import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import java.io.IOException
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -21,14 +22,16 @@ class VoiceSender(
     private val send: (ByteArray) -> Boolean,
     /** Fired once, by the [step] that ends the pump, after its last use of [handle]. */
     private val onExit: (VoiceSender) -> Unit,
-    /** Fired on the pump thread for every packet of speech that reaches the wire — not
-     *  terminators, not refused sends. */
-    private val onAudioSent: () -> Unit = {},
+    /** Fired on the pump thread when we start or stop speaking. A packet of speech that reaches
+     *  the wire raises it; a hangover packet, a terminator, a refused send, [SPEECH_STALL] with no
+     *  packet, and the pump's end lower it. */
+    private val onSpeaking: (Boolean) -> Unit = {},
     /** Fired on the pump thread every [statsInterval] with the engine's counters, [droppedFrames]
      *  filled in. */
     private val onStats: (CaptureStats) -> Unit = {},
     private val statsInterval: Duration = STATS_INTERVAL,
-    /** Seam: the stats cadence's clock, so a test that steps the pump can run it on virtual time. */
+    /** Seam: the clock of the stats cadence and the speech stall, so a test that steps the pump
+     *  can run both on virtual time. */
     private val clock: TimeSource = TimeSource.Monotonic,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
@@ -61,6 +64,8 @@ class VoiceSender(
     private val meta = LongArray(2)
     private var nextStatsAt = clock.markNow() + statsInterval
     private var readings = 0
+    private var speaking = false
+    private var lastSpeech = clock.markNow()
 
     /** Single-shot: the engine's shutdown latch never resets. Build a sender per session. */
     fun start() {
@@ -99,7 +104,10 @@ class VoiceSender(
         try {
             running = pollOnce()
         } finally {
-            if (!running) onExit(this)
+            if (!running) {
+                speak(false)
+                onExit(this)
+            }
         }
         return running
     }
@@ -118,6 +126,7 @@ class VoiceSender(
             transmit(frame, n, meta)
             return true
         }
+        if (speaking && lastSpeech.elapsedNow() >= SPEECH_STALL) speak(false)
         when (n) {
             0 -> return true   // not a spin — pollPacket already blocked
             NativeCapture.POLL_RETRY -> return true   // stream down; that poll reopened it or will
@@ -139,7 +148,8 @@ class VoiceSender(
     }
 
     private fun transmit(frame: ByteArray, n: Int, meta: LongArray) {
-        val terminator = meta[NativeCapture.META_FLAGS] and NativeCapture.FLAG_TERMINATOR != 0L
+        val flags = meta[NativeCapture.META_FLAGS]
+        val terminator = flags and NativeCapture.FLAG_TERMINATOR != 0L
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setTarget(NORMAL_TALKING_TARGET)
             .setFrameNumber(meta[NativeCapture.META_FRAME_NUMBER])
@@ -150,11 +160,16 @@ class VoiceSender(
         val payload = ByteArray(body.size + 1)
         payload[0] = UDP_TYPE_AUDIO
         body.copyInto(payload, 1)
-        if (!send(payload)) {
-            droppedFrames++
-        } else if (!terminator) {
-            onAudioSent()
-        }
+        val sent = send(payload)
+        if (!sent) droppedFrames++
+        speak(sent && !terminator && flags and NativeCapture.FLAG_HANGOVER == 0L)
+    }
+
+    private fun speak(now: Boolean) {
+        if (now) lastSpeech = clock.markNow()
+        if (now == speaking) return
+        speaking = now
+        onSpeaking(now)
     }
 
     companion object {
@@ -165,6 +180,9 @@ class VoiceSender(
         private val STATS_INTERVAL = 2.seconds
         private const val LOG_EVERY_READINGS = 5
         private const val STOP_JOIN_MILLIS = 1_000L
+        /** Speech goes out every 20 ms and a spurt ends on a terminator; this long with neither,
+         *  the spurt has ended without one. */
+        internal val SPEECH_STALL = 100.milliseconds
     }
 }
 

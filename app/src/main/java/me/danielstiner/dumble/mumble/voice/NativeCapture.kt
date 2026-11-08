@@ -18,6 +18,7 @@ object NativeCapture {
     const val POLL_NO_SESSION = -4
     const val POLL_BUFFER_TOO_SMALL = -5
     const val FLAG_TERMINATOR = 1L
+    const val FLAG_HANGOVER = 2L
 
     const val META_FRAME_NUMBER = 0
     const val META_FLAGS = 1

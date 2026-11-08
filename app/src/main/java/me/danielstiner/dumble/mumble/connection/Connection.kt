@@ -40,9 +40,9 @@ interface Connection {
     val selfState: StateFlow<DeafenState>
     val speakingSessions: StateFlow<Set<Int>>
 
-    /** Our own audio reaching the wire, held ~200 ms past the last packet so it does not strobe
-     *  between words. [speakingSessions] never contains us: it is built from decoded incoming
-     *  audio. */
+    /** Our own speech reaching the wire, lowered as the speech gate's hangover starts rather than
+     *  when the spurt ends. [speakingSessions] never contains us: it is built from decoded
+     *  incoming audio. */
     val selfSpeaking: StateFlow<Boolean>
 
     /** Another call — the phone's or another app's — has the microphone. Capture is released and

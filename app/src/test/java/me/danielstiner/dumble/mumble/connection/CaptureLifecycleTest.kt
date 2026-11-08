@@ -35,7 +35,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * The capture lifecycle's regression suite. Each case here reproduced a real defect before the
@@ -47,8 +46,8 @@ class CaptureLifecycleTest {
 
     /**
      * A connection on the rig's scheduler, torn down by it, whose capture pumps the rig steps: a
-     * release and the engine's free land in one `assertSettled`, and the speaking hold runs on
-     * the scheduler's clock. Every handle here returns 0 where the engine would block.
+     * release and the engine's free land in one `assertSettled`, and the pump's speech stall runs
+     * on the scheduler's clock. Every handle here returns 0 where the engine would block.
      */
     private fun Rig.connection(
         newCapture: () -> VoiceSender.CaptureHandle? = { null },
@@ -76,12 +75,16 @@ class CaptureLifecycleTest {
      */
     private class WedgedCaptureHandle : VoiceSender.CaptureHandle {
         private var released = false
+        private var speechPending = false
         var stopCalled = false; private set
         var destroyed = false; private set
 
         // stop() deliberately does not end the poll: it keeps coming back empty until release().
-        override fun pollPacket(out: ByteArray, meta: LongArray) =
-            if (released) NativeCapture.POLL_SHUTDOWN else 0
+        override fun pollPacket(out: ByteArray, meta: LongArray) = when {
+            released -> NativeCapture.POLL_SHUTDOWN
+            speechPending -> { speechPending = false; meta[0] = 0L; meta[1] = 0L; out[0] = 1; 1 }
+            else -> 0
+        }
         override fun setGateOpen(open: Boolean) = Unit
         override fun setTransmitMode(mode: TransmitMode) = Unit
         override fun stop() { stopCalled = true }
@@ -90,6 +93,9 @@ class CaptureLifecycleTest {
 
         /** The wedge clears: the pump's next poll returns, and it exits. */
         fun release() { released = true }
+
+        /** One packet of speech on the next poll. */
+        fun speak() { speechPending = true }
     }
 
     /**
@@ -795,8 +801,8 @@ class CaptureLifecycleTest {
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), 0L, terminator = false))
         assertSettled("a packet on the wire is") { conn.selfSpeaking.value }
 
-        elapse(1.seconds)   // well past the hold, with no packet since
-        assertFalse("and released once they stop", conn.selfSpeaking.value)
+        handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(4), 2L, terminator = false, hangover = true))
+        assertSettled("and released once speech stops, the hangover still going out") { !conn.selfSpeaking.value }
 
         conn.disconnect()
     }
@@ -819,24 +825,50 @@ class CaptureLifecycleTest {
         conn.disconnect()
     }
 
-    /** Left standing across a release, the hold would light the next session's halo for audio
-     *  the previous one sent. */
+    /** A wedged pump never reports its own end, so the release must lower speaking, or it carries
+     *  into whatever opens next. */
     @Test fun releasingCaptureClearsSpeaking() = deterministic {
-        val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
+        val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val conn = connection(newCapture = { handle }, call = call)
 
         connectTo(conn)
         conn.setTransmitting(true)
-        assertSettled("the engine must open") { handles.size == 1 && handles[0].gateOpen }
-
-        handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
+        handle.speak()
         assertSettled("a packet lights it") { conn.selfSpeaking.value }
 
-        // No time passes, so only the release can have lowered it.
+        // No time passes and the pump never exits, so only the release can have lowered it.
         call.hold()
-        assertSettled("the hold must release the engine") { handles[0].destroyed }
-        assertFalse("the release must clear it, ahead of the hold expiring", conn.selfSpeaking.value)
+        assertSettled("the hold must request a stop") { handle.stopCalled }
+        assertFalse("the release must clear it", conn.selfSpeaking.value)
+
+        handle.release()
+        conn.disconnect()
+    }
+
+    /** A pump that outlives its session reports its end late, while the next session talks. */
+    @Test fun aWedgedPumpEndingLateLeavesTheNextSessionSpeaking() = deterministic {
+        val wedged = WedgedCaptureHandle()
+        val next = FakeCaptureHandle(blocking = false)
+        val handles = ArrayDeque(listOf(wedged, next))
+        val conn = connection(newCapture = { handles.removeFirst() })
+
+        connectTo(conn)
+        conn.setTransmitting(true)
+        wedged.speak()
+        assertSettled("the first session speaks") { conn.selfSpeaking.value }
+        conn.disconnect()
+        assertSettled("teardown must request a stop") { wedged.stopCalled }
+
+        connectTo(conn)
+        conn.setTransmitting(true)
+        assertSettled("the next session opens its own engine") { handles.isEmpty() && next.gateOpen }
+        next.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
+        assertSettled("the next session speaks") { conn.selfSpeaking.value }
+
+        wedged.release()
+        assertSettled("the wedged pump exits") { wedged.destroyed }
+        assertTrue("its end must not lower the next session's halo", conn.selfSpeaking.value)
 
         conn.disconnect()
     }

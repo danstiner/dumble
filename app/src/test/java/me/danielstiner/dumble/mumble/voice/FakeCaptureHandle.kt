@@ -9,7 +9,10 @@ class FakeCaptureHandle(
     private val blocking: Boolean = true,
 ) : VoiceSender.CaptureHandle {
     sealed interface Step {
-        data class Frame(val bytes: ByteArray, val frameNumber: Long, val terminator: Boolean) : Step
+        data class Frame(
+            val bytes: ByteArray, val frameNumber: Long, val terminator: Boolean,
+            val hangover: Boolean = false,
+        ) : Step
         data object Retry : Step
         data object Unavailable : Step
         data object Shutdown : Step
@@ -41,7 +44,8 @@ class FakeCaptureHandle(
             is Step.Frame -> {
                 s.bytes.copyInto(out)
                 meta[0] = s.frameNumber
-                meta[1] = if (s.terminator) NativeCapture.FLAG_TERMINATOR else 0L
+                meta[1] = (if (s.terminator) NativeCapture.FLAG_TERMINATOR else 0L) or
+                    (if (s.hangover) NativeCapture.FLAG_HANGOVER else 0L)
                 s.bytes.size
             }
             Step.Retry -> NativeCapture.POLL_RETRY
