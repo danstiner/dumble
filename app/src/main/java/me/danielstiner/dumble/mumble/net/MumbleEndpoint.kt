@@ -12,6 +12,9 @@ class MumbleEndpoint private constructor(val host: String, val port: Int) {
     // so bracketing here is unambiguous and "[::1]:64738" cannot collide with a distinct endpoint.
     val address: String get() = if (host.contains(':')) "[$host]:$port" else "$host:$port"
 
+    /** What a person reads: [address], or just [host] at the default port. */
+    val label: String get() = if (port == DEFAULT_PORT) host else address
+
     companion object {
         const val DEFAULT_PORT = 64738
 

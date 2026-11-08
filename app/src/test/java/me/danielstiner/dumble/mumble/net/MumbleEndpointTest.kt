@@ -32,6 +32,13 @@ class MumbleEndpointTest {
         assertEquals("[::1]:64738", e.address)
     }
 
+    @Test fun labelDropsOnlyTheDefaultPort() {
+        assertEquals("example.com", MumbleEndpoint.parse("Example.com").label)
+        assertEquals("example.com:1234", MumbleEndpoint.parse("example.com", 1234).label)
+        assertEquals("::1", MumbleEndpoint.parse("::1").label)
+        assertEquals("[::1]:1234", MumbleEndpoint.parse("::1", 1234).label)
+    }
+
     @Test fun lowercasesIpv6Hex() {
         assertEquals("2001:db8::1", MumbleEndpoint.parse("2001:DB8::1").host)
     }
