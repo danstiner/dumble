@@ -1,8 +1,11 @@
 package me.danielstiner.dumble.ui.connect
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertIsEnabled
@@ -15,6 +18,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.unit.coerceIn
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -503,5 +511,25 @@ class CallControlsTest {
         compose.onNodeWithContentDescription(
             "Unmute — the server is muting you, so you still will not be heard",
         ).assertIsEnabled()
+    }
+
+    @Test fun controlsAreAsTallAsTheyAreWideBetween48And72Dp() {
+        var screen by mutableStateOf(300.dp)
+        compose.setContent {
+            Box(Modifier.width(screen)) {
+                CallControls(null, false, AudioRoutes(), {}, {}, {}, {}, transmitMode = TransmitMode.PushToTalk)
+            }
+        }
+        for (width in listOf(200.dp, 300.dp, 480.dp)) {
+            screen = width
+            compose.waitForIdle()
+            for (control in listOf("Push to talk", "Deafen", "Audio output", "Disconnect")) {
+                val bounds = compose.onNodeWithContentDescription(control).getBoundsInRoot()
+                assertEquals(
+                    "$control on a $width screen",
+                    bounds.width.coerceIn(48.dp, 72.dp).value, bounds.height.value, 1f,
+                )
+            }
+        }
     }
 }

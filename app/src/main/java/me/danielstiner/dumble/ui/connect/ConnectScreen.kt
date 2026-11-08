@@ -10,9 +10,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -116,18 +118,22 @@ fun ConnectScreen(
                 .verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            OutlinedTextField(
-                state.draft.host, onHost, label = { Text("Server") }, singleLine = true,
-                isError = state.hostError != null,
-                supportingText = state.hostError?.let { msg -> { Text(msg) } },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                state.portText, onPort, label = { Text("Port") }, singleLine = true,
-                isError = state.portError != null,
-                supportingText = state.portError?.let { msg -> { Text(msg) } },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // Almost every server is on the default port, so the port shares the server's row
+            // instead of taking its own.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    state.draft.host, onHost, label = { Text("Server") }, singleLine = true,
+                    isError = state.hostError != null,
+                    supportingText = state.hostError?.let { msg -> { Text(msg) } },
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    state.portText, onPort, label = { Text("Port") }, singleLine = true,
+                    isError = state.portError != null,
+                    supportingText = state.portError?.let { msg -> { Text(msg) } },
+                    modifier = Modifier.width(88.dp),
+                )
+            }
             OutlinedTextField(state.draft.username, onUsername, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 state.password, onPassword, label = { Text("Password") }, singleLine = true,
