@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,10 +36,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -53,9 +54,18 @@ import me.danielstiner.dumble.mumble.voice.speakerToggleTarget
 private val controlPillShape = RoundedCornerShape(percent = 50)
 private val controlActiveShape = RoundedCornerShape(percent = 30)
 
+// Height follows width, so a narrow screen gets circles rather than pills taller than they are
+// wide: never under the 48 dp touch target, and 72 dp tall at most, the pill on a phone.
+private fun Modifier.controlSize() = layout { measurable, constraints ->
+    val width = constraints.maxWidth
+    val height = width.coerceIn(48.dp.roundToPx(), 72.dp.roundToPx())
+    val placeable = measurable.measure(Constraints.fixed(width, height))
+    layout(width, height) { placeable.place(0, 0) }
+}
+
 /**
  * The call screen's bottom bar. Buttons take equal weight so they are wide pills with large touch
- * targets rather than small circles, matching the stock phone app.
+ * targets, matching the stock phone app; a screen too narrow for pills gets circles.
  *
  * Talk and Mute share one slot, chosen by [transmitMode]: a mute button is meaningless while
  * push-to-talk's gate is closed by default, and under voice activity it is the only thing that
@@ -167,7 +177,7 @@ private fun TalkControl(
             onClick = {},
             enabled = block == null,
             interactionSource = interactions,
-            modifier = Modifier.fillMaxWidth().height(72.dp).semantics {
+            modifier = Modifier.controlSize().semantics {
                 contentDescription = talkDescription(block)
             },
             shape = if (pressed) controlActiveShape else controlPillShape,
@@ -324,7 +334,7 @@ private fun ControlButton(
         FilledIconButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(72.dp)
+            modifier = Modifier.controlSize()
                 .semantics { contentDescription = description },
             // Mirrors TalkControl's pressed styling, so "on" reads the same way whichever control
             // is holding it.
