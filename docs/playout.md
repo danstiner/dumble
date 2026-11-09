@@ -287,4 +287,7 @@ the engine's targets account for it the same way.
 
 Invariants are pinned by `PlayoutEngineTest.cpp`, `PlayoutEngineBench.cpp`, `PacketQueueTest.cpp`,
 `JitterEstimatorTest.cpp`, `VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and
-`OboePlayoutDeviceTest.kt`.
+`OboePlayoutDeviceTest.kt`. Latency, capture through playout on a virtual clock, is pinned by
+`LatencyHarnessTest.cpp` in `app/src/test/resources/latency/expected.txt`. A change that moves it
+rewrites the file with `DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency` and
+commits the diff with the change.
