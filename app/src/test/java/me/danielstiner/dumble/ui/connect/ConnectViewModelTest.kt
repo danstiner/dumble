@@ -108,6 +108,20 @@ class ConnectViewModelTest {
         assertEquals(ServerProfile("h", 64738, "u"), store.saved)
     }
 
+    @Test fun anyEditRetiresARejectionOfTheFormUntilTheNextConnect() = runTest(dispatcher) {
+        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock)
+        vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
+        val edits = listOf({ vm.onHostChange("h2") }, { vm.onPortChange("64739") }, { vm.onUsernameChange("u2") }, { vm.onPasswordChange("p") })
+        for ((i, edit) in edits.withIndex()) {
+            vm.onConnect()
+            runCurrent()
+            assertFalse("connect $i", vm.uiState.value.editedSinceConnect)
+            edit()
+            runCurrent()
+            assertTrue("edit $i", vm.uiState.value.editedSinceConnect)
+        }
+    }
+
     /** The status never stops reading blocked, as when a new block lands within one frame. */
     @Test fun localNetworkIsAskedOncePerConnect() = runTest(dispatcher) {
         val conn = FakeConnection()

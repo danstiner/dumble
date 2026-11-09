@@ -67,6 +67,8 @@ data class ConnectUiState(
      * Android stops asking after two denials.
      */
     val localNetworkAsked: Boolean = false,
+    /** Whether the form changed since Connect, which retires a rejection of what was typed. */
+    val editedSinceConnect: Boolean = false,
     val roundTripTime: Duration? = null,
     val voicePath: VoicePath.State = VoicePath.State(),
     val lastServerReplyAt: ComparableTimeMark? = null,
@@ -287,10 +289,11 @@ class ConnectViewModel internal constructor(
         return msgs.size - (msgs.indexOfLast { it === marker } + 1)
     }
 
-    fun onHostChange(v: String) { form.value = form.value.copy(draft = form.value.draft.copy(host = v), hostError = null) }
-    fun onUsernameChange(v: String) { form.value = form.value.copy(draft = form.value.draft.copy(username = v)) }
-    fun onPasswordChange(v: String) { form.value = form.value.copy(password = v) }
-    fun onPortChange(v: String) { form.value = form.value.copy(portText = v, portError = null) }
+    fun onHostChange(v: String) { edit { it.copy(draft = it.draft.copy(host = v), hostError = null) } }
+    fun onUsernameChange(v: String) { edit { it.copy(draft = it.draft.copy(username = v)) } }
+    fun onPasswordChange(v: String) { edit { it.copy(password = v) } }
+    fun onPortChange(v: String) { edit { it.copy(portText = v, portError = null) } }
+    private fun edit(change: (ConnectUiState) -> ConnectUiState) { form.value = change(form.value).copy(editedSinceConnect = true) }
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
     fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }
@@ -325,8 +328,8 @@ class ConnectViewModel internal constructor(
                 viewModelScope.launch { configStore.saveLastUsed(profile) }
                 connection.connect(endpoint, profile.username, f.password.ifBlank { null })
                 // Only after connect() has replaced the status: any sooner, the old block would be
-                // asked about again.
-                form.value = form.value.copy(localNetworkAsked = false)
+                // asked about again, or the old rejection shown under its field again.
+                form.value = form.value.copy(localNetworkAsked = false, editedSinceConnect = false)
             }
         }
     }
