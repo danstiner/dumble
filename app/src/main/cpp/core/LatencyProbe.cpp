@@ -45,8 +45,9 @@ Detection find(const int16_t* pcm, int64_t n, const std::vector<int16_t>& probe)
     const int64_t lags = n - int64_t(probe.size()) + 1;
     if (lags <= 0) return {-1, 0, 0};
     std::vector<float> coarse((lags + kCoarseLag - 1) / kCoarseLag);
-    for (size_t j = 0; j < coarse.size(); j++)
+    for (size_t j = 0; j < coarse.size(); j++) {
         coarse[j] = float(correlate(pcm + j * kCoarseLag, probe, kCoarseSample));
+    }
     const auto best = std::max_element(coarse.begin(), coarse.end()) - coarse.begin();
 
     const int64_t center = best * kCoarseLag;
@@ -60,6 +61,7 @@ Detection find(const int16_t* pcm, int64_t n, const std::vector<int16_t>& probe)
             offset = i;
         }
     }
+    // From the coarse pass, the measure kFoundRatio was measured against.
     float next = 0;
     for (size_t j = 0; j < coarse.size(); j++) {
         if (std::llabs(int64_t(j) * kCoarseLag - offset) > kGuardSamples) {

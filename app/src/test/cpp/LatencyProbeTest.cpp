@@ -36,8 +36,9 @@ int amplitudeFor(double snrDb) {
 std::vector<int16_t> withProbe(int64_t n, int64_t at, double snrDb, uint32_t seed, int sign = 1) {
     auto pcm = noise(n, amplitudeFor(snrDb), seed);
     const auto p = probe(kPeak);
-    for (size_t i = 0; i < p.size(); i++)
+    for (size_t i = 0; i < p.size(); i++) {
         pcm[at + i] = int16_t(std::clamp(pcm[at + i] + sign * p[i], -32768, 32767));
+    }
     return pcm;
 }
 

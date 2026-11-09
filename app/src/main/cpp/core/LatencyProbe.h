@@ -2,8 +2,7 @@
 #include <cstdint>
 #include <vector>
 
-// A known sound to time through the voice path, and the search that finds it again. Shared by the
-// host harness and, through JNI, the on-device latency check.
+// A known sound to time through the voice path, and the search that finds it again.
 namespace dumble::latency {
 
 /** How many times the best match must stand above the next one more than 5 ms away. Through
