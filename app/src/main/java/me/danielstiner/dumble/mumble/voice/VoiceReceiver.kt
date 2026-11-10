@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
+import me.danielstiner.dumble.time.BootTimeSource
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -47,6 +49,8 @@ class VoiceReceiver(
     private val newEngine: () -> PlayoutEngine?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+    /** Seam: the clock of [arrivedTap]'s marks, shared with [VoiceSender.sentTap]. */
+    private val tapClock: TimeSource.WithComparableMarks = BootTimeSource,
     // Seam: where the poll runs; the connection passes its own.
     context: CoroutineContext = Dispatchers.Default,
 ) {
@@ -118,6 +122,11 @@ class VoiceReceiver(
     @Volatile
     private var held = false
 
+    /** Set while a latency check listens: each audio packet, before the engine takes it, with what
+     *  the engine already held for its sender. Runs on the transport's thread under this
+     *  receiver's monitor, so it only records. */
+    @Volatile var arrivedTap: ((ArrivedPacket) -> Unit)? = null
+
     /**
      * Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per session.
      *
@@ -175,6 +184,8 @@ class VoiceReceiver(
      * array may be one the caller reuses, so nothing here keeps it past the call.
      */
     fun onVoicePacket(payload: ByteArray, len: Int) {
+        val tap = arrivedTap
+        val at = if (tap != null) tapClock.markNow() else null
         if (voiceUnavailable || stopped) return
         // The platform has the device: the stream is paused and the engine's speakers released
         // with it, so a packet queued now would only play stale on resume.
@@ -208,8 +219,17 @@ class VoiceReceiver(
             // A refusal is a latched log and nothing more: the engine has no failure a packet can
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
-            val code = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
-                                  audio.isTerminator)
+            val opus = audio.opusData.toByteArray()
+            if (tap != null && at != null) {
+                val queued = IntArray(2)
+                val known = live.readQueued(session, queued)
+                tap(ArrivedPacket(
+                    session, audio.frameNumber, audio.isTerminator, opus, at,
+                    queuedSamples = if (known) queued[0] else 0,
+                    decodedSamples = if (known) queued[1] else 0,
+                ))
+            }
+            val code = live.offer(session, opus, audio.frameNumber, audio.isTerminator)
             val refusal = when (code) {
                 NativePlayout.OFFER_SPEAKER_CAP -> "speaker cap reached; ignoring further sessions"
                 NativePlayout.OFFER_PACKET_TOO_LARGE -> "dropping oversized opus payload"

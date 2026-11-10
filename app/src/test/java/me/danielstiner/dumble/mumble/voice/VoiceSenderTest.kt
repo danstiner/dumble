@@ -2,6 +2,8 @@ package me.danielstiner.dumble.mumble.voice
 
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.voice.latency.SentPacket
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +12,7 @@ import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TestTimeSource
 
@@ -298,5 +301,50 @@ class VoiceSenderTest {
         } finally {
             unwedge.countDown()
         }
+    }
+
+    @Test
+    fun theTargetCanBeTheServerLoopback() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
+        val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { })
+        sender.target = VoiceSender.SERVER_LOOPBACK_TARGET
+        assertTrue(sender.step())
+        assertEquals(31, parse(sent[0]).target)
+    }
+
+    @Test
+    fun theSendTapSeesEachSentPacketWithItsMarkAndACopyOfItsPayload() {
+        val clock = TestTimeSource()
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(
+            FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2), 4L, false),
+            FakeCaptureHandle.Step.Frame(byteArrayOf(3), 6L, true),
+        )
+        val tapped = mutableListOf<SentPacket>()
+        val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { }, tapClock = clock)
+        sender.sentTap = { tapped += it }
+        val start = clock.markNow()
+        assertTrue(sender.step())
+        clock += 20.milliseconds
+        assertTrue(sender.step())
+
+        assertEquals(listOf(4L, 6L), tapped.map { it.frameNumber })
+        assertEquals(listOf(false, true), tapped.map { it.terminator })
+        // The pump reuses one buffer, so an uncopied payload would read the second packet's byte.
+        assertArrayEquals(byteArrayOf(1, 2), tapped[0].opusData)
+        assertEquals(ZERO, tapped[0].at - start)
+        assertEquals(20.milliseconds, tapped[1].at - tapped[0].at)
+    }
+
+    @Test
+    fun aRefusedSendIsNotTapped() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
+        val tapped = mutableListOf<SentPacket>()
+        val sender = VoiceSender(fake, { false }, onExit = { }, tapClock = TestTimeSource())
+        sender.sentTap = { tapped += it }
+        assertTrue(sender.step())
+        assertTrue(tapped.isEmpty())
     }
 }

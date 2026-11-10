@@ -5,6 +5,8 @@ import android.os.Process
 import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.voice.latency.SentPacket
+import me.danielstiner.dumble.time.BootTimeSource
 import java.io.IOException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -33,6 +35,9 @@ class VoiceSender(
     /** Seam: the clock of the stats cadence and the speech stall, so a test that steps the pump
      *  can run both on virtual time. */
     private val clock: TimeSource = TimeSource.Monotonic,
+    /** Seam: the clock of [sentTap]'s marks, shared with [VoiceReceiver.arrivedTap] so a latency
+     *  check can subtract one from the other. */
+    private val tapClock: TimeSource.WithComparableMarks = BootTimeSource,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -52,6 +57,13 @@ class VoiceSender(
     enum class StopReason { REQUESTED, UNAVAILABLE }
 
     @Volatile var droppedFrames = 0; private set
+
+    /** Who the server sends our voice to: [NORMAL_TALKING_TARGET], or [SERVER_LOOPBACK_TARGET]
+     *  while a latency check runs. */
+    @Volatile var target = NORMAL_TALKING_TARGET
+
+    /** Set while a latency check listens: each packet the transport took, on the pump thread. */
+    @Volatile var sentTap: ((SentPacket) -> Unit)? = null
     @Volatile private var thread: Thread? = null
     @Volatile private var stopped = false
 
@@ -148,10 +160,12 @@ class VoiceSender(
     }
 
     private fun transmit(frame: ByteArray, n: Int, meta: LongArray) {
+        val tap = sentTap
+        val at = if (tap != null) tapClock.markNow() else null
         val flags = meta[NativeCapture.META_FLAGS]
         val terminator = flags and NativeCapture.FLAG_TERMINATOR != 0L
         val audio = MumbleUdpProtos.Audio.newBuilder()
-            .setTarget(NORMAL_TALKING_TARGET)
+            .setTarget(target)
             .setFrameNumber(meta[NativeCapture.META_FRAME_NUMBER])
             .setIsTerminator(terminator)
             .setOpusData(ByteString.copyFrom(frame, 0, n))
@@ -162,6 +176,9 @@ class VoiceSender(
         body.copyInto(payload, 1)
         val sent = send(payload)
         if (!sent) droppedFrames++
+        if (sent && tap != null && at != null) {
+            tap(SentPacket(meta[NativeCapture.META_FRAME_NUMBER], terminator, frame.copyOf(n), at))
+        }
         speak(sent && !terminator && flags and NativeCapture.FLAG_HANGOVER == 0L)
     }
 
@@ -175,6 +192,8 @@ class VoiceSender(
     companion object {
         private const val TAG = "VoiceSender"
         const val NORMAL_TALKING_TARGET = 0
+        /** Murmur's loopback target: the server sends the audio back to its sender alone. */
+        const val SERVER_LOOPBACK_TARGET = 31
         private const val UDP_TYPE_AUDIO: Byte = 0
         /** The sheet refreshes every two seconds; the log line keeps its old ten. */
         private val STATS_INTERVAL = 2.seconds
