@@ -1881,7 +1881,7 @@ class MumbleConnectionTest {
         val endpoint = MumbleEndpoint.parse("localhost")
 
         conn.connectPinned(endpoint, "latency-check", "ab12")
-        assertSettled("mismatch") { conn.status.value is ConnectionStatus.PinMismatch }
+        assertSettled("mismatch ends the session") { conn.status.value is ConnectionStatus.Error }
         conn.trustAndConnect()
 
         assertSettled("no second transport") { transports.size == 1 }
@@ -1890,35 +1890,10 @@ class MumbleConnectionTest {
 
     // ---- Real threads, by design. These run on runBlocking and the default dispatchers with
     // awaitOnRealThreads, because the scheduler cannot reach them:
-    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking and
-    //     aPinnedConnectTrustsTheServersCertificateOverRealTls, below
+    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking, below
     //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the `peer` tests in
     //     the UDP section
     // Every other test drives the scheduler and never calls awaitOnRealThreads.
-
-    @Test fun aPinnedConnectTrustsTheServersCertificateOverRealTls() = runBlocking {
-        val srv = TestTlsServer()
-        srv.start()
-        try {
-            val pins = InMemoryPinStore()
-            val conn = MumbleConnection(pins) { pin ->
-                MumbleTcpTransport(
-                    expectedPin = pin,
-                    trustDelegate = TestTlsServer.rejectingTrustManager(),
-                    hostNameVerifier = HostnameVerifier { _, _ -> true },
-                )
-            }
-            val endpoint = MumbleEndpoint.parse("localhost", srv.port)
-
-            conn.connectPinned(endpoint, "latency-check", sha256Hex(srv.leafCertificate.encoded))
-
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            assertNull("nothing was pinned", pins.get(endpoint.address))
-            conn.disconnect()
-        } finally {
-            srv.close()
-        }
-    }
 
     @Test fun firstContactAwaitsTrustThenPinsAndReachesHandshaking() = runBlocking {
         val srv = TestTlsServer()

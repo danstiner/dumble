@@ -207,7 +207,7 @@ class MumbleConnection internal constructor(
      * session, not the connection, because a release must find the session that opened the
      * microphone rather than whichever session replaced it.
      *
-     * The first six fields are immutable identity. The mutable ones are either `@Volatile`
+     * The first seven fields are immutable identity. The mutable ones are either `@Volatile`
      * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
      */
     private class Session(
@@ -947,11 +947,18 @@ class MumbleConnection internal constructor(
      * trust prompt is kept aside for [trustAndConnect] first, since it can follow at once.
      */
     private fun fail(session: Session, status: ConnectionStatus) {
+        var published = status
         if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
-            Log.i(TAG, "handshake stopped for trust decision: $status")
-            synchronized(lock) { if (session.gen == generation && session.pinned == null) trustPrompt = session }
+            if (session.pinned != null) {
+                val presented = (status as? ConnectionStatus.AwaitingTrust)?.fingerprint
+                    ?: (status as ConnectionStatus.PinMismatch).presented
+                published = ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, "certificate $presented is not the one given")
+            } else {
+                Log.i(TAG, "handshake stopped for trust decision: $status")
+                synchronized(lock) { if (session.gen == generation) trustPrompt = session }
+            }
         }
-        publishStatus(session.gen, status)
+        publishStatus(session.gen, published)
         retire(session)
     }
 
