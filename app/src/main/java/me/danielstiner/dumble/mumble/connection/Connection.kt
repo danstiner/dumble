@@ -71,6 +71,10 @@ interface Connection {
      */
     val audioRoutes: StateFlow<AudioRoutes>
     fun connect(endpoint: MumbleEndpoint, username: String, password: String?)
+
+    /** A connection that trusts exactly [fingerprint] and records nothing: no pin, no trust
+     *  prompt. The latency check's own, to a throwaway server whose certificate it was handed. */
+    fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String)
     fun trustAndConnect()
     fun cancelTrust()
     fun disconnect()

@@ -47,6 +47,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -1849,12 +1850,75 @@ class MumbleConnectionTest {
         assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
     }
 
+    /** The latency check's own connection trusts the fingerprint it was handed, whatever the store
+     *  says about the address, and writes nothing to the store. */
+    @Test fun aPinnedConnectTrustsTheGivenFingerprintAndStoresNothing() = deterministic {
+        val pins = InMemoryPinStore()
+        val endpoint = MumbleEndpoint.parse("localhost")
+        pins.put(endpoint.address, "stale")
+        val expected = CopyOnWriteArrayList<String?>()
+        val conn = own(MumbleConnection(
+            pins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin -> expected += pin; FakeControlTransport { _, _ -> } })
+
+        conn.connectPinned(endpoint, "latency-check", "ab12")
+        handshaking(conn)
+
+        assertEquals(listOf<String?>("ab12"), expected)
+        assertEquals("stale", pins.get(endpoint.address))
+    }
+
+    /** A throwaway server's certificate is never one the user should be asked to trust. */
+    @Test fun aPinnedConnectsMismatchIsNotOfferedForTrust() = deterministic {
+        val pins = InMemoryPinStore()
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val conn = own(MumbleConnection(
+            pins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin ->
+            FakeControlTransport { _, _ -> throw PinMismatchException(stored = pin!!, presented = "cd34") }
+                .also { transports += it }
+        })
+        val endpoint = MumbleEndpoint.parse("localhost")
+
+        conn.connectPinned(endpoint, "latency-check", "ab12")
+        assertSettled("mismatch") { conn.status.value is ConnectionStatus.PinMismatch }
+        conn.trustAndConnect()
+
+        assertSettled("no second transport") { transports.size == 1 }
+        assertNull(pins.get(endpoint.address))
+    }
+
     // ---- Real threads, by design. These run on runBlocking and the default dispatchers with
     // awaitOnRealThreads, because the scheduler cannot reach them:
-    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking, below
+    //   a real TLS server — firstContactAwaitsTrustThenPinsAndReachesHandshaking and
+    //     aPinnedConnectTrustsTheServersCertificateOverRealTls, below
     //   a loopback DatagramSocket and MumbleUdpTransport's reader thread — the `peer` tests in
     //     the UDP section
     // Every other test drives the scheduler and never calls awaitOnRealThreads.
+
+    @Test fun aPinnedConnectTrustsTheServersCertificateOverRealTls() = runBlocking {
+        val srv = TestTlsServer()
+        srv.start()
+        try {
+            val pins = InMemoryPinStore()
+            val conn = MumbleConnection(pins) { pin ->
+                MumbleTcpTransport(
+                    expectedPin = pin,
+                    trustDelegate = TestTlsServer.rejectingTrustManager(),
+                    hostNameVerifier = HostnameVerifier { _, _ -> true },
+                )
+            }
+            val endpoint = MumbleEndpoint.parse("localhost", srv.port)
+
+            conn.connectPinned(endpoint, "latency-check", sha256Hex(srv.leafCertificate.encoded))
+
+            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+            assertNull("nothing was pinned", pins.get(endpoint.address))
+            conn.disconnect()
+        } finally {
+            srv.close()
+        }
+    }
 
     @Test fun firstContactAwaitsTrustThenPinsAndReachesHandshaking() = runBlocking {
         val srv = TestTlsServer()
