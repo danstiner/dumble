@@ -17,25 +17,26 @@ class NativeLatencyProbeTest {
     fun aProbeSpurtIsFoundExactlyWhereItWasPlaced() {
         val packets = NativeLatencyProbe.encodeProbeSpurt(PEAK, lead, tail, TRANSMIT_BITRATE)
         assertEquals("200 ms + 250 ms + 200 ms in 20 ms packets, the last padded", 33, packets.size)
-        val codec = NativeLatencyProbe.codecDelaySamples(PEAK, TRANSMIT_BITRATE)
+        val codec = NativeLatencyProbe.codecDelaySamples(TRANSMIT_BITRATE)
         assertEquals("Opus's delay at Dumble's settings, as the host harness pins it", 310, codec)
         val out = DoubleArray(3)
-        assertTrue(NativeLatencyProbe.locate(frames(packets.size), packets, PEAK, codec, out))
+        assertTrue(NativeLatencyProbe.locate(frames(packets.size), packets, codec, out))
         assertEquals(lead.toDouble(), out[0], 0.0)
+        assertTrue("peak ${out[1]} next ${out[2]}", out[1] >= 0.1 && out[1] >= 5 * out[2])
     }
 
     @Test
     fun aSilentSpurtIsNotFound() {
         val packets = NativeLatencyProbe.encodeProbeSpurt(0, lead, tail, TRANSMIT_BITRATE)
-        assertFalse(NativeLatencyProbe.locate(frames(packets.size), packets, PEAK, 310, DoubleArray(3)))
+        assertFalse(NativeLatencyProbe.locate(frames(packets.size), packets, 310, DoubleArray(3)))
     }
 
     @Test
     fun mismatchedArraysAreRefusedWithoutWriting() {
         val packets = NativeLatencyProbe.encodeProbeSpurt(PEAK, lead, tail, TRANSMIT_BITRATE)
         val out = doubleArrayOf(-7.0, -7.0, -7.0)
-        assertFalse(NativeLatencyProbe.locate(frames(packets.size - 1), packets, PEAK, 310, out))
-        assertFalse(NativeLatencyProbe.locate(frames(packets.size), packets, PEAK, 310, DoubleArray(2)))
+        assertFalse(NativeLatencyProbe.locate(frames(packets.size - 1), packets, 310, out))
+        assertFalse(NativeLatencyProbe.locate(frames(packets.size), packets, 310, DoubleArray(2)))
         assertArrayEquals(doubleArrayOf(-7.0, -7.0, -7.0), out, 0.0)
     }
 

@@ -30,10 +30,6 @@ TEST(LatencyPackets, EncodeNumbersPacketsInTensOfMillisecondsAndPadsTheLast) {
     EXPECT_EQ(packets[2].frameNumber, 104u);
 }
 
-TEST(LatencyPackets, CodecDelayIsTheHarnesssFigure) {
-    EXPECT_EQ(lat::codecDelay(lat::probe(kPeak), kBitrate), 310);
-}
-
 TEST(LatencyPackets, LocateNamesWhereTheProbeSatInTheEncodedAudio) {
     const int64_t codec = lat::codecDelay(lat::probe(kPeak), kBitrate);
     for (int64_t lead : {int64_t(kSampleRate / 5), int64_t(kSampleRate / 5 + 333)}) {
@@ -59,6 +55,16 @@ TEST(LatencyPackets, LocateTakesPacketsInAnyOrder) {
     auto packets = lat::encode(spurt(lead, 5), 0, kBitrate);
     std::reverse(packets.begin(), packets.end());
     const auto d = lat::locate(packets, lat::probe(kPeak), lat::codecDelay(lat::probe(kPeak), kBitrate));
+    EXPECT_TRUE(d.found());
+    EXPECT_EQ(d.offset, lead);
+}
+
+TEST(LatencyPackets, APacketFarPastTheRestIsIgnored) {
+    const int64_t lead = kSampleRate / 5;
+    const int64_t codec = lat::codecDelay(lat::probe(kPeak), kBitrate);
+    auto packets = lat::encode(spurt(lead, 6), 7000, kBitrate);
+    packets.push_back({7000u + 10'000'000u, packets.front().opus});
+    const auto d = lat::locate(packets, lat::probe(kPeak), codec);
     EXPECT_TRUE(d.found());
     EXPECT_EQ(d.offset, lead);
 }

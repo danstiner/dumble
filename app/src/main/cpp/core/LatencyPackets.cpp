@@ -7,6 +7,9 @@
 
 namespace dumble::latency {
 
+// A stray wall-clock frame number must not size the timeline: 60 s is far past any check.
+constexpr uint64_t kMaxSpanFrames = 6000;
+
 std::vector<TimedPacket> encode(const std::vector<int16_t>& pcm, uint64_t firstFrame, int bitrate) {
     auto encoder = AudioEncoder::create(kSampleRate, kChannels, bitrate);
     if (!encoder) return {};
@@ -50,7 +53,11 @@ Detection locate(std::vector<TimedPacket> packets, const std::vector<int16_t>& p
         if (n <= 0) {
             continue;
         }
-        const size_t start = size_t(p.frameNumber - first) * kFrameSamples;
+        const uint64_t behind = p.frameNumber - first;
+        if (behind > kMaxSpanFrames) {
+            continue;
+        }
+        const size_t start = size_t(behind) * kFrameSamples;
         if (timeline.size() < start + size_t(n)) timeline.resize(start + size_t(n), 0);
         std::copy_n(frame.begin(), n, timeline.begin() + start);
     }

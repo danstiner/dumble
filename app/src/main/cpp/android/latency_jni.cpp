@@ -9,6 +9,10 @@
 
 namespace lat = dumble::latency;
 
+// Where the device check's own probe sits: find() normalises by the probe's energy, so the level
+// the capture heard it at does not matter to the search.
+constexpr int16_t kProbePeak = 1600;
+
 extern "C" {
 
 JNIEXPORT jobjectArray JNICALL
@@ -28,12 +32,12 @@ FN(encodeProbeSpurt)(JNIEnv* env, jobject, jint peak, jint leadSamples, jint tai
     return out;
 }
 
-JNIEXPORT jint JNICALL FN(codecDelaySamples)(JNIEnv*, jobject, jint peak, jint bitrate) {
-    return jint(lat::codecDelay(lat::probe(int16_t(peak)), bitrate));
+JNIEXPORT jint JNICALL FN(codecDelaySamples)(JNIEnv*, jobject, jint bitrate) {
+    return jint(lat::codecDelay(lat::probe(kProbePeak), bitrate));
 }
 
 JNIEXPORT jboolean JNICALL
-FN(locate)(JNIEnv* env, jobject, jlongArray frames, jobjectArray packets, jint peak,
+FN(locate)(JNIEnv* env, jobject, jlongArray frames, jobjectArray packets,
            jint codecDelaySamples, jdoubleArray out) {
     const jsize n = env->GetArrayLength(frames);
     if (env->GetArrayLength(packets) != n || env->GetArrayLength(out) < 3) {
@@ -50,7 +54,7 @@ FN(locate)(JNIEnv* env, jobject, jlongArray frames, jobjectArray packets, jint p
         env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte*>(timed[size_t(i)].opus.data()));
         env->DeleteLocalRef(bytes);
     }
-    const auto d = lat::locate(std::move(timed), lat::probe(int16_t(peak)), codecDelaySamples);
+    const auto d = lat::locate(std::move(timed), lat::probe(kProbePeak), codecDelaySamples);
     const jdouble result[3] = {jdouble(d.offset), d.peak, d.nextPeak};
     env->SetDoubleArrayRegion(out, 0, 3, result);
     return d.found() ? JNI_TRUE : JNI_FALSE;

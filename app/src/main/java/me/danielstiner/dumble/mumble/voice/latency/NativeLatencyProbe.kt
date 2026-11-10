@@ -13,12 +13,12 @@ object NativeLatencyProbe {
     external fun encodeProbeSpurt(peak: Int, leadSamples: Int, tailSamples: Int, bitrate: Int): Array<ByteArray>
 
     /** Opus's delay at [bitrate], in samples, measured on the probe; -1 if it was not found. */
-    external fun codecDelaySamples(peak: Int, bitrate: Int): Int
+    external fun codecDelaySamples(bitrate: Int): Int
 
     /** Decodes [packets] at frame numbers [frames] (10 ms units, any order) and finds the probe.
      *  Fills [out] with its offset in samples from the earliest frame's first sample, less
      *  [codecDelaySamples], then its peak and next peak; true when that counts as found. False,
      *  with [out] untouched, when [frames] and [packets] differ in length or [out] is shorter
      *  than 3. */
-    external fun locate(frames: LongArray, packets: Array<ByteArray>, peak: Int, codecDelaySamples: Int, out: DoubleArray): Boolean
+    external fun locate(frames: LongArray, packets: Array<ByteArray>, codecDelaySamples: Int, out: DoubleArray): Boolean
 }
