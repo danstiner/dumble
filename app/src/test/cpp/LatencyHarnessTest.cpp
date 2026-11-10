@@ -7,9 +7,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "LatencyFixture.h"
 #include "WavFixture.h"
-#include "core/AudioDecoder.h"
-#include "core/AudioEncoder.h"
 #include "core/BootClock.h"
 #include "core/CaptureConstants.h"
 #include "core/CaptureEngine.h"
@@ -17,10 +16,11 @@
 #include "core/PlayoutConstants.h"
 #include "core/PlayoutEngine.h"
 
-// Dumble's own voice path, mouth to ear, on a virtual clock: CaptureEngine fed in input-callback
-// bursts, each packet delayed by a scripted network, PlayoutEngine pulled in output-callback
-// bursts, and a probe found again in the output. Everything is sample-exact, so the figures are
-// pinned in latency/expected.txt and a change to any of them is a reviewed diff.
+// Dumble's own voice path, capture through playout, on a virtual clock: CaptureEngine fed in
+// input-callback bursts, each packet delayed by a scripted network, PlayoutEngine pulled in
+// output-callback bursts, and a probe found again in the output. The figures exclude the device's
+// input and output buffers, which a phone adds on top. Everything is sample-exact, so the figures
+// are pinned in latency/expected.txt and a change to any of them is a reviewed diff.
 namespace {
 
 using namespace dumble;
@@ -39,6 +39,9 @@ constexpr int64_t kPhaseStep = 5 * kMs;
 constexpr int64_t kSearchWindow = 450 * kMs;
 constexpr int64_t kWarmSpurt = 1000 * kMs;
 constexpr int64_t kWarmGap = 1000 * kMs;
+// Each spurt must open where a frame and every scenario's input burst begin: packet starts
+// are read from frame numbers, which round down, and an error there lands in jitterBuffer.
+static_assert((kWarmSpurt + kWarmGap) % kTxPacketSamples == 0);
 constexpr int32_t kSession = 1;
 
 struct Scenario {
@@ -56,7 +59,7 @@ constexpr Scenario kScenarios[] = {
     {"warm_in20_out10", true, 20, 10, 0, 0},
 };
 
-struct Probe {
+struct Breakdown {
     int64_t total, encode, network, jitterBuffer;   // samples
 };
 
@@ -66,39 +69,19 @@ std::string ms(int64_t samples) {
     return buf;
 }
 
-// Integer-only, so a seed gives the same samples on every platform; std's distributions differ
-// between standard libraries.
-std::vector<int16_t> noise(int64_t n, uint32_t seed) {
-    std::mt19937 rng(seed);
-    std::vector<int16_t> out(n);
-    for (auto& s : out) s = int16_t(int64_t(rng() % (2 * kNoiseAmplitude + 1)) - kNoiseAmplitude);
-    return out;
-}
-
 // Opus's own delay at Dumble's settings, measured the way the harness measures everything else.
 int64_t codecDelay() {
     const auto p = lat::probe(kProbePeak);
     std::vector<int16_t> in(int64_t(kSampleRate), 0);
     const int64_t at = 4 * kTxPacketSamples;
     std::copy(p.begin(), p.end(), in.begin() + at);
-    auto enc = AudioEncoder::create(kSampleRate, kChannels, 32000);
-    auto dec = pl::AudioDecoder::create(kSampleRate, kChannels);
-    EXPECT_TRUE(enc && dec);
-    if (!enc || !dec) return 0;
-    std::vector<int16_t> out;
-    uint8_t packet[kMaxPacketBytes];
-    int16_t frame[kTxPacketSamples];
-    for (size_t i = 0; i + kTxPacketSamples <= in.size(); i += kTxPacketSamples) {
-        const int bytes = enc->encode(in.data() + i, kTxPacketSamples, packet, sizeof packet);
-        const int n = dec->decode(packet, bytes, frame, kTxPacketSamples);
-        out.insert(out.end(), frame, frame + std::max(n, 0));
-    }
+    const auto out = latencytest::opusRoundTrip(in);
     const auto d = lat::find(out.data(), int64_t(out.size()), p);
     EXPECT_TRUE(d.found());
     return d.offset - at;
 }
 
-std::vector<Probe> run(const Scenario& s, int64_t codec) {
+std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
     const int64_t inSamples = s.inMs * kMs, outSamples = s.outMs * kMs;
     const int64_t spurtStart = s.warm ? kWarmSpurt + kWarmGap : 0;
     std::vector<int64_t> placements;
@@ -107,7 +90,7 @@ std::vector<Probe> run(const Scenario& s, int64_t codec) {
     }
     const int64_t total = placements.back() + kSearchWindow;
 
-    auto in = noise(total, 7);
+    auto in = latencytest::noise(total, kNoiseAmplitude, 7);
     const auto p = lat::probe(kProbePeak);
     for (int64_t at : placements) {
         for (size_t i = 0; i < p.size(); i++) in[at + i] = int16_t(in[at + i] + p[i]);
@@ -117,6 +100,10 @@ std::vector<Probe> run(const Scenario& s, int64_t codec) {
     capture->setTransmitMode(TransmitMode::PushToTalk);
     capture->setWaitMillisForTest(0);
     auto playout = pl::PlayoutEngine::create(kSampleRate, pl::kMaxPacketSamples);
+    EXPECT_TRUE(capture && playout);
+    if (!capture || !playout) {
+        return {};
+    }
     playout->setWriteAheadSamples(int(2 * outSamples));
 
     struct Sent { std::vector<uint8_t> data; uint64_t frame; bool terminator; int64_t ready, arrival; };
@@ -139,6 +126,8 @@ std::vector<Probe> run(const Scenario& s, int64_t codec) {
             while ((n = capture->pollPacket(buf, sizeof buf, &frame, &flags)) > 0) {
                 const int64_t delay =
                     (s.networkMs + (s.jitterMs ? int64_t(jitter() % uint32_t(s.jitterMs + 1)) : 0)) * kMs;
+                // In order, as over TCP: jitter never reorders, so a packet whose delay ends before
+                // an earlier one's waits for it, and that wait is part of its network row.
                 lastArrival = std::max(lastArrival, t + delay);
                 sent.push_back({{buf, buf + n}, frame, (flags & kFlagTerminator) != 0, t, lastArrival});
             }
@@ -154,7 +143,7 @@ std::vector<Probe> run(const Scenario& s, int64_t codec) {
         if (t % outSamples == 0) playout->fillQuantum(out.data() + t, int(outSamples), sessions, &live);
     }
 
-    std::vector<Probe> probes;
+    std::vector<Breakdown> probes;
     for (int64_t at : placements) {
         const auto d = lat::find(out.data() + at, kSearchWindow, p);
         EXPECT_TRUE(d.found()) << s.name << ": probe at " << ms(at) << " ms not found (" << d.peak
@@ -168,7 +157,7 @@ std::vector<Probe> run(const Scenario& s, int64_t codec) {
         EXPECT_NE(carrier, sent.end()) << s.name << ": no packet carries frame " << onsetFrame;
         if (carrier == sent.end()) continue;
         const int64_t packetStart = int64_t(carrier->frame) * kFrameSamples;
-        Probe r;
+        Breakdown r;
         r.total = d.offset;
         r.encode = carrier->ready - packetStart;
         r.network = carrier->arrival - carrier->ready;
@@ -208,7 +197,10 @@ TEST(LatencyHarness, MatchesExpected) {
     const std::string path = std::string(DUMBLE_TEST_DATA_DIR) + "/latency/expected.txt";
     const char* update = std::getenv("DUMBLE_UPDATE_EXPECTED");
     if (update && std::string(update) == "1") {
-        std::ofstream(path) << actual.str();
+        ASSERT_FALSE(HasFailure()) << "not rewriting " << path << " from a failed run";
+        std::ofstream out(path);
+        out << actual.str();
+        ASSERT_TRUE(out) << "cannot write " << path;
         std::printf("rewrote %s\n", path.c_str());
         return;
     }
