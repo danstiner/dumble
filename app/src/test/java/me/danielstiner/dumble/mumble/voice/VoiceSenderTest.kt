@@ -2,7 +2,7 @@ package me.danielstiner.dumble.mumble.voice
 
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.voice.latency.SentPacket
+import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -314,23 +314,22 @@ class VoiceSenderTest {
     }
 
     @Test
-    fun theSendTapSeesEachSentPacketWithItsMarkAndACopyOfItsPayload() {
+    fun theSendTapSeesEachCapturedPacketWithItsMarkAndACopyOfItsPayload() {
         val clock = TestTimeSource()
         val fake = FakeCaptureHandle(blocking = false)
         fake.script(
             FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2), 4L, false),
             FakeCaptureHandle.Step.Frame(byteArrayOf(3), 6L, true),
         )
-        val tapped = mutableListOf<SentPacket>()
+        val tapped = mutableListOf<CapturedPacket>()
         val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { }, tapClock = clock)
-        sender.sentTap = { tapped += it }
+        sender.capturedTap = { tapped += it }
         val start = clock.markNow()
         assertTrue(sender.step())
         clock += 20.milliseconds
         assertTrue(sender.step())
 
         assertEquals(listOf(4L, 6L), tapped.map { it.frameNumber })
-        assertEquals(listOf(false, true), tapped.map { it.terminator })
         // The pump reuses one buffer, so an uncopied payload would read the second packet's byte.
         assertArrayEquals(byteArrayOf(1, 2), tapped[0].opusData)
         assertEquals(ZERO, tapped[0].at - start)
@@ -338,13 +337,13 @@ class VoiceSenderTest {
     }
 
     @Test
-    fun aRefusedSendIsNotTapped() {
+    fun aRefusedSendIsStillTapped() {
         val fake = FakeCaptureHandle(blocking = false)
         fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
-        val tapped = mutableListOf<SentPacket>()
+        val tapped = mutableListOf<CapturedPacket>()
         val sender = VoiceSender(fake, { false }, onExit = { }, tapClock = TestTimeSource())
-        sender.sentTap = { tapped += it }
+        sender.capturedTap = { tapped += it }
         assertTrue(sender.step())
-        assertTrue(tapped.isEmpty())
+        assertEquals(1, tapped.size)
     }
 }

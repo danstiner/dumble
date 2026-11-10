@@ -524,7 +524,8 @@ class VoiceReceiverTest {
         val fake = FakePlayoutEngine()
         polling(fake) { rx ->
             val tapped = mutableListOf<ArrivedPacket>()
-            rx.arrivedTap = { tapped += it }
+            val offeredAtTap = mutableListOf<Int>()
+            rx.arrivedTap = { tapped += it; offeredAtTap += fake.offered.size }
             rx.offer(audioPayload(session = 5))
             fake.depthsBySession = mapOf(5 to 960)
             fake.decodedBySession = mapOf(5 to 240)
@@ -537,8 +538,8 @@ class VoiceReceiverTest {
             assertEquals(0, tapped[0].decodedSamples)
             assertEquals(960, tapped[1].queuedSamples)
             assertEquals(240, tapped[1].decodedSamples)
-            assertTrue(tapped[1].terminator)
             assertEquals(20.milliseconds, tapped[1].at - tapped[0].at)
+            assertEquals("the tap runs before the engine takes the packet", listOf(0, 1), offeredAtTap)
             assertEquals("the tap does not take the packet from the engine", 2, fake.offered.size)
         }
     }

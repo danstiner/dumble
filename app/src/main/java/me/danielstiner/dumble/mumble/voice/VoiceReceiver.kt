@@ -49,7 +49,7 @@ class VoiceReceiver(
     private val newEngine: () -> PlayoutEngine?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
-    /** Seam: the clock of [arrivedTap]'s marks, shared with [VoiceSender.sentTap]. */
+    /** Seam: the clock of [arrivedTap]'s marks, shared with [VoiceSender.capturedTap]. */
     private val tapClock: TimeSource.WithComparableMarks = BootTimeSource,
     // Seam: where the poll runs; the connection passes its own.
     context: CoroutineContext = Dispatchers.Default,
@@ -224,7 +224,7 @@ class VoiceReceiver(
                 val queued = IntArray(2)
                 val known = live.readQueued(session, queued)
                 tap(ArrivedPacket(
-                    session, audio.frameNumber, audio.isTerminator, opus, at,
+                    session, audio.frameNumber, at,
                     queuedSamples = if (known) queued[0] else 0,
                     decodedSamples = if (known) queued[1] else 0,
                 ))
