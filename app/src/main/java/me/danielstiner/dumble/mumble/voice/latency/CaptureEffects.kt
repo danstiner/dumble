@@ -32,7 +32,12 @@ class CaptureEffects private constructor(private val held: List<Held>) {
         const val ECHO_CANCELLER = "echo canceller"
         const val NOISE_SUPPRESSOR = "noise suppressor"
 
-        /** On [sessionId], from `CaptureSessionId`. */
+        /**
+         * On [sessionId], from `CaptureSessionId`. Call with capture open: opening an input attaches
+         * the configured pre-processing and enables it (AOSP `AudioPolicyEffects`; not verified on a
+         * device), so a disable before the stream opens, or a reopen mid-check, is undone and
+         * [allOff] read at the end of a check shows it.
+         */
         fun disable(sessionId: Int): CaptureEffects {
             val held = buildList {
                 if (AcousticEchoCanceler.isAvailable()) {

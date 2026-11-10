@@ -11,10 +11,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** V1: the effects a latency check needs off can be turned off on Dumble's own capture session,
- *  and come back as they were. Whether the probe is then heard needs a real speaker and mic.
- *  Skips where the framework offers neither effect (the stock emulator's `audio_effects.xml` leaves
- *  `pre_processing` commented out), so V1 runs on a device that has them. */
+/** The effects a latency check needs off can be turned off on Dumble's own capture session, and
+ *  come back as they were. Whether the probe is then heard needs a real speaker and mic. Skips
+ *  where the framework offers neither effect (the stock emulator's `audio_effects.xml` leaves
+ *  `pre_processing` commented out). */
 class CaptureEffectsDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
