@@ -88,6 +88,10 @@ object NativePlayout {
         counters: LongArray,
     ): Int
 
+    /** Fills `out[0]` with the samples queued for [session] and `out[1]` with those decoded but not
+     *  yet played. False when the engine holds nothing for it, or `out` is shorter than 2. */
+    external fun readQueued(handle: Long, session: Int, out: IntArray): Boolean
+
     external fun destroy(handle: Long)
 }
 
@@ -103,6 +107,8 @@ class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngin
         audible: IntArray,
         counters: LongArray,
     ) = NativePlayout.readStats(handle, sessions, depths, targets, audible, counters)
+
+    override fun readQueued(session: Int, out: IntArray) = NativePlayout.readQueued(handle, session, out)
 
     override fun start() = NativePlayout.start(handle)
     override fun pause() = NativePlayout.pause(handle)

@@ -67,6 +67,11 @@ class VoiceReceiver(
             counters: LongArray,
         ): Int
 
+        /** Reader thread, for a latency check's receive tap only. Fills `out[0]` with the samples
+         *  queued for [session] and `out[1]` with those decoded but not yet played; false when
+         *  the engine holds nothing for it. */
+        fun readQueued(session: Int, out: IntArray): Boolean
+
         /** Poll only — the one owner of stream state. [start] is idempotent and answers whether
          *  a started stream exists, so the poll calls it every interval: that is how a stream
          *  lost to an error comes back. [pause] holds it while the platform has the device. */

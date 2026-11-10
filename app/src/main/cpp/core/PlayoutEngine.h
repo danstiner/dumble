@@ -145,6 +145,11 @@ public:
     /** Any thread; takes mutex_. */
     Stats stats();
 
+    /** Any thread; takes mutex_. What the engine holds for `session` right now: samples still
+     *  encoded in its queue, and samples decoded but not yet mixed. False when it has no slot. A
+     *  latency check reads both as a packet arrives; the once-a-second stats are too coarse. */
+    bool queued(int32_t session, int32_t* queuedSamples, int32_t* decodedSamples);
+
     /** Any thread; no lock, so the realtime callback may call it when the sink's buffer changes.
      *  How far ahead of playout the output sink holds audio, in samples. Added to every target a
      *  queue is measured against, so the estimator's target is what the *queue* holds: a packet

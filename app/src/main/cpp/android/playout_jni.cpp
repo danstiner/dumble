@@ -126,6 +126,15 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
     return stats.speakers;
 }
 
+JNIEXPORT jboolean JNICALL
+FN(readQueued)(JNIEnv* env, jobject, jlong h, jint session, jintArray out) {
+    if (env->GetArrayLength(out) < 2) return JNI_FALSE;
+    int32_t held[2];
+    if (!self(h)->engine->queued(session, &held[0], &held[1])) return JNI_FALSE;
+    env->SetIntArrayRegion(out, 0, 2, held);
+    return JNI_TRUE;
+}
+
 JNIEXPORT void JNICALL FN(destroy)(JNIEnv*, jobject, jlong h) {
     delete self(h);
 }

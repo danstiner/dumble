@@ -44,6 +44,19 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     @Volatile var audibleSessions: Set<Int> = emptySet()
 
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
+
+    /** What [readQueued] reports decoded per session; queued comes from [depthsBySession]. */
+    @Volatile var decodedBySession: Map<Int, Int> = emptyMap()
+    val readQueuedCalls = AtomicInteger()
+
+    override fun readQueued(session: Int, out: IntArray): Boolean {
+        readQueuedCalls.incrementAndGet()
+        val depth = depthsBySession[session] ?: return false
+        out[0] = depth
+        out[1] = decodedBySession[session] ?: 0
+        return true
+    }
+
     @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
 
     /** The counters as native would report them: monotonic, with latency -1 until a stream

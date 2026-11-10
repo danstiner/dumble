@@ -1582,3 +1582,24 @@ TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroWithItsTerminatorLost) {
     EXPECT_EQ(2 * kSpurtFills - 4, drainSpurt(*e)) << "the rest of both spurts, nothing refused";
     expectClean(*e, "mumble-web with its terminator lost");
 }
+
+TEST(PlayoutEngine, QueuedReadsOneSpeakersQueueAndDecodedLeftover) {
+    auto e = newEngine();
+    int32_t queuedSamples = -1, decodedSamples = -1;
+    EXPECT_FALSE(e->queued(7, &queuedSamples, &decodedSamples));
+
+    arm(*e, 7);
+    ASSERT_TRUE(e->queued(7, &queuedSamples, &decodedSamples));
+    EXPECT_EQ(kColdStartPackets * kFrame, queuedSamples);
+    EXPECT_EQ(0, decodedSamples);
+
+    // Half a packet's fill pops one packet and decodes all of it, leaving half decoded.
+    std::vector<int16_t> pcm(kFrame / 2);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    ASSERT_TRUE(e->queued(7, &queuedSamples, &decodedSamples));
+    EXPECT_EQ((kColdStartPackets - 1) * kFrame, queuedSamples);
+    EXPECT_EQ(kFrame / 2, decodedSamples);
+    EXPECT_FALSE(e->queued(9, &queuedSamples, &decodedSamples));
+}

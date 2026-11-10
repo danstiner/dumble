@@ -295,6 +295,18 @@ int PlayoutEngine::contendedFill(int16_t* out, int samples, int32_t* liveSpeaker
     return 0;
 }
 
+bool PlayoutEngine::queued(int32_t session, int32_t* queuedSamples, int32_t* decodedSamples) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    for (int i = 0; i < kMaxSpeakers; i++) {
+        if (slots_.test(i) && sessions_[i] == session) {
+            *queuedSamples = queues_[i].depthSamples();
+            *decodedSamples = decoders_[i]->available();
+            return true;
+        }
+    }
+    return false;
+}
+
 PlayoutEngine::Stats PlayoutEngine::stats() {
     std::lock_guard<std::mutex> guard(mutex_);
     Stats out;

@@ -2,6 +2,7 @@ package me.danielstiner.dumble.mumble.voice
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -188,6 +189,19 @@ class NativePlayoutTest {
         NativePlayout.pause(handle)
         NativePlayout.pause(handle)
         assertEquals(0, stats().speakers)
+    }
+
+    @Test
+    fun readQueuedReportsOneSessionsQueue() {
+        // A 20 ms CELT frame of silence: the smallest payload libopus schedules as audio.
+        val silence = byteArrayOf(0xF8.toByte(), 0xFF.toByte(), 0xFE.toByte())
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false))
+        val out = IntArray(2)
+        assertTrue(NativePlayout.readQueued(handle, SESSION, out))
+        assertEquals("one 20 ms packet queued", 960, out[0])
+        assertEquals("nothing decoded before the stream pulls", 0, out[1])
+        assertFalse(NativePlayout.readQueued(handle, SESSION + 1, out))
+        assertFalse("a short array is refused", NativePlayout.readQueued(handle, SESSION, IntArray(1)))
     }
 
     private companion object {
