@@ -289,5 +289,6 @@ Invariants are pinned by `PlayoutEngineTest.cpp`, `PlayoutEngineBench.cpp`, `Pac
 `JitterEstimatorTest.cpp`, `VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and
 `OboePlayoutDeviceTest.kt`. Latency, capture through playout on a virtual clock, is pinned by
 `LatencyHarnessTest.cpp` in `app/src/test/resources/latency/expected.txt`. A change that moves it
-rewrites the file with `DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency` and
-commits the diff with the change.
+rebuilds, rewrites the file with
+`cmake --build build/host && DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency`, and
+commits the diff with the change. `ctest` alone does not rebuild, and would rewrite the old figures.

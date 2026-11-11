@@ -27,7 +27,7 @@ using namespace dumble;
 namespace pl = dumble::playout;
 namespace lat = dumble::latency;
 
-constexpr int64_t kMs = kSampleRate / 1000;
+constexpr int64_t kMs = pl::kSamplesPerMilli;
 constexpr int16_t kProbePeak = 8000;
 constexpr int kNoiseAmplitude = 100;
 constexpr int kProbes = 4;
@@ -96,7 +96,7 @@ std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
         for (size_t i = 0; i < p.size(); i++) in[at + i] = int16_t(in[at + i] + p[i]);
     }
 
-    auto capture = CaptureEngine::create(32000, fixture::weightBlob().data(), fixture::weightBlob().size());
+    auto capture = CaptureEngine::create(latencytest::kTransmitBitrate, fixture::weightBlob().data(), fixture::weightBlob().size());
     capture->setTransmitMode(TransmitMode::PushToTalk);
     capture->setWaitMillisForTest(0);
     auto playout = pl::PlayoutEngine::create(kSampleRate, pl::kMaxPacketSamples);
@@ -152,7 +152,7 @@ std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
         if (!d.found()) continue;
         const uint64_t onsetFrame = uint64_t(at / kFrameSamples);
         const auto carrier = std::find_if(sent.begin(), sent.end(), [&](const Sent& q) {
-            return !q.data.empty() && q.frame <= onsetFrame && onsetFrame < q.frame + kFramesPerPacket;
+            return q.frame <= onsetFrame && onsetFrame < q.frame + kFramesPerPacket;
         });
         EXPECT_NE(carrier, sent.end()) << s.name << ": no packet carries frame " << onsetFrame;
         if (carrier == sent.end()) continue;
@@ -169,7 +169,7 @@ std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
 
 int64_t median(std::vector<int64_t> v) {
     std::sort(v.begin(), v.end());
-    return v[v.size() / 2];
+    return (v[(v.size() - 1) / 2] + v[v.size() / 2]) / 2;
 }
 
 TEST(LatencyHarness, MatchesExpected) {
@@ -210,7 +210,7 @@ TEST(LatencyHarness, MatchesExpected) {
     expected << file.rdbuf();
     EXPECT_EQ(actual.str(), expected.str())
         << "Latency changed. If intended, rewrite the pinned figures and commit them:\n"
-        << "  DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency";
+        << "  cmake --build build/host && DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency";
 }
 
 }  // namespace
