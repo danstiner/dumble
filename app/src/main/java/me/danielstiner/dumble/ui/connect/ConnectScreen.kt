@@ -59,7 +59,7 @@ fun ConnectScreen(
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
     val error = state.status as? ConnectionStatus.Error
     val errorText = error?.let { connectErrorText(it, state.password.isBlank()) }
-    val errorPlace = error?.let { connectErrorPlace(it.kind) }
+    val errorPlace = error?.let { connectErrorPlace(it.kind, state.password.isBlank()) }
     val usernameError = errorText.takeIf { errorPlace == ErrorPlace.USERNAME && !state.editedSinceConnect }
     val passwordError = errorText.takeIf { errorPlace == ErrorPlace.PASSWORD && !state.editedSinceConnect }
 

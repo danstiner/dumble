@@ -10,14 +10,18 @@ import me.danielstiner.dumble.mumble.connection.ErrorKind
  */
 fun connectErrorText(error: ConnectionStatus.Error, passwordBlank: Boolean): String = when (error.kind) {
     ErrorKind.WRONG_SERVER_PASSWORD -> if (passwordBlank) "This server needs a password" else "Wrong server password"
-    ErrorKind.WRONG_USER_PASSWORD -> "This name is registered: enter its password, or choose another"
+    ErrorKind.WRONG_USER_PASSWORD ->
+        if (passwordBlank) "This name is registered: enter its password, or choose another"
+        else "This name is registered, and this isn't its password"
     ErrorKind.USERNAME_TAKEN -> "Username already in use"
     ErrorKind.USERNAME_INVALID -> "The server won't accept this username"
     ErrorKind.SERVER_FULL -> "The server is full"
     ErrorKind.AUTH_REJECTED -> error.detail?.ifBlank { null } ?: "The server refused the connection"
     ErrorKind.LOCAL_NETWORK_BLOCKED -> "Local network access is off"
     ErrorKind.SERVER_TOO_OLD -> "This server is older than Mumble 1.5"
-    ErrorKind.CONNECT_FAILED -> "Couldn't reach the server"
+    // Every failure with no kind of its own, TLS against a host that answered included, so this
+    // cannot claim the server was unreachable.
+    ErrorKind.CONNECT_FAILED -> "Couldn't connect to the server"
     ErrorKind.TIMEOUT -> "The server didn't answer"
     ErrorKind.DISCONNECTED -> "The connection dropped"
     ErrorKind.KICKED -> "Kicked from the server"
@@ -35,10 +39,12 @@ enum class ErrorPlace { USERNAME, PASSWORD, BELOW_CONNECT }
 
 /**
  * A rejection of what was typed into one field shows under that field. A registered name usually
- * belongs to someone else, since Dumble always presents a certificate, so it marks the username.
+ * belongs to someone else, since Dumble always presents a certificate, so it marks the username,
+ * unless a password was typed: then that is what the user is trying, and what to fix.
  */
-fun connectErrorPlace(kind: ErrorKind): ErrorPlace = when (kind) {
-    ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID, ErrorKind.WRONG_USER_PASSWORD -> ErrorPlace.USERNAME
+fun connectErrorPlace(kind: ErrorKind, passwordBlank: Boolean): ErrorPlace = when (kind) {
+    ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID -> ErrorPlace.USERNAME
+    ErrorKind.WRONG_USER_PASSWORD -> if (passwordBlank) ErrorPlace.USERNAME else ErrorPlace.PASSWORD
     ErrorKind.WRONG_SERVER_PASSWORD -> ErrorPlace.PASSWORD
     else -> ErrorPlace.BELOW_CONNECT
 }
