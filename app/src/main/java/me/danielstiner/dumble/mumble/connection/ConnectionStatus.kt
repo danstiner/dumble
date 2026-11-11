@@ -29,10 +29,42 @@ val ConnectionStatus.mySession: Int?
         else -> null
     }
 
-/** [AUTH_REJECTED] is a rejection with no kind of its own; its detail is the server's reason. */
+/**
+ * Why a connection ended, for the UI to put in its own words. [ConnectionStatus.Error.detail]
+ * carries the system's or the server's text beside it.
+ */
 enum class ErrorKind {
-    CONNECT_FAILED, LOCAL_NETWORK_BLOCKED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD, KICKED, BANNED,
-    AUTH_REJECTED, WRONG_SERVER_PASSWORD, WRONG_USER_PASSWORD, USERNAME_TAKEN, USERNAME_INVALID, SERVER_FULL,
+    /** The socket or TLS never came up. */
+    CONNECT_FAILED,
+    /** Android dropped the connect: the app lacks local network access, and the address is on the LAN. */
+    LOCAL_NETWORK_BLOCKED,
+    /** No answer in time: to the socket connect, to the handshake, or to pings on a live link. */
+    TIMEOUT,
+    /** The link failed after the socket came up. */
+    DISCONNECTED,
+    /** The server's protocol is older than Mumble 1.5. */
+    SERVER_TOO_OLD,
+    /** Removed by a moderator, or by another device connecting on the same certificate. The
+     *  detail names who and why, where the server says. */
+    KICKED,
+    /** Removed and banned by a moderator; the detail names who and why, where the server says. */
+    BANNED,
+
+    // Authentication rejected. The five kinds below are the server's reject types with words of
+    // our own; AUTH_REJECTED is every other type.
+
+    /** A rejection Dumble has no words for; the detail is the server's reason, shown as is. */
+    AUTH_REJECTED,
+    /** Also sent for a blank password: Murmur and Grumble reject a missing password and a wrong
+     *  one alike. */
+    WRONG_SERVER_PASSWORD,
+    /** The name is registered, and neither our certificate nor the password matches it. Dumble
+     *  always presents a certificate, so this usually means the name belongs to someone else. */
+    WRONG_USER_PASSWORD,
+    USERNAME_TAKEN,
+    /** The server's username rules refuse the name. */
+    USERNAME_INVALID,
+    SERVER_FULL,
 }
 
 /**
