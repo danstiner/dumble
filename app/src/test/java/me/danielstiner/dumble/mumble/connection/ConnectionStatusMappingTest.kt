@@ -29,9 +29,10 @@ class ConnectionStatusMappingTest {
             RejectType.InvalidUsername to ErrorKind.USERNAME_INVALID,
             RejectType.ServerFull to ErrorKind.SERVER_FULL,
             RejectType.NoCertificate to ErrorKind.AUTH_REJECTED,
+            null to ErrorKind.AUTH_REJECTED,
         ).forEach { (type, kind) ->
             assertEquals(
-                type.name,
+                "$type",
                 ConnectionStatus.Error(kind, "no"),
                 mapState(3, ConnectionState.Failed(FailReason.AUTH_REJECT, "no", rejectType = type)),
             )

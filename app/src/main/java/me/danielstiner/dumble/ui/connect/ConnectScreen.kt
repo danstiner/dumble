@@ -59,8 +59,9 @@ fun ConnectScreen(
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
     val error = state.status as? ConnectionStatus.Error
     val errorText = error?.let { connectErrorText(it, state.password.isBlank()) }
-    val usernameError = errorText.takeIf { error?.kind in usernameErrors && !state.editedSinceConnect }
-    val passwordError = errorText.takeIf { error?.kind in passwordErrors && !state.editedSinceConnect }
+    val errorPlace = error?.let { connectErrorPlace(it.kind) }
+    val usernameError = errorText.takeIf { errorPlace == ErrorPlace.USERNAME && !state.editedSinceConnect }
+    val passwordError = errorText.takeIf { errorPlace == ErrorPlace.PASSWORD && !state.editedSinceConnect }
 
     val context = LocalContext.current
     fun denied(permission: String) =
@@ -154,9 +155,9 @@ fun ConnectScreen(
             Button(onClick = connect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
                 Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
             }
-            if (error != null && error.kind !in usernameErrors && error.kind !in passwordErrors) {
+            if (error != null && errorText != null && errorPlace == ErrorPlace.BELOW_CONNECT) {
                 Column {
-                    Text(connectErrorText(error, state.password.isBlank()))
+                    Text(errorText)
                     connectErrorDetail(error)?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

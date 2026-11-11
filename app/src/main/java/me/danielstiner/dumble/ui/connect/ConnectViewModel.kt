@@ -67,7 +67,7 @@ data class ConnectUiState(
      * Android stops asking after two denials.
      */
     val localNetworkAsked: Boolean = false,
-    /** Whether the form changed since Connect, which retires a rejection of what was typed. */
+    /** Whether the form no longer holds what the rejection showing was about, which retires it. */
     val editedSinceConnect: Boolean = false,
     val roundTripTime: Duration? = null,
     val voicePath: VoicePath.State = VoicePath.State(),
@@ -170,8 +170,10 @@ class ConnectViewModel internal constructor(
         ConnectUiState(
             microphoneGranted = microphoneHeld(),
             // The status outlives this view model, so an error already showing is not new: the one
-            // before asked, or, if none was open when it landed, the next Connect will.
+            // before asked, or, if none was open when it landed, the next Connect will. Nor is it
+            // about this form, whose password starts blank whatever was sent.
             localNetworkAsked = connection.status.value is ConnectionStatus.Error,
+            editedSinceConnect = connection.status.value is ConnectionStatus.Error,
         ),
     )
 
@@ -293,7 +295,12 @@ class ConnectViewModel internal constructor(
     fun onUsernameChange(v: String) { edit { it.copy(draft = it.draft.copy(username = v)) } }
     fun onPasswordChange(v: String) { edit { it.copy(password = v) } }
     fun onPortChange(v: String) { edit { it.copy(portText = v, portError = null) } }
-    private fun edit(change: (ConnectUiState) -> ConnectUiState) { form.value = change(form.value).copy(editedSinceConnect = true) }
+    // Only an edit made with the rejection on screen retires it. One made while the connect is
+    // still in flight would hide the answer before it arrives.
+    private fun edit(change: (ConnectUiState) -> ConnectUiState) {
+        val retires = form.value.editedSinceConnect || connection.status.value is ConnectionStatus.Error
+        form.value = change(form.value).copy(editedSinceConnect = retires)
+    }
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
     fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }

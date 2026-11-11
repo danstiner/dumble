@@ -109,17 +109,41 @@ class ConnectViewModelTest {
     }
 
     @Test fun anyEditRetiresARejectionOfTheFormUntilTheNextConnect() = runTest(dispatcher) {
-        val vm = ConnectViewModel(FakeConnection(), FakeConfigStore(null), clock)
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
         val edits = listOf({ vm.onHostChange("h2") }, { vm.onPortChange("64739") }, { vm.onUsernameChange("u2") }, { vm.onPasswordChange("p") })
         for ((i, edit) in edits.withIndex()) {
+            conn.status.value = ConnectionStatus.Connecting
             vm.onConnect()
+            conn.status.value = ConnectionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
             runCurrent()
             assertFalse("connect $i", vm.uiState.value.editedSinceConnect)
             edit()
             runCurrent()
             assertTrue("edit $i", vm.uiState.value.editedSinceConnect)
         }
+    }
+
+    @Test fun anEditWhileTheConnectIsInFlightDoesNotHideItsRejection() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
+        conn.onConnect = { conn.status.value = ConnectionStatus.Connecting }
+        vm.onConnect()
+        vm.onUsernameChange("u2")
+        conn.status.value = ConnectionStatus.Error(ErrorKind.USERNAME_TAKEN, null)
+        runCurrent()
+        assertFalse(vm.uiState.value.editedSinceConnect)
+    }
+
+    /** The new form's password is blank, whatever the rejected connect sent. */
+    @Test fun aRejectionFromBeforeTheFormOpenedIsAlreadyRetired() = runTest(dispatcher) {
+        val conn = FakeConnection()
+        conn.status.value = ConnectionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
+        val vm = ConnectViewModel(conn, FakeConfigStore(null), clock)
+        runCurrent()
+        assertTrue(vm.uiState.value.editedSinceConnect)
     }
 
     /** The status never stops reading blocked, as when a new block lands within one frame. */

@@ -31,7 +31,14 @@ fun connectErrorDetail(error: ConnectionStatus.Error): String? = when (error.kin
     else -> error.detail?.ifBlank { null }
 }
 
-// Rejections of what was typed into one field, shown under that field. A registered name usually
-// belongs to someone else, since Dumble always presents a certificate, so it marks the username.
-val usernameErrors = setOf(ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID, ErrorKind.WRONG_USER_PASSWORD)
-val passwordErrors = setOf(ErrorKind.WRONG_SERVER_PASSWORD)
+enum class ErrorPlace { USERNAME, PASSWORD, BELOW_CONNECT }
+
+/**
+ * A rejection of what was typed into one field shows under that field. A registered name usually
+ * belongs to someone else, since Dumble always presents a certificate, so it marks the username.
+ */
+fun connectErrorPlace(kind: ErrorKind): ErrorPlace = when (kind) {
+    ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID, ErrorKind.WRONG_USER_PASSWORD -> ErrorPlace.USERNAME
+    ErrorKind.WRONG_SERVER_PASSWORD -> ErrorPlace.PASSWORD
+    else -> ErrorPlace.BELOW_CONNECT
+}
