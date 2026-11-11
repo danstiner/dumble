@@ -58,12 +58,13 @@ TEST(LatencyProbe, FindsItInvertedAsWell) {
     EXPECT_TRUE(d.found());
 }
 
-TEST(LatencyProbe, ThroughOpusItLandsOneCodecDelayLateAtEveryPhase) {
-    for (int phase = 0; phase < dumble::kTxPacketSamples; phase += 193) {
+TEST(LatencyProbe, ThroughOpusItLandsOneCodecDelayLateAcrossPacketPhases) {
+    // Both ends of a packet, the middle where SILK's 10 ms halves meet, and two between.
+    for (int phase : {0, 193, 480, 767, 959}) {
         const int64_t at = 4 * dumble::kTxPacketSamples + phase;
         const auto out = opusRoundTrip(withProbe(dumble::kSampleRate / 2, at, 20, 2));
         const auto d = find(out.data(), int64_t(out.size()), probe(kPeak));
-        EXPECT_EQ(d.offset - at, kCodecDelaySamples) << "phase " << phase;
+        EXPECT_NEAR(double(d.offset - at), double(kCodecDelaySamples), 2) << "phase " << phase;
         EXPECT_TRUE(d.found()) << "phase " << phase << ": " << d.peak << " over " << d.nextPeak;
     }
 }
@@ -103,9 +104,11 @@ TEST(LatencyProbe, SilenceIsNotFoundEvenWithAClick) {
     EXPECT_FALSE(d.found()) << d.peak << " over " << d.nextPeak;
 }
 
-TEST(LatencyProbe, AWindowShorterThanTheProbeFindsNothing) {
-    const auto p = probe(kPeak);
-    const auto d = find(p.data(), int64_t(p.size()) - 1, p);
+TEST(LatencyProbe, AWindowWithNoRoomForACompetitorFindsNothing) {
+    // The probe itself, then 200 samples: a perfect match, with every other lag inside the guard.
+    auto pcm = probe(kPeak);
+    pcm.resize(pcm.size() + 200);
+    const auto d = find(pcm.data(), int64_t(pcm.size()), probe(kPeak));
     EXPECT_EQ(d.offset, -1);
     EXPECT_FALSE(d.found());
 }

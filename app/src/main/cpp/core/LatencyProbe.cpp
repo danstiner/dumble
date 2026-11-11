@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include "core/CaptureConstants.h"
 
 namespace dumble::latency {
@@ -43,7 +44,8 @@ std::vector<int16_t> probe(int16_t peak) {
 
 Detection find(const int16_t* pcm, int64_t n, const std::vector<int16_t>& probe) {
     const int64_t lags = n - int64_t(probe.size()) + 1;
-    if (lags <= 0) return {-1, 0, 0};
+    // With fewer lags every coarse one can sit inside the guard, and the ratio compares to nothing.
+    if (lags <= 2 * kGuardSamples + kCoarseLag) return {-1, 0, 0};
     std::vector<float> coarse((lags + kCoarseLag - 1) / kCoarseLag);
     for (size_t j = 0; j < coarse.size(); j++) {
         coarse[j] = float(correlate(pcm + j * kCoarseLag, probe, kCoarseSample));

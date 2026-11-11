@@ -23,13 +23,20 @@ inline std::vector<int16_t> opusRoundTrip(const std::vector<int16_t>& in) {
     auto enc = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 32000);
     auto dec = dumble::playout::AudioDecoder::create(dumble::kSampleRate, dumble::kChannels);
     std::vector<int16_t> out;
+    if (!enc || !dec) {
+        ADD_FAILURE() << "no Opus " << (enc ? "decoder" : "encoder");
+        return out;
+    }
     uint8_t packet[dumble::kMaxPacketBytes];
     int16_t frame[dumble::kTxPacketSamples];
     for (size_t at = 0; at + dumble::kTxPacketSamples <= in.size(); at += dumble::kTxPacketSamples) {
         const int bytes = enc->encode(in.data() + at, dumble::kTxPacketSamples, packet, sizeof packet);
-        EXPECT_GT(bytes, 0);
-        const int samples = dec->decode(packet, bytes, frame, dumble::kTxPacketSamples);
-        EXPECT_EQ(samples, dumble::kTxPacketSamples);
+        const int samples =
+            bytes > 0 ? dec->decode(packet, bytes, frame, dumble::kTxPacketSamples) : 0;
+        if (samples != dumble::kTxPacketSamples) {
+            ADD_FAILURE() << "encoded " << bytes << " bytes, decoded " << samples << " samples";
+            return out;
+        }
         out.insert(out.end(), frame, frame + samples);
     }
     return out;

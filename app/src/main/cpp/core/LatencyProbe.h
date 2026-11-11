@@ -29,8 +29,9 @@ struct Detection {
 
 /** Normalized cross-correlation of `probe` over pcm[0, n): every 4th lag on every 2nd sample,
  *  then refined to the sample at full resolution. Callers pass a window, not a whole recording:
- *  the cost is lags times probe length. Polarity is ignored, since a speaker and microphone may
- *  invert. */
+ *  the cost is lags times probe length. The window must be at least 484 samples (just over 10 ms)
+ *  longer than the probe, so that a lag outside the 5 ms guard always exists to compare against.
+ *  Polarity is ignored, since a speaker and microphone may invert. */
 Detection find(const int16_t* pcm, int64_t n, const std::vector<int16_t>& probe);
 
 }  // namespace dumble::latency
