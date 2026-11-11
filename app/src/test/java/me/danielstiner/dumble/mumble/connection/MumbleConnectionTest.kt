@@ -969,7 +969,7 @@ class MumbleConnectionTest {
         transports[2].listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.WrongServerPW))
         assertSettled("error") { conn.status.value is ConnectionStatus.Error }
         val err = conn.status.value as ConnectionStatus.Error
-        assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
+        assertEquals(ErrorKind.WRONG_SERVER_PASSWORD, err.kind)
         assertSettled("giving up ends the call") { call.ends == 1 }
         assertEquals("no attempt after a final rejection", 3, transports.size)
     }
@@ -1102,7 +1102,7 @@ class MumbleConnectionTest {
 
         assertSettled("final rejection") { conn.status.value is ConnectionStatus.Error }
         val err = conn.status.value as ConnectionStatus.Error
-        assertEquals(ErrorKind.AUTH_REJECTED, err.kind)
+        assertEquals(ErrorKind.USERNAME_TAKEN, err.kind)
         assertEquals("no attempt after the name proved to be someone else's", 8, transports.size)
     }
 

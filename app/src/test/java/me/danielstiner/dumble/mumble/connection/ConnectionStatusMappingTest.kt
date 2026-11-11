@@ -2,6 +2,7 @@ package me.danielstiner.dumble.mumble.connection
 
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.FailReason
+import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -20,11 +21,22 @@ class ConnectionStatusMappingTest {
             mapState(3, ConnectionState.Synchronized(42)),
         )
 
-    @Test fun authRejectBecomesAuthRejected() =
-        assertEquals(
-            ConnectionStatus.Error(ErrorKind.AUTH_REJECTED, "no"),
-            mapState(3, ConnectionState.Failed(FailReason.AUTH_REJECT, "no")),
-        )
+    @Test fun eachRejectTypeMapsToItsKind() =
+        mapOf(
+            RejectType.WrongServerPW to ErrorKind.WRONG_SERVER_PASSWORD,
+            RejectType.WrongUserPW to ErrorKind.WRONG_USER_PASSWORD,
+            RejectType.UsernameInUse to ErrorKind.USERNAME_TAKEN,
+            RejectType.InvalidUsername to ErrorKind.USERNAME_INVALID,
+            RejectType.ServerFull to ErrorKind.SERVER_FULL,
+            RejectType.NoCertificate to ErrorKind.AUTH_REJECTED,
+            null to ErrorKind.AUTH_REJECTED,
+        ).forEach { (type, kind) ->
+            assertEquals(
+                "$type",
+                ConnectionStatus.Error(kind, "no"),
+                mapState(3, ConnectionState.Failed(FailReason.AUTH_REJECT, "no", rejectType = type)),
+            )
+        }
 
     @Test fun timeoutMapsToTimeout() =
         assertEquals(

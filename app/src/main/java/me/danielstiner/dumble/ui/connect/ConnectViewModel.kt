@@ -67,6 +67,8 @@ data class ConnectUiState(
      * Android stops asking after two denials.
      */
     val localNetworkAsked: Boolean = false,
+    /** Whether the form no longer holds what the rejection showing was about, which retires it. */
+    val editedSinceConnect: Boolean = false,
     val roundTripTime: Duration? = null,
     val voicePath: VoicePath.State = VoicePath.State(),
     val lastServerReplyAt: ComparableTimeMark? = null,
@@ -168,8 +170,10 @@ class ConnectViewModel internal constructor(
         ConnectUiState(
             microphoneGranted = microphoneHeld(),
             // The status outlives this view model, so an error already showing is not new: the one
-            // before asked, or, if none was open when it landed, the next Connect will.
+            // before asked, or, if none was open when it landed, the next Connect will. Nor is it
+            // about this form, whose password starts blank whatever was sent.
             localNetworkAsked = connection.status.value is ConnectionStatus.Error,
+            editedSinceConnect = connection.status.value is ConnectionStatus.Error,
         ),
     )
 
@@ -287,10 +291,16 @@ class ConnectViewModel internal constructor(
         return msgs.size - (msgs.indexOfLast { it === marker } + 1)
     }
 
-    fun onHostChange(v: String) { form.value = form.value.copy(draft = form.value.draft.copy(host = v), hostError = null) }
-    fun onUsernameChange(v: String) { form.value = form.value.copy(draft = form.value.draft.copy(username = v)) }
-    fun onPasswordChange(v: String) { form.value = form.value.copy(password = v) }
-    fun onPortChange(v: String) { form.value = form.value.copy(portText = v, portError = null) }
+    fun onHostChange(v: String) { edit { it.copy(draft = it.draft.copy(host = v), hostError = null) } }
+    fun onUsernameChange(v: String) { edit { it.copy(draft = it.draft.copy(username = v)) } }
+    fun onPasswordChange(v: String) { edit { it.copy(password = v) } }
+    fun onPortChange(v: String) { edit { it.copy(portText = v, portError = null) } }
+    // Only an edit made with the rejection on screen retires it. One made while the connect is
+    // still in flight would hide the answer before it arrives.
+    private fun edit(change: (ConnectUiState) -> ConnectUiState) {
+        val retires = form.value.editedSinceConnect || connection.status.value is ConnectionStatus.Error
+        form.value = change(form.value).copy(editedSinceConnect = retires)
+    }
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
     fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }
@@ -325,8 +335,8 @@ class ConnectViewModel internal constructor(
                 viewModelScope.launch { configStore.saveLastUsed(profile) }
                 connection.connect(endpoint, profile.username, f.password.ifBlank { null })
                 // Only after connect() has replaced the status: any sooner, the old block would be
-                // asked about again.
-                form.value = form.value.copy(localNetworkAsked = false)
+                // asked about again, or the old rejection shown under its field again.
+                form.value = form.value.copy(localNetworkAsked = false, editedSinceConnect = false)
             }
         }
     }

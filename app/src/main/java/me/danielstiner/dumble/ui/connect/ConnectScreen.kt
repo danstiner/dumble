@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -56,6 +57,11 @@ fun ConnectScreen(
 ) {
     val idle = state.status is ConnectionStatus.Idle || state.status is ConnectionStatus.Error
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
+    val error = state.status as? ConnectionStatus.Error
+    val errorText = error?.let { connectErrorText(it, state.password.isBlank()) }
+    val errorPlace = error?.let { connectErrorPlace(it.kind) }
+    val usernameError = errorText.takeIf { errorPlace == ErrorPlace.USERNAME && !state.editedSinceConnect }
+    val passwordError = errorText.takeIf { errorPlace == ErrorPlace.PASSWORD && !state.editedSinceConnect }
 
     val context = LocalContext.current
     fun denied(permission: String) =
@@ -134,26 +140,35 @@ fun ConnectScreen(
                     modifier = Modifier.width(88.dp),
                 )
             }
-            OutlinedTextField(state.draft.username, onUsername, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                state.draft.username, onUsername, label = { Text("Username") }, singleLine = true,
+                isError = usernameError != null,
+                supportingText = usernameError?.let { msg -> { Text(msg) } },
+                modifier = Modifier.fillMaxWidth(),
+            )
             OutlinedTextField(
                 state.password, onPassword, label = { Text("Password") }, singleLine = true,
+                isError = passwordError != null,
+                supportingText = passwordError?.let { msg -> { Text(msg) } },
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
             )
             Button(onClick = connect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
                 Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
             }
-            when (val s = state.status) {
-                is ConnectionStatus.Error -> {
-                    Text("${s.kind}: ${s.detail ?: ""}")
-                    if (s.kind == ErrorKind.LOCAL_NETWORK_BLOCKED) {
-                        TextButton(onClick = {
-                            context.startActivity(
-                                Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
-                            )
-                        }) { Text("Allow in system settings") }
+            if (error != null && errorText != null && errorPlace == ErrorPlace.BELOW_CONNECT) {
+                Column {
+                    Text(errorText)
+                    connectErrorDetail(error)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                else -> {}
+                if (error.kind == ErrorKind.LOCAL_NETWORK_BLOCKED) {
+                    TextButton(onClick = {
+                        context.startActivity(
+                            Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                        )
+                    }) { Text("Allow in system settings") }
+                }
             }
         }
     }

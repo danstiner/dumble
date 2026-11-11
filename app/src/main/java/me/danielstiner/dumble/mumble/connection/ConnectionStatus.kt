@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.connection
 
+import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 
@@ -28,7 +29,33 @@ val ConnectionStatus.mySession: Int?
         else -> null
     }
 
-enum class ErrorKind { CONNECT_FAILED, LOCAL_NETWORK_BLOCKED, AUTH_REJECTED, TIMEOUT, DISCONNECTED, SERVER_TOO_OLD, KICKED, BANNED }
+/**
+ * Why a connection ended, for the UI to put in its own words. [ConnectionStatus.Error.detail]
+ * carries the system's or the server's text beside it.
+ */
+enum class ErrorKind {
+    /** Any failure without a kind of its own, mostly a socket or TLS that never came up. */
+    CONNECT_FAILED,
+    /** Android blocked a LAN address: the app lacks local network access. */
+    LOCAL_NETWORK_BLOCKED,
+    /** The first connect got no answer in time. A live link that goes quiet reconnects instead. */
+    TIMEOUT,
+    /** The link failed after the socket came up, or reconnecting gave up. */
+    DISCONNECTED,
+    SERVER_TOO_OLD,
+    /** Also how the server removes us when another device connects on the same certificate. */
+    KICKED,
+    BANNED,
+
+    // The server's reject types; AUTH_REJECTED is any without a kind of its own.
+    AUTH_REJECTED,
+    WRONG_SERVER_PASSWORD,
+    /** The name is registered, and neither our certificate nor the password matches it. */
+    WRONG_USER_PASSWORD,
+    USERNAME_TAKEN,
+    USERNAME_INVALID,
+    SERVER_FULL,
+}
 
 /**
  * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state
@@ -40,11 +67,20 @@ fun mapState(gen: Int, s: ConnectionState): ConnectionStatus? = when (s) {
     ConnectionState.Handshaking -> ConnectionStatus.Handshaking
     is ConnectionState.Synchronized -> ConnectionStatus.Connected(gen, s.sessionId)
     is ConnectionState.Failed -> when (s.reason) {
-        FailReason.AUTH_REJECT -> ConnectionStatus.Error(ErrorKind.AUTH_REJECTED, s.detail)
+        FailReason.AUTH_REJECT -> ConnectionStatus.Error(rejectKind(s.rejectType), s.detail)
         FailReason.TIMEOUT -> ConnectionStatus.Error(ErrorKind.TIMEOUT, s.detail)
         FailReason.IO -> ConnectionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
         FailReason.VERSION_TOO_OLD -> ConnectionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
         FailReason.KICKED -> ConnectionStatus.Error(ErrorKind.KICKED, s.detail)
         FailReason.BANNED -> ConnectionStatus.Error(ErrorKind.BANNED, s.detail)
     }
+}
+
+private fun rejectKind(type: RejectType?): ErrorKind = when (type) {
+    RejectType.WrongServerPW -> ErrorKind.WRONG_SERVER_PASSWORD
+    RejectType.WrongUserPW -> ErrorKind.WRONG_USER_PASSWORD
+    RejectType.UsernameInUse -> ErrorKind.USERNAME_TAKEN
+    RejectType.InvalidUsername -> ErrorKind.USERNAME_INVALID
+    RejectType.ServerFull -> ErrorKind.SERVER_FULL
+    else -> ErrorKind.AUTH_REJECTED
 }
