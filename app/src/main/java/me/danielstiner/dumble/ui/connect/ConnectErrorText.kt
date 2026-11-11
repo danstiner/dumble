@@ -12,7 +12,7 @@ fun connectErrorText(error: ConnectionStatus.Error, passwordBlank: Boolean): Str
     ErrorKind.WRONG_SERVER_PASSWORD -> if (passwordBlank) "This server needs a password" else "Wrong server password"
     ErrorKind.WRONG_USER_PASSWORD ->
         if (passwordBlank) "This name is registered: enter its password, or choose another"
-        else "This name is registered, and this isn't its password"
+        else "This name is registered to someone else, or that isn't its password"
     ErrorKind.USERNAME_TAKEN -> "Username already in use"
     ErrorKind.USERNAME_INVALID -> "The server won't accept this username"
     ErrorKind.SERVER_FULL -> "The server is full"
@@ -38,13 +38,13 @@ fun connectErrorDetail(error: ConnectionStatus.Error): String? = when (error.kin
 enum class ErrorPlace { USERNAME, PASSWORD, BELOW_CONNECT }
 
 /**
- * A rejection of what was typed into one field shows under that field. A registered name usually
- * belongs to someone else, since Dumble always presents a certificate, so it marks the username,
- * unless a password was typed: then that is what the user is trying, and what to fix.
+ * A rejection of what was typed into one field shows under that field. A registered name marks the
+ * username whatever password was typed: Dumble always presents a certificate, so the name is
+ * usually someone else's, and Murmur checks it before the server password, so a correct server
+ * password meets this rejection too.
  */
-fun connectErrorPlace(kind: ErrorKind, passwordBlank: Boolean): ErrorPlace = when (kind) {
-    ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID -> ErrorPlace.USERNAME
-    ErrorKind.WRONG_USER_PASSWORD -> if (passwordBlank) ErrorPlace.USERNAME else ErrorPlace.PASSWORD
+fun connectErrorPlace(kind: ErrorKind): ErrorPlace = when (kind) {
+    ErrorKind.USERNAME_TAKEN, ErrorKind.USERNAME_INVALID, ErrorKind.WRONG_USER_PASSWORD -> ErrorPlace.USERNAME
     ErrorKind.WRONG_SERVER_PASSWORD -> ErrorPlace.PASSWORD
     else -> ErrorPlace.BELOW_CONNECT
 }
