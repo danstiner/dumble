@@ -34,35 +34,25 @@ val ConnectionStatus.mySession: Int?
  * carries the system's or the server's text beside it.
  */
 enum class ErrorKind {
-    /** The socket or TLS never came up. */
+    /** Any failure without a kind of its own, mostly a socket or TLS that never came up. */
     CONNECT_FAILED,
-    /** Android dropped the connect: the app lacks local network access, and the address is on the LAN. */
+    /** Android blocked a LAN address: the app lacks local network access. */
     LOCAL_NETWORK_BLOCKED,
-    /** No answer in time: to the socket connect, to the handshake, or to pings on a live link. */
+    /** The first connect got no answer in time. A live link that goes quiet reconnects instead. */
     TIMEOUT,
-    /** The link failed after the socket came up. */
+    /** The link failed after the socket came up, or reconnecting gave up. */
     DISCONNECTED,
-    /** The server's protocol is older than Mumble 1.5. */
     SERVER_TOO_OLD,
-    /** Removed by a moderator, or by another device connecting on the same certificate. The
-     *  detail names who and why, where the server says. */
+    /** Also how the server removes us when another device connects on the same certificate. */
     KICKED,
-    /** Removed and banned by a moderator; the detail names who and why, where the server says. */
     BANNED,
 
-    // Authentication rejected. The five kinds below are the server's reject types with words of
-    // our own; AUTH_REJECTED is every other type.
-
-    /** A rejection Dumble has no words for; the detail is the server's reason, shown as is. */
+    // The server's reject types; AUTH_REJECTED is any without a kind of its own.
     AUTH_REJECTED,
-    /** Also sent for a blank password: Murmur and Grumble reject a missing password and a wrong
-     *  one alike. */
     WRONG_SERVER_PASSWORD,
-    /** The name is registered, and neither our certificate nor the password matches it. Dumble
-     *  always presents a certificate, so this usually means the name belongs to someone else. */
+    /** The name is registered, and neither our certificate nor the password matches it. */
     WRONG_USER_PASSWORD,
     USERNAME_TAKEN,
-    /** The server's username rules refuse the name. */
     USERNAME_INVALID,
     SERVER_FULL,
 }
