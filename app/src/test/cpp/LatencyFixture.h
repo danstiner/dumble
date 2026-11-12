@@ -18,9 +18,12 @@ inline std::vector<int16_t> noise(int64_t n, int amplitude, uint32_t seed) {
     return out;
 }
 
+// Deliberate twin of TransmitConstants.kt TRANSMIT_BITRATE.
+constexpr int kTransmitBitrate = 32000;
+
 // Through Dumble's encoder and a fresh decoder, 20 ms at a time.
 inline std::vector<int16_t> opusRoundTrip(const std::vector<int16_t>& in) {
-    auto enc = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, 32000);
+    auto enc = dumble::AudioEncoder::create(dumble::kSampleRate, dumble::kChannels, kTransmitBitrate);
     auto dec = dumble::playout::AudioDecoder::create(dumble::kSampleRate, dumble::kChannels);
     std::vector<int16_t> out;
     if (!enc || !dec) {

@@ -287,4 +287,11 @@ the engine's targets account for it the same way.
 
 Invariants are pinned by `PlayoutEngineTest.cpp`, `PlayoutEngineBench.cpp`, `PacketQueueTest.cpp`,
 `JitterEstimatorTest.cpp`, `VoiceReceiverTest.kt`, `NativePlayoutTest.kt` and
-`OboePlayoutDeviceTest.kt`.
+`OboePlayoutDeviceTest.kt`. Latency, capture through playout on a virtual clock, is pinned by
+`LatencyHarnessTest.cpp` in `app/src/test/resources/latency/expected.txt`. Its totals include the
+write-ahead the engine is told the sink holds, and no other device latency; nor the sending
+thread's wait to notice a packet, up to 5 ms. A change that moves them rebuilds, rewrites the file
+with `cmake --build build/host && DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host -R Latency`,
+and commits the diff with the change. `ctest` alone does not rebuild: it measures the old code,
+which still matches the file, and passes.
+The run that rewrites fails, naming the file, so the variable left set cannot pass a change unseen.
