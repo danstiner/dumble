@@ -64,7 +64,9 @@ constexpr Scenario kScenarios[] = {
     // starts from its cautious default, so this is the largest figure.
     {.name = "cold", .warm = false},
     // The baseline the rest are read against: a later spurt on a network with no delay and no
-    // jitter, so what is left is Dumble's own.
+    // jitter, so what is left is Dumble's own. Its jitter buffer is two packets' wait: playout
+    // holds a spurt until the queue reaches the target, which on a clean link is about 30 ms plus
+    // the write-ahead, and here that takes a third 20 ms packet.
     {.name = "warm"},
     // A 20 ms network with up to 40 ms of spread: what the jitter buffer adds to ride it out.
     {.name = "warm_network_20ms_jitter_40ms", .networkDelay = 20ms, .networkJitter = 40ms},
