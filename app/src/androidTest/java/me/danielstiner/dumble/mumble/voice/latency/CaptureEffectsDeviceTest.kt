@@ -1,8 +1,6 @@
 package me.danielstiner.dumble.mumble.voice.latency
 
 import android.Manifest
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.NoiseSuppressor
 import androidx.test.platform.app.InstrumentationRegistry
 import me.danielstiner.dumble.mumble.voice.CaptureSessionId
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
@@ -28,13 +26,17 @@ class CaptureEffectsDeviceTest {
             val before = state(session)
             assumeTrue("no software capture effects on this device", before.isNotEmpty())
             val effects = CaptureEffects.disable(session)
+            // No second handle while these are held: one at the same priority takes control from
+            // them (AOSP `EffectBase::addHandle`), and they hear that it is back only some time
+            // after it is released, so a restore straight after would be refused.
+            var restored = false
             try {
                 assertEquals(before.keys.toList(), effects.names)
                 assertTrue("every effect found is off", effects.allOff())
-                assertTrue("a second handle on the session sees them off", state(session).values.none { it })
             } finally {
-                effects.restore()
+                restored = effects.restore()
             }
+            assertTrue("every effect took its state back", restored)
             assertEquals("restored as found", before, state(session))
         } finally {
             capture.stop()
@@ -43,12 +45,6 @@ class CaptureEffectsDeviceTest {
     }
 
     /** Each effect's state on [session], read through a handle of its own. */
-    private fun state(session: Int): Map<String, Boolean> = buildMap {
-        if (AcousticEchoCanceler.isAvailable()) {
-            AcousticEchoCanceler.create(session)?.let { put(CaptureEffects.ECHO_CANCELLER, it.enabled); it.release() }
-        }
-        if (NoiseSuppressor.isAvailable()) {
-            NoiseSuppressor.create(session)?.let { put(CaptureEffects.NOISE_SUPPRESSOR, it.enabled); it.release() }
-        }
-    }
+    private fun state(session: Int): Map<String, Boolean> =
+        CaptureEffects.find(session).associate { (name, effect) -> name to effect.enabled.also { effect.release() } }
 }

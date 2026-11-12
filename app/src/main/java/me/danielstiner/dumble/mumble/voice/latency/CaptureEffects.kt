@@ -12,43 +12,51 @@ import android.media.audiofx.NoiseSuppressor
  * audio HAL is not, and there the check reports "not detected".
  */
 class CaptureEffects private constructor(private val held: List<Held>) {
-    private class Held(val name: String, val effect: AudioEffect, val wasEnabled: Boolean)
+    private class Held(val name: String, val effect: AudioEffect, val wasEnabled: Boolean, val turnedOff: Boolean)
 
     /** The effects found on the session, empty where the framework offers none: the check's record
      *  of what it turned off, since [allOff] is vacuously true with nothing found. */
     val names: List<String> get() = held.map { it.name }
 
-    fun allOff(): Boolean = held.all { !it.effect.enabled }
+    /** Every effect took the disable and still reads off. A handle that loses control of its effect
+     *  is told when the new owner turns it on, so this follows the effect and not only what was
+     *  asked of it. */
+    fun allOff(): Boolean = held.all { it.turnedOff && !it.effect.enabled }
 
-    /** Back as found, and released. Once. */
-    fun restore() {
-        held.forEach {
-            runCatching { it.effect.setEnabled(it.wasEnabled) }
-            it.effect.release()
-        }
-    }
+    /** Back as found, and released. Once. False if an effect refused its state back, which it does
+     *  when another handle has taken control of it: that effect may be left off. */
+    fun restore(): Boolean = held.map {
+        val status = runCatching { it.effect.setEnabled(it.wasEnabled) }.getOrNull()
+        it.effect.release()
+        status == AudioEffect.SUCCESS
+    }.all { it }
 
     companion object {
         const val ECHO_CANCELLER = "echo canceller"
         const val NOISE_SUPPRESSOR = "noise suppressor"
 
         /**
-         * On [sessionId], from `CaptureSessionId`. Call with capture open: opening an input attaches
-         * the configured pre-processing and enables it (AOSP `AudioPolicyEffects`; not verified on a
-         * device), so a disable before the stream opens, or a reopen mid-check, is undone and
-         * [allOff] read at the end of a check shows it.
+         * On [sessionId], from `CaptureSessionId`, with capture open. Opening an input attaches the
+         * configured pre-processing and enables it, but at a priority below these handles' (AOSP
+         * `AudioPolicyEffects`), so by the source a reopen while they are held leaves the effects
+         * off. Not verified on a device: [allOff] read at the end of a check is the guard.
          */
-        fun disable(sessionId: Int): CaptureEffects {
-            val held = buildList {
-                if (AcousticEchoCanceler.isAvailable()) {
-                    AcousticEchoCanceler.create(sessionId)?.let { add(Held(ECHO_CANCELLER, it, it.enabled)) }
-                }
-                if (NoiseSuppressor.isAvailable()) {
-                    NoiseSuppressor.create(sessionId)?.let { add(Held(NOISE_SUPPRESSOR, it, it.enabled)) }
-                }
+        fun disable(sessionId: Int): CaptureEffects = hold(if (sessionId > 0) find(sessionId) else emptyList())
+
+        /** The session's effects, each on a new handle that the caller releases. */
+        internal fun find(sessionId: Int): List<Pair<String, AudioEffect>> = buildList {
+            if (AcousticEchoCanceler.isAvailable()) {
+                AcousticEchoCanceler.create(sessionId)?.let { add(ECHO_CANCELLER to it) }
             }
-            held.forEach { runCatching { it.effect.setEnabled(false) } }
-            return CaptureEffects(held)
+            if (NoiseSuppressor.isAvailable()) {
+                NoiseSuppressor.create(sessionId)?.let { add(NOISE_SUPPRESSOR to it) }
+            }
         }
+
+        internal fun hold(found: List<Pair<String, AudioEffect>>): CaptureEffects =
+            CaptureEffects(found.map { (name, effect) ->
+                val wasEnabled = effect.enabled
+                Held(name, effect, wasEnabled, runCatching { effect.setEnabled(false) }.getOrNull() == AudioEffect.SUCCESS)
+            })
     }
 }
