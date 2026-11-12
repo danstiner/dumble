@@ -49,9 +49,10 @@ struct Scenario {
     // A 1 s spurt and a 1 s gap come first, so playout has already measured this speaker's
     // network when the measured spurt opens.
     bool warm = true;
-    // How much audio the device hands over, and asks for, at a time.
+    // How much audio the device hands over, and asks for, at a time. The defaults are what was
+    // measured in a call, with the platform's voice effects on.
     milliseconds inputCallback = 20ms;
-    milliseconds outputCallback = 4ms;
+    milliseconds outputCallback = 10ms;
     // Every packet arrives this long after it is sent, plus a seeded random extra of up to
     // networkJitter. Packets stay in order.
     milliseconds networkDelay = 0ms;
@@ -62,16 +63,13 @@ constexpr Scenario kScenarios[] = {
     // The first spurt heard from a speaker. Playout knows nothing about the network yet and
     // starts from its cautious default, so this is the largest figure.
     {.name = "cold", .warm = false},
-    // The baseline the rest are read against: an ideal network and small output callbacks.
+    // The baseline the rest are read against: a later spurt on an ideal network.
     {.name = "warm"},
-    // A constant network delay, which should add exactly itself and nothing to the jitter buffer.
-    {.name = "warm_network20", .networkDelay = 20ms},
-    // The same with up to 40 ms of spread: what the jitter buffer adds to ride it out.
+    // A 20 ms network with up to 40 ms of spread: what the jitter buffer adds to ride it out.
     {.name = "warm_network20_jitter40", .networkDelay = 20ms, .networkJitter = 40ms},
-    // Small callbacks both ways: only the write-ahead shrinks, as a packet is still 20 ms.
+    // The low-latency streams a device grants with the voice effects off: the sink holds 4 ms
+    // where the baseline's holds 20, and a packet is still 20 ms.
     {.name = "warm_callbacks2", .inputCallback = 2ms, .outputCallback = 2ms},
-    // A large output callback: the sink holds 20 ms, and playout's target grows with it.
-    {.name = "warm_in20_out10", .outputCallback = 10ms},
 };
 
 constexpr milliseconds kWarmSpurt = 1000ms;
