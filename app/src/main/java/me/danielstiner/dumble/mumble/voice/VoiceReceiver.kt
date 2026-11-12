@@ -57,8 +57,9 @@ class VoiceReceiver(
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
         /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
-         *  own frame counter, which the engine measures arrival jitter against. */
-        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Int
+         *  own frame counter, which the engine measures arrival jitter against. [ahead], for a
+         *  latency check's receive tap only, is filled as [NativePlayout.offer] describes. */
+        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, ahead: IntArray? = null): Int
 
         /** Poll only. Returns the live speaker count and fills the four arrays for it;
          *  `audible[i]` is 1 when `sessions[i]` produced in the last fill. Negative when the
@@ -70,11 +71,6 @@ class VoiceReceiver(
             audible: IntArray,
             counters: LongArray,
         ): Int
-
-        /** Reader thread, for a latency check's receive tap only. Fills `out[0]` with the samples
-         *  queued for [session] and `out[1]` with those decoded but not yet played; false when
-         *  the engine holds nothing for it. */
-        fun readQueued(session: Int, out: IntArray): Boolean
 
         /** Poll only — the one owner of stream state. [start] is idempotent and answers whether
          *  a started stream exists, so the poll calls it every interval: that is how a stream
@@ -122,9 +118,9 @@ class VoiceReceiver(
     @Volatile
     private var held = false
 
-    /** Set while a latency check listens: each audio packet, before the engine takes it, with what
-     *  the engine already held for its sender. Runs on the transport's thread under this
-     *  receiver's monitor, so it only records. */
+    /** Set while a latency check listens: each audio packet the engine accepted, with what the
+     *  engine held for its sender before it. Runs on the transport's thread under this receiver's
+     *  monitor, so it only records. A throw from it is logged and the packet stands. */
     @Volatile var arrivedTap: ((ArrivedPacket) -> Unit)? = null
 
     /**
@@ -219,17 +215,17 @@ class VoiceReceiver(
             // A refusal is a latched log and nothing more: the engine has no failure a packet can
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
-            val opus = audio.opusData.toByteArray()
-            if (tap != null && at != null) {
-                val queued = IntArray(2)
-                val known = live.readQueued(session, queued)
-                tap(ArrivedPacket(
-                    session, audio.frameNumber, at,
-                    queuedSamples = if (known) queued[0] else 0,
-                    decodedSamples = if (known) queued[1] else 0,
-                ))
+            val ahead = if (tap != null) IntArray(2) else null
+            val code = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
+                                  audio.isTerminator, ahead)
+            if (tap != null && at != null && ahead != null && code == NativePlayout.OFFER_ACCEPTED) {
+                try {
+                    tap(ArrivedPacket(session, audio.frameNumber, at, ahead[0], ahead[1]))
+                } catch (t: Throwable) {
+                    // As with the parse above: a check's bug must not reach the transport's reader.
+                    Log.e(TAG, "arrival tap failed", t)
+                }
             }
-            val code = live.offer(session, opus, audio.frameNumber, audio.isTerminator)
             val refusal = when (code) {
                 NativePlayout.OFFER_SPEAKER_CAP -> "speaker cap reached; ignoring further sessions"
                 NativePlayout.OFFER_PACKET_TOO_LARGE -> "dropping oversized opus payload"

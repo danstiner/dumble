@@ -69,7 +69,7 @@ JNIEXPORT void JNICALL FN(pause)(JNIEnv*, jobject, jlong h) {
 
 JNIEXPORT jint JNICALL
 FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
-          jboolean terminator) {
+          jboolean terminator, jintArray ahead) {
     const auto arrival = dumble::BootClock::now();
     const jsize len = env->GetArrayLength(opusData);
     if (len > pl::kMaxPacketBytes) {
@@ -85,8 +85,17 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     // pin here would be held across a mutex acquisition on the reader thread.
     uint8_t packet[pl::kMaxPacketBytes];
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
-    return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
-                                  uint64_t(frameNumber), terminator == JNI_TRUE, arrival);
+    if (ahead == nullptr || env->GetArrayLength(ahead) < 2) {
+        return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
+                                      uint64_t(frameNumber), terminator == JNI_TRUE, arrival);
+    }
+    pl::PlayoutEngine::Ahead held{0, 0};
+    const int code = self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
+                                            uint64_t(frameNumber), terminator == JNI_TRUE, arrival,
+                                            &held);
+    const jint out[2] = {held.queuedSamples, held.decodedSamples};
+    env->SetIntArrayRegion(ahead, 0, 2, out);
+    return code;
 }
 
 JNIEXPORT jint JNICALL
@@ -124,15 +133,6 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
     }
     env->SetLongArrayRegion(counters, 0, kCounterCount, countersOut);
     return stats.speakers;
-}
-
-JNIEXPORT jboolean JNICALL
-FN(readQueued)(JNIEnv* env, jobject, jlong h, jint session, jintArray out) {
-    if (env->GetArrayLength(out) < 2) return JNI_FALSE;
-    int32_t held[2];
-    if (!self(h)->engine->queued(session, &held[0], &held[1])) return JNI_FALSE;
-    env->SetIntArrayRegion(out, 0, 2, held);
-    return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL FN(destroy)(JNIEnv*, jobject, jlong h) {

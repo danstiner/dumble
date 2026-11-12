@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -322,14 +323,17 @@ class VoiceSenderTest {
             FakeCaptureHandle.Step.Frame(byteArrayOf(3), 6L, true),
         )
         val tapped = mutableListOf<CapturedPacket>()
+        val sentAtTap = mutableListOf<Int>()
         val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { }, tapClock = clock)
-        sender.capturedTap = { tapped += it }
+        sender.capturedTap = { tapped += it; sentAtTap += sent.size }
         val start = clock.markNow()
         assertTrue(sender.step())
         clock += 20.milliseconds
         assertTrue(sender.step())
 
         assertEquals(listOf(4L, 6L), tapped.map { it.frameNumber })
+        // Before the send, so a check has the packet before its echo can come back.
+        assertEquals(listOf(0, 1), sentAtTap)
         // The pump reuses one buffer, so an uncopied payload would read the second packet's byte.
         assertArrayEquals(byteArrayOf(1, 2), tapped[0].opusData)
         assertEquals(ZERO, tapped[0].at - start)
@@ -345,5 +349,15 @@ class VoiceSenderTest {
         sender.capturedTap = { tapped += it }
         assertTrue(sender.step())
         assertEquals(1, tapped.size)
+    }
+
+    @Test
+    fun aTapThatThrowsDoesNotEndThePump() {
+        val fake = FakeCaptureHandle(blocking = false)
+        fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
+        val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { fail("the pump ended") })
+        sender.capturedTap = { error("a check's bug") }
+        assertTrue(sender.step())
+        assertEquals(1, sent.size)
     }
 }

@@ -8,7 +8,6 @@ import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
 import me.danielstiner.dumble.time.BootTimeSource
 import java.io.IOException
-import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -63,7 +62,9 @@ class VoiceSender(
      *  while a latency check runs. */
     @Volatile var target = NORMAL_TALKING_TARGET
 
-    /** Set while a latency check listens: each packet capture produced, on the pump thread, sent or not. */
+    /** Set while a latency check listens: each packet capture produced, on the pump thread, before
+     *  it is sent and whether or not the send succeeds. A throw from it is logged and the packet
+     *  goes out. */
     @Volatile var capturedTap: ((CapturedPacket) -> Unit)? = null
     @Volatile private var thread: Thread? = null
     @Volatile private var stopped = false
@@ -128,7 +129,15 @@ class VoiceSender(
     private fun pollOnce(): Boolean {
         val n = handle.pollPacket(frame, meta)
         val tap = capturedTap
-        val at = if (n > 0 && tap != null) tapClock.markNow() else null
+        if (n > 0 && tap != null) {
+            val at = tapClock.markNow()
+            try {
+                tap(CapturedPacket(meta[NativeCapture.META_FRAME_NUMBER], frame.copyOf(n), at))
+            } catch (t: Throwable) {
+                // A check's bug must not end the pump, and with it transmit.
+                Log.e(TAG, "capture tap failed", t)
+            }
+        }
         if (nextStatsAt.hasPassedNow()) {
             nextStatsAt = clock.markNow() + statsInterval
             handle.stats()?.let {
@@ -138,7 +147,7 @@ class VoiceSender(
             }
         }
         if (n > 0) {
-            transmit(frame, n, meta, tap, at)
+            transmit(frame, n, meta)
             return true
         }
         if (speaking && lastSpeech.elapsedNow() >= SPEECH_STALL) speak(false)
@@ -162,13 +171,7 @@ class VoiceSender(
         return false
     }
 
-    private fun transmit(
-        frame: ByteArray,
-        n: Int,
-        meta: LongArray,
-        tap: ((CapturedPacket) -> Unit)?,
-        at: ComparableTimeMark?,
-    ) {
+    private fun transmit(frame: ByteArray, n: Int, meta: LongArray) {
         val flags = meta[NativeCapture.META_FLAGS]
         val terminator = flags and NativeCapture.FLAG_TERMINATOR != 0L
         val audio = MumbleUdpProtos.Audio.newBuilder()
@@ -183,9 +186,6 @@ class VoiceSender(
         body.copyInto(payload, 1)
         val sent = send(payload)
         if (!sent) droppedFrames++
-        if (tap != null && at != null) {
-            tap(CapturedPacket(meta[NativeCapture.META_FRAME_NUMBER], frame.copyOf(n), at))
-        }
         speak(sent && !terminator && flags and NativeCapture.FLAG_HANGOVER == 0L)
     }
 

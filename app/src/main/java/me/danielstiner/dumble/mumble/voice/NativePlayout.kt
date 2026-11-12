@@ -71,12 +71,16 @@ object NativePlayout {
     external fun start(handle: Long): Boolean
     external fun pause(handle: Long)
 
+    /** With [ahead], of at least two entries, an accepted packet also fills `ahead[0]` with the
+     *  samples already queued for [session] and `ahead[1]` with those decoded but not yet played,
+     *  and the call waits out a fill in flight to read them. */
     external fun offer(
         handle: Long,
         session: Int,
         opusData: ByteArray,
         frameNumber: Long,
         terminator: Boolean,
+        ahead: IntArray? = null,
     ): Int
 
     external fun readStats(
@@ -88,17 +92,13 @@ object NativePlayout {
         counters: LongArray,
     ): Int
 
-    /** Fills `out[0]` with the samples queued for [session] and `out[1]` with those decoded but not
-     *  yet played. False when the engine holds nothing for it, or `out` is shorter than 2. */
-    external fun readQueued(handle: Long, session: Int, out: IntArray): Boolean
-
     external fun destroy(handle: Long)
 }
 
 /** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
-    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean) =
-        NativePlayout.offer(handle, session, opusData, frameNumber, terminator)
+    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, ahead: IntArray?) =
+        NativePlayout.offer(handle, session, opusData, frameNumber, terminator, ahead)
 
     override fun readStats(
         sessions: IntArray,
@@ -107,8 +107,6 @@ class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngin
         audible: IntArray,
         counters: LongArray,
     ) = NativePlayout.readStats(handle, sessions, depths, targets, audible, counters)
-
-    override fun readQueued(session: Int, out: IntArray) = NativePlayout.readQueued(handle, session, out)
 
     override fun start() = NativePlayout.start(handle)
     override fun pause() = NativePlayout.pause(handle)

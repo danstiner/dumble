@@ -1583,23 +1583,56 @@ TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroWithItsTerminatorLost) {
     expectClean(*e, "mumble-web with its terminator lost");
 }
 
-TEST(PlayoutEngine, QueuedReadsOneSpeakersQueueAndDecodedLeftover) {
+int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Ahead* ahead) {
+    const std::vector<uint8_t> p = encode(1);
+    return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, ahead);
+}
+
+TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacket) {
     auto e = newEngine();
-    int32_t queuedSamples = -1, decodedSamples = -1;
-    EXPECT_FALSE(e->queued(7, &queuedSamples, &decodedSamples));
+    PlayoutEngine::Ahead ahead{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ(0, ahead.queuedSamples) << "nothing is ahead of a speaker's first packet";
+    EXPECT_EQ(0, ahead.decodedSamples);
 
-    arm(*e, 7);
-    ASSERT_TRUE(e->queued(7, &queuedSamples, &decodedSamples));
-    EXPECT_EQ(kColdStartPackets * kFrame, queuedSamples);
-    EXPECT_EQ(0, decodedSamples);
-
+    arm(*e, 7, kColdStartPackets - 1);
     // Half a packet's fill pops one packet and decodes all of it, leaving half decoded.
     std::vector<int16_t> pcm(kFrame / 2);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
     e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
-    ASSERT_TRUE(e->queued(7, &queuedSamples, &decodedSamples));
-    EXPECT_EQ((kColdStartPackets - 1) * kFrame, queuedSamples);
-    EXPECT_EQ(kFrame / 2, decodedSamples);
-    EXPECT_FALSE(e->queued(9, &queuedSamples, &decodedSamples));
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ((kColdStartPackets - 1) * kFrame, ahead.queuedSamples);
+    EXPECT_EQ(kFrame / 2, ahead.decodedSamples);
+}
+
+// A fill decodes with the mutex released, and the packet it has popped is then in neither count.
+// An offer asking what is ahead must wait the fill out, or it reads a packet short.
+TEST(PlayoutEngine, OfferAskingWhatIsAheadWaitsOutAFillInFlight) {
+    auto e = newEngine();
+    arm(*e, 7);
+    const std::vector<uint8_t> p = encode(1);
+    std::atomic<bool> offering{false};
+    PlayoutEngine::Ahead ahead{-1, -1};
+    std::thread reader;
+    e->betweenPopAndDecodeForTest = [&] {
+        if (reader.joinable()) return;
+        reader = std::thread([&] {
+            offering = true;
+            EXPECT_EQ(pl::kOfferAccepted,
+                      e->offer(7, p.data(), int(p.size()), frameFor(7)++, false, kArrival, &ahead));
+        });
+        // Room for the reader to reach the engine and, were it not to wait, to read. It cannot be
+        // seen waiting from here, so an offer that did not wait could pass this test, but one
+        // that waits cannot fail it.
+        while (!offering) std::this_thread::yield();
+        for (int i = 0; i < 20000 && ahead.queuedSamples < 0; i++) std::this_thread::yield();
+    };
+    std::vector<int16_t> pcm(kFrame / 2);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    reader.join();
+    EXPECT_EQ((kColdStartPackets - 1) * kFrame, ahead.queuedSamples);
+    EXPECT_EQ(kFrame / 2, ahead.decodedSamples) << "the popped packet, decoded and half played";
 }

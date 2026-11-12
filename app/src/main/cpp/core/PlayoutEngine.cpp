@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <ctime>
+#include <thread>
 #include "core/AudioDecoder.h"
 #include "core/Mixer.h"
 
@@ -29,7 +30,7 @@ std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuan
 }
 
 int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber,
-                         bool terminator, BootClock::time_point arrival) {
+                         bool terminator, BootClock::time_point arrival, Ahead* ahead) {
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
@@ -49,7 +50,14 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
     // protobuf field, so we should respect it even if the opus data is malformed.
     if (verdict != kOfferAccepted && !terminator) return verdict;
 
-    std::lock_guard<std::mutex> guard(mutex_);
+    std::unique_lock<std::mutex> guard(mutex_);
+    // Read under the mutex, so a false is safe to act on: a fill that starts after it gets no
+    // further than its first acquisition while this call holds the lock.
+    while (ahead && filling_.load(std::memory_order_acquire)) {
+        guard.unlock();
+        std::this_thread::yield();
+        guard.lock();
+    }
     const int slot = slotFor(session);
     // Before the cap's early return: a packet refused for want of a slot still arrived, and its
     // sender is exactly the one whose estimate we want warm for when a slot frees.
@@ -67,6 +75,7 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
         return kOfferSpeakerCap;
     }
     PacketQueue& queue = queues_[slot];
+    if (ahead) *ahead = {queue.depthSamples(), decoders_[slot]->available()};
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator, frameNumber);
     } else {
@@ -127,6 +136,12 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
 }
 
 int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers) {
+    // Set before the first acquisition and cleared on every return, contended ones included.
+    struct Filling {
+        std::atomic<bool>& flag;
+        explicit Filling(std::atomic<bool>& f) : flag(f) { flag.store(true, std::memory_order_release); }
+        ~Filling() { flag.store(false, std::memory_order_release); }
+    } filling(filling_);
     const int64_t started = monotonicMicros();
     // Taken (blocking mode) or attempted (realtime mode); every acquisition below is this one.
     const auto acquire = [this] {
@@ -201,6 +216,9 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 continue;
             }
             if (len <= 0) break;
+#ifdef DUMBLE_TESTING
+            if (betweenPopAndDecodeForTest) betweenPopAndDecodeForTest();
+#endif
             decoder.decode(packetScratch_, len);
         }
         // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed frame then
@@ -293,18 +311,6 @@ int PlayoutEngine::contendedFill(int16_t* out, int samples, int32_t* liveSpeaker
     contendedFills_.fetch_add(1, std::memory_order_relaxed);
     *liveSpeakers = lastLive_.load(std::memory_order_relaxed);
     return 0;
-}
-
-bool PlayoutEngine::queued(int32_t session, int32_t* queuedSamples, int32_t* decodedSamples) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    for (int i = 0; i < kMaxSpeakers; i++) {
-        if (slots_.test(i) && sessions_[i] == session) {
-            *queuedSamples = queues_[i].depthSamples();
-            *decodedSamples = decoders_[i]->available();
-            return true;
-        }
-    }
-    return false;
 }
 
 PlayoutEngine::Stats PlayoutEngine::stats() {

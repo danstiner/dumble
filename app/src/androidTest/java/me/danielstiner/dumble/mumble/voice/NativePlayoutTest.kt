@@ -192,16 +192,18 @@ class NativePlayoutTest {
     }
 
     @Test
-    fun readQueuedReportsOneSessionsQueue() {
+    fun offerReportsWhatWasAheadOfThePacket() {
         // A 20 ms CELT frame of silence: the smallest payload libopus schedules as audio.
         val silence = byteArrayOf(0xF8.toByte(), 0xFF.toByte(), 0xFE.toByte())
-        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false))
-        val out = IntArray(2)
-        assertTrue(NativePlayout.readQueued(handle, SESSION, out))
-        assertEquals("one 20 ms packet queued", 960, out[0])
-        assertEquals("nothing decoded before the stream pulls", 0, out[1])
-        assertFalse(NativePlayout.readQueued(handle, SESSION + 1, out))
-        assertFalse("a short array is refused", NativePlayout.readQueued(handle, SESSION, IntArray(1)))
+        val ahead = intArrayOf(-1, -1)
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, ahead))
+        assertEquals("nothing ahead of the first packet", listOf(0, 0), ahead.toList())
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, ahead))
+        assertEquals("one 20 ms packet queued", 960, ahead[0])
+        assertEquals("nothing decoded before the stream pulls", 0, ahead[1])
+        val short = intArrayOf(-1)
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, short))
+        assertEquals("a short array is left alone", -1, short[0])
     }
 
     private companion object {
