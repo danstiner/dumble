@@ -76,9 +76,11 @@ constexpr Scenario kScenarios[] = {
 constexpr milliseconds kWarmSpurt = 1000ms;
 constexpr milliseconds kWarmGap = 1000ms;
 
-// The delay is the same for every sample of a spurt unless playout adapts inside it, which
-// several probes show as a spread between min and max. No scenario here provokes one: a shrink
-// needs kShrinkCooldownSamples of produced audio first, and the measured spurt is shorter.
+// The delay is the same for every sample of a spurt unless playout adapts inside it, so several
+// probes must agree on the total, and the test fails if they do not. No scenario here provokes
+// an adaptation: a shrink needs kShrinkCooldownSamples of produced audio first, and the measured
+// spurt is shorter. The parts can still differ between probes, as jitter moves time between the
+// network and the jitter buffer, so each part is pinned as its median.
 constexpr int kProbes = 4;
 constexpr milliseconds kFirstProbe = 300ms;
 constexpr milliseconds kProbeSpacing = 500ms;
@@ -277,7 +279,7 @@ std::string figures() {
         const auto breakdowns = measure(s, codec);
         EXPECT_EQ(breakdowns.size(), size_t(kProbes)) << s.name;
         if (breakdowns.size() != size_t(kProbes)) continue;
-        std::vector<int64_t> totals, buffers;
+        std::vector<int64_t> totals, packetizations, networks, buffers;
         std::printf("%s\n", s.name);
         for (const auto& b : breakdowns) {
             std::printf("  total %7s = packetization %6s + network %6s + jitter buffer %7s + codec %s"
@@ -285,12 +287,17 @@ std::string figures() {
                         ms(b.total).c_str(), ms(b.packetization).c_str(), ms(b.network).c_str(),
                         ms(b.jitterBuffer).c_str(), ms(codec).c_str(), ms(b.writeAhead).c_str());
             totals.push_back(b.total);
+            packetizations.push_back(b.packetization);
+            networks.push_back(b.network);
             buffers.push_back(b.jitterBuffer);
         }
-        text << s.name << ".total_min_ms = " << ms(*std::min_element(totals.begin(), totals.end())) << "\n"
-             << s.name << ".total_median_ms = " << ms(median(totals)) << "\n"
-             << s.name << ".total_max_ms = " << ms(*std::max_element(totals.begin(), totals.end())) << "\n"
-             << s.name << ".jitter_buffer_median_ms = " << ms(median(buffers)) << "\n";
+        EXPECT_EQ(*std::min_element(totals.begin(), totals.end()), *std::max_element(totals.begin(), totals.end()))
+            << s.name << ": the delay changed inside the spurt";
+        text << s.name << ".total_ms = " << ms(totals.front()) << "\n"
+             << s.name << ".packetization_ms = " << ms(median(packetizations)) << "\n"
+             << s.name << ".network_ms = " << ms(median(networks)) << "\n"
+             << s.name << ".jitter_buffer_ms = " << ms(median(buffers)) << "\n"
+             << s.name << ".write_ahead_ms = " << ms(breakdowns.front().writeAhead) << "\n";
     }
     return text.str();
 }
