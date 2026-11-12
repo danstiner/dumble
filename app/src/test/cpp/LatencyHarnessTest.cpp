@@ -63,7 +63,8 @@ constexpr Scenario kScenarios[] = {
     // The first spurt heard from a speaker. Playout knows nothing about the network yet and
     // starts from its cautious default, so this is the largest figure.
     {.name = "cold", .warm = false},
-    // The baseline the rest are read against: a later spurt on an ideal network.
+    // The baseline the rest are read against: a later spurt on a network with no delay and no
+    // jitter, so what is left is Dumble's own.
     {.name = "warm"},
     // A 20 ms network with up to 40 ms of spread: what the jitter buffer adds to ride it out.
     {.name = "warm_network_20ms_jitter_40ms", .networkDelay = 20ms, .networkJitter = 40ms},
@@ -242,7 +243,9 @@ std::vector<Breakdown> measure(const Scenario& s, int64_t codec) {
     return breakdowns;
 }
 
-// Opus's own delay at Dumble's settings, measured the way the harness measures everything else.
+// Opus's own delay at Dumble's settings: the encoder's lookahead, 6.5 ms below 64 kbit/s. Measured
+// the way the harness measures everything else, not read from the encoder, so that the probe's
+// own error of a sample or two cancels out of the jitter buffer row.
 int64_t codecDelay() {
     const auto probe = lat::probe(kProbePeak);
     std::vector<int16_t> in(int64_t(kSampleRate), 0);
