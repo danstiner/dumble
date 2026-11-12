@@ -66,10 +66,10 @@ constexpr Scenario kScenarios[] = {
     // The baseline the rest are read against: a later spurt on an ideal network.
     {.name = "warm"},
     // A 20 ms network with up to 40 ms of spread: what the jitter buffer adds to ride it out.
-    {.name = "warm_network20_jitter40", .networkDelay = 20ms, .networkJitter = 40ms},
+    {.name = "warm_network_20ms_jitter_40ms", .networkDelay = 20ms, .networkJitter = 40ms},
     // The low-latency streams a device grants with the voice effects off: the sink holds 4 ms
     // where the baseline's holds 20, and a packet is still 20 ms.
-    {.name = "warm_callbacks2", .inputCallback = 2ms, .outputCallback = 2ms},
+    {.name = "warm_callbacks_2ms", .inputCallback = 2ms, .outputCallback = 2ms},
 };
 
 constexpr milliseconds kWarmSpurt = 1000ms;
