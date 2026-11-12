@@ -71,6 +71,13 @@ interface Connection {
      */
     val audioRoutes: StateFlow<AudioRoutes>
     fun connect(endpoint: MumbleEndpoint, username: String, password: String?)
+
+    /** A connection that trusts exactly [fingerprint] and records nothing: no pin, no trust
+     *  prompt. The latency check's own, to a throwaway server whose certificate it was handed.
+     *  [fingerprint] is the lowercase hex SHA-256 of the server's leaf certificate in DER, compared
+     *  exactly: `openssl x509 -fingerprint -sha256` prints uppercase with colons and won't match.
+     *  A different certificate ends the session in an error, never a trust prompt. */
+    fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String)
     fun trustAndConnect()
     fun cancelTrust()
     fun disconnect()
