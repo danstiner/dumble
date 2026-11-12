@@ -44,7 +44,14 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     @Volatile var audibleSessions: Set<Int> = emptySet()
 
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
+
     @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
+
+    /** What [offer] reports already decoded per session; queued comes from [depthsBySession]. */
+    @Volatile var decodedBySession: Map<Int, Int> = emptyMap()
+
+    /** How many offers asked what was ahead of them. */
+    val aheadAsked = AtomicInteger()
 
     /** The counters as native would report them: monotonic, with latency -1 until a stream
      *  reports one. */
@@ -65,8 +72,14 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         opusData: ByteArray,
         frameNumber: Long,
         terminator: Boolean,
+        ahead: IntArray?,
     ): Int {
         checkLive()
+        if (ahead != null) {
+            aheadAsked.incrementAndGet()
+            ahead[0] = depthsBySession[session] ?: 0
+            ahead[1] = decodedBySession[session] ?: 0
+        }
         offered += Offer(session, opusData, frameNumber, terminator)
         return offerResult
     }

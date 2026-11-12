@@ -4,9 +4,11 @@ import com.google.protobuf.ByteString
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
+import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
 import me.danielstiner.dumble.time.elapse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,7 +44,8 @@ class VoiceReceiverTest {
         newEngine: () -> VoiceReceiver.PlayoutEngine?,
         body: suspend TestScope.(VoiceReceiver) -> Unit,
     ) = runTest {
-        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
+        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource,
+            tapClock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
         try {
             body(rx)
         } finally {
@@ -513,6 +516,64 @@ class VoiceReceiverTest {
             assertEquals("a receiver that never started must never build an engine", 0, builds.get())
             rx.start()
             assertEquals(0, builds.get())
+        }
+    }
+
+    @Test
+    fun theArrivalTapSeesEachPacketWithWhatTheEngineHeldForItsSender() {
+        val fake = FakePlayoutEngine()
+        polling(fake) { rx ->
+            val tapped = mutableListOf<ArrivedPacket>()
+            val offeredAtTap = mutableListOf<Int>()
+            rx.arrivedTap = { tapped += it; offeredAtTap += fake.offered.size }
+            rx.offer(audioPayload(session = 5))
+            fake.depthsBySession = mapOf(5 to 960)
+            fake.decodedBySession = mapOf(5 to 240)
+            advanceTimeBy(20.milliseconds)
+            rx.offer(audioPayload(session = 5, terminator = true))
+
+            assertEquals(2, tapped.size)
+            assertEquals(5, tapped[0].session)
+            assertEquals("no slot yet: nothing ahead of the first packet", 0, tapped[0].queuedSamples)
+            assertEquals(0, tapped[0].decodedSamples)
+            assertEquals(960, tapped[1].queuedSamples)
+            assertEquals(240, tapped[1].decodedSamples)
+            assertEquals(20.milliseconds, tapped[1].at - tapped[0].at)
+            assertEquals("the tap runs once the engine has taken the packet", listOf(1, 2), offeredAtTap)
+        }
+    }
+
+    @Test
+    fun withNoTapTheEngineIsNeverAskedWhatItHolds() {
+        val fake = FakePlayoutEngine()
+        polling(fake) { rx ->
+            rx.offer(audioPayload(session = 5))
+            assertEquals(0, fake.aheadAsked.get())
+            assertEquals(1, fake.offered.size)
+        }
+    }
+
+    @Test
+    fun aPacketTheEngineRefusesIsNotTappedAsArrived() {
+        val fake = FakePlayoutEngine()
+        polling(fake) { rx ->
+            val tapped = mutableListOf<ArrivedPacket>()
+            rx.arrivedTap = { tapped += it }
+            fake.offerResult = NativePlayout.OFFER_SPEAKER_CAP
+            rx.offer(audioPayload(session = 5))
+            assertEquals(1, fake.offered.size)
+            assertEquals(emptyList<ArrivedPacket>(), tapped)
+        }
+    }
+
+    @Test
+    fun aTapThatThrowsDoesNotReachTheTransportsReader() {
+        val fake = FakePlayoutEngine()
+        polling(fake) { rx ->
+            rx.arrivedTap = { error("a check's bug") }
+            rx.offer(audioPayload(session = 5))
+            rx.offer(audioPayload(session = 5))
+            assertEquals(2, fake.offered.size)
         }
     }
 }
