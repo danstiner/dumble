@@ -21,8 +21,10 @@
 // input-callback bursts, each packet delayed by a scripted network, PlayoutEngine pulled in
 // output-callback bursts, and a probe found again in the output. The output is heard one
 // write-ahead after it is filled, as the engine is told the sink holds it; the rest of the device's
-// input and output latency is excluded, and a phone adds it on top. The engines are sample-exact
-// and the codec's delay is measured once through the same probe, so the figures are pinned in
+// input and output latency is excluded, and a phone adds it on top. So is the wait before the
+// sending thread notices a packet, up to kPollWaitMillis, and a packet arriving just after a fill,
+// which waits up to one output callback more than here. The engines are sample-exact and the
+// codec's delay is measured once through the same probe, so the figures are pinned in
 // latency/expected.txt and a change to any of them is a reviewed diff.
 namespace {
 
@@ -34,8 +36,9 @@ using namespace std::chrono_literals;
 
 constexpr int16_t kProbePeak = 8000;
 constexpr int kNoiseAmplitude = 100;
-// The delay is the same for every sample of a spurt unless playout adapts inside it, which is
-// what several probes, and the min and max over them, would show.
+// The delay is the same for every sample of a spurt unless playout adapts inside it, which
+// several probes show as a spread between min and max. No scenario here provokes one: a shrink
+// needs kShrinkCooldownSamples of produced audio first, and the measured spurt is shorter.
 constexpr int kProbes = 4;
 constexpr milliseconds kFirstProbe = 300ms;
 constexpr milliseconds kProbeSpacing = 500ms;
@@ -62,14 +65,17 @@ constexpr Scenario kScenarios[] = {
 
 // The gate must change where an input burst ends, or the burst straddling it is fed late, and the
 // measured spurt must open where a packet begins: packet starts are read from frame numbers,
-// which round down. An error in either lands in jitterBuffer.
+// which round down. An error in either lands in jitterBuffer. Probes open where packets begin
+// too, so every probe meets its packet at the same point.
 constexpr bool spurtsAlign() {
     for (const auto& s : kScenarios) {
         if (kWarmSpurt % s.in != 0ms || (kWarmSpurt + kWarmGap) % s.in != 0ms) {
             return false;
         }
     }
-    return pl::samplesIn(kWarmSpurt + kWarmGap) % kTxPacketSamples == 0;
+    return pl::samplesIn(kWarmSpurt + kWarmGap) % kTxPacketSamples == 0 &&
+           pl::samplesIn(kFirstProbe) % kTxPacketSamples == 0 &&
+           pl::samplesIn(kProbeSpacing) % kTxPacketSamples == 0;
 }
 static_assert(spurtsAlign());
 
@@ -151,6 +157,7 @@ std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
         // After the input burst, so a gate change takes effect from sample t exactly.
         if (s.warm && t == kWarmSpurt) capture->setGateOpen(false);
         if (s.warm && t == spurtStart) capture->setGateOpen(true);
+        // Before this millisecond's fill, so a packet is never one output callback late.
         for (; delivered < sent.size() && sent[delivered].arrival <= t; delivered++) {
             const auto& q = sent[delivered];
             playout->offer(kSession, q.data.data(), int(q.data.size()), q.frame, q.terminator,
@@ -161,6 +168,8 @@ std::vector<Breakdown> run(const Scenario& s, int64_t codec) {
             playout->fillQuantum(out.data() + pl::samplesIn(t + writeAhead), pl::samplesIn(s.out), sessions, &live);
         }
     }
+    // A packet that failed to encode is skipped, and playout would conceal it.
+    EXPECT_EQ(capture->encodeErrors(), 0u) << s.name;
 
     std::vector<Breakdown> probes;
     for (milliseconds at : placements) {
