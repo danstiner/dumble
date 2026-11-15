@@ -51,8 +51,7 @@ jobs:
           MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest lintDebug verifyShippedGroups --stacktrace
       - name: Keep the debug APK
-        # Signed with this runner's own debug key, so it installs over neither a release build
-        # nor another run's APK without uninstalling first.
+        # Signed with this runner's debug key.
         uses: actions/upload-artifact@v7
         with:
           name: dumble-debug
