@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Attaching the APK to the tag's release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Fetch opus's release tags
+        # As in ci.yml: opus's CMake takes its version from `git describe`.
+        run: git -C third_party/opus fetch --depth=1 origin 'refs/tags/v*:refs/tags/v*'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: Build the signed release APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DUMBLE_KEYSTORE_BASE64 }}
+          ORG_GRADLE_PROJECT_DUMBLE_KEYSTORE_PASSWORD: ${{ secrets.DUMBLE_KEYSTORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_DUMBLE_KEY_ALIAS: ${{ secrets.DUMBLE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_DUMBLE_KEY_PASSWORD: ${{ secrets.DUMBLE_KEY_PASSWORD }}
+        # The keystore property is always set here, so a missing secret fails the build rather
+        # than quietly producing app-release-unsigned.apk.
+        run: |
+          printf %s "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/dumble.jks"
+          ./gradlew assembleRelease -PDUMBLE_KEYSTORE_FILE="$RUNNER_TEMP/dumble.jks" --stacktrace
+          mv app/build/outputs/apk/release/app-release.apk "dumble-$GITHUB_REF_NAME.apk"
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A release drafted in the UI already exists by the time its tag lands; a bare tag push
+        # gets a prerelease to hold the APK.
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "dumble-$GITHUB_REF_NAME.apk" --repo "$GITHUB_REPOSITORY" --clobber

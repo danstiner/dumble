@@ -50,6 +50,13 @@ jobs:
         env:
           MUMBLE_TEST_SERVER: localhost
         run: ./gradlew assembleDebug assembleRelease testDebugUnitTest assembleDebugAndroidTest lintDebug verifyShippedGroups --stacktrace
+      - name: Keep the debug APK
+        # Signed with this runner's debug key.
+        uses: actions/upload-artifact@v7
+        with:
+          name: dumble-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
       - name: Keep the test reports of a failed run
         if: failure()
         uses: actions/upload-artifact@v7
