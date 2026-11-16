@@ -604,7 +604,7 @@ class MumbleConnection internal constructor(
             }
             // Demoting brings the downlink back with our next spurt; the tunneled ping does it
             // for a client that never speaks, since the server never re-learns an address
-            // (docs/connection.md, UDP voice).
+            // (docs/network.md, UDP voice).
             override fun onPingsUnanswered() {
                 Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
                 path.demote()
@@ -784,7 +784,7 @@ class MumbleConnection internal constructor(
         }
         // Before start(): the ping that registers our address fires the instant CryptSetup keys
         // the cipher, and from then on the server sends our downlink over UDP whether or not we
-        // ever transmit (docs/connection.md, UDP voice), so it has to land on a socket already
+        // ever transmit (docs/network.md, UDP voice), so it has to land on a socket already
         // listening. One that cannot be opened costs the session nothing but UDP.
         link.transport.remoteAddress()?.let { remote ->
             runCatching { link.udp.open(remote) }

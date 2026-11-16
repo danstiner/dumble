@@ -1,28 +1,31 @@
 # Silero VAD offline tools
 
-Neither script runs during a build or a test. They exist so the committed artifacts are
-reproducible from the vendored model, and so a model bump is a reviewable diff.
+Two scripts that regenerate the voice activity detector's committed artifacts from the vendored
+model. Neither runs during a build or a test. They exist so that ONNX Runtime does not have to be
+a dependency, and so that a model change is a reviewable diff. The design is in
+[docs/voice-activity.md](../../docs/voice-activity.md).
 
-Requirements: `python3 -m pip install numpy onnx onnxruntime` (a virtualenv is fine).
-`extract_weights.py` needs only numpy; `make_reference.py` needs all three.
+```bash
+python3 -m pip install numpy onnx onnxruntime    # a virtualenv is fine
+```
 
-## extract_weights.py
+`extract_weights.py` needs only numpy.
 
-Reads `third_party/silero-vad/silero_vad_16k_op15.onnx` and writes
-`app/src/main/assets/silero_vad_weights.bin` — 309,633 little-endian fp32 in ONNX initializer
-order. It refuses to write if the initializer set or shapes differ from what
-`core/SileroVad.cpp` assumes, because a silent reordering produces plausible-looking wrong
-probabilities that only the parity test catches.
+| Script | Reads | Writes |
+|---|---|---|
+| `extract_weights.py` | `third_party/silero-vad/silero_vad_16k_op15.onnx` | `app/src/main/assets/silero_vad_weights.bin`: 309,633 little-endian fp32 in ONNX initializer order |
+| `make_reference.py` | the same model, run under ONNX Runtime over each corpus clip | `app/src/test/resources/silero-reference/<clip>.txt`: one probability per 512-sample window; also the generated `synthetic.wav` |
 
-## make_reference.py
+`extract_weights.py` refuses to write if the initializer names or shapes differ from what
+`core/SileroVad.cpp` assumes. A silent reordering would produce plausible wrong probabilities that
+only the parity test catches.
 
-Runs the ONNX under ONNX Runtime over each corpus clip and writes
-`app/src/test/resources/silero-reference/<clip>.txt`, one probability per 512-sample window.
-`SileroVadTest` asserts the C++ against these, which is why ONNX Runtime is not a dependency
-of this project in any form.
+`SileroVadTest` asserts the C++ against the reference files.
 
-## When you must re-run both
+## After changing the model
 
-Any change to the vendored `.onnx`. Re-run `extract_weights.py`, then `make_reference.py`,
-then update the blob sha256 pinned in `app/src/test/cpp/SileroVadTest.cpp`. A model bump that
-skips the reference regeneration will fail the parity test, which is the intended behaviour.
+1. Run `extract_weights.py`.
+2. Run `make_reference.py`.
+3. Update the weight file's SHA-256 pinned in `app/src/test/cpp/SileroVadTest.cpp`.
+
+Skipping step 2 fails the parity test, as intended.
