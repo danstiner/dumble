@@ -11,7 +11,7 @@ on the wire are in [mumble-protocol.md](mumble-protocol.md).
   without ending the call or reopening audio.
 - **Failures are distinct and say why:** a dead path, a rejection, a kick, a changed certificate.
 - **The user decides which server to trust,** and nothing overrides that silently.
-- **Voice uses UDP when UDP works and TCP otherwise,** with no setting and no lost downlink.
+- **Voice uses UDP when UDP works and TCP otherwise,** with no setting, and without going deaf when UDP stops working.
 
 ## Design
 
@@ -37,7 +37,7 @@ UI ─► Connection (interface)
 | Reconnecting gives up after 2 minutes | Long enough for an elevator or a tunnel; short enough that a dead server does not hold the phone in call mode. | A longer outage needs a manual reconnect. |
 | A link with no ping reply for 15 to 20 s is replaced | A dead path may never produce a socket error. | A path stalled that long but alive is torn down too. |
 | The old link is closed before the new one is dialed | The old link would read its own ghost kick as the server removing us, and end the session. | A moment with no link on every handover. |
-| Voice moves to UDP on the ping alone | A reply proves both directions, and replies keep arriving while voice is tunneled. | Voice can stay on a lossy UDP path: only two unanswered pings in a row demote it. |
+| Voice moves to UDP on the ping alone | A reply proves both directions, and replies keep arriving while voice is on TCP. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. |
 | The pin is checked before the certificate authorities | Otherwise any authority-issued certificate for the host overrides the user's choice of one exact server. Desktop Mumble uses the other order. | A server that renews its certificate must be accepted again. |
 | One client certificate for every server, stored unencrypted and backed up | It follows a reinstall, is in the format desktop Mumble reads, and lets the server replace our old session on a reconnect. | The key is protected only by the app sandbox, and every server sees the same certificate. |
 | The local network permission is requested after a block, not before | Android decides by destination address, which the host text does not reveal. | The first connect to a LAN server fails once before the prompt. |
@@ -131,7 +131,7 @@ has proven itself.
 state leaks between links. One reader coroutine delivers frames, and its `finally` is the only
 caller of `onClosed`: exactly once, never from inside `onFrame`, so listeners need no locking. The
 send queue is small on purpose (32 frames): a larger buffer would only hide a stalled socket for
-longer. Tunneled voice goes through the same queue, and a full queue refuses the packet.
+longer. Voice sent over TCP goes through the same queue, and a full queue refuses the packet.
 
 ### Trust
 
@@ -187,79 +187,113 @@ wins.
 - Pings run on the boot clock, which counts time in doze.
 - The published value is the instant of the last server reply, not its age. An age is stale as
   soon as it is published, and a dozing device fires no tick to refresh it.
-- Tunneled voice is delivered by callback, not through a flow. A `StateFlow` conflates, and a
+- Voice arriving over TCP is delivered by callback, not through a flow. A `StateFlow` conflates, and a
   dropped emission would be dropped audio.
 
 ## UDP: the low-latency voice path
 
-A UDP socket beside the control connection carries voice once a ping has round-tripped on it. It
-is the low-latency path: a lost datagram delays nothing behind it, where TCP holds every later
-packet back until the lost one is resent. It is optional: without it the session is complete,
-with voice in the tunnel.
+Voice can travel two ways:
 
-### UDP voice
+- **Over TCP:** inside the TLS control connection, wrapped in `UDPTunnel` frames. Always available.
+  The code calls this *tunneled*.
+- **Over UDP:** as encrypted datagrams on a socket beside the control connection. This is the
+  low-latency path: a lost datagram delays nothing behind it, where TCP holds every later packet
+  back until the lost one is resent.
 
-`net/MumbleUdpTransport`. A connected `DatagramChannel` aimed at the control connection's remote
-address, `CryptState` encrypting and decrypting every datagram, and one thread blocked in read.
+The two directions are decided separately, by different parties:
 
-- Opened as soon as the control connection is up, closed with the link.
-- A socket that cannot be opened costs nothing. The server never learns a UDP address and keeps
-  our downlink on the tunnel.
-- The state machine owns the cipher, because `CryptSetup` is a control message. It sends the UDP
-  ping when the cipher is keyed and then on the TCP ping's ticker.
-- Receiving is unconditional. The server sends a client's downlink over UDP from that client's
-  first ping, whether or not it has ever transmitted, so a socket that only pinged would hear
-  nothing ([mumble-protocol.md](mumble-protocol.md), Voice framing).
+| Direction | Who decides | Rule |
+|---|---|---|
+| **Outgoing** voice, what we send | this app (`VoicePath`) | TCP until a UDP ping has been answered. Back to TCP when UDP pings stop being answered. |
+| **Incoming** voice, what we hear | the server | UDP once it knows our UDP address, which our first UDP ping gives it. TCP after we send it any voice frame over TCP. UDP again after we send it audio over UDP. |
 
-### Which transport carries our voice
+So the server's choice for incoming voice follows whatever we last did with outgoing voice. This
+app accepts incoming voice from both at all times, so it never needs to know which one the server
+picked.
 
-`net/VoicePath`. Each link is in one of two states: our outgoing voice is *tunneled*, sent as
-`UDPTunnel` frames on the TLS connection, or *on UDP*. A link starts tunneled.
-`MumbleConnection.sendVoice` reads the state for every packet, and the status line shows it from
-`Connection.voicePath`, as `UDP` or `TCP` beside the round trip.
+### Outgoing voice: promote and demote
 
-- **Promote** switches our outgoing voice from the tunnel to UDP, from the next packet on.
-- **Demote** switches it back to the tunnel, and the status line goes back from `UDP` to `TCP`.
+`net/VoicePath` holds one fact per link: is outgoing voice on UDP? It starts as no.
+`MumbleConnection.sendVoice` reads it for every packet. The code has a name for each change:
 
-Neither changes what we accept: both sockets feed the same receiver, whichever state the path is
-in. The server picks the path for what we hear, our downlink, and it follows our outgoing voice:
-any tunneled frame from us moves the downlink to the tunnel, and our next UDP audio packet moves
-it back ([below](#when-udp-stops-working)).
+- **Promote:** outgoing voice switches from TCP to UDP, starting with the next packet.
+- **Demote:** outgoing voice switches from UDP back to TCP, starting with the next packet.
 
-What causes each:
+Nothing else changes on either. The UDP socket stays open, a UDP ping still goes out every 5 s,
+and incoming voice is still accepted from both. The status line shows the current one, as `UDP`
+or `TCP` beside the round trip.
 
-- **Promote:** one UDP ping reply at the start of a link. After a demotion it takes two, which
-  damps flapping. The server answers a UDP ping over UDP whichever path voice is on, so the
-  evidence keeps arriving while tunneled.
-- **Demote:** the transport reports two pings in a row unanswered, or the socket refuses a
-  datagram. The refused datagram goes through the tunnel in the same call. Demotions are not
-  capped.
+| Change | Happens when |
+|---|---|
+| Promote | A UDP ping is answered. The first promotion of a link takes one answer. After a demotion it takes two, so a path that works on and off does not flip back and forth. |
+| Demote | Two UDP pings in a row go unanswered, or the socket refuses a datagram. A refused datagram is sent over TCP instead, in the same call. |
 
-Three details:
+For example:
 
+```
+link connects           outgoing voice on TCP; first UDP ping sent
+ping answered           promote: outgoing voice on UDP
+two pings unanswered    demote:  outgoing voice on TCP
+ping answered           one of the two answers now needed
+ping answered           promote: outgoing voice on UDP
+```
+
+The ping is the only evidence used:
+
+- An answered ping proves both directions at once.
+- The server answers a UDP ping over UDP even while our voice is on TCP, so pings keep testing the
+  UDP path after a demotion. That is what lets voice return to UDP.
 - The cipher's counters are never consulted: our encrypt counter advances whether or not a
   datagram arrives.
-- The path and its round trip are one record, so a demotion clears both together.
-- Every accepted reply also feeds the average our TCP ping reports, which is what other clients
+- Every accepted answer also feeds the average our TCP ping reports, which is what other clients
   show about us ([mumble-protocol.md](mumble-protocol.md), Ping).
 
 ### When UDP stops working
 
-The server binds a client's UDP address once and never learns a new one. It sends the downlink
-there while a per-user flag is set, and only a `UDPTunnel` frame from that client clears the flag.
-A client that only listens never sends one. So a NAT that rebinds our port, or a socket that dies,
-would leave us deaf while the control channel looks healthy.
+A demotion fixes outgoing voice. Incoming voice needs one more step, because of two rules the
+server follows:
 
-- The transport judges each ping when it sends the next one, and reports two in a row unanswered
-  once per outage.
-- The connection then demotes the path and tunnels one ping. The server clears the flag on any
-  tunneled frame that passes its length check, before decoding it, so a ping moves the downlink
-  to the tunnel and no peer hears anything.
-- A rebound port stays on the tunnel for the rest of the link, because the server ignores the
-  new port.
-- A brief loss costs two ping intervals to demote and two replies to come back. Only a UDP audio
-  packet from us sets the server's flag again, so a listener who never speaks keeps a tunneled
-  downlink after any demotion.
+- It learns our UDP address once and never updates it.
+- It keeps sending incoming voice to that address until it sees a voice frame from us over TCP.
+
+Someone who is only listening sends no voice frames. So if UDP dies while we listen, for example
+because a NAT gave us a new port, the server would go on sending to a dead address. We would hear
+nothing, while the control connection looked healthy.
+
+So when a demotion is caused by unanswered pings, the connection also sends one ping over TCP
+(`TUNNEL_PING`). The server never answers it. Its arrival is enough: the server switches our
+incoming voice to TCP on any voice frame that arrives over TCP, before decoding it, so no other
+user hears anything. When the cause was a refused datagram, that datagram went over TCP and had
+the same effect.
+
+What follows from that:
+
+- **Detection takes two to three ping intervals.** The transport judges each ping when it sends
+  the next one, and reports two in a row unanswered once per outage.
+- **Incoming voice returns to UDP only when we next send audio over UDP,** which needs a
+  promotion and then us talking. A listener who never talks keeps hearing over TCP for the rest
+  of the link.
+- **A changed port never recovers.** The server ignores datagrams from a port it did not learn,
+  so the pings stay unanswered and voice stays on TCP both ways until the link is replaced.
+- **A brief loss** costs two unanswered pings to demote and two answers to promote again.
+- **A replacement link starts over:** new address, new cipher, outgoing voice on TCP.
+
+Pinned against a real server by `LiveServerIntegrationTest`.
+
+### UDP voice
+
+The socket itself: `net/MumbleUdpTransport`. A connected `DatagramChannel` aimed at the control
+connection's remote address, `CryptState` encrypting and decrypting every datagram, and one thread
+blocked in read.
+
+- It is opened as soon as the control connection is up, and closed with the link.
+- If it cannot be opened, nothing is lost. The server never learns a UDP address and sends our
+  incoming voice over TCP.
+- The state machine owns the cipher, because `CryptSetup` is a control message. It sends the first
+  UDP ping when the cipher is keyed, and one more with every TCP ping.
+- It listens from the start. The server sends incoming voice over UDP from our first ping, whether
+  or not we have ever sent audio, so a socket that pinged without listening would hear nothing
+  ([mumble-protocol.md](mumble-protocol.md), Voice framing).
 
 ## Tests
 

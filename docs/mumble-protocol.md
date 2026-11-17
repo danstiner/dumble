@@ -93,13 +93,13 @@ in `UserStats`:
 
 - **UDP cipher counts** (`good`, `late`, `lost`, `resync`). The server's reply carries its own,
   which say whether it can decrypt our datagrams. Desktop Mumble judges UDP health from them.
-  We send them too, but judge by the UDP ping alone ([network.md](network.md), Which transport
-  carries our voice).
+  We send them too, but judge by the UDP ping alone ([network.md](network.md), Outgoing voice:
+  promote and demote).
 - **Round trips**: mean and variance over the last twenty replies for each of TCP and UDP
   (`tcp_ping_avg`, `udp_ping_avg`, `*_ping_var`), and reply counts (`tcp_packets`, `udp_packets`,
   which count ping replies and not voice, on desktop too). This is how another client shows our
   round trip. A UDP average being present means a UDP ping has round-tripped on this link; it
-  stays set after a demotion (`PingAverage`).
+  stays set after our voice falls back to TCP (`PingAverage`).
 
 ### Self mute and deafen
 
@@ -287,5 +287,5 @@ This client matches desktop behaviour by default. Each departure is deliberate.
 | Wider IV window: 63 behind, 191 lost in a row | Loss bursts of seconds are routine on mobile networks. | None on the wire; the choice is local to the receiver. | `net/CryptState.kt` |
 | Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
 | 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
-| UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: only two unanswered pings in a row demote it. | `net/VoicePath.kt` |
+| UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |
 | A mute asked for while deafened is kept | It follows from storing the two asks separately. | None: no control can ask for it. | `DeafenState` |
