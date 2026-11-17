@@ -52,9 +52,11 @@ class MumbleTcpTransport(
     private val handshakeTimeoutMs: Int = 10_000,
 ) : MumbleControlTransport {
 
-    // Small on purpose: this is a low-volume control channel — a couple of handshake frames, then a
-    // ping every few seconds. A larger buffer would only let a stalled socket hide longer behind a
-    // queue that keeps accepting frames. Revisit if voice is ever tunnelled here (UDPTunnel).
+    // Small on purpose. Control traffic is a couple of handshake frames, then a ping every few
+    // seconds; voice adds a UDPTunnel frame every 20 ms while it is not on UDP, so a full queue is
+    // about 640 ms of it. A larger buffer would only let a stalled socket hide longer behind a
+    // queue that keeps accepting frames. A full one refuses the frame, which VoiceSender counts
+    // in droppedFrames.
     private val sendQueue = Channel<ByteArray>(capacity = 32)
 
     @Volatile private var socket: SSLSocket? = null

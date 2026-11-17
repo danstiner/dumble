@@ -20,7 +20,7 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
 
 /**
  * Owns inbound voice below the platform: one PacketQueue and one SpeakerDecoder per sender, mixed
- * into one frame per fillQuantum call. Platform-free — no JNI, no output device.
+ * into each fillQuantum call's output. Platform-free — no JNI, no output device.
  *
  * The two halves are separate types because they answer to different threads. A packet queue is
  * touched only under mutex_; a decoder only from the playback thread, with mutex_ released. The
@@ -40,16 +40,17 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
  * this is the one class where the two sides meet, so there is no single rule to state.
  *
  * fillQuantum is deliberately shaped as an audio data callback: non-blocking in realtime mode,
- * allocation-free, and taking its sample count per call. Today a Kotlin playback thread drives it between AudioTrack
- * writes; an Oboe callback will call the same function unchanged.
+ * allocation-free, and taking its sample count per call. OboePlayout calls it from the output
+ * stream's data callback, at whatever size the device asks for — normally one burst.
  *
- * One fillQuantum call — a fill — is the engine's only clock; nothing in here advances between
- * fills. What a fill produces is a **quantum**: `samples` of audio, picked by the caller, which
- * today's playback loop sets to one frame. A fill produces at most that, and often less.
+ * One fillQuantum call — a fill, or several for an oversize call — is the engine's only clock;
+ * nothing in here advances between fills. What a fill produces is a **quantum**: `samples` of
+ * audio, picked by the caller. A fill produces at most that, and often less.
  *
  * Every limit below is a count of samples accumulated from each fill's `samples`, so it means the
- * same time at any fill size. A fill that produced nothing counts its samples as elapsed too:
- * under a device-paced caller it was, and under the push loop it is the 10 ms park.
+ * same time at any fill size. A fill that produced nothing counts its samples as elapsed too,
+ * since the device paces the fills. Two exceptions: the shrink cooldown counts only fills that
+ * produced, and a contended fill counts nothing.
  */
 class PlayoutEngine {
 public:
@@ -164,8 +165,8 @@ public:
      *  fill that finds the reader inside offer() outputs silence, touches no per-speaker state,
      *  and counts one in Stats::contendedFills, rather than blocking a realtime thread behind a
      *  normal-priority one — std::mutex has no priority inheritance, and AAudio's
-     *  callback contract forbids waiting on one. Off by default: the push loop's own thread is
-     *  the only other caller, and blocking there is harmless. */
+     *  callback contract forbids waiting on one. Off by default, for a caller that is not a
+     *  realtime thread — the host tests — where blocking is harmless; OboePlayout turns it on. */
     void setRealtime(bool realtime);
 
 #ifdef DUMBLE_TESTING
