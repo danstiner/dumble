@@ -50,7 +50,7 @@ The gate is not stored. `apply` derives it from three levels as
 `!muted && (pressed || voiceActivity)`, whenever one of them changes and again when the capture
 session opens.
 
-- **Muted** is the `self_mute` Dumble last asked the server for, including one forced by a
+- **Muted** is the `self_mute` the app last asked the server for, including one forced by a
   deafen. It is not the server's echo, so the gate closes at the tap.
 - **Wanting the gate open also asks for capture again,** which is how capture comes back after a
   terminal failure.

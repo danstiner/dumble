@@ -1,9 +1,8 @@
 # Avatar color
 
-**Normative.** This page is the specification, written so that other Dumble codebases can show the
-same person in the same color. `Fnv1a.kt` and `AvatarPalette.kt` implement it, and `Fnv1aTest.kt`
-and `AvatarPaletteTest.kt` pin them to the vectors below. Change this page and those files
-together.
+**Normative.** This page is the specification, written so that other ports of the app can show the same person in the same color. `Fnv1a.kt` and `AvatarPalette.kt` implement it, and
+`Fnv1aTest.kt` and `AvatarPaletteTest.kt` pin them to the vectors below. Change this page and those
+files together.
 
 ## Goals
 

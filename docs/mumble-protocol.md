@@ -1,9 +1,10 @@
 # The Mumble protocol
 
-The wire protocol as Dumble speaks it: Mumble 1.5 and newer, protobuf voice, Opus only. This page
-is a reference for what crosses the network, plus the reasoning wherever Dumble had a choice. The
-choices are collected in the [last section](#where-dumble-departs-from-the-desktop-client). How
-the code is organised around the protocol is in [network.md](network.md).
+The wire protocol as this client speaks it: Mumble 1.5 and newer, protobuf voice, Opus only. This
+page is a reference for what crosses the network, plus the reasoning wherever this client had a
+choice. The choices are collected in the [last
+section](#where-this-client-departs-from-the-desktop-client). How the code is organised around the
+protocol is in [network.md](network.md).
 
 Upstream documents the protocol at [mumble.readthedocs.io](https://mumble.readthedocs.io/). The
 protobuf schemas are vendored in `app/src/main/proto/` (`Mumble.proto`, `MumbleUDP.proto`), and
@@ -15,8 +16,8 @@ A session is one TLS-over-TCP **control channel** and, optionally, one encrypted
 channel** to the same host and port. Anything UDP carries can also travel on the control channel
 inside `UDPTunnel` frames, so TCP alone is a complete session.
 
-Dumble opens the UDP channel on every session, receives on it from the first ping, and sends voice
-on it once a ping has round-tripped ([network.md](network.md)).
+This client opens the UDP channel on every session, receives on it from the first ping, and sends
+voice on it once a ping has round-tripped ([network.md](network.md)).
 
 ## Control channel
 
@@ -27,9 +28,9 @@ TLS to the server's port, 64738 by default. Every message is framed the same way
 ```
 
 The payload is a protobuf message from `Mumble.proto`, except type 1 (`UDPTunnel`), which is a raw
-voice datagram. Message types Dumble does not model are ignored, which is also how the protocol
-stays forward compatible. Dumble refuses inbound payloads over 8 MiB (`MumbleCodec.MAX_TCP_PAYLOAD`)
-to guard against a hostile length; the protocol has no limit.
+voice datagram. Message types this client does not model are ignored, which is also how the protocol
+stays forward compatible. This client refuses inbound payloads over 8 MiB
+(`MumbleCodec.MAX_TCP_PAYLOAD`) to guard against a hostile length; the protocol has no limit.
 
 | id | message | notes |
 |---:|---|---|
@@ -48,15 +49,15 @@ to guard against a hostile length; the protocol has no limit.
 | 24 | ServerConfig | limits such as message and image length |
 
 The rest (BanList, ACL, QueryUsers, UserList, ContextAction, RequestBlob, SuggestConfig, UserStats,
-PluginDataTransmission) are administrative or optional. Dumble uses `UserStats` and ignores the
+PluginDataTransmission) are administrative or optional. This client uses `UserStats` and ignores the
 others.
 
 ### Version encoding
 
-Two encodings coexist. Legacy `version_v1` is a u32, `major<<16 | minor<<8 | patch`. Minor and
-patch saturate at 255, which real 1.3 to 1.5 point releases reach. `version_v2` is a u64 with 16
-bits each for major, minor and patch at bits 48, 32 and 16; the low 16 are reserved. Dumble sends both, prefers v2 when
-reading, and announces itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
+Two encodings coexist. Legacy `version_v1` is a u32, `major<<16 | minor<<8 | patch`. Minor and patch
+saturate at 255, which real 1.3 to 1.5 point releases reach. `version_v2` is a u64 with 16 bits each
+for major, minor and patch at bits 48, 32 and 16; the low 16 are reserved. This client sends both,
+prefers v2 when reading, and announces itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
 
 ### Handshake
 
@@ -65,12 +66,12 @@ reading, and announces itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
 2. The server streams `CryptSetup`, `CodecVersion`, every `ChannelState` and every `UserState`.
 3. `ServerSync` ends the handshake. Nothing received before it is authoritative.
 
-Failure is a `Reject` or a closed socket. The protocol has no handshake timeout; Dumble allows 15 s
-to `ServerSync` (`HANDSHAKE_DEADLINE_MS`).
+Failure is a `Reject` or a closed socket. The protocol has no handshake timeout; this client allows
+15 s to `ServerSync` (`HANDSHAKE_DEADLINE_MS`).
 
-Dumble refuses servers older than 1.5 at the `Version` message. A 1.4 server parses protobuf voice
-as malformed legacy CELT and silently drops every frame, so joining one would mean a session with
-no voice.
+This client refuses servers older than 1.5 at the `Version` message. A 1.4 server parses protobuf
+voice as malformed legacy CELT and silently drops every frame, so joining one would mean a session
+with no voice.
 
 The client certificate is not a protocol message. It is part of the TLS handshake, and
 `Authenticate` never mentions it ([network.md](network.md), Client certificate).
@@ -84,15 +85,15 @@ changed fields set. Nothing is polled.
 ### Ping
 
 The client must ping or be dropped: murmur's default drops a silent connection after about 30 s.
-Dumble pings every 5 s (`PING_INTERVAL_MS`). A link with no reply for three intervals is ended as
-a timeout and replaced ([network.md](network.md), Reconnect).
+This client pings every 5 s (`PING_INTERVAL_MS`). A link with no reply for three intervals is ended
+as a timeout and replaced ([network.md](network.md), Reconnect).
 
 The `Ping` message also carries statistics, which the server stores and returns to other clients
 in `UserStats`:
 
 - **UDP cipher counts** (`good`, `late`, `lost`, `resync`). The server's reply carries its own,
   which say whether it can decrypt our datagrams. Desktop Mumble judges UDP health from them.
-  Dumble sends them and judges by the UDP ping alone ([network.md](network.md), Which transport
+  We send them too, but judge by the UDP ping alone ([network.md](network.md), Which transport
   carries our voice).
 - **Round trips**: mean and variance over the last twenty replies for each of TCP and UDP
   (`tcp_ping_avg`, `udp_ping_avg`, `*_ping_var`), and reply counts (`tcp_packets`, `udp_packets`,
@@ -108,7 +109,7 @@ A client sets both in its own `UserState`. The server stores and echoes them and
 `self_deaf`. It never lifts a mute that a deafen forced, so what an undeafen does to the mute is
 up to the client.
 
-Dumble follows desktop Mumble (`on_qaAudioMute_triggered` and `on_qaAudioDeaf_triggered` in
+This client follows desktop Mumble (`on_qaAudioMute_triggered` and `on_qaAudioDeaf_triggered` in
 `src/mumble/MainWindow.cpp`):
 
 | Ask | Result |
@@ -121,10 +122,10 @@ Dumble follows desktop Mumble (`on_qaAudioMute_triggered` and `on_qaAudioDeaf_tr
 Desktop keeps three flags (`bMute`, `bDeaf`, `unmuteOnUndeaf`). `DeafenState` keeps the two asks,
 the deafen and the user's own mute, and derives the wire's `self_mute` as either one. That is the
 same machine with the invalid states unrepresentable, and every ask is an idempotent set. It was
-checked against a port of the two desktop handlers over every toggle sequence to depth 16 and
-every explicit on/off sequence to depth 8. The one difference is a mute asked for while deafened:
-`DeafenState` keeps it as the user's own, where desktop's shortcut ignores it. Dumble sends both
-fields with every ask, so the server's coupling never has to act.
+checked against a port of the two desktop handlers over every toggle sequence to depth 16 and every
+explicit on/off sequence to depth 8. The one difference is a mute asked for while deafened:
+`DeafenState` keeps it as the user's own, where desktop's shortcut ignores it. This client sends
+both fields with every ask, so the server's coupling never has to act.
 
 **The ask and the echo are separate states.** Only a user's own `UserState` can write their
 `self_mute` and `self_deaf` (murmur returns early on anyone else's, and its Ice interface only
@@ -147,10 +148,10 @@ loopback), `frame_number`, `opus_data`, and `is_terminator` on the last packet o
 
 **Audio, downlink.** `context` (normal, shout, whisper, listener) replaces `target`, and
 `sender_session` is added. `frame_number` orders the packets of one speaker and is what the
-jitter buffer keys on. Each packet Dumble sends is one 20 ms mono Opus frame.
+jitter buffer keys on. Each packet this client sends is one 20 ms mono Opus frame.
 
-Dumble ignores `positional_data` (a non-goal) and `volume_adjustment`, the server's per-listener
-volume change.
+This client ignores `positional_data` (a non-goal) and `volume_adjustment`, the server's
+per-listener volume change.
 
 **Over TCP** the same bytes travel as a `UDPTunnel` frame with no encryption beyond TLS. Tunneled
 voice inherits TCP's ordering and its head-of-line blocking, which is why the UDP path exists.
@@ -160,8 +161,8 @@ voice inherits TCP's ordering and its head-of-line blocking, which is why the UD
 `Ping` carries a client timestamp that the server echoes unchanged. Because it goes through the
 same encryption as audio, a reply proves the UDP path specifically.
 
-How murmur treats a client's UDP address shapes everything Dumble does here (`src/murmur/Server.cpp`,
-checked at `90c2184c8`):
+How murmur treats a client's UDP address shapes everything we do here
+(`src/murmur/Server.cpp`, checked at `90c2184c8`):
 
 1. **It learns the address only from a datagram it can decrypt,** by trying the keys of every
    session from that host.
@@ -206,7 +207,7 @@ carrying into the higher bytes. Only the low byte is sent, so the receiver rebui
 fifteen from the counter it holds and must choose among 256 candidates. That choice is local to
 the receiver: nothing on the wire records it.
 
-Dumble reads the byte as up to 63 behind the highest counter accepted, or up to 192 ahead. One
+This client reads the byte as up to 63 behind the highest counter accepted, or up to 192 ahead. One
 guess covers both, so an attacker can never force a second decrypt.
 
 - **63 behind** is 1.26 s of reordering at 50 packets a second, far more than networks produce.
@@ -231,8 +232,8 @@ every later packet repeats the comparison and the receive direction is stuck. Th
 hides this: 5 s without a good decrypt triggers a resync, so the symptom is a rare one-way dropout
 that looks like network loss.
 
-A bitmap has no sentinel value to confuse with a real one, and Dumble marks the seed consumed at
-keying, so the first packet under a new key is unambiguously seed + 1. All of this is local
+A bitmap has no sentinel value to confuse with a real one, and this client marks the seed consumed
+at keying, so the first packet under a new key is unambiguously seed + 1. All of this is local
 bookkeeping; no byte on the wire depends on it.
 
 ### Resync
@@ -247,7 +248,7 @@ bookkeeping; no byte on the wire depends on it.
 - A malformed `CryptSetup` is logged and dropped, as upstream does, and does not end the session.
 - Voice lost in the gap stays lost.
 
-Dumble adopts the server's reply unconditionally, as upstream does. A request fires only after
+This client adopts the server's reply unconditionally, as upstream does. A request fires only after
 5 s without a good decrypt, so the highest counter has stopped moving and an honest reply lands at
 or ahead of it. Two edge cases:
 
@@ -262,10 +263,10 @@ still cannot be replayed. Upstream's table does not guarantee that.
 
 ### OCB2 is broken
 
-Inoue et al. 2019 ([eprint 2019/311](https://eprint.iacr.org/2019/311)) showed universal forgery
-and full plaintext recovery against OCB2 when the attacker controls plaintexts with near-zero
-blocks. Every 1.5 server speaks OCB2 and nothing else on UDP, so it stays. Dumble implements the
-two countermeasures peers expect, from the paper:
+Inoue et al. 2019 ([eprint 2019/311](https://eprint.iacr.org/2019/311)) showed universal forgery and
+full plaintext recovery against OCB2 when the attacker controls plaintexts with near-zero blocks.
+Every 1.5 server speaks OCB2 and nothing else on UDP, so it stays. This client implements the two
+countermeasures peers expect, from the paper:
 
 - **Encrypt.** When the last full plaintext block is all zeros except its last byte, which is the
   attack's precondition, one plaintext bit is flipped before encrypting.
@@ -274,11 +275,11 @@ two countermeasures peers expect, from the paper:
 
 The TCP tunnel does not use OCB2; tunneled voice has TLS's integrity.
 
-## Where Dumble departs from the desktop client
+## Where this client departs from the desktop client
 
-Dumble matches desktop behaviour by default. Each departure is deliberate.
+This client matches desktop behaviour by default. Each departure is deliberate.
 
-| Dumble | Why | Cost | Where |
+| This client | Why | Cost | Where |
 |---|---|---|---|
 | Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
 | No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |

@@ -1,6 +1,6 @@
 # Network
 
-How Dumble reaches a server and stays there. The first half covers a connection as a whole:
+How the app reaches a server and stays there. The first half covers a connection as a whole:
 sessions, links and reconnecting. Then [TCP](#tcp-the-control-connection) covers the TLS control
 connection and trust, and [UDP](#udp-the-voice-path) covers the voice socket. The bytes on the
 wire are in [mumble-protocol.md](mumble-protocol.md).
@@ -98,13 +98,13 @@ runs out. The first link of a session is never retried: its failure is the conne
 ### What ends the session instead
 
 - **A rejection,** classified by the server's reject type. "Username in use" is retried for 45 s,
-  long enough for murmur to drop our ghost, which it does after 30 s of silence. Every other rejection, and a server older than 1.5,
-  ends the session at once.
-- **A kick or a ban.** Murmur sends the removal before closing the socket, and the session ends
-  with its reason. Another device connecting on our certificate kicks us with the same message,
-  so two devices never kick each other back and forth.
-- **A trust prompt on a replacement.** The session is retired and kept for `trustAndConnect()`,
-  as on a first connect.
+  long enough for murmur to drop our ghost, which it does after 30 s of silence. Every other
+  rejection, and a server older than 1.5, ends the session at once.
+- **A kick or a ban.** Murmur sends the removal before closing the socket, and the session ends with
+  its reason. Another device connecting on our certificate kicks us with the same message, so two
+  devices never kick each other back and forth.
+- **A trust prompt on a replacement.** The session is retired and kept for `trustAndConnect()`, as
+  on a first connect.
 - **A local network block on a replacement.** It waits on the user.
 
 ### Network changes
@@ -180,9 +180,9 @@ lookup succeeds without the permission and its socket is then blocked like any o
 ### Protocol session
 
 `protocol/SessionStateMachine`. It sends `Version` and `Authenticate`, then waits for `ServerSync`
-under its own 15 s deadline, since the transport's own timeouts (10 s each for the socket connect and the TLS handshake)
-end there. State
-transitions settle by compare-and-set, and the first failure wins.
+under its own 15 s deadline, since the transport's own timeouts (10 s each for the socket connect
+and the TLS handshake) end there. State transitions settle by compare-and-set, and the first failure
+wins.
 
 - Pings run on the boot clock, which counts time in doze.
 - The published value is the instant of the last server reply, not its age. An age is stale as

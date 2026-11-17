@@ -59,7 +59,7 @@ Start with [architecture](docs/architecture.md). Each subsystem has its own page
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | the layers, the threads, where the code lives |
 | [docs/network.md](docs/network.md) | connecting, reconnecting, certificates, choosing UDP or TCP for voice |
-| [docs/mumble-protocol.md](docs/mumble-protocol.md) | the wire protocol as Dumble speaks it |
+| [docs/mumble-protocol.md](docs/mumble-protocol.md) | the wire protocol as this client speaks it |
 | [docs/capture.md](docs/capture.md) | microphone to packets, the transmit gate, sharing the microphone |
 | [docs/voice-activity.md](docs/voice-activity.md) | the voice activity detector: design, constants, measurements |
 | [docs/playout.md](docs/playout.md) | packets to the speaker, the jitter buffer, measured latency |

@@ -1,16 +1,16 @@
 # Architecture
 
-What Dumble is built to do, how it is divided, and the decisions that shaped the division. Each
+What the app is built to do, how it is divided, and the decisions that shaped the division. Each
 subsystem has its own page with the same structure: goals, design, decisions and their costs.
 
 ## Goals
 
-- **Work with stock Mumble.** Any 1.5 or newer server, alongside desktop clients, behaving as
-  desktop does unless a page says why not.
+- **Work with a stock Mumble server.** Version 1.5 or newer, alongside desktop clients, behaving
+  as desktop does unless a page says why not.
 - **Low, known voice delay.** Delay is measured at each stage, shown per speaker, and pinned in a
   CI test, so a change that adds delay shows up as a diff.
-- **A call survives the network changing.** WiFi to cellular, a tunnel, a brief outage.
-- **Share the phone.** A phone call or another voice app takes the microphone and gets it; Dumble
+- **A call survives the network changing.** WiFi to cellular, a brief outage.
+- **Share the phone.** A phone call or another voice app takes the microphone and gets it; the app
   resumes by itself afterwards.
 - **Testable without a device.** The audio engines run on the host with the real codec, and the
   Kotlin runs on virtual time.
@@ -40,9 +40,9 @@ Non-goals:
       └─ AndroidVoiceCall              audio mode and route, foreground service, hold and resume
 ```
 
-One TLS connection carries the protobuf control messages. Voice goes over a UDP socket beside it
-once a UDP ping has round-tripped, and inside the TLS connection until then. Audio is 48 kHz mono
-16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packets.
+One TLS connection carries the protobuf control messages. Voice initially goes over the TCP
+connection, but switches to UDP once a round-trip ping proves UDP connectivity. Audio is 48 kHz
+mono 16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packets.
 
 **Connection** ([network.md](network.md)). `MumbleConnection` is a Hilt singleton bound to the
 `Connection` interface. It runs the TLS connect, the protocol session and the reconnects, and
@@ -68,7 +68,7 @@ still listen in the background.
 | Audio engines in portable C++, Android confined to a thin adapter | The realtime audio callbacks never enter the JVM, and CI runs the engines on the host against the real libopus, sample-exact. | A JNI seam, and a few constants kept in step by hand on both sides. |
 | Oboe streams driven by the device's callbacks | The device paces the audio, so the buffer can be two bursts. A Kotlin loop feeding an `AudioTrack` could not hold a buffer that small (measured: about 3000 underruns a minute). | Below API 37 a low-latency stream disconnects on every route change and must be reopened. |
 | Platform `SSLSocket` for TLS | TLS 1.3, patched by the OS. Ktor's own TLS was 1.2 only when this was decided (2026-07). | Reads block and cannot be cancelled, so teardown closes the socket and late results are discarded by generation (below). |
-| No Telecom call | Telecom shows a call to every in-call service that asks or to none. The first lets another app's dialer draw over our screen; the second leaves a Bluetooth headset without call audio. | Dumble detects holds itself, from the audio mode and the recording callback, and has no system call UI. |
+| No Telecom call | Telecom shows a call to every in-call service that asks or to none. The first lets another app's dialer draw over our screen; the second leaves a Bluetooth headset without call audio. | The app detects holds itself, from the audio mode and the recording callback, and has no system call UI. |
 | Voice starts inside TLS and moves to UDP on a ping reply | It works at once through any firewall, and UDP is used only once proven in both directions. | Until promotion, voice has TCP's head-of-line blocking. |
 | Servers older than 1.5 are refused | A 1.4 server silently drops protobuf voice, so a session there has no audio. Refusing also removes the legacy voice framing and CELT. | No access to old servers, even for chat. |
 | Voice activity detector written by hand, no inference runtime ([voice-activity.md](voice-activity.md)) | ONNX Runtime is about 32 MB per ABI; the detector is 1.2 MB of weights and about 300 lines of C++. | Every model change must be re-verified against committed reference traces. |
@@ -111,8 +111,8 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 These recur across the code. Each exists because of a specific failure.
 
 **Generations.** Teardown cannot always stop a TLS handshake in flight, so a superseded connect can
-finish late and overwrite a newer session's state. Every `connect()` bumps a generation, and every flow
-write is checked against it under one lock, so a late write does nothing.
+finish late and overwrite a newer session's state. Every `connect()` bumps a generation, and every
+flow write is checked against it under one lock, so a late write does nothing.
 
 **Levels, not events.** Four things ask for capture to open or close, concurrently. Each sends a
 command to one channel. Its single consumer sets a level (capture wanted, call held, session live)
