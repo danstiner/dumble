@@ -13,7 +13,7 @@
 
 namespace dumble {
 
-/** Which producer decides that audio goes out. Nothing sets VoiceActivity until PR 3. */
+/** Which producer decides that audio goes out: the Talk button, or the speech gate. */
 enum class TransmitMode { PushToTalk, VoiceActivity };
 
 /**
