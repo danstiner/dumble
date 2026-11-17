@@ -29,7 +29,8 @@ data class Attribution(
  * declared POM <license> element, not assumed.
  *
  * Test-only dependencies (JUnit, Robolectric, Espresso) are not distributed and owe no
- * attribution. verifyAttribution fails the build if a shipped group is missing here.
+ * attribution. The `verifyShippedGroups` task pins the shipped group list, and `AttributionTest`
+ * fails if a group in it is missing here.
  */
 val ATTRIBUTIONS: List<Attribution> = listOf(
     Attribution(groupPrefix = "androidx", description = "AndroidX — Jetpack Compose, Lifecycle, Activity, DataStore, Navigation (libandroidx.graphics.path.so, libdatastore_shared_counter.so)", license = License.APACHE_2_0),

@@ -69,10 +69,9 @@ private fun Modifier.controlSize() = layout { measurable, constraints ->
  *
  * Talk and Mute share one slot, chosen by [transmitMode]: a mute button is meaningless while
  * push-to-talk's gate is closed by default, and under voice activity it is the only thing that
- * closes it. Deafen is not
- * redundant with push-to-talk — it is about not hearing others, not about not transmitting. Speaker
- * is now the audio-route control, which reads [AudioRoutes.available] to decide whether it is a
- * speaker toggle or a menu — see [RouteControl].
+ * closes it. Deafen is not redundant with push-to-talk — it is about not hearing others, not about
+ * not transmitting. Speaker is the audio-route control, which reads [AudioRoutes.available] to
+ * decide whether it is a speaker toggle or a menu — see [RouteControl].
  *
  * [deafened] and [muted] are what was last asked for, so they move at the tap — see
  * `ConnectViewModel.onToggleDeafen`.
@@ -137,8 +136,8 @@ fun CallControls(
  * The caption cannot hold a full explanation, so the reason goes to `contentDescription` where
  * screen readers and the long-press tooltip still carry it.
  *
- * [block] can change mid-press, unlike the microphone answer it replaced: an admin mute, a channel
- * suppress, or a deafen from a second finger all disable this button under a held thumb. Compose
+ * [block] can change mid-press: an admin mute, a channel suppress, or a deafen from a second
+ * finger all disable this button under a held thumb. Compose
  * disposes the button's interactions on disable and emits `PressInteraction.Cancel`, which the
  * collector below treats as a release — without that the transmit level stays raised and every
  * rebuilt capture session re-applies it. Pinned by `talkDisabledWhileHeldClosesTheGate`, and
@@ -258,8 +257,9 @@ private fun RouteControl(
     // Whatever is actually known, in order: the route the platform has named, then the destination
     // a tap would reach — the latter only in toggle mode, where the tap goes straight there with no
     // menu in between to read. Both can be absent, and independently: `available` and `current` are
-    // separate collectors, so a frame arrives with routes but no current yet, and that used to read
-    // as the bare "Audio output" of a dead control while the button was live with somewhere to go.
+    // separate collectors, so a frame arrives with routes but no current yet. Without the second
+    // entry that frame reads as the bare "Audio output" of a dead control, while the button is
+    // live with somewhere to go.
     val known = listOfNotNull(
         current?.label,
         toggleTarget?.let { "tap for ${it.label}" },
@@ -304,17 +304,17 @@ private fun talkDescription(block: TalkBlock?) = when (block) {
     null -> "Push to talk"
     TalkBlock.NO_MICROPHONE -> "Microphone permission denied — you can still hear others"
     TalkBlock.DEAFENED -> "Undeafen to talk"
-    // Deliberately not "the server has muted you": the cause can be our own self_mute, and will be
-    // routinely once a mute control exists. States the consequence, which is true for all three.
+    // Deliberately not "the server has muted you": the cause can be our own self_mute, which the
+    // Mute control sets. States the consequence, which is true for all three.
     TalkBlock.MUTED -> "Muted — the server will not carry your audio"
     TalkBlock.RECONNECTING -> "Reconnecting — Talk comes back with the link"
 }
 
 /**
- * The description goes in a `semantics {}` block on the button rather than on the [Icon], which is
- * where it used to be: that put the label on a separate, non-clickable node, so `uiautomator` saw
- * two nodes per control and the one carrying the text reported `enabled=true` even for a disabled
- * button. [TalkControl] always did it this way.
+ * The description goes in a `semantics {}` block on the button rather than on the [Icon]: on the
+ * icon the label sits on a separate, non-clickable node, so `uiautomator` sees two nodes per
+ * control and the one carrying the text reports `enabled=true` even for a disabled button.
+ * [TalkControl] does the same.
  */
 @Composable
 private fun ControlButton(

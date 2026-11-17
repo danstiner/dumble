@@ -230,8 +230,8 @@ int CaptureEngine::pollPacket(uint8_t* out, int outCap, uint64_t* frameNumber, u
             candidateFrameNumber = offsetFrameNumber(ring_.readIndex(), clockOffset);
             haveFrame = assembler_.takePacket(ring_, scratch_.data());
         } else {
-            // At most one packet's worth of new audio per poll: the same throughput as the
-            // packet-native take this replaces, and the bound that stops a silent ring draining
+            // At most one packet's worth of new audio per poll: the same throughput as
+            // push-to-talk's takePacket above, and the bound that stops a silent ring draining
             // in a single pass.
             bool closing = false;
             for (int taken = 0; taken < kFramesPerPacket && readyFrames_ < kFramesPerPacket;

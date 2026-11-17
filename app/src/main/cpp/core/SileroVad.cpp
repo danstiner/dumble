@@ -105,17 +105,17 @@ std::unique_ptr<SileroVad> SileroVad::create(const void* weights, size_t bytes) 
 }
 
 SileroVad::SileroVad(const void* weights) {
-    // create() takes a const void* because PR 2's asset-loading path can hand this a pointer into
-    // a mapped APK, which lands on an arbitrary zip-entry byte offset — not necessarily a multiple
-    // of 4. Iterator-constructing a vector<float> from a reinterpreted float* would dereference
-    // that pointer as a float, undefined on a misaligned address; memcpy has no such requirement.
+    // create() takes a const void* because the weights arrive as bytes, and nothing in that type
+    // promises float alignment. Iterator-constructing a vector<float> from a reinterpreted float*
+    // would dereference that pointer as a float, undefined on a misaligned address; memcpy has no
+    // such requirement.
     std::vector<float> raw(kWeightFloats);
     std::memcpy(raw.data(), weights, kWeightFloats * sizeof(float));
 
     // Row 0 of the dense basis is window * cos(0) — the window itself.
     std::memcpy(window_, raw.data(), sizeof(window_));
 
-    const float* p = raw.data() + size_t(2 * kBins) * kFft;   // past the now-dead basis
+    const float* p = raw.data() + size_t(2 * kBins) * kFft;   // past the unused basis
     auto take = [&p](size_t n) { const float* q = p; p += n; return q; };
     auto vec = [&](size_t n) { const float* q = take(n); return std::vector<float>(q, q + n); };
 

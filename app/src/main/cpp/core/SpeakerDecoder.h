@@ -21,8 +21,9 @@ namespace dumble::playout {
  * Playback-thread-only. PlayoutEngine pops a packet under its mutex and then calls decode() with
  * the mutex released, so a slow decode never stalls the reader thread; nothing here may be touched
  * from the reader side. Takes no lock of its own: PcmRing is an SPSC ring whose two ends both sit
- * on this thread today, which costs a couple of atomics and keeps the drain movable to an Oboe
- * callback without changing anything here.
+ * on the playback thread — the output stream's callback, or setOutputDown's caller once the
+ * stream has stopped. Its atomics buy nothing here; they are the price of sharing PcmRing with
+ * capture, whose two ends sit on different threads.
  *
  * Mono, and not a parameter: decodeScratch_ is sized in total samples while opus_decode's
  * frame_size counts per channel, and decode() treats the return as a total. Mumble carries mono

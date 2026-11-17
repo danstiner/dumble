@@ -22,7 +22,8 @@ using dumble::playout::PlayoutEngine;
 namespace pl = dumble::playout;
 using namespace std::chrono_literals;
 
-// AudioConstants.kt FRAME_SAMPLES — the quantum the production playback loop asks for.
+// One 10 ms frame, the quantum these tests fill by. The device asks for a burst instead, whose
+// size varies by device and stream.
 constexpr int kFrame = 480;
 
 // Packets of one quantum needed to clear a cold speaker's gate. Derived, not written as 8, so it
@@ -1174,9 +1175,9 @@ TEST(PlayoutEngine, DeliberateDiscardCountsSurviveRetirement) {
     EXPECT_EQ(engine->stats().shrunkPackets, shrunk);
 }
 
-// The engine's limits are sample counts, so a fill of one device burst — 128 samples on a Pixel
-// 7a, 1088 on the emulator — must reach the same wall-clock outcome as today's 480, to within a
-// fill. The engine is sized for 480 throughout: 1088 exercises the chunked path.
+// The engine's limits are sample counts, so a fill of one device burst — measured from 128 to
+// 1088 samples — must reach the same wall-clock outcome as a 480-sample fill, to within a fill.
+// The engine is sized for 480 throughout: 1088 exercises the chunked path.
 class PlayoutEngineQuantum : public ::testing::TestWithParam<int> {
 protected:
     int quantum() const { return GetParam(); }

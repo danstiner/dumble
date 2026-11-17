@@ -7,10 +7,10 @@ import kotlin.time.Duration.Companion.microseconds
 /**
  * One second of receive-path measurement, or a talk spurt's final tally.
  *
- * Receive-side only, and named for it: capture latency will arrive as a sibling from the transmit
- * path, and composing the two is [me.danielstiner.dumble.mumble.connection.MumbleConnection]'s job,
- * since it is the only place that also sees ping. The UI reads [depth] and [latencyMs] off it
- * for one speaker at a time; the rest is still logcat-only.
+ * Receive-side only, and named for it: [CaptureStats] is its sibling on the transmit path.
+ * [PlayoutDelay] composes this with the pings into one speaker's delay, as [SendDelay] composes
+ * [CaptureStats] for our own voice. The UI reads [depth] and [latencyMs] off it for one speaker
+ * at a time; the rest is logcat-only.
  *
  * [underruns], [concealedGaps] and [droppedPackets] are counts within the current talk spurt,
  * not cumulative: a cumulative underrun count would report the silence we deliberately leave
