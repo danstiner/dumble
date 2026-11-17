@@ -2,7 +2,7 @@
 
 How the app reaches a server and stays there. The first half covers a connection as a whole:
 sessions, links and reconnecting. Then [TCP](#tcp-the-control-connection) covers the TLS control
-connection and trust, and [UDP](#udp-the-voice-path) covers the voice socket. The bytes on the
+connection and trust, and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes on the
 wire are in [mumble-protocol.md](mumble-protocol.md).
 
 ## Goals
@@ -190,10 +190,12 @@ wins.
 - Tunneled voice is delivered by callback, not through a flow. A `StateFlow` conflates, and a
   dropped emission would be dropped audio.
 
-## UDP: the voice path
+## UDP: the low-latency voice path
 
 A UDP socket beside the control connection carries voice once a ping has round-tripped on it. It
-is optional: without it the session is complete, with voice in the tunnel.
+is the low-latency path: a lost datagram delays nothing behind it, where TCP holds every later
+packet back until the lost one is resent. It is optional: without it the session is complete,
+with voice in the tunnel.
 
 ### UDP voice
 
@@ -211,13 +213,27 @@ address, `CryptState` encrypting and decrypting every datagram, and one thread b
 
 ### Which transport carries our voice
 
-`net/VoicePath`. Our voice starts in the tunnel. The server answers a UDP ping over UDP whichever
-path voice is on, so the evidence keeps arriving.
+`net/VoicePath`. Each link is in one of two states: our outgoing voice is *tunneled*, sent as
+`UDPTunnel` frames on the TLS connection, or *on UDP*. A link starts tunneled.
+`MumbleConnection.sendVoice` reads the state for every packet, and the UI shows it from
+`Connection.voicePath`.
 
-- **Promote:** one reply at the start of a link. After a demotion it takes two, which damps
-  flapping. Demotions are not capped.
-- **Demote:** the transport reports two pings unanswered, or the socket refuses a datagram. The
-  refused datagram goes through the tunnel in the same call.
+- **Promote** switches our outgoing voice from the tunnel to UDP, from the next packet on.
+- **Demote** switches it back to the tunnel, and clears the round trip the UI was showing. The
+  first tunneled frame after a demotion also makes the server move our downlink to the tunnel
+  ([below](#when-udp-stops-working)).
+
+Neither changes what we accept: both sockets feed the same receiver at all times, and which one
+the server sends our downlink on is the server's choice.
+
+What causes each:
+
+- **Promote:** one UDP ping reply at the start of a link. After a demotion it takes two, which
+  damps flapping. The server answers a UDP ping over UDP whichever path voice is on, so the
+  evidence keeps arriving while tunneled.
+- **Demote:** the transport reports two pings in a row unanswered, or the socket refuses a
+  datagram. The refused datagram goes through the tunnel in the same call. Demotions are not
+  capped.
 - The cipher's counters are never consulted: our encrypt counter advances whether or not a
   datagram arrives.
 - The path and its round trip are one record, so a demotion clears both together.
