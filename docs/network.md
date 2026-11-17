@@ -1,9 +1,9 @@
 # Network
 
-How the app reaches a server and stays there. The first half covers a connection as a whole:
+How this app reaches a server and stays there. The first half covers a connection as a whole:
 sessions, links and reconnecting. Then [TCP](#tcp-the-control-connection) covers the TLS control
-connection and trust, and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes on the
-wire are in [mumble-protocol.md](mumble-protocol.md).
+connection and trust, and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes
+on the wire are in [mumble-protocol.md](mumble-protocol.md).
 
 ## Goals
 
@@ -109,7 +109,7 @@ runs out. The first link of a session is never retried: its failure is the conne
 
 ### Network changes
 
-- A link is dialed on the app's default network and remembers which one.
+- A link is dialed on the default network and remembers which one.
 - When a change of the default network finds a link's own network gone, the link is closed
   without waiting for the socket to notice. A link on a non-default network gets no such
   event when that network later disappears; the ping timeout catches it.
@@ -167,7 +167,7 @@ certificate, generated in the background at first launch.
 
 ### Local network access
 
-Android can block a socket to a local address when the app lacks the local network permission,
+Android can block a socket to a local address when an app lacks the local network permission,
 and to Java the blocked connect looks like any timeout. So from API 37 the connect runs beside a
 watcher that reads `android_getnetworkblockedreason` through a duplicate of the socket's
 descriptor and aborts on the first block. The connect screen asks for the permission from that

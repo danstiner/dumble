@@ -1,6 +1,6 @@
 # Architecture
 
-What the app is built to do, how it is divided, and the decisions that shaped the division. Each
+What this app is built to do, how it is divided, and the decisions that shaped the division. Each
 subsystem has its own page with the same structure: goals, design, decisions and their costs.
 
 ## Goals
@@ -10,7 +10,7 @@ subsystem has its own page with the same structure: goals, design, decisions and
 - **Low, known voice delay.** Delay is measured at each stage, shown per speaker, and pinned in a
   CI test, so a change that adds delay shows up as a diff.
 - **A call survives the network changing.** WiFi to cellular, a brief outage.
-- **Share the phone.** A phone call or another voice app takes the microphone and gets it; the app
+- **Share the phone.** A phone call or another voice app takes the microphone and gets it; this app
   resumes by itself afterwards.
 - **Testable without a device.** The audio engines run on the host with the real codec, and the
   Kotlin runs on virtual time.
@@ -68,7 +68,7 @@ still listen in the background.
 | Audio engines in portable C++, Android confined to a thin adapter | The realtime audio callbacks never enter the JVM, and CI runs the engines on the host against the real libopus, sample-exact. | A JNI seam, and a few constants kept in step by hand on both sides. |
 | Oboe streams driven by the device's callbacks | The device paces the audio, so the buffer can be two bursts. A Kotlin loop feeding an `AudioTrack` could not hold a buffer that small (measured: about 3000 underruns a minute). | Below API 37 a low-latency stream disconnects on every route change and must be reopened. |
 | Platform `SSLSocket` for TLS | TLS 1.3, patched by the OS. Ktor's own TLS was 1.2 only when this was decided (2026-07). | Reads block and cannot be cancelled, so teardown closes the socket and late results are discarded by generation (below). |
-| No Telecom call | Telecom shows a call to every in-call service that asks or to none. The first lets another app's dialer draw over our screen; the second leaves a Bluetooth headset without call audio. | The app detects holds itself, from the audio mode and the recording callback, and has no system call UI. |
+| No Telecom call | Telecom shows a call to every in-call service that asks or to none. The first lets another app's dialer draw over our screen; the second leaves a Bluetooth headset without call audio. | This app detects holds itself, from the audio mode and the recording callback, and has no system call UI. |
 | Voice starts inside TLS and moves to UDP on a ping reply | It works at once through any firewall, and UDP is used only once proven in both directions. | Until promotion, voice has TCP's head-of-line blocking. |
 | Servers older than 1.5 are refused | A 1.4 server silently drops protobuf voice, so a session there has no audio. Refusing also removes the legacy voice framing and CELT. | No access to old servers, even for chat. |
 | Voice activity detector written by hand, no inference runtime ([voice-activity.md](voice-activity.md)) | ONNX Runtime is about 32 MB per ABI; the detector is 1.2 MB of weights and about 300 lines of C++. | Every model change must be re-verified against committed reference traces. |

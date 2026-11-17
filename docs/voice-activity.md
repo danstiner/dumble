@@ -118,10 +118,10 @@ Two properties took real measurement to establish:
 
 ## The gate constants
 
-`kOpenLevel` 0.60, `kCloseLevel` 0.45, `kHangoverFrames` 20 (200 ms). The comment on
-`SpeechGate` in `VoiceActivity.h` says why the shape is two thresholds and a frame-counted hangover. The values came from a sweep over the
-labelled corpus: open in {0.30…0.70}, close = open − {0.10, 0.15, 0.25}, hangover in {10, 15, 20,
-30}, 60 candidates.
+`kOpenLevel` 0.60, `kCloseLevel` 0.45, `kHangoverFrames` 20 (200 ms). The comment on `SpeechGate` in
+`VoiceActivity.h` says why the shape is two thresholds and a frame-counted hangover. The values came
+from a sweep over the labelled corpus: open in {0.30…0.70}, close = open − {0.10, 0.15, 0.25},
+hangover in {10, 15, 20, 30}, 60 candidates.
 
 **The sweep saturated.** All 60 scored zero false openings, zero missed regions and zero dropout.
 The only movement was the quiet talker (`dev-other-700-122866-0000`, −31.4 dBFS) dipping to 0.998
@@ -179,9 +179,10 @@ pinned to the shapes we hard-code.
 
 The forward pass executes 353,664 multiply-accumulates per window, about 11 million a second. The
 figure 679,552 counts the dense basis the FFT replaced and the zero-padding taps `Conv::apply`
-skips, so it describes a model this code does not run. The decimator adds 1.2 million a second. Live weights are 243,072 floats
-(about 950 KiB): the file's 309,633 minus the dropped basis, a folded bias vector and the head's
-scalar bias. The forward pass allocates nothing and uses about 13 KB of stack.
+skips, so it describes a model this code does not run. The decimator adds 1.2 million a second. Live
+weights are 243,072 floats (about 950 KiB): the file's 309,633 minus the dropped basis, a folded
+bias vector and the head's scalar bias. The forward pass allocates nothing and uses about 13 KB of
+stack.
 
 ## Known blind spots
 

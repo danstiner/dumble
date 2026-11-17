@@ -141,10 +141,11 @@ playout has reached, there is a hole.
   the pop it cannot be told from burst loss. pymumble never sends a terminator, and desktop's can
   be lost on UDP.
 
-Holes and stalls go through the same libopus call, so they fade alike. Measured on libopus 1.6.1
-in CELT mode, concealment fades per request, not per millisecond: 10 ms requests are 30 dB down
-within 70 ms for 20 ms and 60 ms senders alike, while the 20 ms requests libopus splits longer ones into fall 24 dB over 100 ms for
-a 20 ms sender and 9 dB for a 60 ms one. Hybrid mode barely fades in 100 ms at any request size.
+Holes and stalls go through the same libopus call, so they fade alike. Measured on libopus 1.6.1 in
+CELT mode, concealment fades per request, not per millisecond: 10 ms requests are 30 dB down within
+70 ms for 20 ms and 60 ms senders alike, while the 20 ms requests libopus splits longer ones into
+fall 24 dB over 100 ms for a 20 ms sender and 9 dB for a 60 ms one. Hybrid mode barely fades in 100
+ms at any request size.
 
 ### Ordering
 
@@ -195,17 +196,17 @@ Probed in one process on the speaker route, changing only `AudioManager.setMode`
   legacy path. The 8 ms figure is real and reachable only outside a call.
 - **Which legacy path is decided by the usage.** `VoiceCommunication` maps to stream `VOICE_CALL`,
   and the audio policy replaces the requested flags with `VOIP_RX|DIRECT`
-  (`AudioPolicyManager::getOutputForAttrInt`). That is the voice path with the echo canceller:
-  burst 480, 81 ms.
+  (`AudioPolicyManager::getOutputForAttrInt`). That is the voice path with the echo canceller: burst
+  480, 81 ms.
 - **Media usage would be 54 ms** but loses the echo canceller's reference signal and the pairing
   with call volume. Not taken, pending a listening test.
-- **Below API 37 a memory-mapped stream disconnects on every route change.** A headset plugged
-  in or a speakerphone toggle mid-sentence costs a poll interval, the reopen (about 100 ms) and a fresh prebuffer. The
-  legacy path reroutes in place.
-- **The legacy path hides underruns.** Its count stayed at 0 while AudioFlinger counted 480 on
-  the fast track over a session, mostly around Bluetooth route changes. So the tuner never grows
-  the buffer there, and each underrun inserts a burst of silence into the stream, raising its
-  reported latency until a flush. Neither shows in the app's counters today.
+- **Below API 37 a memory-mapped stream disconnects on every route change.** A headset plugged in or
+  a speakerphone toggle mid-sentence costs a poll interval, the reopen (about 100 ms) and a fresh
+  prebuffer. The legacy path reroutes in place.
+- **The legacy path hides underruns.** Its count stayed at 0 while AudioFlinger counted 480 on the
+  fast track over a session, mostly around Bluetooth route changes. So the tuner never grows the
+  buffer there, and each underrun inserts a burst of silence into the stream, raising its reported
+  latency until a flush. Neither shows in the app's counters today.
 
 ## What the numbers mean
 

@@ -69,4 +69,4 @@ Start with [architecture](docs/architecture.md). Each subsystem has its own page
 
 ## License
 
-Apache 2.0, see `LICENSE`. Third-party notices are on the app's About screen.
+Apache 2.0, see `LICENSE`. Third-party notices are on the About screen.
