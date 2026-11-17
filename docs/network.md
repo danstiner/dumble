@@ -204,11 +204,11 @@ The two directions are decided separately, by different parties:
 
 | Direction | Who decides | Rule |
 |---|---|---|
-| **Outgoing** voice, what we send | this app (`VoicePath`) | TCP until a UDP ping has been answered. Back to TCP when UDP pings stop being answered. |
-| **Incoming** voice, what we hear | the server | UDP once it knows our UDP address, which our first UDP ping gives it. TCP after we send it any voice frame over TCP. UDP again after we send it audio over UDP. |
+| **Outgoing** voice, what we send (*uplink*) | this app (`VoicePath`) | TCP until a UDP ping has been answered. Back to TCP when UDP pings stop being answered. |
+| **Incoming** voice, what we hear (*downlink*) | the server | UDP once it knows our UDP address, which our first UDP ping gives it. TCP after it receives any `UDPTunnel` frame from us, voice or ping. UDP again after we send it audio over UDP. |
 
-So the server's choice for incoming voice follows whatever we last did with outgoing voice. This
-app accepts incoming voice from both at all times, so it never needs to know which one the server
+So the server's choice for incoming voice follows the last thing we actually sent it. This app
+accepts incoming voice from both at all times, so it never needs to know which one the server
 picked.
 
 ### Outgoing voice: promote and demote
@@ -217,16 +217,17 @@ picked.
 `MumbleConnection.sendVoice` reads it for every packet. The code has a name for each change:
 
 - **Promote:** outgoing voice switches from TCP to UDP, starting with the next packet.
-- **Demote:** outgoing voice switches from UDP back to TCP, starting with the next packet.
+- **Demote:** outgoing voice goes back to TCP, starting with the next packet, and the count of
+  answered pings starts again from zero.
 
-Nothing else changes on either. The UDP socket stays open, a UDP ping still goes out every 5 s,
-and incoming voice is still accepted from both. The status line shows the current one, as `UDP`
+Neither touches this app's sockets. The UDP socket stays open, a UDP ping still goes out every
+5 s, and incoming voice is still accepted from both. The status line shows the current one, as `UDP`
 or `TCP` beside the round trip.
 
 | Change | Happens when |
 |---|---|
-| Promote | A UDP ping is answered. The first promotion of a link takes one answer. After a demotion it takes two, so a path that works on and off does not flip back and forth. |
-| Demote | Two UDP pings in a row go unanswered, or the socket refuses a datagram. A refused datagram is sent over TCP instead, in the same call. |
+| Promote | Two UDP pings have been answered since the last demotion. A new link is credited with one, so if its pings are answered from the start, the first answer is enough. Needing two after a demotion keeps a path that works on and off from flipping back and forth. |
+| Demote | Two UDP pings in a row go unanswered, or the socket refuses a voice datagram. A refused datagram is sent over TCP instead, in the same call. A demotion can happen while voice is still on TCP; then it only resets the count. |
 
 For example:
 
@@ -254,17 +255,19 @@ A demotion fixes outgoing voice. Incoming voice needs one more step, because of 
 server follows:
 
 - It learns our UDP address once and never updates it.
-- It keeps sending incoming voice to that address until it sees a voice frame from us over TCP.
+- It keeps sending incoming voice to that address until it receives a `UDPTunnel` frame from us,
+  voice or ping.
 
-Someone who is only listening sends no voice frames. So if UDP dies while we listen, for example
-because a NAT gave us a new port, the server would go on sending to a dead address. We would hear
-nothing, while the control connection looked healthy.
+Someone who is only listening sends none. So if UDP dies while we listen, for example because a
+NAT gave us a new port, the server would go on sending to a dead address. We would hear nothing,
+while the control connection looked healthy. The same happens on a link where our pings reach
+the server but its answers never reach us: it has our address, and we cannot hear on it.
 
-So when a demotion is caused by unanswered pings, the connection also sends one ping over TCP
-(`TUNNEL_PING`). The server never answers it. Its arrival is enough: the server switches our
-incoming voice to TCP on any voice frame that arrives over TCP, before decoding it, so no other
-user hears anything. When the cause was a refused datagram, that datagram went over TCP and had
-the same effect.
+So whenever two UDP pings in a row go unanswered, whether or not outgoing voice was on UDP, the
+connection also sends one ping over TCP (`TUNNEL_PING`). The server never answers it. Its
+arrival is enough: the server switches our incoming voice to TCP on any `UDPTunnel` frame,
+before decoding it, so no other user hears anything. When the cause was a refused voice
+datagram, that datagram went over TCP and had the same effect.
 
 What follows from that:
 

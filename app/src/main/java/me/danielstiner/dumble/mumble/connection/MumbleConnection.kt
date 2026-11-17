@@ -604,7 +604,7 @@ class MumbleConnection internal constructor(
             }
             // Demoting brings the downlink back with our next spurt; the tunneled ping does it
             // for a client that never speaks, since the server never re-learns an address
-            // (docs/network.md, UDP voice).
+            // (docs/network.md, When UDP stops working).
             override fun onPingsUnanswered() {
                 Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
                 path.demote()
