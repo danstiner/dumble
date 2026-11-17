@@ -40,7 +40,7 @@ constexpr uint32_t kFlagTerminator = 1u;
 // Sent during the voice-activity hangover: speech has stopped and the spurt has not yet closed.
 constexpr uint32_t kFlagHangover = 2u;
 
-// Hysteresis + hangover; sweep results in docs/capture.md.
+// Hysteresis + hangover; sweep results in docs/voice-activity.md.
 constexpr float kOpenLevel = 0.60f;
 constexpr float kCloseLevel = 0.45f;
 // Deliberate twin of AudioConstants.kt HANGOVER_MILLIS, the halo's fade-out.

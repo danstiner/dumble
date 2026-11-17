@@ -1,254 +1,291 @@
 # The Mumble protocol
 
-The wire protocol as Dumble speaks it: Mumble 1.5+, protobuf voice, Opus only. This is the
-reference for what crosses the network; how Dumble is structured around it lives in
-`docs/architecture.md` and `docs/connection.md`. Upstream's own documentation is at
-[mumble.readthedocs.io](https://mumble.readthedocs.io/) and in the protobuf
-schemas vendored under `app/src/main/proto/` (`Mumble.proto`, `MumbleUDP.proto`), whose comments
-are normative.
+The wire protocol as this client speaks it: Mumble 1.5 and newer, protobuf voice, Opus only. This
+page is a reference for what crosses the network, plus the reasoning wherever this client had a
+choice. The choices are collected in the [last
+section](#where-this-client-departs-from-the-desktop-client). How the code is organised around the
+protocol is in [network.md](network.md).
+
+Upstream documents the protocol at [mumble.readthedocs.io](https://mumble.readthedocs.io/). The
+protobuf schemas are vendored in `app/src/main/proto/` (`Mumble.proto`, `MumbleUDP.proto`), and
+their comments are normative.
 
 ## Two channels
 
-A session is one TLS-over-TCP **control channel** plus, optionally, one encrypted UDP **voice
-channel** to the same host and port. Everything the UDP channel carries can also ride the control
-channel inside `UDPTunnel` frames, so TCP alone is a complete session. Dumble opens the UDP
-channel with every session, receives on it from the first ping, and sends on it once a ping has
-round-tripped (`docs/connection.md`). The crypto layer is `net/Ocb2.kt` and `net/CryptState.kt`,
-the socket `net/MumbleUdpTransport.kt`, the choice `net/VoicePath.kt`.
+A session is one TLS-over-TCP **control channel** and, optionally, one encrypted UDP **voice
+channel** to the same host and port. Anything UDP carries can also travel on the control channel
+inside `UDPTunnel` frames, so TCP alone is a complete session.
+
+This client opens the UDP channel on every session, receives on it from the first ping, and sends
+voice on it once a ping has round-tripped ([network.md](network.md)).
 
 ## Control channel
 
-TLS to the server's port (default 64738). Most servers are self-signed; trust is
-pin-on-first-use (`docs/connection.md`). Framing is fixed:
+TLS to the server's port, 64738 by default. Every message is framed the same way:
 
 ```
 [u16 message type][u32 payload length][payload]     big-endian
 ```
 
-Payloads are the protobuf messages of `Mumble.proto`, except type 1 (`UDPTunnel`), whose payload
-is a raw voice datagram, not protobuf. Types Dumble does not model are ignored, which is also the
-protocol's forward-compatibility story. Dumble caps inbound payloads at 8 MiB
-(`MumbleCodec.MAX_TCP_PAYLOAD`) as a hostile-length guard; the protocol itself has no cap.
+The payload is a protobuf message from `Mumble.proto`, except type 1 (`UDPTunnel`), which is a raw
+voice datagram. Message types this client does not model are ignored, which is also how the protocol
+stays forward compatible. This client refuses inbound payloads over 8 MiB
+(`MumbleCodec.MAX_TCP_PAYLOAD`) to guard against a hostile length; the protocol has no limit.
 
 | id | message | notes |
 |---:|---|---|
 | 0 | Version | both directions, first message each way |
-| 1 | UDPTunnel | voice datagram over TCP; **not** protobuf |
+| 1 | UDPTunnel | voice datagram over TCP; not protobuf |
 | 2 | Authenticate | username, optional password, tokens, `opus=true` |
-| 3 | Ping | client-initiated, server echoes; carries crypt stats |
-| 4 | Reject | terminal handshake failure (bad auth, wrong version…) |
-| 5 | ServerSync | handshake complete; your session id, welcome text |
-| 6–9 | ChannelRemove/State, UserRemove/State | the state stream (below) |
+| 3 | Ping | sent by the client, echoed by the server; carries statistics |
+| 4 | Reject | the handshake failed (bad password, name in use…) |
+| 5 | ServerSync | handshake complete; our session id and the welcome text |
+| 6–9 | ChannelRemove/State, UserRemove/State | the state stream |
 | 11 | TextMessage | chat |
-| 12 | PermissionDenied | rejected action, with reason enum |
-| 15 | CryptSetup | OCB2 key material and resync (below) |
-| 19 | VoiceTarget | registers whisper/shout targets 1–30 (not used) |
+| 12 | PermissionDenied | an action was refused, with a reason |
+| 15 | CryptSetup | the UDP cipher's key and nonces, and resync |
+| 19 | VoiceTarget | registers whisper and shout targets 1–30; unused |
 | 21 | CodecVersion | legacy CELT negotiation; ignored, Opus is assumed |
-| 24 | ServerConfig | limits (message length, image length…) |
+| 24 | ServerConfig | limits such as message and image length |
 
-The rest (BanList, ACL, QueryUsers, UserList, ContextAction…, RequestBlob, SuggestConfig,
-UserStats, PluginDataTransmission) are administrative or optional; Dumble ignores what it does
-not use.
+The rest (BanList, ACL, QueryUsers, UserList, ContextAction, RequestBlob, SuggestConfig, UserStats,
+PluginDataTransmission) are administrative or optional. This client uses `UserStats` and ignores the
+others.
 
-**Version encoding.** Two encodings coexist. Legacy `version_v1` is a u32:
-`major<<16 | minor<<8 | patch` — minor and patch saturate at 255, which Mumble 1.3/1.4/1.5 point
-releases actually hit, hence `version_v2`: a u64 with 16 bits each for major, minor, patch at
-bits 48/32/16 (low 16 reserved). Dumble sends both, prefers v2 when reading, and advertises
-itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
+### Version encoding
 
-**Handshake.** After TLS, both sides send `Version`; the client follows immediately with
-`Authenticate` without waiting for the server's. The server then streams `CryptSetup`,
-`CodecVersion`, every `ChannelState`, every `UserState`, and finally `ServerSync`, which is the
-"you are in" — until it arrives nothing is authoritative. Failure is a `Reject` or a closed
-socket. The protocol has no handshake timeout; Dumble imposes 15 s to `ServerSync`
-(`HANDSHAKE_DEADLINE_MS`). Servers older than 1.5 are refused at the `Version` message: a 1.4
-server parses protobuf voice as malformed legacy CELT and silently drops every frame, and voice
-is the point of connecting.
-The client certificate is not a protocol message: it rides the TLS handshake, and `Authenticate`
-never mentions it (`docs/connection.md`, Client certificate).
+Two encodings coexist. Legacy `version_v1` is a u32, `major<<16 | minor<<8 | patch`. Minor and patch
+saturate at 255, which real 1.3 to 1.5 point releases reach. `version_v2` is a u64 with 16 bits each
+for major, minor and patch at bits 48, 32 and 16; the low 16 are reserved. This client sends both,
+prefers v2 when reading, and announces itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
 
-**State stream.** After sync the server pushes deltas: `ChannelState`/`ChannelRemove`,
-`UserState`/`UserRemove` (a `UserState` is a sparse diff — only changed fields are set, keyed by
-`session`), `TextMessage`. There is no polling; the connection is the subscription.
+### Handshake
 
-**Ping.** The client must ping or be dropped: servers time out silent connections (murmur's
-default allows ~30 s). Dumble pings every 5 s (`PING_INTERVAL_MS`) and marks the session
-degraded after 15 s without a reply (two unanswered pings) — display state only; only a dead
-socket or the server ends a session. The `Ping` message carries the sender's UDP crypt
-statistics (`good`, `late`, `lost`, `resync`); the server's reply carries its own reception
-numbers, which is how you learn whether the server can decrypt *your* UDP packets. The desktop
-client uses them to decide UDP health; Dumble sends them because the server folds them into the
-`UserStats` other clients read, and steers on nothing but the UDP ping (see the design spec).
-The ping also carries both legs' round-trip mean and variance over the last twenty replies,
-and the session's reply counts
-(`tcp_ping_avg`/`udp_ping_avg`, `*_ping_var`, `tcp_packets`/`udp_packets` — ping replies, not
-voice, in the desktop client too), stored by the server and echoed in our `UserStats`: that is
-how another client's sheet reads our round trip and, from the UDP average being there at all,
-which leg carries our voice (`PingAverage`).
+1. After TLS, both sides send `Version`. The client sends `Authenticate` straight after, without
+   waiting for the server's.
+2. The server streams `CryptSetup`, `CodecVersion`, every `ChannelState` and every `UserState`.
+3. `ServerSync` ends the handshake. Nothing received before it is authoritative.
 
-**Self mute and deafen.** Both are the client's to set, in its own `UserState`; the server stores
-and echoes them and adds one coupling (`Server::msgUserState`): `self_deaf=true` forces
-`self_mute=true`, and `self_mute=false` forces `self_deaf=false`. Voice is dropped on `self_mute`
-(and `mute`, `suppress`), never on `self_deaf`. The server never lifts the mute a deafen forced, so
-what an undeafen does to the mute is client policy. Desktop's, from `on_qaAudioMute_triggered` and
-`on_qaAudioDeaf_triggered` (`src/mumble/MainWindow.cpp`) — local state, which the echo never writes:
+Failure is a `Reject` or a closed socket. The protocol has no handshake timeout; this client allows
+15 s to `ServerSync` (`HANDSHAKE_DEADLINE_MS`).
+
+This client refuses servers older than 1.5 at the `Version` message. A 1.4 server parses protobuf
+voice as malformed legacy CELT and silently drops every frame, so joining one would mean a session
+with no voice.
+
+The client certificate is not a protocol message. It is part of the TLS handshake, and
+`Authenticate` never mentions it ([network.md](network.md), Client certificate).
+
+### State stream
+
+After `ServerSync` the server pushes changes: `ChannelState`, `ChannelRemove`, `UserState`,
+`UserRemove`, `TextMessage`. A `UserState` is a sparse diff keyed by `session`, with only the
+changed fields set. Nothing is polled.
+
+### Ping
+
+The client must ping or be dropped: murmur's default drops a silent connection after about 30 s.
+This client pings every 5 s (`PING_INTERVAL_MS`). A link with no reply for three intervals is ended
+as a timeout and replaced ([network.md](network.md), Reconnect).
+
+The `Ping` message also carries statistics, which the server stores and returns to other clients
+in `UserStats`:
+
+- **UDP cipher counts** (`good`, `late`, `lost`, `resync`). The server's reply carries its own,
+  which say whether it can decrypt our datagrams. Desktop Mumble judges UDP health from them.
+  We send them too, but judge by the UDP ping alone ([network.md](network.md), Outgoing voice:
+  promote and demote).
+- **Round trips**: mean and variance over the last twenty replies for each of TCP and UDP
+  (`tcp_ping_avg`, `udp_ping_avg`, `*_ping_var`), and reply counts (`tcp_packets`, `udp_packets`,
+  which count ping replies and not voice, on desktop too). This is how another client shows our
+  round trip. A UDP average being present means a UDP ping has round-tripped on this link; it
+  stays set after our voice falls back to TCP (`PingAverage`).
+
+### Self mute and deafen
+
+A client sets both in its own `UserState`. The server stores and echoes them and adds one coupling
+(`Server::msgUserState`): `self_deaf=true` forces `self_mute=true`, and `self_mute=false` forces
+`self_deaf=false`. The server drops voice on `self_mute` (and `mute`, `suppress`), never on
+`self_deaf`. It never lifts a mute that a deafen forced, so what an undeafen does to the mute is
+up to the client.
+
+This client follows desktop Mumble (`on_qaAudioMute_triggered` and `on_qaAudioDeaf_triggered` in
+`src/mumble/MainWindow.cpp`):
 
 | Ask | Result |
 |---|---|
 | Deafen | Deafened and muted. |
-| Undeafen | Back to the mute as it was before the deafen: one the user set stays (else a muted microphone reopens unasked), one the deafen forced lifts. |
+| Undeafen | The mute returns to what it was before the deafen. A mute the user set stays, so a muted microphone does not reopen unasked. A mute the deafen forced lifts. |
 | Unmute while deafened | Unmuted and undeafened, whoever set the mute. |
-| Mute while deafened | Cannot be asked from the button, which already reads muted; the "mute on" shortcut is a no-op. |
+| Mute while deafened | No control can ask for it: the button already reads muted. |
 
-Desktop keeps `bMute`, `bDeaf` and an `unmuteOnUndeaf` flag to tell the two mutes apart.
-`DeafenState` keeps the two asks — the deafen and the user's own mute — and derives the wire's
-`self_mute` as either, which is the same machine with the invalid states unrepresentable and every
-ask an idempotent set. Checked against a port of the two desktop handlers over every toggle sequence
-to depth 16 and every explicit on/off sequence to depth 8. The one difference is a mute asked for
-while deafened, which `DeafenState` keeps as the user's own where desktop's shortcut ignores it; no
-control can ask for it. Dumble sends both fields in every ask, so the server's coupling never has
-to act.
+Desktop keeps three flags (`bMute`, `bDeaf`, `unmuteOnUndeaf`). `DeafenState` keeps the two asks,
+the deafen and the user's own mute, and derives the wire's `self_mute` as either one. That is the
+same machine with the invalid states unrepresentable, and every ask is an idempotent set. It was
+checked against a port of the two desktop handlers over every toggle sequence to depth 16 and every
+explicit on/off sequence to depth 8. The one difference is a mute asked for while deafened:
+`DeafenState` keeps it as the user's own, where desktop's shortcut ignores it. This client sends
+both fields with every ask, so the server's coupling never has to act.
 
-As on desktop, the ask and the echo are separate states with separate readers. Only a user's own
-`UserState` can write their `self_mute` and `self_deaf` (murmur returns early on anyone else's, and
-its Ice interface only reads them), so the echo can only lag the ask, and says nothing through a
-reconnect. The Mute and Deafen controls, Talk's self half and the capture gate read the ask; the
+**The ask and the echo are separate states.** Only a user's own `UserState` can write their
+`self_mute` and `self_deaf` (murmur returns early on anyone else's, and its Ice interface only
+reads them), so the echo can only lag the ask, and it says nothing during a
+reconnect. The Mute and Deafen controls, the Talk button and the capture gate read the ask. The
 roster row reads the echo, which is what everyone else sees.
 
 ## Voice framing
 
-Since 1.5, a voice datagram is one header byte then a protobuf message from `MumbleUDP.proto`:
+Since 1.5 a voice datagram is one type byte and then a protobuf message from `MumbleUDP.proto`:
 
 ```
 0x00 → Audio    0x01 → Ping
 ```
 
-(The pre-1.5 bit-packed framing — type and target in one byte, varint-coded session and
-sequence — is deliberately not implemented; refusing pre-1.5 servers removes it whole.)
+The older bit-packed framing is not implemented; refusing servers before 1.5 removes the need.
 
-`Audio` uplink sets `target` (0 = normal talk, 1–30 = a registered `VoiceTarget`, 31 = server
-loopback), `frame_number`, `opus_data`, and `is_terminator` on the last packet of a
-transmission. Downlink replaces `target` with `context` (normal / shout / whisper / listener)
-and adds `sender_session`; `frame_number` orders packets within one speaker's stream and is what
-playout's jitter logic keys on. One packet carries one 20 ms mono Opus frame end to end
-(`docs/capture.md`). `positional_data` is a non-goal (`CLAUDE.md`); `volume_adjustment` is
-a server-determined per-listener volume adjustment, currently ignored.
+**Audio, uplink.** `target` (0 is normal talk, 1–30 a registered `VoiceTarget`, 31 server
+loopback), `frame_number`, `opus_data`, and `is_terminator` on the last packet of a transmission.
 
-`Ping` carries an opaque client timestamp the server echoes untouched — liveness proof for the
-UDP path specifically, since it round-trips the same encryption as audio. Three facts about the
-server shape everything Dumble does with it (`src/murmur/Server.cpp`, checked at `90c2184c8`):
-it learns a client's UDP address only from a datagram it can decrypt, by trying the client's key
-against every session from that host; it sends a client's downlink over UDP while a per-user
-flag is set, and that flag starts set and is cleared only by a tunneled packet from that client;
-and it answers a ping that carries nothing but the timestamp over UDP regardless of that flag.
-So the first ping — sent the moment `CryptSetup` keys the cipher, then every 5 s beside the TCP
-ping — registers the address, keeps the NAT mapping alive, and proves both directions at once;
-and from that moment a client that has never transmitted receives over UDP, which is why the
-socket is opened for receiving before anything sends voice over it. Two more facts bound that.
-The server learns the address once: registration moves the session out of the per-host bucket
-it matches unknown peers against, so a datagram from a new port is dropped and the downlink
-keeps going to the old one. And the flag is cleared by any tunneled frame that passes the length
-check, before it is decoded, so a tunneled ping — which the server does not answer — is how a
-listener asks for its downlink back (`docs/connection.md`).
+**Audio, downlink.** `context` (normal, shout, whisper, listener) replaces `target`, and
+`sender_session` is added. `frame_number` orders the packets of one speaker and is what the
+jitter buffer keys on. Each packet this client sends is one 20 ms mono Opus frame.
 
-**Over TCP** the same `[header byte][protobuf]` bytes travel as a `UDPTunnel` frame, unencrypted
-beyond TLS. Tunneled voice inherits TCP's ordering and its head-of-line blocking, which is why
-the UDP path exists.
+This client ignores `positional_data` (a non-goal) and `volume_adjustment`, the server's
+per-listener volume change.
+
+**Over TCP** the same bytes travel as a `UDPTunnel` frame with no encryption beyond TLS. Tunneled
+voice inherits TCP's ordering and its head-of-line blocking, which is why the UDP path exists.
+
+### The UDP ping, and what the server does with it
+
+`Ping` carries a client timestamp that the server echoes unchanged. Because it goes through the
+same encryption as audio, a reply proves the UDP path specifically.
+
+How murmur treats a client's UDP address shapes everything we do here
+(`src/murmur/Server.cpp`, checked at `90c2184c8`):
+
+1. **It learns the address only from a datagram it can decrypt,** by trying the keys of every
+   session from that host.
+2. **It learns it once.** Registration takes the session out of the set that unknown datagrams
+   are matched against, so a datagram from a new port is dropped and the downlink keeps going to
+   the old one.
+3. **It sends the downlink over UDP while a per-user flag is set.** The flag starts set. Any
+   tunneled frame from that client that passes the length check clears it, before the frame is
+   decoded. A UDP audio packet sets it again.
+4. **It answers a ping that carries only a timestamp over UDP,** whatever the flag says. It does
+   not answer a tunneled ping.
+
+What follows:
+
+- The first ping, sent the moment `CryptSetup` keys the cipher and then every 5 s, registers the
+  address, keeps the NAT mapping alive and proves both directions.
+- From that first ping a client receives over UDP even if it has never transmitted. So the socket
+  must be receiving before anything is sent on it.
+- A tunneled ping is how a listener asks for its downlink back over TCP
+  ([network.md](network.md), When UDP stops working).
 
 ## The UDP channel: OCB2-AES128
 
-UDP datagrams are encrypted with OCB2 under AES-128. The cipher is `net/Ocb2.kt` and the packet
-layer around it is `net/CryptState.kt`; both are written from Rogaway's OCB2 paper and this
-protocol description rather than ported from upstream's `CryptStateOCB2.cpp`, so what follows
-describes the wire format both must produce, then where Dumble's receiver differs by choice.
-The handshake `CryptSetup` delivers the shared key and two 16-byte
-nonces — `client_nonce` seeds the client's encrypt IV and the server's decrypt IV,
-`server_nonce` the reverse. On the wire:
+UDP datagrams are encrypted with OCB2 under AES-128. `net/Ocb2.kt` is the cipher and
+`net/CryptState.kt` the packet layer. Both were written from Rogaway's OCB2 paper and this
+description of the wire format, not ported from upstream's `CryptStateOCB2.cpp`.
+
+`CryptSetup` delivers the key and two 16-byte nonces. `client_nonce` seeds the client's encrypt IV
+and the server's decrypt IV; `server_nonce` the reverse. A datagram is:
 
 ```
 [IV low byte][tag byte 0][tag byte 1][tag byte 2][OCB2 ciphertext]
 ```
 
-4 bytes of overhead; ciphertext length equals plaintext length (OCB2 is length-preserving; a
-4-byte datagram with no payload is legal). The tag is the first 3 bytes of the 16-byte OCB
-authentication tag.
+Four bytes of overhead. The ciphertext is as long as the plaintext, and a datagram with no payload
+is legal. The tag is the first 3 bytes of the 16-byte OCB tag.
 
-**IV scheme.** The IV is the full 16-byte nonce used as a counter: the sender increments it
-before every packet, carrying into higher bytes on wrap. Only the low byte is transmitted, so the
-receiver must rebuild the other fifteen from the counter it already holds — and that byte gives
-it 256 candidates to choose between. Which one it picks is receiver-local: nothing on the wire
-records the choice, so a client is free to set its own tolerance for reordering and loss.
+### The IV
 
-Dumble splits the 256 values 63 behind the highest counter accepted and the rest ahead, so a
-burst of up to 191 consecutive losses is ridden out and 63 packets of reordering are tolerated,
-with one guess covering both — never a second decrypt attempt an attacker could force. The
-asymmetry is deliberate: 63 behind is already 1.26 s of reordering at 50 packets/s, an order of
-magnitude past what networks produce, while multi-second loss bursts — a WiFi roam, a cell
-handoff — are routine, and only the behind side costs replay-tracking state. Anything
-further out rebuilds to the wrong counter and fails the tag, which is the right answer: at that
-distance a stale packet and a forged one are indistinguishable. Upstream chooses differently,
-tolerating 29 behind and jumping forward to the 128-value ambiguity boundary of the mod-256
-counter.
+The IV is the whole 16-byte nonce used as a counter. The sender increments it before every packet,
+carrying into the higher bytes. Only the low byte is sent, so the receiver rebuilds the other
+fifteen from the counter it holds and must choose among 256 candidates. That choice is local to
+the receiver: nothing on the wire records it.
 
-Replays are caught before any decryption. Dumble keeps the sliding-window bitmap IPsec uses
-(RFC 6479) and SRTP requires at least 64 of (RFC 3711 §3.3.2) — the highest counter accepted plus
-one bit for each of the 63 below it — sized by the one 64-bit word that holds it, not by the wire:
-the hint only caps the late-plus-ahead split at 256.
-Upstream instead keeps a 256-slot history table, one slot per value of `iv[0]`, recording the
-"generation" (`iv[1]`) last accepted there.
+This client reads the byte as up to 63 behind the highest counter accepted, or up to 192 ahead. One
+guess covers both, so an attacker can never force a second decrypt.
 
-**Upstream's replay table has a stall defect the bitmap cannot have.** Upstream zero-fills the
-byte-valued history table, so "never visited" is indistinguishable from "visited in generation
-0x00". Nonces are random, so 1 keying in 256 starts with `iv[1] == 0` — and then the first lost
-or reordered packet lands on an untouched slot, falsely matches as a replay, and is rejected;
-since rejection restores the IV, every following packet recomputes the identical comparison and
-the receive direction wedges permanently. Upstream never noticed because the desktop client masks
-it — any failed decrypt with no success in 5 s triggers a crypt resync (below) and the symptom
-collapses to a rare few-second one-way dropout indistinguishable from network loss.
+- **63 behind** is 1.26 s of reordering at 50 packets a second, far more than networks produce.
+- **191 packets lost in a row** are ridden out. Loss bursts of seconds are routine (a WiFi roam, a
+  cell handoff), and only the behind side costs replay state.
+- Anything further away rebuilds to the wrong counter and fails the tag. At that distance a stale
+  packet and a forged one cannot be told apart.
 
-A bitmap has no sentinel to confuse with a real value: a bit is set or it is not, and the seed is
-marked consumed at keying so the first packet under a new key is unambiguously seed + 1. The
-defect is structurally absent rather than patched. Either way this is receiver-local bookkeeping —
-no wire byte derives from it — so it is a divergence from upstream's code, not its protocol.
+Upstream tolerates 29 behind and jumps ahead up to the 128-value ambiguity boundary.
 
-**Resync.** `CryptSetup` doubles as the recovery channel: a client that decrypts nothing for 5 s
-sends an empty `CryptSetup`, and the server replies with its current encrypt IV as
-`server_nonce`, re-seeding the client's decrypt state. The server recovers its own decrypt
-direction symmetrically: an empty `CryptSetup` from it is answered with our encrypt IV as
-`client_nonce`. Rate-limited to one request per 5 s on both ends. A malformed message of any
-of the three shapes is logged and dropped, as upstream does, rather than ending the session.
-Voice lost during the gap is simply gone — the stream is live audio, not a transcript.
+### Replay protection
 
-Dumble adopts the reply unconditionally, as upstream does. Safe because of when a request can
-fire: only after five seconds without a good decrypt, so the top has stopped moving and an honest
-reply lands at or ahead of it — in practice every resync is a forward adoption. (The one honest
-exception: a junk datagram can trip a request just as a quiet stream resumes, and adopting the
-in-flight reply then reopens at most one window of just-resumed audio — the same trade upstream
-makes on every resync.) A top somehow ahead of the
-server (a forged tag winning a 2^24 collision moves it up to 192 ahead) is exactly what adoption
-heals; refusing to rewind would let one poisoned top refuse every truthful correction. The
-restart consumes rather than clears, so the window below the adopted counter still cannot
-replay — a guarantee upstream's generation table does not give.
+Replays are rejected before any decryption. `ReplayWindow` keeps the sliding-window bitmap that
+IPsec uses (RFC 6479) and SRTP requires at least 64 bits of (RFC 3711 §3.3.2): the highest counter
+accepted, plus one bit for each of the 63 below it, in one 64-bit word.
 
-**OCB2 is cryptographically broken** (Inoue et al. 2019, [eprint 2019/311](https://eprint.iacr.org/2019/311)):
-universal forgery and full plaintext recovery when the attacker controls plaintexts with
-near-zero blocks. It remains on the wire for compatibility — every 1.5 server speaks it and
-nothing else for UDP. The two countermeasures peers expect are therefore implemented from the
-paper: when the last full plaintext block is all zeros but the last byte (the attack's
-precondition), the encryptor flips one plaintext bit before encrypting (upstream: “modify the
-packet in a way which should not affect the audio”), and the decryptor refuses a datagram whose
-recovered final block matches the current whitening mask — the shape the forgery's tail decrypts
-to — even when the tag matches. The TCP tunnel does not use OCB2 at all; tunneled voice has
-TLS's integrity instead.
+Upstream keeps a 256-slot table, one slot per value of `iv[0]`, holding the `iv[1]` last accepted
+there. The table is zero-filled, so "never visited" looks like "visited when `iv[1]` was 0".
+Nonces are random, so one keying in 256 starts with `iv[1] == 0`. Then the first lost or reordered
+packet lands on an untouched slot and is rejected as a replay. The rejection restores the IV, so
+every later packet repeats the comparison and the receive direction is stuck. The desktop client
+hides this: 5 s without a good decrypt triggers a resync, so the symptom is a rare one-way dropout
+that looks like network loss.
 
-## Divergences from the desktop client
+A bitmap has no sentinel value to confuse with a real one, and this client marks the seed consumed
+at keying, so the first packet under a new key is unambiguously seed + 1. All of this is local
+bookkeeping; no byte on the wire depends on it.
 
-Deliberate, documented where they live:
+### Resync
 
-- **Pre-1.5 servers refused** rather than joined without voice (`SessionStateMachine`).
-- **Legacy voice framing and CELT** not implemented — subsumed by the above.
-- **Positional audio** not implemented; voice is mono end to end (`CLAUDE.md` non-goals).
-- **Sliding-window replay bitmap** rather than a generation table, avoiding the stall above, and
-  a wider reordering window (63 late, 191 consecutive losses) (`net/CryptState.kt`).
-- **Pin-before-authority trust ordering** (`docs/connection.md`).
-- **Client-side handshake deadline** — the protocol has none, Dumble enforces 15 s.
+`CryptSetup` is also the recovery channel.
+
+- A client that decrypts nothing for 5 s sends an empty `CryptSetup`. The server replies with its
+  current encrypt IV as `server_nonce`, which re-seeds the client's decrypt state.
+- The server recovers the same way: an empty `CryptSetup` from it is answered with our encrypt IV
+  as `client_nonce`.
+- Each end sends at most one request per 5 s.
+- A malformed `CryptSetup` is logged and dropped, as upstream does, and does not end the session.
+- Voice lost in the gap stays lost.
+
+This client adopts the server's reply unconditionally, as upstream does. A request fires only after
+5 s without a good decrypt, so the highest counter has stopped moving and an honest reply lands at
+or ahead of it. Two edge cases:
+
+- A junk datagram can trigger a request just as a quiet stream resumes. Adopting the reply then
+  reopens at most one window of just-resumed audio to replay, the same trade upstream makes.
+- A forged tag that wins a 2^24 collision can move the highest counter up to 192 ahead of the
+  server. Adoption is what repairs that; refusing to move backwards would let one bad value
+  reject every honest correction.
+
+The restart marks the adopted counter consumed instead of clearing the window, so packets below it
+still cannot be replayed. Upstream's table does not guarantee that.
+
+### OCB2 is broken
+
+Inoue et al. 2019 ([eprint 2019/311](https://eprint.iacr.org/2019/311)) showed universal forgery and
+full plaintext recovery against OCB2 when the attacker controls plaintexts with near-zero blocks.
+Every 1.5 server speaks OCB2 and nothing else on UDP, so it stays. This client implements the two
+countermeasures peers expect, from the paper:
+
+- **Encrypt.** When the last full plaintext block is all zeros except its last byte, which is the
+  attack's precondition, one plaintext bit is flipped before encrypting.
+- **Decrypt.** A datagram whose recovered final block equals the current whitening mask, the
+  shape a forgery's tail decrypts to, is refused even when its tag matches.
+
+The TCP tunnel does not use OCB2; tunneled voice has TLS's integrity.
+
+## Where this client departs from the desktop client
+
+This client matches desktop behaviour by default. Each departure is deliberate.
+
+| This client | Why | Cost | Where |
+|---|---|---|---|
+| Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
+| No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |
+| Replay bitmap instead of a generation table | The table can wedge the receive direction (Replay protection). | None on the wire. | `net/ReplayWindow.kt` |
+| Wider IV window: 63 behind, 191 lost in a row | Loss bursts of seconds are routine on mobile networks. | None on the wire; the choice is local to the receiver. | `net/CryptState.kt` |
+| Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
+| 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
+| UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |
+| A mute asked for while deafened is kept | It follows from storing the two asks separately. | None: no control can ask for it. | `DeafenState` |

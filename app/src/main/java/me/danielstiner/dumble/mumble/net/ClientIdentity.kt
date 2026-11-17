@@ -50,7 +50,7 @@ fun sha1Hex(bytes: ByteArray): String =
  * the desktop's 2048 because the certificate is meant to outlast 2030, where NIST SP 800-57 stops
  * accepting 2048.
  *
- * Murmur keys "same client" on the SHA-1 of this certificate; see docs/connection.md, Client
+ * Murmur keys "same client" on the SHA-1 of this certificate; see docs/network.md, Client
  * certificate.
  */
 class ClientIdentity(val certificate: X509Certificate, private val key: PrivateKey) {
