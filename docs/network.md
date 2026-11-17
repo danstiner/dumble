@@ -215,16 +215,16 @@ address, `CryptState` encrypting and decrypting every datagram, and one thread b
 
 `net/VoicePath`. Each link is in one of two states: our outgoing voice is *tunneled*, sent as
 `UDPTunnel` frames on the TLS connection, or *on UDP*. A link starts tunneled.
-`MumbleConnection.sendVoice` reads the state for every packet, and the UI shows it from
-`Connection.voicePath`.
+`MumbleConnection.sendVoice` reads the state for every packet, and the status line shows it from
+`Connection.voicePath`, as `UDP` or `TCP` beside the round trip.
 
 - **Promote** switches our outgoing voice from the tunnel to UDP, from the next packet on.
-- **Demote** switches it back to the tunnel, and clears the round trip the UI was showing. The
-  first tunneled frame after a demotion also makes the server move our downlink to the tunnel
-  ([below](#when-udp-stops-working)).
+- **Demote** switches it back to the tunnel, and the status line goes back from `UDP` to `TCP`.
 
-Neither changes what we accept: both sockets feed the same receiver at all times, and which one
-the server sends our downlink on is the server's choice.
+Neither changes what we accept: both sockets feed the same receiver, whichever state the path is
+in. The server picks the path for what we hear, our downlink, and it follows our outgoing voice:
+any tunneled frame from us moves the downlink to the tunnel, and our next UDP audio packet moves
+it back ([below](#when-udp-stops-working)).
 
 What causes each:
 
@@ -234,6 +234,9 @@ What causes each:
 - **Demote:** the transport reports two pings in a row unanswered, or the socket refuses a
   datagram. The refused datagram goes through the tunnel in the same call. Demotions are not
   capped.
+
+Three details:
+
 - The cipher's counters are never consulted: our encrypt counter advances whether or not a
   datagram arrives.
 - The path and its round trip are one record, so a demotion clears both together.
