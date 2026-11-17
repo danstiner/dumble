@@ -33,8 +33,8 @@ private:
     static constexpr int kTaps = 75;
 
     // Taps stored reversed, and history kept linear rather than circular, so the inner product
-    // walks both arrays forward and contiguously. The circular buffer it replaces indexed
-    // backwards with a wraparound branch, which cannot vectorise.
+    // walks both arrays forward and contiguously. A circular buffer would index backwards with
+    // a wraparound branch, which cannot vectorise.
     float reversed_[kTaps];
     float carry_[kTaps - 1] = {};
 };

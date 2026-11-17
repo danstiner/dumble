@@ -5,8 +5,7 @@ package me.danielstiner.dumble.ui.connect
  *
  * A pure function rather than logic inside the composable: this is the only place a user's protocol
  * state becomes something visible, and with no Compose coverage of the roster it would otherwise be
- * the one part that could be deleted with the whole suite still green. It replaces `userLabel` in
- * that role.
+ * the one part that could be deleted with the whole suite still green.
  */
 data class UserBadge(val kind: Kind, val server: Boolean) {
     enum class Kind { MUTE, DEAF }

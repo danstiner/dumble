@@ -130,10 +130,9 @@ constexpr std::chrono::milliseconds kMinTarget{10};
 // overflow, for as long as the target stayed high.
 constexpr std::chrono::milliseconds kMaxTarget{kHighWaterSamples / kSamplesPerMilli * 3 / 4};
 
-// NetEq's kStartDelayMs. 20 ms worse than the fixed 60 ms margin it replaces, for the first
-// spurt of the first speaker in a session and nothing after — the engine-wide histogram seeds
-// every later newcomer. Kept at NetEq's measured value rather than tuned to match the old
-// behaviour, because we have no measurement of our own yet.
+// NetEq's kStartDelayMs. Applies to the first spurt of the first speaker in a session and
+// nothing after — the engine-wide histogram seeds every later newcomer. Kept at NetEq's
+// measured value, because we have no measurement of our own.
 constexpr std::chrono::milliseconds kColdStart{80};
 constexpr int kColdStartSamples = samplesIn(kColdStart);
 

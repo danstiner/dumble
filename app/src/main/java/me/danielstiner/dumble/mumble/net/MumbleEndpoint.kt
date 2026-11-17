@@ -25,9 +25,9 @@ class MumbleEndpoint private constructor(val host: String, val port: Int) {
             require(host.isNotEmpty()) { "host is empty" }
             val colons = host.count { it == ':' }
             // A lone colon is a mistyped host:port. A bracket surviving removeSurrounding is the
-            // same mistake wearing IPv6 clothes: "[::1]:64738" keeps its "[", because the closing
-            // one is no longer the last character. Stripping the two independently used to leave
-            // "::1]:64738" as the host, whose three colons sailed past this check to fail at connect.
+            // same mistake wearing IPv6 clothes: "[::1]:64738" keeps its brackets, because the
+            // closing one is not the last character. The colon count cannot catch it, since an
+            // IPv6 literal's own colons pass, so a bracket is refused outright.
             require((colons == 0 || colons >= 2) && '[' !in host && ']' !in host) {
                 "host looks like it includes a port; use the port field"
             }
