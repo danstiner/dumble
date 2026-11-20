@@ -54,6 +54,10 @@ class FakeConnection : Connection {
         connectCalls++; lastEndpoint = endpoint
         onConnect()
     }
+    val pinnedConnects = mutableListOf<Pair<MumbleEndpoint, String>>()
+    override fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String) {
+        pinnedConnects += endpoint to fingerprint
+    }
     override fun trustAndConnect() { trustCalls++ }
     override fun cancelTrust() { cancelCalls++ }
     override fun disconnect() { disconnectCalls++ }
