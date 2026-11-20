@@ -69,7 +69,7 @@ JNIEXPORT void JNICALL FN(pause)(JNIEnv*, jobject, jlong h) {
 
 JNIEXPORT jint JNICALL
 FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
-          jboolean terminator) {
+          jboolean terminator, jintArray ahead) {
     const auto arrival = dumble::BootClock::now();
     const jsize len = env->GetArrayLength(opusData);
     if (len > pl::kMaxPacketBytes) {
@@ -85,8 +85,17 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     // pin here would be held across a mutex acquisition on the reader thread.
     uint8_t packet[pl::kMaxPacketBytes];
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
-    return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
-                                  uint64_t(frameNumber), terminator == JNI_TRUE, arrival);
+    if (ahead == nullptr || env->GetArrayLength(ahead) < 2) {
+        return self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
+                                      uint64_t(frameNumber), terminator == JNI_TRUE, arrival);
+    }
+    pl::PlayoutEngine::Ahead held{0, 0};
+    const int code = self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
+                                            uint64_t(frameNumber), terminator == JNI_TRUE, arrival,
+                                            &held);
+    const jint out[2] = {held.queuedSamples, held.decodedSamples};
+    env->SetIntArrayRegion(ahead, 0, 2, out);
+    return code;
 }
 
 JNIEXPORT jint JNICALL
