@@ -13,6 +13,7 @@
 #include "core/BootClock.h"
 #include "core/CaptureConstants.h"
 #include "core/CaptureEngine.h"
+#include "core/LatencyPackets.h"
 #include "core/LatencyProbe.h"
 #include "core/PlayoutConstants.h"
 #include "core/PlayoutEngine.h"
@@ -251,14 +252,9 @@ std::vector<Breakdown> measure(const Scenario& s, int64_t codec) {
 // the way the harness measures everything else, not read from the encoder, so that the probe's
 // own error of a sample or two cancels out of the jitter buffer row.
 int64_t codecDelay() {
-    const auto probe = lat::probe(kProbePeak);
-    std::vector<int16_t> in(int64_t(kSampleRate), 0);
-    const int64_t at = 4 * kTxPacketSamples;
-    std::copy(probe.begin(), probe.end(), in.begin() + at);
-    const auto out = latencytest::opusRoundTrip(in);
-    const auto d = lat::find(out.data(), int64_t(out.size()), probe);
-    EXPECT_TRUE(d.found());
-    return d.offset - at;
+    const int64_t d = lat::codecDelay(lat::probe(kProbePeak), latencytest::kTransmitBitrate);
+    EXPECT_GE(d, 0) << "the probe was not found through Opus";
+    return d;
 }
 
 std::string ms(int64_t samples) {
