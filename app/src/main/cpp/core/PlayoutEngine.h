@@ -57,13 +57,12 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
  */
 class PlayoutEngine {
 public:
-    /** The wait ahead of an arriving packet: its sender's samples still encoded in the queue, and
-     *  those decoded but not yet mixed. Beside it, the depth a spurt's gate waits for, in its two
-     *  parts: the estimator's target, and the write-ahead every target is raised by. A wait well
-     *  past their sum is a burst that arrived at once. */
-    struct Ahead {
-        int32_t queuedSamples;
-        int32_t decodedSamples;
+    /** What offer() tells a latency check. `aheadSamples` is the wait ahead of the packet: its
+     *  sender's samples still queued, plus those decoded and not yet mixed. The other two are the
+     *  depth a spurt's gate waits for, in its parts: the estimator's target, and the write-ahead
+     *  every target is raised by. A wait well past their sum is a burst that arrived at once. */
+    struct Offered {
+        int32_t aheadSamples;
         int32_t targetSamples;
         int32_t writeAheadSamples;
     };
@@ -83,10 +82,10 @@ public:
      *  here. `arrival` is when the packet became ready to queue: delay before that, local or
      *  network, is jitter the target must cover.
      *
-     *  `ahead`, for a latency check, is filled with what the engine held for the session before
-     *  this packet, when the packet gets a slot: the once-a-second stats are too coarse. */
+     *  `offered`, for a latency check, is filled when the packet gets a slot, with what held
+     *  before it: the once-a-second stats are too coarse for that. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
-              BootClock::time_point arrival, Ahead* ahead = nullptr);
+              BootClock::time_point arrival, Offered* offered = nullptr);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement
