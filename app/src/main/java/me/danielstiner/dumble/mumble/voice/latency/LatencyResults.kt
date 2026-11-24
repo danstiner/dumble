@@ -17,7 +17,7 @@ object LatencyResults {
     fun text(outcome: CheckOutcome, device: DeviceFacts): String {
         // A match before capture's first sample is no match: the search subtracts the codec's delay.
         val found = outcome is CheckOutcome.Measured &&
-            outcome.m.located?.let { it.found && it.offsetSamples >= 0 } == true
+            outcome.measurements.located?.let { it.found && it.offsetSamples >= 0 } == true
         return buildString {
             fun row(name: String, value: Any?) {
                 if (value != null) appendLine("$name = $value")
@@ -33,7 +33,7 @@ object LatencyResults {
                     row("reason", outcome.reason)
                     outcome.partial
                 }
-                is CheckOutcome.Measured -> outcome.m.also { m ->
+                is CheckOutcome.Measured -> outcome.measurements.also { m ->
                     row("result", if (found) "ok" else "not_detected")
                     if (!found) {
                         row("reason", "the probe was not heard in capture")
