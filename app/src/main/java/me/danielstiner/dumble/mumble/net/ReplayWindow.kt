@@ -58,7 +58,8 @@ internal class ReplayWindow {
      */
     fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
-        if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
+        val alreadyAccepted = offset <= 0 && (bitmap ushr -offset) and 1L != 0L
+        if (alreadyAccepted) return false
         addToCounter(top, offset, out)
         return true
     }
