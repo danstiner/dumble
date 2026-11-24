@@ -299,3 +299,6 @@ cmake --build build/host && DUMBLE_UPDATE_EXPECTED=1 ctest --test-dir build/host
 
 `ctest` alone does not rebuild. It would measure the old code, match the old file and pass. The
 run that rewrites the file fails and names it, so leaving the variable set cannot hide a change.
+
+**Mouth-to-ear latency on a device** is measured by `scripts/latency-check`; see
+[latency.md](latency.md).
