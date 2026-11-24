@@ -191,15 +191,12 @@ class NativePlayoutTest {
     }
 
     @Test
-    fun offerReportsWhatWasAheadOfThePacketAndTheGate() {
-        val engine = NativePlayoutEngine(handle)
-        val first = engine.offer(SESSION, TONE_10MS, nextFrame(), false)
-        assertEquals(NativePlayout.OFFER_ACCEPTED, first.code)
-        assertEquals("nothing ahead of the first packet", 0, first.aheadSamples)
-        assertEquals("a new speaker's target", COLD_START_SAMPLES, first.targetSamples)
-        assertEquals("with the write-ahead, the target the stats report", stats().targets[0], first.targetSamples + first.writeAheadSamples)
-        val second = engine.offer(SESSION, TONE_10MS, nextFrame(), false)
-        assertEquals("the first packet, queued: no stream is pulling", FRAME_SAMPLES, second.aheadSamples)
+    fun offerReportsWhatWasAheadOfThePacket() {
+        val ahead = intArrayOf(-1)
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
+        assertEquals("nothing ahead of the first packet", 0, ahead[0])
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
+        assertEquals("the first packet, queued: no stream is pulling", FRAME_SAMPLES, ahead[0])
     }
 
     private companion object {
@@ -207,9 +204,6 @@ class NativePlayoutTest {
 
         /** Mirrors `PlayoutConstants.h`'s kMaxPacketBytes, which is what the seam refuses above. */
         const val MAX_PACKET_BYTES = 1276
-
-        /** Mirrors `PlayoutConstants.h`'s kColdStartSamples. */
-        const val COLD_START_SAMPLES = 3840
 
         /**
          * One 10 ms packet of the 440 Hz tone the host C++ tests use, from the same encoder at the
