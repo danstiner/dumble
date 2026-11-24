@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import me.danielstiner.dumble.mumble.proto.MumbleProtos
+import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.time.elapse
@@ -102,3 +104,9 @@ internal class Rig(val scope: TestScope) {
         return transport
     }
 }
+
+/** The frame that ends the handshake, naming [session] as ours. */
+internal fun serverSync(session: Int) = TcpFrame(
+    TcpMessageType.ServerSync.id,
+    MumbleProtos.ServerSync.newBuilder().setSession(session).build().toByteArray(),
+)

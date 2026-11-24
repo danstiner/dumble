@@ -582,11 +582,6 @@ class MumbleConnectionTest {
         assertTrue(message, cond())
     }
 
-    private fun serverSync(session: Int) = TcpFrame(
-        TcpMessageType.ServerSync.id,
-        MumbleProtos.ServerSync.newBuilder().setSession(session).build().toByteArray(),
-    )
-
     private fun userRemove(session: Int, reason: String) = TcpFrame(
         TcpMessageType.UserRemove.id,
         MumbleProtos.UserRemove.newBuilder().setSession(session).setReason(reason).build().toByteArray(),
@@ -1861,7 +1856,7 @@ class MumbleConnectionTest {
             pins, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { pin -> expected += pin; FakeControlTransport { _, _ -> } })
 
-        conn.connectPinned(endpoint, "latency-check", "ab12")
+        conn.connectForCheck(endpoint, "latency-check", "ab12", {}, {})
         handshaking(conn)
 
         assertEquals(listOf<String?>("ab12"), expected)
@@ -1880,7 +1875,7 @@ class MumbleConnectionTest {
         })
         val endpoint = MumbleEndpoint.parse("localhost")
 
-        conn.connectPinned(endpoint, "latency-check", "ab12")
+        conn.connectForCheck(endpoint, "latency-check", "ab12", {}, {})
         assertSettled("mismatch ends the session") { conn.status.value is ConnectionStatus.Error }
         conn.trustAndConnect()
 
