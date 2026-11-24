@@ -56,17 +56,20 @@ class LatencyCheck(
      *  [progress] names each step for the page. */
     suspend fun run(endpoint: MumbleEndpoint, fingerprint: String, progress: (String) -> Unit = {}): CheckOutcome {
         val exchange = ProbeExchange(probe)
+        // Read as t0 is marked: an abort clears the route and the effects before a partial is built.
         var pathAtOnset = VoicePath.State()
+        var routeAtOnset: AudioRoute? = null
+        var effectsAtOnset: CheckEffects? = null
         val check = host.connectForCheck(endpoint, USERNAME, fingerprint, exchange::onCaptured, exchange::onArrived)
             ?: return CheckOutcome.Refused("Dumble is connected to a server; disconnect first")
 
         fun measurements(sent: ComparableTimeMark, located: Located?): Measurements {
-            val effects = check.effects
+            val effects = effectsAtOnset
             return Measurements(
                 sent = sent, returned = exchange.returned, captured = exchange.captured, located = located,
                 codecDelaySamples = exchange.codecDelaySamples,
                 effects = effects?.names.orEmpty(), effectsAllOff = effects?.allOff() ?: false,
-                route = connection.audioRoutes.value.current, voicePath = pathAtOnset,
+                route = routeAtOnset, voicePath = pathAtOnset,
                 roundTripTime = connection.roundTripTime.value, captureStats = connection.captureStats.value,
                 playoutStats = connection.playoutStats.value,
             )
@@ -117,7 +120,11 @@ class LatencyCheck(
                 within(unopened, CAPTURE_TIMEOUT) { check.captureOpen.first { it } }
                 abortOn(check.captureOpen, "capture closed during the check") { !it }
 
-                val located = exchange.run(check, session, progress) { pathAtOnset = connection.voicePath.value }
+                val located = exchange.run(check, session, progress) {
+                    pathAtOnset = connection.voicePath.value
+                    routeAtOnset = connection.audioRoutes.value.current
+                    effectsAtOnset = check.effects
+                }
                 CheckOutcome.Measured(measurements(checkNotNull(exchange.sent), located))
             }
         } catch (e: Exception) {
