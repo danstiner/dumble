@@ -52,12 +52,13 @@ class MumbleConnectionCheckTest {
         val effects = mutableListOf<FakeEffects>()
         val captured = mutableListOf<CapturedPacket>()
         val arrived = mutableListOf<ArrivedPacket>()
-        val playout = FakePlayoutEngine()
+        /** The newest session's engine. */
+        var playout = FakePlayoutEngine()
         val call = FakeVoiceCall()
         val conn = rig.own(MumbleConnection(
             InMemoryPinStore(),
             newCapture = { wrapCapture(FakeCaptureHandle(blocking = false).also { handles += it }) },
-            newPlayout = { playout }, call = call,
+            newPlayout = { FakePlayoutEngine().also { playout = it } }, call = call,
             startPump = { senders += it; rig.startPump(it) },
             captureClock = rig.clock, udpClock = rig.clock,
             captureEffects = {
@@ -219,6 +220,21 @@ class MumbleConnectionCheckTest {
         live.conn.disconnect()
 
         assertTrue(check.ended.value)
+    }
+
+    @Test fun aCheckEndsItsOwnSessionAndNoOther() = deterministic {
+        val live = Live(this)
+        val check = checking(live)
+        check.end()
+        assertTrue(check.ended.value)
+        assertEquals(ConnectionStatus.Idle, live.conn.status.value)
+
+        live.conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(live.transports, 1).listener!!.onFrame(serverSync(SELF))
+        connected(live.conn)
+        check.end()
+        assertSettled("the user's session stands") { live.conn.status.value is ConnectionStatus.Connected }
+        assertEquals(2, live.transports.size)
     }
 
     @Test fun aCheckDoesNotReplaceALiveSession() = deterministic {
