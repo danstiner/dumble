@@ -16,6 +16,7 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.latency.CheckOutcome
 import me.danielstiner.dumble.mumble.voice.latency.LatencyResults
 import me.danielstiner.dumble.mumble.voice.latency.NativeProbeCodec
+import java.io.IOException
 import javax.inject.Inject
 
 sealed interface LatencyCheckState {
@@ -33,7 +34,16 @@ class LatencyCheckViewModel internal constructor(
 ) : ViewModel() {
     @Inject constructor(connection: MumbleConnection, @ApplicationContext context: Context) : this(
         LatencyCheck(connection, connection, NativeProbeCodec, callVolume = { ResultsFile.callVolume(context) })::run,
-        { outcome -> LatencyResults.text(outcome, ResultsFile.deviceFacts()).also { ResultsFile.write(context, it) } },
+        { outcome ->
+            val text = LatencyResults.text(outcome, ResultsFile.deviceFacts())
+            // The page still shows the results when the file cannot be written.
+            try {
+                ResultsFile.write(context, text)
+                text
+            } catch (e: IOException) {
+                "$text\nresults file not written: ${e.message}"
+            }
+        },
         Dispatchers.Default,
     )
 
