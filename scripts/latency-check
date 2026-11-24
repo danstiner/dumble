@@ -73,10 +73,12 @@ trap 'exit 130' INT TERM HUP
 
 adb shell pm path "$package" | grep '^package:' >/dev/null \
   || die "$package is not installed. Build a copy and install it by hand; never a Gradle install or connected task, which can replace your own app. See docs/latency.md."
-# An install older than the alias has none.
-adb shell cmd package resolve-activity --brief -n "$package/me.danielstiner.dumble.LatencyCheck" \
-  | grep LatencyCheck >/dev/null \
-  || die "$package has no latency alias; on a personal phone pass --package (see docs/latency.md)"
+# The class's own name: an applicationIdSuffix changes the package and not this.
+activity=me.danielstiner.dumble.ui.latency.LatencyCheckActivity
+# An install older than the check has none.
+adb shell cmd package resolve-activity --brief -n "$package/$activity" \
+  | grep LatencyCheckActivity >/dev/null \
+  || die "$package has no latency check; on a personal phone pass --package (see docs/latency.md)"
 
 # Runtime permissions of the tested package itself, not a device setting.
 adb shell pm grant "$package" android.permission.RECORD_AUDIO \
@@ -149,7 +151,7 @@ fi
 # logcat -T rejects a time without milliseconds and still exits 0.
 since=$(adb shell "date '+%m-%d %H:%M:%S.000'" | tr -d '\r')
 adb shell am start --activity-clear-task \
-  -n "$package/me.danielstiner.dumble.LatencyCheck" \
+  -n "$package/$activity" \
   --es host "$host" --ei port "$port" --es fingerprint "$fingerprint" >&2
 
 path=
