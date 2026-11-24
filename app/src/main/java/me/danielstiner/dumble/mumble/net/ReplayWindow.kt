@@ -58,8 +58,8 @@ internal class ReplayWindow {
      */
     fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
-        val alreadyAccepted = offset <= 0 && (bitmap ushr -offset) and 1L != 0L
-        if (alreadyAccepted) return false
+        // Bit k of the bitmap is the counter k below the top, so one at or behind it is bit -offset.
+        if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
         addToCounter(top, offset, out)
         return true
     }
@@ -84,7 +84,9 @@ internal class ReplayWindow {
     }
 
     private fun offsetFor(hint: Int): Int {
+        // How far ahead of the top the hint sits, modulo 256: 0 to 255.
         val step = (hint - top[0]) and 0xFF
+        // The top MAX_LATE of those are read as behind instead: 193..255 become -63..-1.
         return if (step > 0xFF - MAX_LATE) step - 0x100 else step
     }
 
