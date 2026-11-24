@@ -69,7 +69,7 @@ JNIEXPORT void JNICALL FN(pause)(JNIEnv*, jobject, jlong h) {
 
 JNIEXPORT jint JNICALL
 FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlong frameNumber,
-          jboolean terminator, jintArray ahead) {
+          jboolean terminator, jintArray offeredOut) {
     const auto arrival = dumble::BootClock::now();
     const jsize len = env->GetArrayLength(opusData);
     if (len > pl::kMaxPacketBytes) {
@@ -88,10 +88,10 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     pl::PlayoutEngine::Offered offered{};
     const int code = self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
                                             uint64_t(frameNumber), terminator == JNI_TRUE, arrival,
-                                            ahead ? &offered : nullptr);
-    if (ahead && code == pl::kOfferAccepted) {
+                                            offeredOut ? &offered : nullptr);
+    if (offeredOut && code == pl::kOfferAccepted) {
         const jint out[3] = {offered.aheadSamples, offered.targetSamples, offered.writeAheadSamples};
-        env->SetIntArrayRegion(ahead, 0, 3, out);
+        env->SetIntArrayRegion(offeredOut, 0, 3, out);
     }
     return code;
 }
