@@ -152,10 +152,10 @@ class LatencyCheckTest {
         advance(2300.milliseconds)
         rig.conn.voicePath.value = VoicePath.State()
         // Through the two callbacks the check connected its session with.
-        val ours = ArrivedPacket(SESSION, 220, rig.clock.markNow(), 960, 0, 0).also(rig.session.arrived)
+        val ours = ArrivedPacket(SESSION, 220, rig.clock.markNow(), 960).also(rig.session.arrived)
         rig.host.captured(CapturedPacket(250, byteArrayOf(1), rig.clock.markNow()))
         advance(400.milliseconds)
-        rig.session.arrived(ArrivedPacket(SESSION, 264, rig.clock.markNow(), 0, 0, 0))
+        rig.session.arrived(ArrivedPacket(SESSION, 264, rig.clock.markNow(), 0))
         advance(1.seconds)
 
         val expected = Measurements(

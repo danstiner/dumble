@@ -36,9 +36,7 @@ class LatencyResultsTest {
         voicePath: VoicePath.State = VoicePath.State(onUdp = true, roundTrip = 30.milliseconds),
     ) = Measurements(
         sent = t0,
-        returned = ArrivedPacket(
-            1, 50, t0 + 90.milliseconds, aheadSamples = 1440, targetSamples = 480, writeAheadSamples = 240,
-        ),
+        returned = ArrivedPacket(1, 50, t0 + 90.milliseconds, aheadSamples = 1440),
         heard = heard, codecDelaySamples = 312,
         effects = listOf("echo canceller", "noise suppressor"), effectsAllOff = effectsAllOff,
         route = AudioRoute("1", AudioRoute.Type.SPEAKER), callVolume = CallVolume(5, 7), voicePath = voicePath,
@@ -70,8 +68,6 @@ class LatencyResultsTest {
                 network.ping = 30.00
                 loop.phone = 112.50
                 receive.jitter_buffer = 30.00
-                receive.gate.target = 10.00
-                receive.gate.write_ahead = 5.00
                 receive.shrunk_packets = 1
                 receive.catch_up_packets = 2
                 receive.codec_delay = 6.50

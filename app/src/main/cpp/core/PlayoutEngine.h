@@ -57,16 +57,6 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
  */
 class PlayoutEngine {
 public:
-    /** What offer() tells a latency check. `aheadSamples` is the wait ahead of the packet: its
-     *  sender's samples still queued, plus those decoded and not yet mixed. The other two are the
-     *  depth a closed gate waits for, in its parts: the estimator's target, this packet's arrival
-     *  already counted, and the write-ahead every target is raised by. */
-    struct Offered {
-        int32_t aheadSamples;
-        int32_t targetSamples;
-        int32_t writeAheadSamples;
-    };
-
     /** Any thread; no lock, nothing is shared until it returns. Null when libopus cannot build a
      *  decoder, or when `maxQuantumSamples` is outside (0, kMaxPacketSamples] — every buffer here
      *  and in each speaker is sized from it. */
@@ -82,10 +72,11 @@ public:
      *  here. `arrival` is when the packet became ready to queue: delay before that, local or
      *  network, is jitter the target must cover.
      *
-     *  `offered`, for a latency check, is filled when the packet gets a slot: the once-a-second
-     *  stats are too coarse for that. */
+     *  `aheadSamples`, for a latency check, is set to the wait ahead of this packet when it gets
+     *  a slot: its sender's samples still queued, plus those decoded and not yet mixed. The
+     *  once-a-second stats are too coarse for that. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
-              BootClock::time_point arrival, Offered* offered = nullptr);
+              BootClock::time_point arrival, int32_t* aheadSamples = nullptr);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement

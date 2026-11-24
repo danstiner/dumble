@@ -75,9 +75,6 @@ object LatencyResults {
             row("network.ping", ping?.ms())
             row("loop.phone", loop?.ms())
             row("receive.jitter_buffer", jitter?.ms())
-            // The depth the spurt's gate waited for, not parts of the row above.
-            row("receive.gate.target", m.returned?.targetSamples?.toLong()?.sampleDuration()?.ms())
-            row("receive.gate.write_ahead", m.returned?.writeAheadSamples?.toLong()?.sampleDuration()?.ms())
             // Either above zero and playout dropped audio to catch up during the check: the onset
             // may have waited less than receive.jitter_buffer says.
             row("receive.shrunk_packets", m.playoutStats?.shrunkPackets)

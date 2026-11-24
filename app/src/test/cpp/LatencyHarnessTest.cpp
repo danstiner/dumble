@@ -193,10 +193,10 @@ Call simulate(const Scenario& s, const std::vector<int16_t>& microphone, millise
         // Before this millisecond's fill, so a packet is never one output callback late.
         for (; delivered < call.packets.size() && call.packets[delivered].arrival <= t; delivered++) {
             Packet& p = call.packets[delivered];
-            pl::PlayoutEngine::Offered offered{};
+            int32_t ahead = 0;
             playout->offer(kSession, p.data.data(), int(p.data.size()), p.frame, p.terminator,
-                           BootClock::time_point(p.arrival), &offered);
-            p.ahead = offered.aheadSamples;
+                           BootClock::time_point(p.arrival), &ahead);
+            p.ahead = ahead;
         }
 
         if (t % s.outputCallback == 0ms) {

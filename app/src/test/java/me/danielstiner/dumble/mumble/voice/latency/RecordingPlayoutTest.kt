@@ -18,8 +18,6 @@ class RecordingPlayoutTest {
         val start = clock.markNow()
         clock += 30.milliseconds
         engine.aheadSamples = 960
-        engine.targetSamples = 1440
-        engine.writeAheadSamples = 480
 
         val offered = recording.offer(5, byteArrayOf(1), 42, terminator = false)
 
@@ -28,8 +26,6 @@ class RecordingPlayoutTest {
         assertEquals(5, packet.session)
         assertEquals(42L, packet.frameNumber)
         assertEquals(960, packet.aheadSamples)
-        assertEquals(1440, packet.targetSamples)
-        assertEquals(480, packet.writeAheadSamples)
         assertEquals(30.milliseconds, packet.at - start)
         assertEquals("the engine took the packet", 1, engine.offered.size)
     }
