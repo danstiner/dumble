@@ -46,8 +46,7 @@ class MainActivity : ComponentActivity() {
         if (fresh && intent.component?.className == LATENCY_CHECK_ALIAS) {
             latencyCheck.start(
                 intent.getStringExtra("host"),
-                // Either an int or a string extra: `--ei` and `--es` are both easy to type.
-                intent.getStringExtra("port") ?: intent.getIntExtra("port", -1).takeIf { it != -1 }?.toString(),
+                intent.getIntExtra("port", -1).takeIf { it != -1 },
                 intent.getStringExtra("fingerprint"),
             )
         }

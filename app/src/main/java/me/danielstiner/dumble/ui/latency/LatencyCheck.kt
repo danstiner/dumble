@@ -1,4 +1,4 @@
-package me.danielstiner.dumble.mumble.voice.latency
+package me.danielstiner.dumble.ui.latency
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -14,33 +14,19 @@ import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.voice.AudioRoute
-import me.danielstiner.dumble.mumble.voice.CaptureStats
-import me.danielstiner.dumble.mumble.voice.PlayoutStats
+import me.danielstiner.dumble.mumble.voice.latency.CallVolume
+import me.danielstiner.dumble.mumble.voice.latency.CheckEffects
+import me.danielstiner.dumble.mumble.voice.latency.CheckFailure
+import me.danielstiner.dumble.mumble.voice.latency.CheckHost
+import me.danielstiner.dumble.mumble.voice.latency.CheckOutcome
+import me.danielstiner.dumble.mumble.voice.latency.CheckSession
+import me.danielstiner.dumble.mumble.voice.latency.Heard
+import me.danielstiner.dumble.mumble.voice.latency.Measurements
+import me.danielstiner.dumble.mumble.voice.latency.ProbeCodec
+import me.danielstiner.dumble.mumble.voice.latency.ProbeExchange
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-
-sealed interface CheckOutcome {
-    data class Refused(val reason: String) : CheckOutcome
-    data class Failed(val reason: String, val partial: Measurements?) : CheckOutcome
-    data class Measured(val measurements: Measurements) : CheckOutcome
-}
-
-/** What a check measured, raw; times on the check's clock. */
-data class Measurements(
-    /** t0: the onset packet handed to inject. */
-    val sent: ComparableTimeMark,
-    /** t1's packet: our own session's first return of the onset frame, with the depth read then. */
-    val returned: ArrivedPacket?,
-    val captured: List<CapturedPacket>,
-    val located: Located?,
-    val codecDelaySamples: Int,
-    val effects: List<String>, val effectsAllOff: Boolean,
-    val route: AudioRoute?,
-    /** At t0: UDP can be promoted mid-check, after the probe went through the tunnel. */
-    val voicePath: VoicePath.State,
-    val roundTripTime: Duration?, val captureStats: CaptureStats?, val playoutStats: PlayoutStats?,
-)
 
 /**
  * The on-device latency check, through a server: connects a session of its own, takes the speaker,
@@ -51,6 +37,8 @@ class LatencyCheck(
     private val connection: Connection,
     private val host: CheckHost,
     private val probe: ProbeCodec,
+    /** The voice-call stream's volume now; null when it cannot be read. */
+    private val callVolume: () -> CallVolume?,
 ) {
     /** Runs on the caller's context, which must not be the main thread ([ProbeExchange.run]);
      *  [progress] names each step for the page. */
@@ -60,16 +48,17 @@ class LatencyCheck(
         var pathAtOnset = VoicePath.State()
         var routeAtOnset: AudioRoute? = null
         var effectsAtOnset: CheckEffects? = null
+        var volume: CallVolume? = null
         val check = host.connectForCheck(endpoint, USERNAME, fingerprint, exchange::onCaptured, exchange::onArrived)
             ?: return CheckOutcome.Refused("Dumble is connected to a server; disconnect first")
 
-        fun measurements(sent: ComparableTimeMark, located: Located?): Measurements {
+        fun measurements(sent: ComparableTimeMark, heard: Heard?): Measurements {
             val effects = effectsAtOnset
             return Measurements(
-                sent = sent, returned = exchange.returned, captured = exchange.captured, located = located,
+                sent = sent, returned = exchange.returned, heard = heard,
                 codecDelaySamples = exchange.codecDelaySamples,
                 effects = effects?.names.orEmpty(), effectsAllOff = effects?.allOff() ?: false,
-                route = routeAtOnset, voicePath = pathAtOnset,
+                route = routeAtOnset, callVolume = volume, voicePath = pathAtOnset,
                 roundTripTime = connection.roundTripTime.value, captureStats = connection.captureStats.value,
                 playoutStats = connection.playoutStats.value,
             )
@@ -88,12 +77,12 @@ class LatencyCheck(
                 else -> throw CheckFailure("the connection ended before it was up")
             }
             val session = connected.sessionId
-            abortingOn(check, connected) {
+            whileConnected(check, connected) {
                 val self = within("our user did not appear on the server") {
                     connection.channelTree.mapNotNull { it.users[session] }.first()
                 }
                 if (self.mute || self.suppress || self.selfMute) {
-                    return@abortingOn CheckOutcome.Refused(
+                    return@whileConnected CheckOutcome.Refused(
                         "muted or suppressed on the server: Murmur drops loopback audio from such a user",
                     )
                 }
@@ -120,17 +109,21 @@ class LatencyCheck(
                 within(unopened, CAPTURE_TIMEOUT) { check.captureOpen.first { it } }
                 abortOn(check.captureOpen, "capture closed during the check") { !it }
 
-                val located = exchange.run(check, session, progress) {
+                // While the call is up and on the speaker: the stream's volume is per route, and
+                // the route goes with the session. Not at the onset, where a system call would
+                // sit between marking t0 and the send.
+                volume = callVolume()
+                val heard = exchange.run(check, session, progress) {
                     pathAtOnset = connection.voicePath.value
                     routeAtOnset = connection.audioRoutes.value.current
                     effectsAtOnset = check.effects
                 }
-                CheckOutcome.Measured(measurements(checkNotNull(exchange.sent), located))
+                CheckOutcome.Measured(measurements(checkNotNull(exchange.sent), heard))
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             val reason = if (e is CheckFailure) e.message else "the check failed unexpectedly: $e"
-            CheckOutcome.Failed(reason, exchange.sent?.let { measurements(it, located = null) })
+            CheckOutcome.Failed(reason, exchange.sent?.let { measurements(it, heard = null) })
         } finally {
             // Ending the check's own session puts back everything the check changed. Not
             // disconnect(), which would end a session the user opened since.
@@ -140,7 +133,7 @@ class LatencyCheck(
 
     /** Runs [steps] beside watchers that end the check once [check]'s session ends, the status
      *  leaves [connected] or a call takes the microphone; [steps] adds its own with [abortOn]. */
-    private suspend fun abortingOn(
+    private suspend fun whileConnected(
         check: CheckSession,
         connected: ConnectionStatus.Connected,
         steps: suspend CoroutineScope.() -> CheckOutcome,
