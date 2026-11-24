@@ -40,7 +40,7 @@ class LatencyCheckViewModelTest {
 
     @Test fun startShowsRunningBeforeItReturnsThenRunsToItsResult() = runTest(dispatcher) {
         val rig = Rig(dispatcher)
-        rig.vm.start("127.0.0.1", "9", "ab")
+        rig.vm.start("127.0.0.1", 9, "ab")
         assertEquals(LatencyCheckState.Running("starting"), rig.vm.state.value)
         runCurrent()
         assertEquals(LatencyCheckState.Running("halfway"), rig.vm.state.value)
@@ -55,10 +55,9 @@ class LatencyCheckViewModelTest {
 
     @Test fun missingOrBadExtrasAreRefusedWithTheReasonAndNothingRuns() = runTest(dispatcher) {
         for ((host, port, fingerprint, reason) in listOf(
-            Args(null, "9", "ab", "missing extra: host"),
-            Args("h", "9", null, "missing extra: fingerprint"),
-            Args("h", "70000", "ab", "bad extra: port out of range: 70000"),
-            Args("h", "http", "ab", "bad extra: port is not a number: http"),
+            Args(null, 9, "ab", "missing extra: host"),
+            Args("h", 9, null, "missing extra: fingerprint"),
+            Args("h", 70000, "ab", "bad extra: port out of range: 70000"),
         )) {
             val rig = Rig(dispatcher)
             rig.vm.start(host, port, fingerprint)
@@ -71,7 +70,7 @@ class LatencyCheckViewModelTest {
 
     @Test fun dismissingAFinishedPageReturnsToIdleButARunningOneStays() = runTest(dispatcher) {
         val rig = Rig(dispatcher)
-        rig.vm.start("h", "9", "ab")
+        rig.vm.start("h", 9, "ab")
         runCurrent()
         rig.vm.dismiss()
         assertEquals(LatencyCheckState.Running("halfway"), rig.vm.state.value)
@@ -81,5 +80,5 @@ class LatencyCheckViewModelTest {
         assertEquals(LatencyCheckState.Idle, rig.vm.state.value)
     }
 
-    private data class Args(val host: String?, val port: String?, val fingerprint: String?, val reason: String)
+    private data class Args(val host: String?, val port: Int?, val fingerprint: String?, val reason: String)
 }
