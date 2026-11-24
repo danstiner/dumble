@@ -21,6 +21,9 @@ import kotlin.time.Duration.Companion.seconds
  *  it has to cancel the steps rather than end quietly. */
 internal class CheckFailure(override val message: String) : Exception(message)
 
+/** The probe as capture heard it. [at] is t2, null when the match does not count as found. */
+data class Heard(val at: ComparableTimeMark?, val peak: Double, val nextPeak: Double)
+
 /**
  * The probe's trip on a check's session: a warm spurt and then the probe spurt go to the server's
  * loopback, the return plays through the speaker, and what capture hears is searched for it.
@@ -48,11 +51,8 @@ internal class ProbeExchange(
     var codecDelaySamples = 0
         private set
 
-    /** Everything capture has produced so far. */
-    val captured: List<CapturedPacket> get() = heard.toList()
-
     // Filled by the session's two callbacks, on the capture pump's and the transport's threads.
-    private val heard = ConcurrentLinkedQueue<CapturedPacket>()
+    private val captured = ConcurrentLinkedQueue<CapturedPacket>()
     private val onsetReturn = MutableStateFlow<ArrivedPacket?>(null)
     private val lastReturn = MutableStateFlow<ComparableTimeMark?>(null)
 
@@ -62,7 +62,7 @@ internal class ProbeExchange(
     @Volatile private var lastFrame = -1L
 
     fun onCaptured(packet: CapturedPacket) {
-        heard += packet
+        captured += packet
     }
 
     fun onArrived(packet: ArrivedPacket) {
@@ -72,11 +72,12 @@ internal class ProbeExchange(
     }
 
     /**
-     * Sends both spurts on [check], whose capture is open, listens, and returns where the probe is
-     * in [captured]; [session] is ours on the server and [atOnset] runs as t0 is marked. Call it
-     * off the main thread: it paces sends on deadlines and decodes capture in [ProbeCodec.locate].
+     * Sends both spurts on [check], whose capture is open, listens, and returns the probe as
+     * capture heard it, null when capture produced nothing; [session] is ours on the server and
+     * [atOnset] runs as t0 is marked. Call it off the main thread: it paces sends on deadlines and
+     * decodes capture in [ProbeCodec.locate].
      */
-    suspend fun run(check: CheckSession, session: Int, progress: (String) -> Unit = {}, atOnset: () -> Unit = {}): Located? {
+    suspend fun run(check: CheckSession, session: Int, progress: (String) -> Unit = {}, atOnset: () -> Unit = {}): Heard? {
         val warm = probe.encodeProbeSpurt(0, WARM_LEAD, ZERO, TRANSMIT_BITRATE)
         val spurt = probe.encodeProbeSpurt(PROBE_PEAK, PROBE_LEAD, PROBE_TAIL, TRANSMIT_BITRATE)
         codecDelaySamples = probe.codecDelaySamples(TRANSMIT_BITRATE)
@@ -114,7 +115,21 @@ internal class ProbeExchange(
         if (back != null) waitUntil(minOf(back + LISTEN_AFTER_RETURN, cap))
         check.setGateOpen(false)
         if (returned == null) throw CheckFailure("the probe did not come back from the server")
-        return probe.locate(captured, codecDelaySamples)
+        val packets = captured.sortedBy { it.frameNumber }
+        val located = probe.locate(packets, codecDelaySamples) ?: return null
+        return Heard(if (located.found) onsetAt(packets, located.offsetSamples) else null, located.peak, located.nextPeak)
+    }
+
+    /** When the onset left capture: its packet's time plus its place in the packet. Capture can
+     *  skip frames, so the packet is found by frame number and not by counting. Null for a match
+     *  before capture's first sample, which the codec's delay can make of noise. */
+    private fun onsetAt(packets: List<CapturedPacket>, offsetSamples: Long): ComparableTimeMark? {
+        if (offsetSamples < 0) return null
+        val first = packets.first().frameNumber
+        val onsetFrame = first + offsetSamples / FRAME_SAMPLES
+        val carrier = packets.lastOrNull { it.frameNumber <= onsetFrame } ?: return null
+        val inPacket = offsetSamples - (carrier.frameNumber - first) * FRAME_SAMPLES
+        return carrier.at + inPacket.seconds / SAMPLE_RATE
     }
 
     private companion object {
