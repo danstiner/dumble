@@ -12,9 +12,9 @@ class CapturedPacket(
 
 /** A voice packet from the server that the playout engine accepted on a latency check's session.
  *  [at] is when it reached the engine. [aheadSamples] is what the engine held for [session] before
- *  it, queued or decoded and not yet played: the wait ahead of this packet. A spurt's gate waits
- *  for [targetSamples] plus [writeAheadSamples]; a wait well past their sum is a burst that
- *  arrived at once. */
+ *  it, queued or decoded and not yet played: the wait ahead of this packet. [targetSamples] plus
+ *  [writeAheadSamples] is the depth a closed gate waits for, with this packet's arrival counted;
+ *  a gate already open has stopped waiting for it. */
 class ArrivedPacket(
     val session: Int,
     val frameNumber: Long,
