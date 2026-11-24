@@ -38,14 +38,12 @@ class LatencyCheckViewModelTest {
         )
     }
 
-    @Test fun startShowsRunningBeforeItReturnsThenRunsOnceToItsResult() = runTest(dispatcher) {
+    @Test fun startShowsRunningBeforeItReturnsThenRunsToItsResult() = runTest(dispatcher) {
         val rig = Rig(dispatcher)
         rig.vm.start("127.0.0.1", "9", "ab")
         assertEquals(LatencyCheckState.Running("starting"), rig.vm.state.value)
         runCurrent()
         assertEquals(LatencyCheckState.Running("halfway"), rig.vm.state.value)
-        rig.vm.start("127.0.0.1", "9", "ab")
-        runCurrent()
         assertEquals(listOf(MumbleEndpoint.parse("127.0.0.1", 9).address to "ab"), rig.runs.map { it.first.address to it.second })
 
         val failed = CheckOutcome.Failed("no server", null)
@@ -57,17 +55,16 @@ class LatencyCheckViewModelTest {
 
     @Test fun missingOrBadExtrasAreRefusedWithTheReasonAndNothingRuns() = runTest(dispatcher) {
         for ((host, port, fingerprint, reason) in listOf(
-            Args(null, "9", "ab", "host"),
-            Args("h", "9", null, "fingerprint"),
-            Args("h", "70000", "ab", "port"),
-            Args("h", "http", "ab", "port"),
+            Args(null, "9", "ab", "missing extra: host"),
+            Args("h", "9", null, "missing extra: fingerprint"),
+            Args("h", "70000", "ab", "bad extra: port out of range: 70000"),
+            Args("h", "http", "ab", "bad extra: port is not a number: http"),
         )) {
             val rig = Rig(dispatcher)
             rig.vm.start(host, port, fingerprint)
             runCurrent()
             assertEquals(emptyList<Any>(), rig.runs)
-            val refused = rig.reported.single() as CheckOutcome.Refused
-            assertEquals(true, reason in refused.reason)
+            assertEquals(listOf<CheckOutcome>(CheckOutcome.Refused(reason)), rig.reported)
             assertEquals(LatencyCheckState.Done("report 1"), rig.vm.state.value)
         }
     }

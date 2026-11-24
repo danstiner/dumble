@@ -44,10 +44,11 @@
             </intent-filter>
         </activity>
 
-        <!-- adb only: the shell holds DUMP and no app can, so no app can start a check that makes
-             Dumble send room audio to a server it chose. Extras: host, port, fingerprint.
-             Launch with the activity-clear-task flag: a plain relaunch would bring the old page forward or
-             stack a second instance over the first check's session. -->
+        <!-- adb only: starting it needs DUMP, which the shell holds and no app a user installs
+             can. A check connects to the server it is given with the user's certificate, opens
+             the microphone and takes the speaker; what it captures never leaves the phone.
+             Extras: host, port, fingerprint. Launch with the activity-clear-task flag: a plain
+             relaunch would stack a second page over the first. -->
         <activity-alias
             android:name=".LatencyCheck"
             android:exported="true"

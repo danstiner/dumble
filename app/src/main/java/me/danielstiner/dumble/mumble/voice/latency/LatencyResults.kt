@@ -12,10 +12,12 @@ import kotlin.time.DurationUnit
 /** What only the device can say, read by the caller so the text stays JVM-testable. */
 data class DeviceFacts(val model: String, val android: String, val voiceCallVolume: Int, val voiceCallVolumeMax: Int)
 
-/** A check's outcome as spec §1's stage table, one `name = value` per line; durations in ms. */
+/** A check's outcome, one `name = value` per line; durations in ms. */
 object LatencyResults {
     fun text(outcome: CheckOutcome, device: DeviceFacts): String {
-        val found = outcome is CheckOutcome.Measured && outcome.m.located?.found == true
+        // A match before capture's first sample is no match: the search subtracts the codec's delay.
+        val found = outcome is CheckOutcome.Measured &&
+            outcome.m.located?.let { it.found && it.offsetSamples >= 0 } == true
         return buildString {
             fun row(name: String, value: Any?) {
                 if (value != null) appendLine("$name = $value")
@@ -59,29 +61,36 @@ object LatencyResults {
 
             val returnedAt = m.returned?.let { it.at - m.sent }
             val ping = if (m.voicePath.onUdp) m.voicePath.roundTrip else m.roundTripTime
-            val jitter = m.returned?.aheadSamples?.samples()
-            val codec = m.codecDelaySamples.samples()
+            val jitter = m.returned?.aheadSamples?.toLong()?.sampleDuration()
+            val codec = m.codecDelaySamples.toLong().sampleDuration()
             val output = m.playoutStats?.latencyMs?.milliseconds
             val send = SendDelay.of(m.captureStats, m.voicePath, m.roundTripTime)
             val loop = if (found) loopPhone(m) else null
-            val unaccounted = listOf(jitter, output, send.inputBuffer, send.encode)
-                .takeIf { loop != null && null !in it }
-                ?.let { terms -> loop!! - terms.fold(codec) { sum, term -> sum + term!! } }
+            val unaccounted =
+                if (loop != null && jitter != null && output != null && send.inputBuffer != null && send.encode != null) {
+                    loop - jitter - codec - output - send.inputBuffer - send.encode
+                } else {
+                    null
+                }
 
             row("network.round_trip", returnedAt?.ms())
             row("network.ping", ping?.ms())
             row("loop.phone", loop?.ms())
             row("receive.jitter_buffer", jitter?.ms())
-            row("receive.jitter_buffer.target", m.returned?.targetSamples?.samples()?.ms())
-            row("receive.jitter_buffer.write_ahead", m.returned?.writeAheadSamples?.samples()?.ms())
+            // The depth the spurt's gate waited for, not parts of the row above.
+            row("receive.gate.target", m.returned?.targetSamples?.toLong()?.sampleDuration()?.ms())
+            row("receive.gate.write_ahead", m.returned?.writeAheadSamples?.toLong()?.sampleDuration()?.ms())
+            // Either above zero and playout dropped audio to catch up during the check: the onset
+            // may have waited less than receive.jitter_buffer says.
+            row("receive.shrunk_packets", m.playoutStats?.shrunkPackets)
+            row("receive.catch_up_packets", m.playoutStats?.catchUpPackets)
             row("receive.codec_delay", codec.ms())
             row("receive.audio_output", output?.ms())
             row("send.input_buffer", send.inputBuffer?.ms())
             row("send.encode", send.encode?.ms())
             row("unaccounted", unaccounted?.ms())
-            row("estimate.network_ms", ping?.div(2)?.ms())
-            row("detection.peak", m.located?.peak?.two())
-            row("detection.next_peak", m.located?.nextPeak?.two())
+            row("detection.peak", m.located?.peak?.twoDecimals())
+            row("detection.next_peak", m.located?.nextPeak?.twoDecimals())
         }
     }
 
@@ -94,11 +103,10 @@ object LatencyResults {
         val onsetFrame = first + offset / FRAME_NUMBER_SAMPLES
         val carrier = packets.lastOrNull { it.frameNumber <= onsetFrame } ?: return null
         val inPacket = offset - (carrier.frameNumber - first) * FRAME_NUMBER_SAMPLES
-        return carrier.at + inPacket.samples() - returned.at
+        return carrier.at + inPacket.sampleDuration() - returned.at
     }
 
-    private fun Int.samples() = toLong().samples()
-    private fun Long.samples() = seconds / SAMPLE_RATE
-    private fun Duration.ms() = toDouble(DurationUnit.MILLISECONDS).two()
-    private fun Double.two() = "%.2f".format(Locale.ROOT, this)
+    private fun Long.sampleDuration() = seconds / SAMPLE_RATE
+    private fun Duration.ms() = toDouble(DurationUnit.MILLISECONDS).twoDecimals()
+    private fun Double.twoDecimals() = "%.2f".format(Locale.ROOT, this)
 }
