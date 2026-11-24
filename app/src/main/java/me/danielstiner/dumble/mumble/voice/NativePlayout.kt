@@ -71,9 +71,9 @@ object NativePlayout {
     external fun start(handle: Long): Boolean
     external fun pause(handle: Long)
 
-    /** With [ahead], of two entries, an accepted packet also fills `ahead[0]` with the samples
-     *  already queued for [session] and `ahead[1]` with those decoded but not yet played. A packet
-     *  that is not accepted leaves it alone. */
+    /** With [ahead], of one entry, an accepted packet also fills it with the samples held for
+     *  [session] before the packet: queued, plus decoded and not yet played. A packet that is not
+     *  accepted leaves it alone. */
     external fun offer(
         handle: Long,
         session: Int,
