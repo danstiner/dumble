@@ -25,7 +25,7 @@ class CryptState {
     private var late = 0
     private var advanced = 0
     private var resync = 0
-    private var replay = 0
+    private var rejected = 0
 
     private val nonce = ByteArray(NONCE_LEN)
     private val tag = ByteArray(NONCE_LEN)
@@ -55,7 +55,7 @@ class CryptState {
         late = 0
         advanced = 0
         resync = 0
-        replay = 0
+        rejected = 0
     }
 
     /** The peer has told us where its counter really is, because we drifted too far to rebuild it. */
@@ -74,7 +74,7 @@ class CryptState {
     fun stats(): CryptStats =
         // Every accepted packet either moved the top or filled a slot an earlier move opened, so
         // the top's total travel minus the packets that arrived is exactly what never did.
-        CryptStats(good, late, advanced - good, resync, replay)
+        CryptStats(good, late, advanced - good, resync, rejected)
 
     /**
      * Encrypts `src[0, len)` into [dst], which must hold `len + HEADER_LEN` bytes and be a different
@@ -109,7 +109,7 @@ class CryptState {
      * Decrypts `src[0, len)` into [dst] and returns the plaintext length, or -1 for anything the
      * wire could produce: a runt, a bad tag, a replay, a counter too far out to rebuild, or a
      * packet that beat the key exchange. A rejection leaves the stream state exactly as it was --
-     * only [CryptStats.replay] moves -- so the next good packet still decrypts. [dst] is the
+     * only [CryptStats.rejected] moves -- so the next good packet still decrypts. [dst] is the
      * exception: it holds unverified plaintext whenever -1 comes back, and the caller must
      * discard it.
      *
@@ -121,10 +121,10 @@ class CryptState {
     fun decrypt(src: ByteArray, len: Int, dst: ByteArray): Int {
         require(len >= 0) { "negative length $len" }
         require(len <= src.size) { "length $len exceeds ${src.size} source bytes" }
-        if (len < HEADER_LEN) return -1
+        if (len < HEADER_LEN) return reject()
         val plainLen = len - HEADER_LEN
         require(plainLen <= dst.size) { "destination holds ${dst.size}, needs $plainLen" }
-        val keyed = cipher ?: return -1
+        val keyed = cipher ?: return reject()
 
         // Read the header out before open(), which fills dst -- and dst is allowed to be src.
         val hint = src[0].toInt() and 0xFF
@@ -134,10 +134,7 @@ class CryptState {
 
         // A replay costs no AES: the bitmap answers first. Otherwise guessing is free: a wrong
         // guess makes the wrong nonce and the tag will not match.
-        if (!window.rebuildNonce(hint, nonce)) {
-            replay++
-            return -1
-        }
+        if (!window.rebuildNonce(hint, nonce)) return reject()
 
         // open() hands back unverified plaintext and a recomputed tag; only this comparison
         // authenticates. Its false return means the final block has the shape the XEX* forgery
@@ -146,12 +143,17 @@ class CryptState {
         val diff = (tag[0].toInt() xor wire0.toInt()) or
             (tag[1].toInt() xor wire1.toInt()) or
             (tag[2].toInt() xor wire2.toInt())
-        if (!unforged || diff != 0) return -1
+        if (!unforged || diff != 0) return reject()
 
         val offset = window.accept(nonce)
         if (offset > 0) advanced += offset else late++
         good++
         return plainLen
+    }
+
+    private fun reject(): Int {
+        rejected++
+        return -1
     }
 
     companion object {

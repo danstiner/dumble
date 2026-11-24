@@ -54,7 +54,7 @@ class CryptStateTest {
             assertEquals(len + CryptState.HEADER_LEN, datagram.size)
             assertArrayEquals("length $len", plain, receive(b, datagram))
         }
-        assertEquals(CryptStats(good = 81, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 81, late = 0, lost = 0, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
@@ -92,7 +92,7 @@ class CryptStateTest {
         val datagrams = (0 until 10).map { send(a, payload(it)) }
         assertNotNull(receive(b, datagrams[0]))
         assertNotNull(receive(b, datagrams[5]))
-        assertEquals(CryptStats(good = 2, late = 0, lost = 4, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 2, late = 0, lost = 4, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
@@ -103,11 +103,11 @@ class CryptStateTest {
             assertArrayEquals("packet $i", payload(i), receive(b, datagrams[i]))
         }
         // Everything arrived, just backwards, so nothing is still missing.
-        assertEquals(CryptStats(good = 32, late = 31, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 32, late = 31, lost = 0, resync = 0, rejected = 0), b.stats())
         for (i in 0 until 32) {
             assertNull("replay of $i", receive(b, datagrams[i]))
         }
-        assertEquals(CryptStats(good = 32, late = 31, lost = 0, resync = 0, replay = 32), b.stats())
+        assertEquals(CryptStats(good = 32, late = 31, lost = 0, resync = 0, rejected = 32), b.stats())
     }
 
     @Test
@@ -117,9 +117,9 @@ class CryptStateTest {
         assertArrayEquals(payload(3), receive(b, datagram))
         val before = b.stats()
         repeat(5) { assertNull(receive(b, datagram)) }
-        // Everything but the replay count must be untouched by a rejection.
-        assertEquals(before, b.stats().copy(replay = before.replay))
-        assertEquals(before.replay + 5, b.stats().replay)
+        // Everything but the rejected count must be untouched by a rejection.
+        assertEquals(before, b.stats().copy(rejected = before.rejected))
+        assertEquals(before.rejected + 5, b.stats().rejected)
         assertArrayEquals(payload(4), receive(b, send(a, payload(4))))
     }
 
@@ -136,7 +136,7 @@ class CryptStateTest {
         repeat(64) { assertNotNull(receive(d, send(c, payload(it + 1)))) }
         val before = d.stats()
         assertNull(receive(d, tooOld))
-        assertEquals(before, d.stats())
+        assertEquals(before.copy(rejected = 1), d.stats())
         assertNotNull(receive(d, send(c, payload(99))))
     }
 
@@ -145,7 +145,7 @@ class CryptStateTest {
         val (a, b) = pair()
         repeat(191) { send(a, payload(it)) }
         assertArrayEquals(payload(7), receive(b, send(a, payload(7))))
-        assertEquals(CryptStats(good = 1, late = 0, lost = 191, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 1, late = 0, lost = 191, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
@@ -153,14 +153,14 @@ class CryptStateTest {
         val (a, b) = pair()
         repeat(192) { send(a, payload(it)) }
         // 193 ahead rebuilds as a packet behind us, and that slot is already spent, so the window
-        // refuses it before any decryption -- which is what the replay count records here.
+        // refuses it before any decryption.
         assertNull(receive(b, send(a, payload(7))))
-        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 1), b.stats())
+        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 1), b.stats())
 
         b.setDecryptNonce(a.encryptNonce())
         assertEquals(1, b.stats().resync)
         assertArrayEquals(payload(8), receive(b, send(a, payload(8))))
-        assertEquals(CryptStats(good = 1, late = 0, lost = 0, resync = 1, replay = 1), b.stats())
+        assertEquals(CryptStats(good = 1, late = 0, lost = 0, resync = 1, rejected = 1), b.stats())
     }
 
     @Test
@@ -174,7 +174,7 @@ class CryptStateTest {
         b.setDecryptNonce(a.encryptNonce())
         datagrams.forEach { assertNull(receive(b, it)) }
         assertNull("late packets from before the resync are dropped", receive(b, held))
-        assertEquals(CryptStats(good = 5, late = 0, lost = 1, resync = 1, replay = 6), b.stats())
+        assertEquals(CryptStats(good = 5, late = 0, lost = 1, resync = 1, rejected = 6), b.stats())
         assertArrayEquals(payload(6), receive(b, send(a, payload(6))))
     }
 
@@ -188,7 +188,7 @@ class CryptStateTest {
             val corrupt = datagram.copyOf()
             corrupt[i] = (corrupt[i].toInt() xor 0x40).toByte()
             assertNull("flipped byte $i", receive(b, corrupt))
-            assertEquals("flipped byte $i", before, b.stats())
+            assertEquals("flipped byte $i", before.copy(rejected = i + 1), b.stats())
         }
         assertArrayEquals(payload(2, 40), receive(b, datagram))
         assertArrayEquals(payload(3, 40), receive(b, send(a, payload(3, 40))))
@@ -201,7 +201,7 @@ class CryptStateTest {
         val before = b.stats()
         assertNull(receive(b, datagram.copyOf(datagram.size - 1)))
         assertNull(receive(b, datagram.copyOf(datagram.size + 1)))
-        assertEquals(before, b.stats())
+        assertEquals(before.copy(rejected = 2), b.stats())
         assertArrayEquals(payload(1, 32), receive(b, datagram))
     }
 
@@ -211,7 +211,7 @@ class CryptStateTest {
         for (len in 0 until CryptState.HEADER_LEN) {
             assertEquals(-1, b.decrypt(ByteArray(8), len, ByteArray(8)))
         }
-        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 4), b.stats())
     }
 
     @Test
@@ -220,7 +220,7 @@ class CryptStateTest {
         assertFalse(fresh.isValid())
         assertEquals(-1, fresh.decrypt(ByteArray(64), 64, ByteArray(64)))
         assertEquals(-1, fresh.decrypt(ByteArray(4), 4, ByteArray(0)))
-        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 0), fresh.stats())
+        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 2), fresh.stats())
         assertArrayEquals(counter(0), fresh.encryptNonce())
     }
 
@@ -237,9 +237,8 @@ class CryptStateTest {
             assertNull(receive(b, junk))
             assertEquals(-1, unkeyed.decrypt(junk, junk.size, junk))
         }
-        // Junk whose low byte happens to rebuild into a spent slot is refused by the window
-        // rather than the tag, so the replay count moves; nothing else may.
-        assertEquals(before, b.stats().copy(replay = before.replay))
+        // Every one counts as rejected, whether the window or the tag refused it; nothing else moves.
+        assertEquals(before.copy(rejected = 2000), b.stats())
         assertArrayEquals(payload(2), receive(b, send(a, payload(2))))
     }
 
@@ -250,7 +249,7 @@ class CryptStateTest {
             assertArrayEquals("packet $i", payload(i), receive(b, send(a, payload(i))))
         }
         assertArrayEquals(counter(1000), a.encryptNonce())
-        assertEquals(CryptStats(good = 1000, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 1000, late = 0, lost = 0, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
@@ -281,7 +280,7 @@ class CryptStateTest {
         assertArrayEquals(payload(0), receive(b, datagrams[0]))
         assertArrayEquals(payload(1), receive(b, datagrams[1]))
         assertArrayEquals(payload(2), receive(b, datagrams[2]))
-        assertEquals(CryptStats(good = 4, late = 3, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 4, late = 3, lost = 0, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
@@ -322,14 +321,15 @@ class CryptStateTest {
 
         val rekey = ByteArray(16) { (it * 5 + 3).toByte() }
         b.setKeys(rekey, counter(0x99), counter(0))
-        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 0), b.stats())
         assertArrayEquals(counter(0x99), b.encryptNonce())
         assertNull(receive(b, stale))
 
         val peer = CryptState()
         peer.setKeys(rekey, counter(0), counter(0x99))
         assertArrayEquals(payload(4), receive(b, send(peer, payload(4))))
-        assertEquals(CryptStats(good = 1, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        // The one rejection is the stale packet from the old key.
+        assertEquals(CryptStats(good = 1, late = 0, lost = 0, resync = 0, rejected = 1), b.stats())
 
         // The seed itself is never a packet counter -- a sender increments before it seals -- so
         // the value it names stays spent even under a brand new key.
@@ -378,7 +378,7 @@ class CryptStateTest {
         assertThrows(IllegalArgumentException::class.java) {
             b.decrypt(datagram, -1, ByteArray(64))
         }
-        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, replay = 0), b.stats())
+        assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 0), b.stats())
         assertArrayEquals(payload(1, 20), receive(b, datagram))
     }
 
@@ -437,10 +437,10 @@ class CryptStateTest {
         assertNotNull("the stream resumes after adopting", receive(recv, send(send, payload(9))))
         // What the resync jumped over is spent rather than merely unreachable: the last two of
         // those counters land inside the window and are refused there, before any decryption.
-        val before = recv.stats().replay
+        val before = recv.stats().rejected
         assertNull(receive(recv, skipped[399]))
         assertNull(receive(recv, skipped[398]))
-        assertEquals(before + 2, recv.stats().replay)
+        assertEquals(before + 2, recv.stats().rejected)
     }
 
     /**
