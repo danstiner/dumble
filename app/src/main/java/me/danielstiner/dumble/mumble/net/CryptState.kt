@@ -8,7 +8,7 @@ package me.danielstiner.dumble.mumble.net
  *     bytes 1..3  the first three bytes of the OCB2 tag
  *     bytes 4..   ciphertext, as long as the plaintext
  *
- * so it costs [HEADER_LEN] bytes. Only that low byte travels, and the receiver rebuilds the other
+ * so it costs [HEADER_LEN] bytes. Only that low byte is sent, and the receiver rebuilds the other
  * fifteen from the counter it already holds.
  *
  * Three threads share one instance -- control channel keying and reading stats, send path, receive

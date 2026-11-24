@@ -51,14 +51,14 @@ internal class ReplayWindow {
      * [out] as the nonce to try. False, with [out] untouched, when that counter has been accepted
      * already.
      *
-     * [hint] is the counter's low byte, all that travels. Its 256 values are split [MAX_LATE]
-     * behind the top and the rest ahead, so candidates run `top-63` to `top+192` -- one guess
-     * covering both loss and reordering, never a second decrypt attempt for an attacker to force.
-     * Anything further out rebuilds to the wrong counter and fails the tag.
+     * [hint] is the counter's low byte, the only part of it sent on the wire. Its 256 values are
+     * split [MAX_LATE] behind the top and the rest ahead, so candidates run `top-63` to `top+192`
+     * -- one guess covering both loss and reordering, never a second decrypt attempt for an
+     * attacker to force. Anything further out rebuilds to the wrong counter and fails the tag.
      */
     fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
-        // Bit k of the bitmap is the counter k below the top, so one at or behind it is bit -offset.
+        // Bit k is the counter k below the top, so a counter at or behind the top is bit -offset.
         if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
         addToCounter(top, offset, out)
         return true
