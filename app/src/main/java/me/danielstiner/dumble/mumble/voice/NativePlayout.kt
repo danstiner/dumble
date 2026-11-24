@@ -71,9 +71,9 @@ object NativePlayout {
     external fun start(handle: Long): Boolean
     external fun pause(handle: Long)
 
-    /** With [ahead], of four entries, an accepted packet also fills `ahead[0]` with the samples
-     *  already queued for [session], `ahead[1]` with those decoded but not yet played, `ahead[2]`
-     *  with the jitter estimator's target and `ahead[3]` with the write-ahead added to it. A packet
+    /** With [ahead], of three entries, an accepted packet also fills `ahead[0]` with the samples
+     *  held for [session] before the packet (queued, plus decoded and not yet played), `ahead[1]`
+     *  with the jitter estimator's target and `ahead[2]` with the write-ahead added to it. A packet
      *  that is not accepted leaves it alone. */
     external fun offer(
         handle: Long,
@@ -99,11 +99,11 @@ object NativePlayout {
 /** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
     // One array for every offer: the receiver offers under its monitor, one packet at a time.
-    private val ahead = IntArray(4)
+    private val ahead = IntArray(3)
 
     override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): VoiceReceiver.Offered {
         val code = NativePlayout.offer(handle, session, opusData, frameNumber, terminator, ahead)
-        return VoiceReceiver.Offered(code, ahead[0] + ahead[1], ahead[2], ahead[3])
+        return VoiceReceiver.Offered(code, ahead[0], ahead[1], ahead[2])
     }
 
     override fun readStats(

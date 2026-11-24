@@ -29,7 +29,7 @@ std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuan
 }
 
 int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber,
-                         bool terminator, BootClock::time_point arrival, Ahead* ahead) {
+                         bool terminator, BootClock::time_point arrival, Offered* offered) {
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
@@ -67,9 +67,9 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
         return kOfferSpeakerCap;
     }
     PacketQueue& queue = queues_[slot];
-    if (ahead) {
-        *ahead = {queue.depthSamples(), decodedAhead_[slot], estimators_[estimator].targetSamples(),
-                  writeAhead_.load(std::memory_order_relaxed)};
+    if (offered) {
+        *offered = {queue.depthSamples() + decodedAhead_[slot], estimators_[estimator].targetSamples(),
+                    writeAhead_.load(std::memory_order_relaxed)};
     }
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator, frameNumber);
