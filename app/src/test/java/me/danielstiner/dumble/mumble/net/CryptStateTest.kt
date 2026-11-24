@@ -255,20 +255,28 @@ class CryptStateTest {
 
     @Test
     fun carryPropagatesThroughEveryCounterByte() {
-        // Seeds one short of a byte-1 boundary, of the 64-bit half, and of the whole 128 bits.
-        for (seed in listOf(counter(0xFFFF), counter(-1L), counter(-1L, -1L))) {
+        // Seeds one short of byte 2, of byte 8, and of the whole 128 bits, each with where four
+        // sends must leave it. Both peers share one adder, so a round trip alone would pass a
+        // carry that stops early on both sides and only fails against another implementation.
+        val cases = listOf(
+            counter(0xFFFF) to counter(0x10003),
+            counter(-1L) to counter(3, high = 1),
+            counter(-1L, -1L) to counter(3),
+        )
+        for ((seed, after) in cases) {
             val (a, b) = pair(sendSeed = seed)
             for (i in 0 until 4) {
                 assertArrayEquals(payload(i), receive(b, send(a, payload(i))))
             }
+            assertArrayEquals(after, a.encryptNonce())
         }
     }
 
     @Test
-    fun rebuildingBorrowsAcrossTheSixtyFourBitHalf() {
+    fun rebuildingBorrowsAcrossByteEight() {
         val (a, b) = pair(sendSeed = counter(-3L))
         val datagrams = (0 until 4).map { send(a, payload(it)) }
-        // Counters straddle the half boundary: the last two carried into the high word.
+        // Counters straddle the carry into byte 8: the last two sit past it.
         assertArrayEquals(payload(3), receive(b, datagrams[3]))
         assertArrayEquals(payload(0), receive(b, datagrams[0]))
         assertArrayEquals(payload(1), receive(b, datagrams[1]))
