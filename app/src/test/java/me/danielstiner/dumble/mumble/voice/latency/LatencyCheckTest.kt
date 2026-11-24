@@ -177,6 +177,7 @@ class LatencyCheckTest {
             val failed = outcome.getCompleted() as CheckOutcome.Failed
             assertEquals(reason, failed.reason)
             assertEquals(reason, rig.origin + 2200.milliseconds, failed.partial?.sent)
+            assertEquals("the route the probe played through", SPEAKER, failed.partial?.route)
             assertEquals(reason, 50 + 26, rig.session.injects.size)
         }
     }
