@@ -1,67 +1,16 @@
 package me.danielstiner.dumble.mumble.net
 
 /**
- * A little-endian 128-bit counter held as two unsigned 64-bit halves, so advancing it and offsetting
- * from it stay register operations; only the hand-off to the cipher needs bytes.
- *
- * Mutable and reused in place. These sit on the voice path at ~50 packets/s each way, where a
- * per-packet allocation is jitter rather than a slow benchmark.
+ * Writes `counter + offset` into [out], which may be [counter] itself. A counter is a little-endian
+ * 16-byte block, the form the cipher takes its nonce in, so nothing converts on the way there.
  */
-internal class U128 {
-    var low = 0L
-        private set
-    var high = 0L
-        private set
-
-    /** The byte that travels on the wire. */
-    val lowByte: Int get() = low.toInt() and 0xFF
-
-    fun readFrom(bytes: ByteArray) {
-        low = readHalf(bytes, 0)
-        high = readHalf(bytes, 8)
-    }
-
-    fun writeTo(bytes: ByteArray) {
-        writeHalf(bytes, 0, low)
-        writeHalf(bytes, 8, high)
-    }
-
-    fun increment() {
-        low++
-        if (low == 0L) high++
-    }
-
-    /** Writes `this + offset` into [out], carrying or borrowing across the halves. */
-    fun writeOffsetTo(offset: Int, out: ByteArray) {
-        val lo = low + offset
-        writeHalf(out, 0, lo)
-        writeHalf(out, 8, carriedHigh(lo, offset))
-    }
-
-    /** Advances by a signed [offset] in place. */
-    fun advanceBy(offset: Int) {
-        val lo = low + offset
-        high = carriedHigh(lo, offset)
-        low = lo
-    }
-
-    /** The high half for a low half that has become [lo] by adding [offset]. Reads the old [low]. */
-    private fun carriedHigh(lo: Long, offset: Int): Long = when {
-        offset > 0 && lo.toULong() < low.toULong() -> high + 1
-        offset < 0 && lo.toULong() > low.toULong() -> high - 1
-        else -> high
-    }
-
-    private companion object {
-        fun readHalf(b: ByteArray, off: Int): Long {
-            var v = 0L
-            for (i in 7 downTo 0) v = (v shl 8) or (b[off + i].toLong() and 0xFF)
-            return v
-        }
-
-        fun writeHalf(b: ByteArray, off: Int, v: Long) {
-            for (i in 0 until 8) b[off + i] = (v ushr (8 * i)).toByte()
-        }
+internal fun addToCounter(counter: ByteArray, offset: Int, out: ByteArray) {
+    var carry = offset
+    for (i in counter.indices) {
+        carry += counter[i].toInt() and 0xFF
+        out[i] = carry.toByte()
+        // An arithmetic shift, so a borrow rides up as -1 the way a carry does as 1.
+        carry = carry shr 8
     }
 }
 
@@ -70,7 +19,7 @@ internal class U128 {
  *
  * The highest counter accepted is the top; [bitmap] records the [MAX_LATE] below it, bit *k*
  * meaning "top − k accepted". Bit 0 is the top itself, so it is set whenever anything has been.
- * This is the sliding-window form IPsec uses (RFC 6479) and SRTP requires at least 64 of
+ * This is the sliding-window form IPsec uses (RFC 4303 §3.4.3) and SRTP requires at least 64 of
  * (RFC 3711 §3.3.2), at the size one Long holds -- the hint itself would allow any split of its
  * 256 values.
  *
@@ -78,7 +27,7 @@ internal class U128 {
  * top shifts the bitmap by the same amount.
  */
 internal class ReplayWindow {
-    private val top = U128()
+    private val top = ByteArray(CryptState.NONCE_LEN)
     private var bitmap = 0L
 
     /**
@@ -93,7 +42,7 @@ internal class ReplayWindow {
      * window, the cheap half of the trade.
      */
     fun restartAt(peerNonce: ByteArray) {
-        top.readFrom(peerNonce)
+        peerNonce.copyInto(top)
         bitmap = -1L
     }
 
@@ -104,7 +53,7 @@ internal class ReplayWindow {
      * an attacker to force. Anything further out rebuilds to the wrong counter and fails the tag.
      */
     fun offsetFor(hint: Int): Int {
-        val step = (hint - top.lowByte) and 0xFF
+        val step = (hint - top[0]) and 0xFF
         return if (step > 0xFF - MAX_LATE) step - 0x100 else step
     }
 
@@ -113,7 +62,7 @@ internal class ReplayWindow {
         offset <= 0 && (bitmap ushr -offset) and 1L != 0L
 
     /** Writes the counter at [offset] into [out] as the nonce to try. */
-    fun nonceAt(offset: Int, out: ByteArray) = top.writeOffsetTo(offset, out)
+    fun nonceAt(offset: Int, out: ByteArray) = addToCounter(top, offset, out)
 
     /**
      * Records the counter at [offset] as accepted. A forward offset carries the top with it and
@@ -127,7 +76,7 @@ internal class ReplayWindow {
             // Kotlin masks a Long shift to six bits, so a jump of exactly the window size would
             // otherwise leave the bitmap unshifted and mark all 63 slots below the new top spent.
             bitmap = if (offset >= WINDOW) 1L else (bitmap shl offset) or 1L
-            top.advanceBy(offset)
+            addToCounter(top, offset, top)
         } else {
             bitmap = bitmap or (1L shl -offset)
         }

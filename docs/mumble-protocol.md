@@ -221,7 +221,7 @@ Upstream tolerates 29 behind and jumps ahead up to the 128-value ambiguity bound
 ### Replay protection
 
 Replays are rejected before any decryption. `ReplayWindow` keeps the sliding-window bitmap that
-IPsec uses (RFC 6479) and SRTP requires at least 64 bits of (RFC 3711 §3.3.2): the highest counter
+IPsec uses (RFC 4303 §3.4.3) and SRTP requires at least 64 bits of (RFC 3711 §3.3.2): the highest counter
 accepted, plus one bit for each of the 63 below it, in one 64-bit word.
 
 Upstream keeps a 256-slot table, one slot per value of `iv[0]`, holding the `iv[1]` last accepted

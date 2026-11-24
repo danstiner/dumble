@@ -18,7 +18,7 @@ package me.danielstiner.dumble.mumble.net
 class CryptState {
     private var cipher: Ocb2? = null
 
-    private val encryptCounter = U128()
+    private val encryptCounter = ByteArray(NONCE_LEN)
     private val window = ReplayWindow()
 
     private var good = 0
@@ -49,7 +49,7 @@ class CryptState {
         }
         val keyed = Ocb2(key)
         cipher = keyed
-        encryptCounter.readFrom(encryptNonce)
+        encryptNonce.copyInto(encryptCounter)
         window.restartAt(decryptNonce)
         good = 0
         late = 0
@@ -68,7 +68,7 @@ class CryptState {
 
     /** A copy of our send counter, as the last packet we sealed left it. */
     @Synchronized
-    fun encryptNonce(): ByteArray = ByteArray(NONCE_LEN).also { encryptCounter.writeTo(it) }
+    fun encryptNonce(): ByteArray = encryptCounter.copyOf()
 
     @Synchronized
     fun stats(): CryptStats =
@@ -94,12 +94,11 @@ class CryptState {
         require(src !== dst) { "encrypt cannot work in place: the header would land on the plaintext" }
 
         // The seed is never used as a nonce; the first packet goes out under seed + 1.
-        encryptCounter.increment()
-        encryptCounter.writeTo(nonce)
+        addToCounter(encryptCounter, 1, encryptCounter)
         // No return to check: seal only fails with its XEX* countermeasure turned off.
-        keyed.seal(nonce, src, 0, len, dst, HEADER_LEN, tag)
+        keyed.seal(encryptCounter, src, 0, len, dst, HEADER_LEN, tag)
 
-        dst[0] = encryptCounter.lowByte.toByte()
+        dst[0] = encryptCounter[0]
         dst[1] = tag[0]
         dst[2] = tag[1]
         dst[3] = tag[2]
