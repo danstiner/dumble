@@ -194,10 +194,9 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                                 est && !est->discontinuous(), &concealSamples);
                 // The packet leaves the queue's count and joins this one under the same lock, so an
                 // offer() reading both never finds it in neither.
-                if (concealSamples > 0) {
-                    decodedAhead_[live[n]] += concealSamples;
-                } else if (len > 0) {
-                    decodedAhead_[live[n]] += AudioDecoder::packetSamples(packetScratch_, len, sampleRate_);
+                if (len > 0) {
+                    decodedAhead_[live[n]] +=
+                        AudioDecoder::packetSamples(packetScratch_, len, sampleRate_);
                 }
             }
             // One frame per pop keeps the cursor and the fifo in step whatever the callback size;

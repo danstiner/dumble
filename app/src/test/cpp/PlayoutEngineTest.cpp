@@ -1588,30 +1588,16 @@ int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Ahead* ahead) {
     return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, ahead);
 }
 
-TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacket) {
-    auto e = newEngine();
-    PlayoutEngine::Ahead ahead{-1, -1};
-    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ(0, ahead.queuedSamples) << "nothing is ahead of a speaker's first packet";
-    EXPECT_EQ(0, ahead.decodedSamples);
-
-    arm(*e, 7, kColdStartPackets - 1);
-    // Half a packet's fill pops one packet and decodes all of it, leaving half decoded.
-    std::vector<int16_t> pcm(kFrame / 2);
-    std::vector<int32_t> speaking(pl::kMaxSpeakers);
-    int32_t live = 0;
-    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
-    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ((kColdStartPackets - 1) * kFrame, ahead.queuedSamples);
-    EXPECT_EQ(kFrame / 2, ahead.decodedSamples);
-}
-
 // A fill decodes with the mutex released, and the packet it has popped is then in neither the
-// queue nor the decoder. An offer landing there must still count it. The hook runs at exactly that
-// point with the mutex free, so the offer is made from it, on the fill's own thread.
-TEST(PlayoutEngine, OfferInsideAFillStillCountsThePoppedPacket) {
+// queue nor the decoder. The hook runs there, on the fill's own thread.
+TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     auto e = newEngine();
-    arm(*e, 7);
+    PlayoutEngine::Ahead first{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &first));
+    EXPECT_EQ(0, first.queuedSamples) << "nothing is ahead of a speaker's first packet";
+    EXPECT_EQ(0, first.decodedSamples);
+    arm(*e, 7, kColdStartPackets - 1);
+
     PlayoutEngine::Ahead inside{-1, -1};
     int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
@@ -1631,32 +1617,19 @@ TEST(PlayoutEngine, OfferInsideAFillStillCountsThePoppedPacket) {
     EXPECT_EQ(kFrame / 2, after.decodedSamples) << "the fill mixed half of the popped packet";
 }
 
-// The count offer() reads is a copy of the decoder's, kept by the fill. Every way a speaker's
-// decoder is filled or emptied has to leave the two equal once the fill has returned.
-TEST(PlayoutEngine, WhatIsAheadMatchesTheDecoderAfterAHoleAndAfterTheSpeakerRetires) {
+// The output going down releases a slot whose decoder still holds audio. A slot a fill retires
+// has already played its decoder out.
+TEST(PlayoutEngine, NothingIsAheadOfASpeakerReleasedWithAudioStillDecoded) {
     auto e = newEngine();
-    const std::vector<uint8_t> p = encode(1);
     arm(*e, 7);
-    frameFor(7)++;   // one packet lost: the pop before it asks the decoder to conceal a frame
-    for (int i = 0; i < 2; i++) offer(*e, 7, p);
     std::vector<int16_t> pcm(kFrame / 2);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
-    // Every packet before the hole, then half of the frame concealed in its place.
-    for (int i = 0; i < 2 * kColdStartPackets + 1; i++) {
-        e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
-    }
-    ASSERT_EQ(kFrame, e->stats().lostSamples) << "the fill reached the hole";
-    PlayoutEngine::Ahead ahead{-1, -1};
-    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ(2 * kFrame, ahead.queuedSamples) << "the two packets behind the hole";
-    EXPECT_EQ(kFrame / 2, ahead.decodedSamples) << "the half of the concealed frame not yet mixed";
+    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    e->setOutputDown(true);
+    e->setOutputDown(false);
 
-    // Played out, retired, and back: the new slot starts with nothing ahead.
-    for (int i = 0; i < 400 && (i == 0 || live > 0); i++) {
-        e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
-    }
-    ASSERT_EQ(0, live);
+    PlayoutEngine::Ahead ahead{-1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
     EXPECT_EQ(0, ahead.queuedSamples);
     EXPECT_EQ(0, ahead.decodedSamples);

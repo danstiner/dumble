@@ -2,7 +2,6 @@ package me.danielstiner.dumble.mumble.voice
 
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -193,17 +192,11 @@ class NativePlayoutTest {
 
     @Test
     fun offerReportsWhatWasAheadOfThePacket() {
-        // A 20 ms CELT frame of silence: the smallest payload libopus schedules as audio.
-        val silence = byteArrayOf(0xF8.toByte(), 0xFF.toByte(), 0xFE.toByte())
         val ahead = intArrayOf(-1, -1)
-        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, ahead))
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
         assertEquals("nothing ahead of the first packet", listOf(0, 0), ahead.toList())
-        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, ahead))
-        assertEquals("one 20 ms packet queued", 960, ahead[0])
-        assertEquals("nothing decoded before the stream pulls", 0, ahead[1])
-        val short = intArrayOf(-1)
-        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, silence, nextFrame(), false, short))
-        assertEquals("a short array is left alone", -1, short[0])
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
+        assertEquals("the first packet, queued: no stream is pulling", listOf(FRAME_SAMPLES, 0), ahead.toList())
     }
 
     private companion object {

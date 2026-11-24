@@ -1,7 +1,9 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#ifdef DUMBLE_TESTING
 #include <functional>
+#endif
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -77,8 +79,7 @@ public:
      *  network, is jitter the target must cover.
      *
      *  `ahead`, for a latency check, is filled with what the engine held for the session before
-     *  this packet, when the packet gets a slot: the once-a-second stats are too coarse. A read
-     *  that lands inside a fill still counts the burst that fill is producing. */
+     *  this packet, when the packet gets a slot: the once-a-second stats are too coarse. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
               BootClock::time_point arrival, Ahead* ahead = nullptr);
 
@@ -262,11 +263,10 @@ private:
     // Whether the slot produced in the last fill. Written in the commit phase and read by stats(),
     // both under mutex_. Zeroed on claim.
     bool audible_[kMaxSpeakers] = {};
-    // Samples the slot's decoder holds, decoded and not yet mixed, for offer() to read: the decoder
-    // itself belongs to the playback thread, which decodes with mutex_ released. A pop adds the
-    // packet it hands the decoder, and the commit phase sets the decoder's own count, so between
-    // the two it still holds the burst being mixed. A contended fill skips that commit and leaves
-    // it up to one burst high until the next. Zeroed on release.
+    // What the slot's decoder holds, decoded and not yet mixed, for offer() to read: the decoder
+    // itself belongs to the playback thread, which uses it with mutex_ released. Exact after a
+    // fill's commit. Inside a fill, and after a contended one until the next commit, it still
+    // counts the burst being mixed and misses anything that fill concealed. Zeroed on release.
     int decodedAhead_[kMaxSpeakers] = {};
     // Samples a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only by real
     // audio, never by a fill that merely did not conceal: an expired hold would otherwise clear

@@ -245,11 +245,11 @@ std::vector<Breakdown> measure(const Scenario& s, int64_t codec) {
         b.network = pl::samplesIn(carrier->arrival - carrier->sent);
         b.writeAhead = pl::samplesIn(writeAhead(s));
         b.jitterBuffer = b.total - b.packetization - b.network - codec - b.writeAhead;
-        // What playout said it held ahead of the packet is the device check's jitter buffer row.
-        // It must be the wait measured here from the output, less the wait for the next fill.
-        const int64_t untilFill = b.jitterBuffer - carrier->ahead;
-        EXPECT_GE(untilFill, 0) << s.name << ": probe at " << at.count() << " ms";
-        EXPECT_LT(untilFill, pl::samplesIn(s.outputCallback)) << s.name << ": probe at " << at.count() << " ms";
+        // What playout said it held ahead of the packet, plus the wait for the next fill, is the
+        // wait measured here from the output. Exact while playout does not adapt in between.
+        const milliseconds untilFill = (s.outputCallback - carrier->arrival % s.outputCallback) % s.outputCallback;
+        EXPECT_EQ(b.jitterBuffer, carrier->ahead + pl::samplesIn(untilFill))
+            << s.name << ": probe at " << at.count() << " ms";
         breakdowns.push_back(b);
     }
     return breakdowns;
