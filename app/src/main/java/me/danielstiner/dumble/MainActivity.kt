@@ -1,5 +1,6 @@
 package me.danielstiner.dumble
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,10 +38,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // Only a fresh launch through the alias: a rotation or process restore has a saved state.
+        // Only a fresh launch through the alias: a rotation or process restore has a saved state,
+        // and a task reopened from Recents is started again with the first launch's extras.
         // A constant, not "$packageName.LatencyCheck": an applicationIdSuffix changes the package
         // but not the alias's class name.
-        if (savedInstanceState == null && intent.component?.className == LATENCY_CHECK_ALIAS) {
+        val fresh = savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        if (fresh && intent.component?.className == LATENCY_CHECK_ALIAS) {
             latencyCheck.start(
                 intent.getStringExtra("host"),
                 // Either an int or a string extra: `--ei` and `--es` are both easy to type.

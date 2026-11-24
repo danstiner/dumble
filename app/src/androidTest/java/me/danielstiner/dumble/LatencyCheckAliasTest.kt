@@ -1,5 +1,7 @@
 package me.danielstiner.dumble
 
+import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.os.ParcelFileDescriptor
 import androidx.lifecycle.ViewModelProvider
@@ -22,13 +24,24 @@ class LatencyCheckAliasTest {
     }
 
     @Test fun theShellIsAdmittedThroughTheGuardAndTheCheckRunsToAResult() {
-        val out = shell("am start -W --activity-clear-task -n $pkg/me.danielstiner.dumble.LatencyCheck --es host 127.0.0.1 --ei port 9 --es fingerprint 00")
-        assertTrue(out, "Error" !in out && "Permission Denial" !in out)
-        awaitResults(1)
+        val out = shell("am start -W --activity-clear-task -n $pkg/$ALIAS --es host 127.0.0.1 --ei port 9 --es fingerprint 00")
+        try {
+            assertTrue(out, "Status: ok" in out)
+            awaitResults(1)
+        } finally {
+            shell("am start -W --activity-clear-task -n $pkg/.MainActivity")
+        }
+    }
+
+    /** The shell can start any exported activity, and a test launches from the app's own uid:
+     *  neither run shows the guard is there. */
+    @Test fun onlyAHolderOfDumpCanStartACheck() {
+        val alias = instrumentation.targetContext.packageManager.getActivityInfo(ComponentName(pkg, ALIAS), 0)
+        assertEquals(Manifest.permission.DUMP, alias.permission)
     }
 
     @Test fun recreatingTheActivityDoesNotStartASecondCheck() {
-        val intent = Intent().setClassName(pkg, "me.danielstiner.dumble.LatencyCheck")
+        val intent = Intent().setClassName(pkg, ALIAS)
             .putExtra("host", "127.0.0.1").putExtra("port", 9).putExtra("fingerprint", "00")
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             awaitResults(1)
@@ -47,6 +60,10 @@ class LatencyCheckAliasTest {
             .use { it.readBytes().decodeToString() }
 
     private fun results() = shell("logcat -d -s LatencyCheck").lines().count { "results:" in it }
+
+    private companion object {
+        const val ALIAS = "me.danielstiner.dumble.LatencyCheck"
+    }
 
     // The timeout only catches a hang.
     private fun awaitResults(count: Int) {
