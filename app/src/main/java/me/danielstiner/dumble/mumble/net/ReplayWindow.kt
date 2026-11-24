@@ -47,15 +47,16 @@ internal class ReplayWindow {
     }
 
     /**
-     * Writes the counter a packet carrying [hint] must have been sealed under into [out], as the
-     * nonce to try. False, with no cipher work spent, when that counter has been accepted already.
+     * Rebuilds the counter a packet carrying [hint] must have been sealed under and writes it to
+     * [out] as the nonce to try. False, with [out] untouched and no cipher work spent, when that
+     * counter has been accepted already.
      *
      * [hint] is the counter's low byte, all that travels. Its 256 values are split [MAX_LATE]
      * behind the top and the rest ahead, so candidates run `top-63` to `top+192` -- one guess
      * covering both loss and reordering, never a second decrypt attempt for an attacker to force.
      * Anything further out rebuilds to the wrong counter and fails the tag.
      */
-    fun nonceFor(hint: Int, out: ByteArray): Boolean {
+    fun rebuildIfNew(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
         if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
         addToCounter(top, offset, out)

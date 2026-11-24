@@ -134,7 +134,7 @@ class CryptState {
 
         // A replay costs no AES: the bitmap answers first. Otherwise guessing is free: a wrong
         // guess makes the wrong nonce and the tag will not match.
-        if (!window.nonceFor(hint, nonce)) {
+        if (!window.rebuildIfNew(hint, nonce)) {
             replay++
             return -1
         }
