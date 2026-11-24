@@ -5,7 +5,6 @@ import android.os.Process
 import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
 import java.io.IOException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -32,9 +31,8 @@ class VoiceSender(
     private val onStats: (CaptureStats) -> Unit = {},
     private val statsInterval: Duration = STATS_INTERVAL,
     /** Seam: the clock of the stats cadence and the speech stall, so a test that steps the pump
-     *  can run both on virtual time. [capturedTap]'s marks are on it too, and a latency check
-     *  subtracts them from [VoiceReceiver.arrivedTap]'s, so the two classes share one source. */
-    private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+     *  can run both on virtual time. */
+    private val clock: TimeSource = TimeSource.Monotonic,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -54,15 +52,6 @@ class VoiceSender(
     enum class StopReason { REQUESTED, UNAVAILABLE }
 
     @Volatile var droppedFrames = 0; private set
-
-    /** Who the server sends our voice to: [NORMAL_TALKING_TARGET], or [SERVER_LOOPBACK_TARGET]
-     *  while a latency check runs. */
-    @Volatile var target = NORMAL_TALKING_TARGET
-
-    /** Set while a latency check listens: each packet capture produced, on the pump thread, before
-     *  it is sent and whether or not the send succeeds. A throw from it is logged and the packet
-     *  goes out. */
-    @Volatile var capturedTap: ((CapturedPacket) -> Unit)? = null
     @Volatile private var thread: Thread? = null
     @Volatile private var stopped = false
 
@@ -125,16 +114,6 @@ class VoiceSender(
 
     private fun pollOnce(): Boolean {
         val n = handle.pollPacket(frame, meta)
-        val tap = capturedTap
-        if (n > 0 && tap != null) {
-            val at = clock.markNow()
-            try {
-                tap(CapturedPacket(meta[NativeCapture.META_FRAME_NUMBER], frame.copyOf(n), at))
-            } catch (t: Throwable) {
-                // A check's bug must not end the pump, and with it transmit.
-                Log.e(TAG, "capture tap failed", t)
-            }
-        }
         if (nextStatsAt.hasPassedNow()) {
             nextStatsAt = clock.markNow() + statsInterval
             handle.stats()?.let {
@@ -172,7 +151,7 @@ class VoiceSender(
         val flags = meta[NativeCapture.META_FLAGS]
         val terminator = flags and NativeCapture.FLAG_TERMINATOR != 0L
         val audio = MumbleUdpProtos.Audio.newBuilder()
-            .setTarget(target)
+            .setTarget(NORMAL_TALKING_TARGET)
             .setFrameNumber(meta[NativeCapture.META_FRAME_NUMBER])
             .setIsTerminator(terminator)
             .setOpusData(ByteString.copyFrom(frame, 0, n))
@@ -196,8 +175,6 @@ class VoiceSender(
     companion object {
         private const val TAG = "VoiceSender"
         const val NORMAL_TALKING_TARGET = 0
-        /** Murmur's loopback target: the server sends the audio back to its sender alone. */
-        const val SERVER_LOOPBACK_TARGET = 31
         private const val UDP_TYPE_AUDIO: Byte = 0
         /** The sheet refreshes every two seconds; the log line keeps its old ten. */
         private val STATS_INTERVAL = 2.seconds

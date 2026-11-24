@@ -96,11 +96,8 @@ object NativePlayout {
 
 /** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
-    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): VoiceReceiver.Offered {
-        val ahead = IntArray(2)
-        val code = NativePlayout.offer(handle, session, opusData, frameNumber, terminator, ahead)
-        return VoiceReceiver.Offered(code, ahead[0] + ahead[1])
-    }
+    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean) =
+        NativePlayout.offer(handle, session, opusData, frameNumber, terminator)
 
     override fun readStats(
         sessions: IntArray,

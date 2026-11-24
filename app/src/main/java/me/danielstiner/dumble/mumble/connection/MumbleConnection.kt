@@ -102,7 +102,7 @@ class MumbleConnection internal constructor(
     private val startPump: (VoiceSender) -> Unit = VoiceSender::start,
     // Seam: the pump's clock, for its stats cadence and its speech stall, so a test that steps the
     // pump runs both on the scheduler's time.
-    private val captureClock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
+    private val captureClock: TimeSource = TimeSource.Monotonic,
     // Seams: the clock of everything that must count sleep — the sync stamp, the reconnect budget,
     // the UDP transport — which reads zero off-device, so a test injects one; and the ping
     // interval, so a test can keep the ticker out of its way.

@@ -44,11 +44,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     @Volatile var audibleSessions: Set<Int> = emptySet()
 
     @Volatile var depthsBySession: Map<Int, Int> = emptyMap()
-
     @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
-
-    /** What [offer] reports ahead of a packet, per session. */
-    @Volatile var aheadBySession: Map<Int, Int> = emptyMap()
 
     /** The counters as native would report them: monotonic, with latency -1 until a stream
      *  reports one. */
@@ -69,10 +65,10 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         opusData: ByteArray,
         frameNumber: Long,
         terminator: Boolean,
-    ): VoiceReceiver.Offered {
+    ): Int {
         checkLive()
         offered += Offer(session, opusData, frameNumber, terminator)
-        return VoiceReceiver.Offered(offerResult, aheadBySession[session] ?: 0)
+        return offerResult
     }
 
     override fun readStats(
