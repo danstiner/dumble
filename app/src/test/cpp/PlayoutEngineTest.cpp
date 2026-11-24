@@ -1593,13 +1593,13 @@ int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Ahead* ahead) {
 // queue nor the decoder. The hook runs there, on the fill's own thread.
 TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     auto e = newEngine();
-    PlayoutEngine::Ahead first{-1, -1};
+    PlayoutEngine::Ahead first{-1, -1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &first));
     EXPECT_EQ(0, first.queuedSamples) << "nothing is ahead of a speaker's first packet";
     EXPECT_EQ(0, first.decodedSamples);
     arm(*e, 7, kColdStartPackets - 1);
 
-    PlayoutEngine::Ahead inside{-1, -1};
+    PlayoutEngine::Ahead inside{-1, -1, -1, -1};
     int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
         if (popped++ == 0) ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &inside));
@@ -1612,7 +1612,7 @@ TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     EXPECT_EQ((kColdStartPackets - 1) * kFrame, inside.queuedSamples);
     EXPECT_EQ(kFrame, inside.decodedSamples) << "the popped packet, whole: none of it is mixed yet";
 
-    PlayoutEngine::Ahead after{-1, -1};
+    PlayoutEngine::Ahead after{-1, -1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &after));
     EXPECT_EQ(kColdStartPackets * kFrame, after.queuedSamples) << "the packet offered inside the fill";
     EXPECT_EQ(kFrame / 2, after.decodedSamples) << "the fill mixed half of the popped packet";
@@ -1630,8 +1630,17 @@ TEST(PlayoutEngine, NothingIsAheadOfASpeakerReleasedWithAudioStillDecoded) {
     e->setOutputDown(true);
     e->setOutputDown(false);
 
-    PlayoutEngine::Ahead ahead{-1, -1};
+    PlayoutEngine::Ahead ahead{-1, -1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
     EXPECT_EQ(0, ahead.queuedSamples);
     EXPECT_EQ(0, ahead.decodedSamples);
+}
+
+TEST(PlayoutEngine, OfferReportsTheGateInItsTwoParts) {
+    auto e = newEngine();
+    e->setWriteAheadSamples(480);
+    PlayoutEngine::Ahead ahead{-1, -1, -1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ(pl::kColdStartSamples, ahead.targetSamples);
+    EXPECT_EQ(480, ahead.writeAheadSamples);
 }

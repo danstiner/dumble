@@ -192,11 +192,12 @@ class NativePlayoutTest {
 
     @Test
     fun offerReportsWhatWasAheadOfThePacket() {
-        val ahead = intArrayOf(-1, -1)
+        val ahead = intArrayOf(-1, -1, -1, -1)
         assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
-        assertEquals("nothing ahead of the first packet", listOf(0, 0), ahead.toList())
+        assertEquals("nothing ahead of the first packet", listOf(0, 0), ahead.take(2))
+        assertTrue("the gate's target comes with it", ahead[2] > 0)
         assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
-        assertEquals("the first packet, queued: no stream is pulling", listOf(FRAME_SAMPLES, 0), ahead.toList())
+        assertEquals("the first packet, queued: no stream is pulling", listOf(FRAME_SAMPLES, 0), ahead.take(2))
     }
 
     private companion object {

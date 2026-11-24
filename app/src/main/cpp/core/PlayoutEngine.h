@@ -58,10 +58,14 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
 class PlayoutEngine {
 public:
     /** The wait ahead of an arriving packet: its sender's samples still encoded in the queue, and
-     *  those decoded but not yet mixed. */
+     *  those decoded but not yet mixed. Beside it, the depth a spurt's gate waits for, in its two
+     *  parts: the estimator's target, and the write-ahead every target is raised by. A wait well
+     *  past their sum is a burst that arrived at once. */
     struct Ahead {
         int32_t queuedSamples;
         int32_t decodedSamples;
+        int32_t targetSamples;
+        int32_t writeAheadSamples;
     };
 
     /** Any thread; no lock, nothing is shared until it returns. Null when libopus cannot build a

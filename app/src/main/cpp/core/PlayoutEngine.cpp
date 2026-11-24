@@ -67,7 +67,10 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
         return kOfferSpeakerCap;
     }
     PacketQueue& queue = queues_[slot];
-    if (ahead) *ahead = {queue.depthSamples(), decodedAhead_[slot]};
+    if (ahead) {
+        *ahead = {queue.depthSamples(), decodedAhead_[slot], estimators_[estimator].targetSamples(),
+                  writeAhead_.load(std::memory_order_relaxed)};
+    }
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator, frameNumber);
     } else {

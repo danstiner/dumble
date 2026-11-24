@@ -33,8 +33,10 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     /** What [offer] returns. Tests that exercise the cap or a broken engine override it. */
     @Volatile var offerResult = NativePlayout.OFFER_ACCEPTED
 
-    /** What [offer] reports ahead of a packet. */
+    /** What [offer] reports ahead of a packet, and as the gate it waits for. */
     @Volatile var aheadSamples = 0
+    @Volatile var targetSamples = 0
+    @Volatile var writeAheadSamples = 0
 
     /** When true, [readStats] reports the caller's arrays as too small, the way native does when
      *  this side allocates them wrong. */
@@ -71,7 +73,7 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
     ): VoiceReceiver.Offered {
         checkLive()
         offered += Offer(session, opusData, frameNumber, terminator)
-        return VoiceReceiver.Offered(offerResult, aheadSamples)
+        return VoiceReceiver.Offered(offerResult, aheadSamples, targetSamples, writeAheadSamples)
     }
 
     override fun readStats(
