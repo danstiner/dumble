@@ -41,7 +41,7 @@ and logs its path under the tag `LatencyCheck`; the script pulls and prints it. 
 |---|---|
 | `result` | `ok`, `not_detected` (the probe came back but capture did not hear it), `failed` or `refused` |
 | `reason`, `likely_cause` | Why, when not `ok` |
-| `device.*`, `route`, `voice_call_volume` | The phone, the audio route, and the voice-call volume out of its maximum |
+| `device.*`, `route`, `voice_call_volume` | The phone, the audio route the probe played through, and the voice-call volume on it, out of its maximum |
 | `voice_path` | `udp` or `tcp` (the tunnel), at t0 |
 | `capture.frames_per_burst` | Capture's burst size, in frames |
 | `effects`, `effects_off` | The capture effects found, and whether all were turned off |
