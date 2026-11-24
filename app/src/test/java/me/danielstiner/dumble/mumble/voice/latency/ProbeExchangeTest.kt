@@ -59,11 +59,10 @@ class ProbeExchangeTest {
             advance(2500.milliseconds)
             val packet = CapturedPacket(250, byteArrayOf(1), rig.clock.markNow())
             rig.exchange.onCaptured(packet)
-            // Capture's pump keeps polling while locate decodes.
-            rig.probe.onLocate = { rig.exchange.onCaptured(CapturedPacket(400, byteArrayOf(2), rig.clock.markNow())) }
             advance(3.seconds)
 
-            assertEquals("$echo", Heard(listOf(packet), rig.probe.located), outcome.getCompleted().getOrThrow())
+            assertEquals("$echo", rig.probe.located, outcome.getCompleted().getOrThrow())
+            assertEquals("$echo", listOf(packet), rig.exchange.captured)
             assertEquals("$echo", listOf(true to 2.seconds, false to closes), rig.gate())
             assertEquals("$echo", List(50) { false } + List(33) { true }, rig.session.injects.map { it.gateOpen })
             assertEquals("$echo", listOf(listOf(packet) to CODEC_DELAY), rig.probe.searches)
@@ -80,6 +79,7 @@ class ProbeExchangeTest {
         advance(2300.milliseconds)
         arrive(OTHER, 220, 1)
         arrive(SESSION, 218, 2)
+        arrive(SESSION, 222, 2)
         val ours = arrive(SESSION, 220, 3)
         arrive(SESSION, 220, 4)
         advance(400.milliseconds)
@@ -97,7 +97,12 @@ class ProbeExchangeTest {
     }
 
     @Test fun aMissingReturnTimesOut() = runTest {
-        val rig = Rig(this)
+        // The cap counts from when the spurt's last packet was due, however late it went.
+        var waits = 0
+        val rig = Rig(this) { deadline ->
+            delayUntil(deadline)
+            if (++waits == 83) delay(100.milliseconds)
+        }
         rig.session.echo = null
         val outcome = rig.start()
         advance(4640.milliseconds - 1.milliseconds)
@@ -119,6 +124,15 @@ class ProbeExchangeTest {
         assertTrue(heard.getCompleted().isSuccess)
         assertEquals(ours, late.exchange.returned)
         assertEquals(false to 4640.milliseconds, late.gate().last())
+    }
+
+    @Test fun aPacketTheConnectionDoesNotTakeEndsTheExchange() = runTest {
+        val rig = Rig(this)
+        rig.session.takes = false
+        val failure = rig.start().getCompleted().exceptionOrNull()
+        assertTrue("$failure", failure is CheckFailure)
+        assertEquals("the probe could not be sent: the connection did not take it", failure?.message)
+        assertEquals(1, rig.session.injects.size)
     }
 
     @Test fun aProbeThatCannotBeEncodedSendsNothing() = runTest {
@@ -151,7 +165,7 @@ class ProbeExchangeTest {
         /** Each gate change, at its time since [origin]. */
         fun gate() = session.gateChanges.map { (open, at) -> open to at - origin }
 
-        fun start(): Deferred<Result<Heard>> =
+        fun start(): Deferred<Result<Located?>> =
             scope.async { runCatching { exchange.run(session, SESSION) { onsets += clock.markNow() - origin } } }
                 .also { scope.runCurrent() }
     }
@@ -174,6 +188,9 @@ class FakeCheckSession(private val scope: TestScope) : CheckSession {
     override val clock = scope.testScheduler.timeSource
     var echo: Duration? = 30.milliseconds
 
+    /** What [inject] answers: false is a connection with no link for the packet. */
+    var takes = true
+
     /** What the session reports arrivals to. */
     var arrived: (ArrivedPacket) -> Unit = {}
     val injects = mutableListOf<Injected>()
@@ -189,6 +206,7 @@ class FakeCheckSession(private val scope: TestScope) : CheckSession {
 
     override fun inject(frameNumber: Long, opusData: ByteArray, terminator: Boolean): Boolean {
         injects += Injected(frameNumber, opusData, terminator, clock.markNow(), gateOpen)
+        if (!takes) return false
         echo?.let { after ->
             scope.backgroundScope.launch {
                 delay(after)
