@@ -475,9 +475,15 @@ class MumbleConnection internal constructor(
         val capture = CaptureSession(handle, sender)
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
         session.capture = capture
+        check?.captureOpen?.value = true
         // Before the pump starts, so its first poll already reads the mode and the gate.
         capture.apply(session)
         startPump(sender)
+    }
+
+    /** [check]'s capture stream is closed, or past using. Lifecycle consumer only. */
+    private fun captureClosed(check: Check) {
+        check.captureOpen.value = false
     }
 
     /** Whichever transport the session's link has voice on; dropped while it has none. A datagram
@@ -499,7 +505,13 @@ class MumbleConnection internal constructor(
         // Synchronous, inline: stop() returns once the pump has closed the Oboe stream (or, wedged,
         // after its bound). That ordering is the entire one-microphone invariant — making it
         // asynchronous would silently reopen the hole.
-        capture.stop()
+        try {
+            capture.stop()
+        } finally {
+            // Whether stop() closed the stream, gave up on a wedged pump, or threw: the check
+            // can no longer use this capture, and nothing later is certain to run.
+            session.check?.let(::captureClosed)
+        }
         // The signal belongs to the session being released. A pump that exited already lowered it;
         // a wedged one has not, and left standing it would carry into whatever opens next.
         _selfSpeaking.value = false
@@ -528,6 +540,8 @@ class MumbleConnection internal constructor(
             capture.destroy()
             session.capture = null
             publishCaptureStats(session.gen, null)
+            // A pump that ended on its own had no release to do this.
+            session.check?.let(::captureClosed)
         } else {
             // Unreachable — reconcile refuses to open while capture is set, so at most one exit can
             // be outstanding. Logged rather than assumed, so a wrong argument is visible.
@@ -955,6 +969,8 @@ class MumbleConnection internal constructor(
             val swapped = synchronized(lock) {
                 if (current === session) {
                     session.carried = _messages.value
+                    // Before the link moves: an inject that still reads false sends on the old one.
+                    session.check?.let { it.ended.value = true }
                     session.link = next
                     session.next = null
                     true
@@ -1066,6 +1082,8 @@ class MumbleConnection internal constructor(
         lateinit var session: Session
         @Volatile var gate = false
         override val clock get() = captureClock
+        override val captureOpen = MutableStateFlow(false)
+        override val ended = MutableStateFlow(false)
         /** Pump thread only. */
         private var failed = false
 
@@ -1082,6 +1100,11 @@ class MumbleConnection internal constructor(
                 failed = true
             }
             return true
+        }
+
+        override fun inject(frameNumber: Long, opusData: ByteArray, terminator: Boolean): Boolean {
+            if (ended.value) return false
+            return sendVoice(session, VoiceSender.voicePacket(VoiceSender.SERVER_LOOPBACK_TARGET, frameNumber, terminator, opusData))
         }
 
         /** Level first, then the live capture, as [setTransmitting]. */
@@ -1174,6 +1197,7 @@ class MumbleConnection internal constructor(
     /** Any thread; nothing here blocks. [session] is already out of [current], its Release queued
      *  by whoever removed it, so this runs at most once per session. */
     private fun teardown(session: Session) {
+        session.check?.let { it.ended.value = true }
         // blockingScope because stop() ends with the native stream's destroy, which blocks; its
         // join of the poll suspends. Its own coroutine, so a stalled socket close cannot delay
         // it. The receiver drops any datagram that reaches it after stop().

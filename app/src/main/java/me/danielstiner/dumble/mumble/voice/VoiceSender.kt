@@ -150,17 +150,7 @@ class VoiceSender(
     private fun transmit(frame: ByteArray, n: Int, meta: LongArray) {
         val flags = meta[NativeCapture.META_FLAGS]
         val terminator = flags and NativeCapture.FLAG_TERMINATOR != 0L
-        val audio = MumbleUdpProtos.Audio.newBuilder()
-            .setTarget(NORMAL_TALKING_TARGET)
-            .setFrameNumber(meta[NativeCapture.META_FRAME_NUMBER])
-            .setIsTerminator(terminator)
-            .setOpusData(ByteString.copyFrom(frame, 0, n))
-            .build()
-        val body = audio.toByteArray()
-        val payload = ByteArray(body.size + 1)
-        payload[0] = UDP_TYPE_AUDIO
-        body.copyInto(payload, 1)
-        val sent = send(payload)
+        val sent = send(voicePacket(NORMAL_TALKING_TARGET, meta[NativeCapture.META_FRAME_NUMBER], terminator, frame, n))
         if (!sent) droppedFrames++
         speak(sent && !terminator && flags and NativeCapture.FLAG_HANGOVER == 0L)
     }
@@ -175,6 +165,8 @@ class VoiceSender(
     companion object {
         private const val TAG = "VoiceSender"
         const val NORMAL_TALKING_TARGET = 0
+        /** Murmur's loopback target: the server sends the audio back to its sender alone. */
+        const val SERVER_LOOPBACK_TARGET = 31
         private const val UDP_TYPE_AUDIO: Byte = 0
         /** The sheet refreshes every two seconds; the log line keeps its old ten. */
         private val STATS_INTERVAL = 2.seconds
@@ -183,6 +175,27 @@ class VoiceSender(
         /** Speech goes out every 20 ms and a spurt ends on a terminator; this long with neither,
          *  the spurt has ended without one. */
         internal val SPEECH_STALL = 100.milliseconds
+
+        /** One voice packet as the wire carries it, type byte first, from `opus[0, length)`. */
+        internal fun voicePacket(
+            target: Int,
+            frameNumber: Long,
+            terminator: Boolean,
+            opus: ByteArray,
+            length: Int = opus.size,
+        ): ByteArray {
+            val body = MumbleUdpProtos.Audio.newBuilder()
+                .setTarget(target)
+                .setFrameNumber(frameNumber)
+                .setIsTerminator(terminator)
+                .setOpusData(ByteString.copyFrom(opus, 0, length))
+                .build()
+                .toByteArray()
+            val payload = ByteArray(body.size + 1)
+            payload[0] = UDP_TYPE_AUDIO
+            body.copyInto(payload, 1)
+            return payload
+        }
     }
 }
 
