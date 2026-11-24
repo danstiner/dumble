@@ -324,7 +324,7 @@ class VoiceSenderTest {
         )
         val tapped = mutableListOf<CapturedPacket>()
         val sentAtTap = mutableListOf<Int>()
-        val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { }, tapClock = clock)
+        val sender = VoiceSender(fake, { p -> sent += p; true }, onExit = { }, clock = clock)
         sender.capturedTap = { tapped += it; sentAtTap += sent.size }
         val start = clock.markNow()
         assertTrue(sender.step())
@@ -345,7 +345,7 @@ class VoiceSenderTest {
         val fake = FakeCaptureHandle(blocking = false)
         fake.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, false))
         val tapped = mutableListOf<CapturedPacket>()
-        val sender = VoiceSender(fake, { false }, onExit = { }, tapClock = TestTimeSource())
+        val sender = VoiceSender(fake, { false }, onExit = { })
         sender.capturedTap = { tapped += it }
         assertTrue(sender.step())
         assertEquals(1, tapped.size)

@@ -6,7 +6,6 @@ import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
-import me.danielstiner.dumble.time.BootTimeSource
 import java.io.IOException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -33,11 +32,9 @@ class VoiceSender(
     private val onStats: (CaptureStats) -> Unit = {},
     private val statsInterval: Duration = STATS_INTERVAL,
     /** Seam: the clock of the stats cadence and the speech stall, so a test that steps the pump
-     *  can run both on virtual time. */
-    private val clock: TimeSource = TimeSource.Monotonic,
-    /** Seam: the clock of [capturedTap]'s marks, shared with [VoiceReceiver.arrivedTap] so a latency
-     *  check can subtract one from the other. */
-    private val tapClock: TimeSource.WithComparableMarks = BootTimeSource,
+     *  can run both on virtual time. [capturedTap]'s marks are on it too, and a latency check
+     *  subtracts them from [VoiceReceiver.arrivedTap]'s, so the two classes share one source. */
+    private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
 ) {
     /** Seam so JVM tests can drive the pump without loading native code. */
     interface CaptureHandle {
@@ -130,7 +127,7 @@ class VoiceSender(
         val n = handle.pollPacket(frame, meta)
         val tap = capturedTap
         if (n > 0 && tap != null) {
-            val at = tapClock.markNow()
+            val at = clock.markNow()
             try {
                 tap(CapturedPacket(meta[NativeCapture.META_FRAME_NUMBER], frame.copyOf(n), at))
             } catch (t: Throwable) {

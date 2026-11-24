@@ -47,8 +47,8 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
 
     @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
 
-    /** What [offer] reports already decoded per session; queued comes from [depthsBySession]. */
-    @Volatile var decodedBySession: Map<Int, Int> = emptyMap()
+    /** What [offer] reports ahead of a packet per session, when asked. */
+    @Volatile var aheadBySession: Map<Int, Int> = emptyMap()
 
     /** How many offers asked what was ahead of them. */
     val aheadAsked = AtomicInteger()
@@ -72,16 +72,12 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         opusData: ByteArray,
         frameNumber: Long,
         terminator: Boolean,
-        ahead: IntArray?,
-    ): Int {
+        measureAhead: Boolean,
+    ): VoiceReceiver.Offered {
         checkLive()
-        if (ahead != null) {
-            aheadAsked.incrementAndGet()
-            ahead[0] = depthsBySession[session] ?: 0
-            ahead[1] = decodedBySession[session] ?: 0
-        }
+        if (measureAhead) aheadAsked.incrementAndGet()
         offered += Offer(session, opusData, frameNumber, terminator)
-        return offerResult
+        return VoiceReceiver.Offered(offerResult, if (measureAhead) aheadBySession[session] ?: 0 else 0)
     }
 
     override fun readStats(

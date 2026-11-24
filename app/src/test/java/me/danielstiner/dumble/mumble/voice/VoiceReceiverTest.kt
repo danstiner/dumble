@@ -44,8 +44,7 @@ class VoiceReceiverTest {
         newEngine: () -> VoiceReceiver.PlayoutEngine?,
         body: suspend TestScope.(VoiceReceiver) -> Unit,
     ) = runTest {
-        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource,
-            tapClock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
+        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
         try {
             body(rx)
         } finally {
@@ -527,17 +526,14 @@ class VoiceReceiverTest {
             val offeredAtTap = mutableListOf<Int>()
             rx.arrivedTap = { tapped += it; offeredAtTap += fake.offered.size }
             rx.offer(audioPayload(session = 5))
-            fake.depthsBySession = mapOf(5 to 960)
-            fake.decodedBySession = mapOf(5 to 240)
+            fake.aheadBySession = mapOf(5 to 1200)
             advanceTimeBy(20.milliseconds)
             rx.offer(audioPayload(session = 5, terminator = true))
 
             assertEquals(2, tapped.size)
             assertEquals(5, tapped[0].session)
-            assertEquals("no slot yet: nothing ahead of the first packet", 0, tapped[0].queuedSamples)
-            assertEquals(0, tapped[0].decodedSamples)
-            assertEquals(960, tapped[1].queuedSamples)
-            assertEquals(240, tapped[1].decodedSamples)
+            assertEquals("no slot yet: nothing ahead of the first packet", 0, tapped[0].aheadSamples)
+            assertEquals(1200, tapped[1].aheadSamples)
             assertEquals(20.milliseconds, tapped[1].at - tapped[0].at)
             assertEquals("the tap runs once the engine has taken the packet", listOf(1, 2), offeredAtTap)
         }

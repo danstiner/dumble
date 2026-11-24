@@ -11,12 +11,11 @@ class CapturedPacket(
 )
 
 /** A voice packet from the server that the engine accepted, seen by a latency check. [at] is when
- *  it arrived. [queuedSamples] and [decodedSamples] are what the engine held for [session] before
- *  it: the wait ahead of this packet. */
+ *  it arrived. [aheadSamples] is what the engine held for [session] before it, queued or decoded
+ *  and not yet played: the wait ahead of this packet. */
 class ArrivedPacket(
     val session: Int,
     val frameNumber: Long,
     val at: ComparableTimeMark,
-    val queuedSamples: Int,
-    val decodedSamples: Int,
+    val aheadSamples: Int,
 )

@@ -17,7 +17,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
-import me.danielstiner.dumble.time.BootTimeSource
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -48,18 +47,22 @@ private const val UDP_TYPE_AUDIO = 0
 class VoiceReceiver(
     private val newEngine: () -> PlayoutEngine?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
+    // [arrivedTap]'s marks are on it too, shared with [VoiceSender.capturedTap]'s.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
-    /** Seam: the clock of [arrivedTap]'s marks, shared with [VoiceSender.capturedTap]. */
-    private val tapClock: TimeSource.WithComparableMarks = BootTimeSource,
     // Seam: where the poll runs; the connection passes its own.
     context: CoroutineContext = Dispatchers.Default,
 ) {
+    /** What [PlayoutEngine.offer] answers. [code] is one of [NativePlayout]'s `OFFER_*` codes.
+     *  [aheadSamples] is what the engine held for the sender before an accepted packet, queued or
+     *  decoded and not yet played: the wait ahead of it. 0 unless it was asked for. */
+    class Offered(val code: Int, val aheadSamples: Int = 0)
+
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
-        /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
-         *  own frame counter, which the engine measures arrival jitter against. [ahead], for a
-         *  latency check's receive tap only, is filled as [NativePlayout.offer] describes. */
-        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, ahead: IntArray? = null): Int
+        /** Reader thread. [frameNumber] is the sender's own frame counter, which the engine
+         *  measures arrival jitter against. [measureAhead], for a latency check's receive tap only,
+         *  fills [Offered.aheadSamples] and makes the call wait out a fill in flight to read it. */
+        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, measureAhead: Boolean = false): Offered
 
         /** Poll only. Returns the live speaker count and fills the four arrays for it;
          *  `audible[i]` is 1 when `sessions[i]` produced in the last fill. Negative when the
@@ -181,7 +184,7 @@ class VoiceReceiver(
      */
     fun onVoicePacket(payload: ByteArray, len: Int) {
         val tap = arrivedTap
-        val at = if (tap != null) tapClock.markNow() else null
+        val at = if (tap != null) clock.markNow() else null
         if (voiceUnavailable || stopped) return
         // The platform has the device: the stream is paused and the engine's speakers released
         // with it, so a packet queued now would only play stale on resume.
@@ -215,12 +218,12 @@ class VoiceReceiver(
             // A refusal is a latched log and nothing more: the engine has no failure a packet can
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
-            val ahead = if (tap != null) IntArray(2) else null
-            val code = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
-                                  audio.isTerminator, ahead)
-            if (tap != null && at != null && ahead != null && code == NativePlayout.OFFER_ACCEPTED) {
+            val offered = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
+                                     audio.isTerminator, measureAhead = tap != null)
+            val code = offered.code
+            if (tap != null && at != null && code == NativePlayout.OFFER_ACCEPTED) {
                 try {
-                    tap(ArrivedPacket(session, audio.frameNumber, at, ahead[0], ahead[1]))
+                    tap(ArrivedPacket(session, audio.frameNumber, at, offered.aheadSamples))
                 } catch (t: Throwable) {
                     // As with the parse above: a check's bug must not reach the transport's reader.
                     Log.e(TAG, "arrival tap failed", t)
