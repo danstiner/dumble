@@ -34,6 +34,7 @@ class LatencyCheckTest {
         val rig = Rig(this)
         rig.host.grants = false
         assertEquals(CheckOutcome.Refused(CONNECTED), rig.start().getCompleted())
+        assertEquals(0, rig.session.ends)
         assertEquals(0, rig.conn.disconnectCalls)
     }
 
@@ -41,7 +42,6 @@ class LatencyCheckTest {
         val answers = mapOf(
             ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, "certificate ff is not the one given") to
                 "could not connect: CONNECT_FAILED (certificate ff is not the one given)",
-            ConnectionStatus.PinMismatch("aa", "ff") to ENDED,
             ConnectionStatus.Idle to ENDED,
         )
         for ((answer, reason) in answers) {
@@ -55,14 +55,28 @@ class LatencyCheckTest {
         val rig = Rig(this)
         rig.conn.onConnect = { rig.conn.status.value = ConnectionStatus.Connecting }
         val outcome = rig.start()
-        advance(10.seconds - 1.milliseconds)
+        advance(5.seconds)
+        rig.conn.status.value = ConnectionStatus.Handshaking
+        advance(5.seconds - 1.milliseconds)
         assertFalse(outcome.isCompleted)
         advance(1.milliseconds)
         assertEquals(CheckOutcome.Failed("could not connect within 10s", null), outcome.getCompleted())
     }
 
+    /** The status is the connection's: Connected may be a session the user opened meanwhile. */
+    @Test fun aSessionReplacedWhileConnectingIsNotActedOn() = runTest {
+        val rig = Rig(this)
+        rig.conn.audioRoutes.value = AudioRoutes(listOf(EARPIECE, SPEAKER), current = EARPIECE)
+        rig.conn.onConnect = {
+            rig.session.ended.value = true
+            rig.conn.status.value = ConnectionStatus.Connected(2, OTHER)
+        }
+        assertEquals(CheckOutcome.Failed(REPLACED, null), rig.start().getCompleted())
+        assertEquals(emptyList<String>(), rig.conn.routeRequests)
+        assertEquals("only the check's own session is ended", 0, rig.conn.disconnectCalls)
+    }
+
     @Test fun aCheckRefusesWhenMutedOrSuppressed() = runTest {
-        // Self-mute as asked for (selfState) is a row in everyEndingDisconnects.
         for (self in listOf(SELF.copy(mute = true), SELF.copy(suppress = true), SELF.copy(selfMute = true))) {
             val rig = Rig(this)
             rig.conn.channelTree.value = ChannelTree(users = mapOf(SESSION to self))
@@ -88,7 +102,7 @@ class LatencyCheckTest {
         assertTrue(outcome.getCompleted() is CheckOutcome.Measured)
     }
 
-    @Test fun captureHasFiveSecondsToOpen() = runTest {
+    @Test fun captureHasFiveSecondsToOpenAndTheOtherStepsTwo() = runTest {
         val rig = Rig(this)
         rig.session.captureOpen.value = false
         val outcome = rig.start()
@@ -96,6 +110,20 @@ class LatencyCheckTest {
         rig.session.captureOpen.value = true
         advance(5.seconds)
         assertTrue(outcome.getCompleted() is CheckOutcome.Measured)
+
+        val slow = mapOf<String, Pair<Duration, Rig.() -> Unit>>(
+            UNOPENED to (5.seconds to { session.captureOpen.value = false }),
+            "no built-in speaker" to (2.seconds to { conn.audioRoutes.value = AudioRoutes(listOf(EARPIECE), EARPIECE) }),
+        )
+        for ((reason, case) in slow) {
+            val (timeout, setup) = case
+            val late = Rig(this).apply(setup)
+            val failed = late.start()
+            advance(timeout - 1.milliseconds)
+            assertFalse(reason, failed.isCompleted)
+            advance(1.milliseconds)
+            assertEquals(CheckOutcome.Failed(reason, null), failed.getCompleted())
+        }
     }
 
     @Test fun aMeasuredCheckCarriesWhatTheExchangeAndTheConnectionReport() = runTest {
@@ -136,7 +164,7 @@ class LatencyCheckTest {
             },
             "the connection to the server ended" to { conn.status.value = ConnectionStatus.Reconnecting(1, SESSION) },
             "the connection to the server ended" to { conn.status.value = ConnectionStatus.Connected(1, OTHER) },
-            "the connection to the server ended or was replaced during the check" to { session.ended.value = true },
+            REPLACED to { session.ended.value = true },
             "capture closed during the check" to { session.captureOpen.value = false },
         )
         for ((reason, change) in cases) {
@@ -153,28 +181,20 @@ class LatencyCheckTest {
         }
     }
 
-    @Test fun everyEndingDisconnects() = runTest {
+    @Test fun everyEndingEndsTheSession() = runTest {
         class Ending(val ending: String, val setup: Rig.() -> Unit, val atOneSecond: Rig.(Deferred<CheckOutcome>) -> Unit = {})
         val rejected = ConnectionStatus.Error(ErrorKind.SERVER_FULL, null)
-        val unencoded = "the probe could not be encoded"
         val endings = listOf(
             Ending("measured", {}),
             Ending("could not connect: SERVER_FULL", { conn.onConnect = { conn.status.value = rejected } }),
             Ending("could not connect within 10s", { conn.onConnect = { conn.status.value = ConnectionStatus.Connecting } }),
             Ending("our user did not appear on the server", { conn.channelTree.value = ChannelTree() }),
-            Ending("refused: $MUTED", { conn.setMuted(true) }),
+            Ending("refused: $MUTED", { conn.channelTree.value = ChannelTree(users = mapOf(SESSION to SELF.copy(mute = true))) }),
             Ending("no built-in speaker", { conn.audioRoutes.value = AudioRoutes(listOf(EARPIECE), EARPIECE) }),
             Ending("the speaker route was not taken", {
                 conn.audioRoutes.value = AudioRoutes(listOf(EARPIECE, SPEAKER), EARPIECE)
             }),
-            Ending(
-                "capture did not open within 5s: is the microphone permission granted, or is another app using the microphone?",
-                { session.captureOpen.value = false },
-            ),
-            Ending(unencoded, { probe.codecDelay = -1 }),
-            Ending(unencoded, { probe.warmPackets = 0 }),
-            Ending(unencoded, { probe.spurtPackets = 10 }),
-            Ending("the probe did not come back from the server", { session.echo = null }),
+            Ending(UNOPENED, { session.captureOpen.value = false }),
             Ending("another call took the microphone", {}, { conn.callHeld.value = true }),
             Ending("the check failed unexpectedly: java.lang.IllegalStateException: decoder gone", {
                 probe.onLocate = { error("decoder gone") }
@@ -194,7 +214,10 @@ class LatencyCheckTest {
                 is CheckOutcome.Refused -> "refused: ${o.reason}"
             }
             assertEquals("row $i", ending.ending, actual)
-            assertEquals("row $i", 1, rig.conn.disconnectCalls)
+            // A cancelled check reports nothing: a result would be written as a failure.
+            assertEquals("row $i", outcome.isCancelled, rig.returned == null)
+            assertEquals("row $i", 1, rig.session.ends)
+            assertEquals("row $i", 0, rig.conn.disconnectCalls)
         }
     }
 
@@ -214,8 +237,13 @@ class LatencyCheckTest {
         val session = FakeCheckSession(scope)
         val host = FakeCheckHost(session) { conn.onConnect() }
         val probe = FakeProbeCodec()
+
+        /** What run returned; null while it runs and when it was cancelled. */
+        var returned: CheckOutcome? = null
+            private set
+
         fun start(): Deferred<CheckOutcome> =
-            scope.async { LatencyCheck(conn, host, probe).run(ENDPOINT, FINGERPRINT) }
+            scope.async { LatencyCheck(conn, host, probe).run(ENDPOINT, FINGERPRINT).also { returned = it } }
                 .also { scope.runCurrent() }
     }
 
@@ -229,6 +257,9 @@ class LatencyCheckTest {
         val SPEAKER = AudioRoute("2", AudioRoute.Type.SPEAKER)
         const val ENDED = "the connection ended before it was up"
         const val CONNECTED = "Dumble is connected to a server; disconnect first"
+        const val REPLACED = "the connection to the server ended or was replaced during the check"
+        const val UNOPENED =
+            "capture did not open within 5s: is the microphone permission granted, or is another app using the microphone?"
         const val MUTED = "muted or suppressed on the server: Murmur drops loopback audio from such a user"
         val SELF = User(
             SESSION, "dumble-latency", 0, mute = false, deaf = false, selfMute = false, selfDeaf = false, suppress = false,

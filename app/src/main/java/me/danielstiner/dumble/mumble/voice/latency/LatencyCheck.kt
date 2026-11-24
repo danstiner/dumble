@@ -23,7 +23,7 @@ import kotlin.time.Duration.Companion.seconds
 sealed interface CheckOutcome {
     data class Refused(val reason: String) : CheckOutcome
     data class Failed(val reason: String, val partial: Measurements?) : CheckOutcome
-    data class Measured(val m: Measurements) : CheckOutcome
+    data class Measured(val measurements: Measurements) : CheckOutcome
 }
 
 /** What a check measured, raw; times on the check's clock. */
@@ -43,20 +43,19 @@ data class Measurements(
 )
 
 /**
- * Test D through a server: connects a session of its own, takes the speaker, opens capture, and
- * runs a [ProbeExchange] on it, ending the check if the session, the route or capture changes
- * under it.
+ * The on-device latency check, through a server: connects a session of its own, takes the speaker,
+ * opens capture, and runs a [ProbeExchange] on it, ending the check if the session, the route or
+ * capture changes under it.
  */
 class LatencyCheck(
     private val connection: Connection,
     private val host: CheckHost,
     private val probe: ProbeCodec,
-    private val waitUntil: suspend (ComparableTimeMark) -> Unit = ::delayUntil,
 ) {
     /** Runs on the caller's context, which must not be the main thread ([ProbeExchange.run]);
      *  [progress] names each step for the page. */
     suspend fun run(endpoint: MumbleEndpoint, fingerprint: String, progress: (String) -> Unit = {}): CheckOutcome {
-        val exchange = ProbeExchange(probe, waitUntil)
+        val exchange = ProbeExchange(probe)
         var pathAtOnset = VoicePath.State()
         val check = host.connectForCheck(endpoint, USERNAME, fingerprint, exchange::onCaptured, exchange::onArrived)
             ?: return CheckOutcome.Refused("Dumble is connected to a server; disconnect first")
@@ -86,11 +85,11 @@ class LatencyCheck(
                 else -> throw CheckFailure("the connection ended before it was up")
             }
             val session = connected.sessionId
-            abortingOn(connected) {
+            abortingOn(check, connected) {
                 val self = within("our user did not appear on the server") {
                     connection.channelTree.mapNotNull { it.users[session] }.first()
                 }
-                if (connection.selfState.value.muted || self.mute || self.suppress || self.selfMute) {
+                if (self.mute || self.suppress || self.selfMute) {
                     return@abortingOn CheckOutcome.Refused(
                         "muted or suppressed on the server: Murmur drops loopback audio from such a user",
                     )
@@ -112,8 +111,6 @@ class LatencyCheck(
                 }
 
                 progress("opening the microphone")
-                // The status watcher misses a link replaced between two reads of an equal status.
-                abortOn(check.ended, "the connection to the server ended or was replaced during the check") { it }
                 connection.requestCapture()
                 val unopened = "capture did not open within $CAPTURE_TIMEOUT: is the microphone permission granted, " +
                     "or is another app using the microphone?"
@@ -128,17 +125,24 @@ class LatencyCheck(
             val reason = if (e is CheckFailure) e.message else "the check failed unexpectedly: $e"
             CheckOutcome.Failed(reason, exchange.sent?.let { measurements(it, located = null) })
         } finally {
-            // The session is the check's own: ending it puts back everything the check changed.
-            connection.disconnect()
+            // Ending the check's own session puts back everything the check changed. Not
+            // disconnect(), which would end a session the user opened since.
+            check.end()
         }
     }
 
-    /** Runs [steps] beside watchers that end the check once the status leaves [connected] or a call
-     *  takes the microphone; [steps] adds its own with [abortOn]. */
+    /** Runs [steps] beside watchers that end the check once [check]'s session ends, the status
+     *  leaves [connected] or a call takes the microphone; [steps] adds its own with [abortOn]. */
     private suspend fun abortingOn(
+        check: CheckSession,
         connected: ConnectionStatus.Connected,
         steps: suspend CoroutineScope.() -> CheckOutcome,
     ): CheckOutcome = coroutineScope {
+        // The status is the connection's: [connected] may be a session the user opened since, and
+        // a link replaced between two reads of an equal status never shows in it.
+        val ended = "the connection to the server ended or was replaced during the check"
+        if (check.ended.value) throw CheckFailure(ended)
+        abortOn(check.ended, ended) { it }
         abortOn(connection.status, "the connection to the server ended") { it != connected }
         abortOn(connection.callHeld, "another call took the microphone") { it }
         steps().also { coroutineContext.cancelChildren() }
