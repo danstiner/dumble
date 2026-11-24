@@ -68,17 +68,5 @@ class LatencyCheckViewModelTest {
         }
     }
 
-    @Test fun dismissingAFinishedPageReturnsToIdleButARunningOneStays() = runTest(dispatcher) {
-        val rig = Rig(dispatcher)
-        rig.vm.start("h", 9, "ab")
-        runCurrent()
-        rig.vm.dismiss()
-        assertEquals(LatencyCheckState.Running("halfway"), rig.vm.state.value)
-        rig.answer.complete(CheckOutcome.Refused("x"))
-        runCurrent()
-        rig.vm.dismiss()
-        assertEquals(LatencyCheckState.Idle, rig.vm.state.value)
-    }
-
     private data class Args(val host: String?, val port: Int?, val fingerprint: String?, val reason: String)
 }

@@ -1,6 +1,5 @@
 package me.danielstiner.dumble.ui.latency
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -17,9 +16,7 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LatencyCheckScreen(state: LatencyCheckState, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    // Back from a running check does nothing: dismissing would show the call screen under it.
-    BackHandler(onBack = onBack)
+fun LatencyCheckScreen(state: LatencyCheckState, modifier: Modifier = Modifier) {
     Scaffold(modifier = modifier, topBar = { TopAppBar(title = { Text("Latency check") }) }) { padding ->
         Column(Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
             when (state) {

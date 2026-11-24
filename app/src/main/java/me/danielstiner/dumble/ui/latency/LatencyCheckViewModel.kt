@@ -40,8 +40,7 @@ class LatencyCheckViewModel internal constructor(
     private val _state = MutableStateFlow<LatencyCheckState>(LatencyCheckState.Idle)
     val state: StateFlow<LatencyCheckState> = _state
 
-    /** A null [port] is the default. Publishes Running before returning, so the first composition
-     *  already shows the page. */
+    /** A null [port] is the default. */
     fun start(host: String?, port: Int?, fingerprint: String?) {
         _state.value = LatencyCheckState.Running("starting")
         viewModelScope.launch {
@@ -55,9 +54,5 @@ class LatencyCheckViewModel internal constructor(
         val endpoint = runCatching { MumbleEndpoint.parse(host, port) }
             .getOrElse { return CheckOutcome.Refused("bad extra: ${it.message}") }
         return run(endpoint, fingerprint) { step -> _state.value = LatencyCheckState.Running(step) }
-    }
-
-    fun dismiss() {
-        if (_state.value is LatencyCheckState.Done) _state.value = LatencyCheckState.Idle
     }
 }
