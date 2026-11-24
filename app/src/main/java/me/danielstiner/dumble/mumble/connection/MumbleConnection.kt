@@ -620,7 +620,13 @@ class MumbleConnection internal constructor(
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
         connect(endpoint, username, password, answering = null, pinned = null)
 
-    override fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String) =
+    /** A connection that trusts exactly [fingerprint] and records nothing: no pin, no trust
+     *  prompt. The latency check's own, to a throwaway server whose certificate it was handed, so
+     *  it is not on [Connection]: nothing in the app's own flows connects this way.
+     *  [fingerprint] is the lowercase hex SHA-256 of the server's leaf certificate in DER, compared
+     *  exactly: `openssl x509 -fingerprint -sha256` prints uppercase with colons and won't match.
+     *  A different certificate ends the session in an error, never a trust prompt. */
+    internal fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String) =
         connect(endpoint, username, null, answering = null, pinned = fingerprint)
 
     /**
