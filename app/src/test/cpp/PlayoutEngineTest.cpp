@@ -1589,23 +1589,16 @@ int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Offered* offere
     return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, offered);
 }
 
-int offerAhead(PlayoutEngine& e, int32_t session, int32_t* ahead) {
-    PlayoutEngine::Offered offered{};
-    const int code = offerAhead(e, session, &offered);
-    *ahead = offered.aheadSamples;
-    return code;
-}
-
 // A fill decodes with the mutex released, and the packet it has popped is then in neither the
 // queue nor the decoder. The hook runs there, on the fill's own thread.
 TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     auto e = newEngine();
-    int32_t first = -1;
+    PlayoutEngine::Offered first{-1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &first));
-    EXPECT_EQ(0, first) << "nothing is ahead of a speaker's first packet";
+    EXPECT_EQ(0, first.aheadSamples) << "nothing is ahead of a speaker's first packet";
     arm(*e, 7, kColdStartPackets - 1);
 
-    int32_t inside = -1;
+    PlayoutEngine::Offered inside{-1, -1, -1};
     int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
         if (popped++ == 0) {
@@ -1617,11 +1610,12 @@ TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     int32_t live = 0;
     e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
     ASSERT_EQ(1, popped);
-    EXPECT_EQ(kColdStartPackets * kFrame, inside) << "the popped packet still counts: none of it is mixed yet";
+    EXPECT_EQ(kColdStartPackets * kFrame, inside.aheadSamples)
+        << "the popped packet still counts: none of it is mixed yet";
 
-    int32_t after = -1;
+    PlayoutEngine::Offered after{-1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &after));
-    EXPECT_EQ(kColdStartPackets * kFrame + kFrame / 2, after)
+    EXPECT_EQ(kColdStartPackets * kFrame + kFrame / 2, after.aheadSamples)
         << "the packet offered inside the fill, less the half packet the fill mixed";
 }
 
@@ -1637,9 +1631,9 @@ TEST(PlayoutEngine, NothingIsAheadOfASpeakerReleasedWithAudioStillDecoded) {
     e->setOutputDown(true);
     e->setOutputDown(false);
 
-    int32_t ahead = -1;
+    PlayoutEngine::Offered ahead{-1, -1, -1};
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ(0, ahead);
+    EXPECT_EQ(0, ahead.aheadSamples);
 }
 
 TEST(PlayoutEngine, OfferReportsTheGateInItsTwoParts) {
@@ -1649,4 +1643,6 @@ TEST(PlayoutEngine, OfferReportsTheGateInItsTwoParts) {
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &offered));
     EXPECT_EQ(pl::kColdStartSamples, offered.targetSamples);
     EXPECT_EQ(480, offered.writeAheadSamples);
+    EXPECT_EQ(e->stats().targets[0], offered.targetSamples + offered.writeAheadSamples)
+        << "the two parts are the target the gate and the stats use";
 }
