@@ -85,14 +85,13 @@ FN(offer)(JNIEnv* env, jobject, jlong h, jint session, jbyteArray opusData, jlon
     // pin here would be held across a mutex acquisition on the reader thread.
     uint8_t packet[pl::kMaxPacketBytes];
     if (len > 0) env->GetByteArrayRegion(opusData, 0, len, reinterpret_cast<jbyte*>(packet));
-    pl::PlayoutEngine::Ahead held{};
+    pl::PlayoutEngine::Offered offered{};
     const int code = self(h)->engine->offer(session, len > 0 ? packet : nullptr, int(len),
                                             uint64_t(frameNumber), terminator == JNI_TRUE, arrival,
-                                            ahead ? &held : nullptr);
+                                            ahead ? &offered : nullptr);
     if (ahead && code == pl::kOfferAccepted) {
-        const jint out[4] = {held.queuedSamples, held.decodedSamples, held.targetSamples,
-                             held.writeAheadSamples};
-        env->SetIntArrayRegion(ahead, 0, 4, out);
+        const jint out[3] = {offered.aheadSamples, offered.targetSamples, offered.writeAheadSamples};
+        env->SetIntArrayRegion(ahead, 0, 3, out);
     }
     return code;
 }
