@@ -22,7 +22,8 @@ fun LatencyCheckScreen(state: LatencyCheckState, modifier: Modifier = Modifier) 
             when (state) {
                 is LatencyCheckState.Running -> Text(state.step)
                 is LatencyCheckState.Done -> SelectionContainer { Text(state.text, fontFamily = FontFamily.Monospace) }
-                LatencyCheckState.Idle -> Unit
+                // A page restored after its process died: the check died with it.
+                LatencyCheckState.Idle -> Text("No check is running.")
             }
         }
     }
