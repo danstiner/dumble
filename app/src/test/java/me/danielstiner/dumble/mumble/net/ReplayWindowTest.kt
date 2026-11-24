@@ -27,19 +27,29 @@ class ReplayWindowTest {
     }
 
     @Test
-    fun aRestartSpendsItsSeedAndTheWholeWindowBelowIt() {
-        val window = windowAt(100)
-        for (hint in 37..100) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
-        // 64 behind is past the bitmap, so it is read as 192 ahead and left for the tag to fail.
-        assertTrue(window.rebuildNonce(36, nonce))
-        assertArrayEquals(ByteArray(16).also { it[0] = 36; it[1] = 1 }, nonce)
+    fun aRestartSpendsItsSeedAndEverythingBehindIt() {
+        val window = windowAt(200)
+        // 32 behind is the window's spent slots, the rest is further back than it reaches.
+        for (hint in 72..200) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
     }
 
     @Test
-    fun oneNinetyTwoAheadRebuildsAndOneNinetyThreeAliasesToASpentSlot() {
+    fun aSlotOpenedByAJumpIsAcceptedThirtyTwoBehindAndNotThirtyThree() {
         val window = windowAt(0)
-        assertTrue(window.rebuildNonce(192, nonce))
-        assertArrayEquals(ByteArray(16).also { it[0] = 192.toByte() }, nonce)
-        assertFalse(window.rebuildNonce(193, nonce))
+        assertTrue(window.rebuildNonce(100, nonce))
+        assertEquals(100, window.accept(nonce))
+        assertFalse(window.rebuildNonce(67, nonce))
+        assertTrue(window.rebuildNonce(68, nonce))
+        assertEquals(-32, window.accept(nonce))
+        assertFalse(window.rebuildNonce(68, nonce))
+    }
+
+    @Test
+    fun oneTwentySevenAheadRebuildsAndOneMoreReadsAsBehind() {
+        val window = windowAt(200)
+        assertTrue(window.rebuildNonce(71, nonce))
+        // 200 + 127 carries into the second byte.
+        assertArrayEquals(ByteArray(16).also { it[0] = 71; it[1] = 1 }, nonce)
+        assertFalse(window.rebuildNonce(72, nonce))
     }
 }

@@ -19,9 +19,7 @@ internal fun addToCounter(counter: ByteArray, offset: Int, out: ByteArray) {
  *
  * The highest counter accepted is the top; [bitmap] records the [MAX_LATE] below it, bit *k*
  * meaning "top − k accepted". Bit 0 is the top itself, so it is set whenever anything has been.
- * This is the sliding-window form IPsec uses (RFC 4303 §3.4.3) and SRTP requires at least 64 of
- * (RFC 3711 §3.3.2), at the size one Long holds -- the hint itself would allow any split of its
- * 256 values.
+ * This is the sliding-window form IPsec uses (RFC 4303 §3.4.3).
  *
  * The top and the bitmap are one object rather than two because they move together: advancing the
  * top shifts the bitmap by the same amount.
@@ -49,17 +47,17 @@ internal class ReplayWindow {
     /**
      * Rebuilds the counter a packet carrying [hint] must have been sealed under and writes it to
      * [out] as the nonce to try. False, with [out] untouched, when that counter has been accepted
-     * already.
+     * already, or sits further behind the top than the bitmap records.
      *
-     * [hint] is the counter's low byte, the only part of it sent on the wire. Its 256 values are
-     * split [MAX_LATE] behind the top and the rest ahead, so candidates run `top-63` to `top+192`
-     * -- one guess covering both loss and reordering, never a second decrypt attempt for an
-     * attacker to force. Anything further out rebuilds to the wrong counter and fails the tag.
+     * [hint] is the counter's low byte, the only part of it sent on the wire. It is read as the
+     * counter nearest the top that ends in that byte, so up to 127 ahead -- one guess, never a
+     * second decrypt attempt for an attacker to force. Anything further ahead rebuilds to the
+     * wrong counter and fails the tag or lands behind and is refused here.
      */
     fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
         // Bit k is the counter k below the top, so a counter at or behind the top is bit -offset.
-        if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
+        if (offset <= 0 && (offset < -MAX_LATE || (bitmap ushr -offset) and 1L != 0L)) return false
         addToCounter(top, offset, out)
         return true
     }
@@ -68,14 +66,15 @@ internal class ReplayWindow {
      * Records [nonce], the counter [rebuildNonce] produced, as accepted now that its tag has
      * verified, and returns its offset from the top: positive when it becomes the new top,
      * negative when it arrived late. Moving the top shifts the bitmap by the same amount; a jump
-     * of a whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
+     * past [MAX_LATE] leaves nothing live to keep, since every slot below the new top is then
+     * above the old one.
      */
     fun accept(nonce: ByteArray): Int {
         val offset = offsetFor(nonce[0].toInt())
         if (offset > 0) {
-            // Kotlin masks a Long shift to six bits, so a jump of exactly the window size would
-            // otherwise leave the bitmap unshifted and mark all 63 slots below the new top spent.
-            bitmap = if (offset >= WINDOW) 1L else (bitmap shl offset) or 1L
+            // Not only a shortcut: Kotlin masks a Long shift to six bits, so a jump of 64 would
+            // leave the bitmap unshifted and every slot below the new top spent.
+            bitmap = if (offset > MAX_LATE) 1L else (bitmap shl offset) or 1L
             nonce.copyInto(top)
         } else {
             bitmap = bitmap or (1L shl -offset)
@@ -83,18 +82,14 @@ internal class ReplayWindow {
         return offset
     }
 
-    private fun offsetFor(hint: Int): Int {
-        // How far ahead of the top the hint sits, modulo 256: 0 to 255.
-        val step = (hint - top[0]) and 0xFF
-        // The top MAX_LATE of those are read as behind instead: 193..255 become -63..-1.
-        return if (step > 0xFF - MAX_LATE) step - 0x100 else step
-    }
+    /** The difference of the low bytes as a signed byte: -128 to 127, the nearest such counter. */
+    private fun offsetFor(hint: Int): Int = (hint - top[0]).toByte().toInt()
 
     companion object {
-        /** Bits in the bitmap: the top plus the [MAX_LATE] counters below it. */
-        private const val WINDOW = 64
-
-        /** How far behind the top a packet may arrive and still be accepted. */
-        private const val MAX_LATE = WINDOW - 1
+        /**
+         * How far behind the top a packet may arrive and still be accepted. Upstream allows 29;
+         * a path that reorders further than this is one the jitter buffer has given up on too.
+         */
+        private const val MAX_LATE = 32
     }
 }
