@@ -1601,7 +1601,9 @@ TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     PlayoutEngine::Ahead inside{-1, -1};
     int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
-        if (popped++ == 0) ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &inside));
+        if (popped++ == 0) {
+            ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &inside));
+        }
     };
     std::vector<int16_t> pcm(kFrame / 2);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
