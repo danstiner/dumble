@@ -221,6 +221,14 @@ class FakeCheckSession(private val scope: TestScope) : CheckSession {
         gateChanges += open to clock.markNow()
     }
 
+    var ends = 0
+        private set
+
+    override fun end() {
+        ends++
+        ended.value = true
+    }
+
     companion object {
         /** The session id the fake server gives a check. */
         const val SESSION = 7
