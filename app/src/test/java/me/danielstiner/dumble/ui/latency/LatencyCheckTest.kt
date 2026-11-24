@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalCoroutinesApi::class)
 
-package me.danielstiner.dumble.mumble.voice.latency
+package me.danielstiner.dumble.ui.latency
 
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,6 +18,16 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
+import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CallVolume
+import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CheckHost
+import me.danielstiner.dumble.mumble.voice.latency.CheckOutcome
+import me.danielstiner.dumble.mumble.voice.latency.CheckSession
+import me.danielstiner.dumble.mumble.voice.latency.FakeCheckSession
+import me.danielstiner.dumble.mumble.voice.latency.FakeProbeCodec
+import me.danielstiner.dumble.mumble.voice.latency.Heard
+import me.danielstiner.dumble.mumble.voice.latency.Measurements
 import me.danielstiner.dumble.ui.connect.FakeConnection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -99,7 +109,8 @@ class LatencyCheckTest {
         advance(1.seconds)
         assertFalse(outcome.isCompleted)
         advance(5.seconds)
-        assertTrue(outcome.getCompleted() is CheckOutcome.Measured)
+        val measured = outcome.getCompleted() as CheckOutcome.Measured
+        assertEquals("read once the speaker was taken", CallVolume(2, 15), measured.measurements.callVolume)
     }
 
     @Test fun captureHasFiveSecondsToOpenAndTheOtherStepsTwo() = runTest {
@@ -142,15 +153,18 @@ class LatencyCheckTest {
         rig.conn.voicePath.value = VoicePath.State()
         // Through the two callbacks the check connected its session with.
         val ours = ArrivedPacket(SESSION, 220, rig.clock.markNow(), 960, 0, 0).also(rig.session.arrived)
-        val heard = CapturedPacket(250, byteArrayOf(1), rig.clock.markNow()).also(rig.host.captured)
+        rig.host.captured(CapturedPacket(250, byteArrayOf(1), rig.clock.markNow()))
         advance(400.milliseconds)
         rig.session.arrived(ArrivedPacket(SESSION, 264, rig.clock.markNow(), 0, 0, 0))
         advance(1.seconds)
 
         val expected = Measurements(
-            sent = rig.origin + 2200.milliseconds, returned = ours, captured = listOf(heard), located = rig.probe.located,
+            sent = rig.origin + 2200.milliseconds, returned = ours,
+            // The fake codec's match, a second into the one packet capture handed over at 2.3 s.
+            heard = Heard(rig.origin + 3300.milliseconds, 9000.0, 300.0),
             codecDelaySamples = CODEC_DELAY, effects = listOf("echo canceller"), effectsAllOff = true,
-            route = SPEAKER, voicePath = VoicePath.State(onUdp = true, roundTrip = 35.milliseconds),
+            route = SPEAKER, callVolume = CallVolume(2, 15),
+            voicePath = VoicePath.State(onUdp = true, roundTrip = 35.milliseconds),
             roundTripTime = 40.milliseconds, captureStats = stats, playoutStats = rig.conn.playoutStats.value,
         )
         assertEquals(CheckOutcome.Measured(expected), outcome.getCompleted())
@@ -243,8 +257,12 @@ class LatencyCheckTest {
         var returned: CheckOutcome? = null
             private set
 
+        /** The fake volume is the current route's id, so a test can tell on which route it was read. */
         fun start(): Deferred<CheckOutcome> =
-            scope.async { LatencyCheck(conn, host, probe).run(ENDPOINT, FINGERPRINT).also { returned = it } }
+            scope.async {
+                val check = LatencyCheck(conn, host, probe) { CallVolume(conn.audioRoutes.value.current?.id?.toInt() ?: 0, 15) }
+                check.run(ENDPOINT, FINGERPRINT).also { returned = it }
+            }
                 .also { scope.runCurrent() }
     }
 
