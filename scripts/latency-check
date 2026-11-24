@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Runs Dumble's adb-only latency check against a throwaway Murmur and prints the results.
 # Needs adb, docker and openssl. See docs/latency.md.
-set -euo pipefail
+set -eEuo pipefail
+# Exit 1 is kept for a check that ran and did not measure.
+trap 'exit 2' ERR
 
 usage() {
   cat >&2 <<'USAGE'
-usage: scripts/latency-check [--usb | --lan [--tcp]] [--host ADDRESS] [--image REF] [--package ID] [--apk PATH] [-s SERIAL]
+usage: scripts/latency-check [--usb | --lan [--tcp]] [--host ADDRESS] [--package ID] [-s SERIAL]
   --usb       adb reverse to this computer's Murmur (default)
   --lan       the phone connects over Wi-Fi to this computer's LAN address
   --tcp       with --lan: publish TCP only, so voice takes the TCP tunnel
   --host      with --lan: the address the device reaches this computer at (default: detected)
-  --image     Murmur image (default mumblevoip/mumble-server:latest)
   --package   package to test (default me.danielstiner.dumble)
-  --apk       install this APK with adb install -r first
   -s          device serial, same as ANDROID_SERIAL
 exit: 0 result ok, 1 any other result, 2 the check could not run
 USAGE
@@ -21,9 +21,7 @@ USAGE
 
 transport=usb
 tcp=0
-image=mumblevoip/mumble-server:latest
 package=me.danielstiner.dumble
-apk=
 lan_host=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,9 +29,7 @@ while [ $# -gt 0 ]; do
     --lan) transport=lan ;;
     --tcp) tcp=1 ;;
     --host) [ $# -ge 2 ] || usage; lan_host=$2; shift ;;
-    --image) [ $# -ge 2 ] || usage; image=$2; shift ;;
     --package) [ $# -ge 2 ] || usage; package=$2; shift ;;
-    --apk) [ $# -ge 2 ] || usage; apk=$2; shift ;;
     -s) [ $# -ge 2 ] || usage; export ANDROID_SERIAL=$2; shift ;;
     *) usage ;;
   esac
@@ -55,41 +51,26 @@ if [ -z "${ANDROID_SERIAL:-}" ]; then
   [ "$attached" -le 1 ] || die "$attached devices attached; name one with ANDROID_SERIAL or -s"
 fi
 [ "$(adb get-state 2>/dev/null)" = device ] || die "no device attached"
+# Pinned, so a device attached mid-run changes nothing.
+ANDROID_SERIAL=$(adb get-serialno)
+export ANDROID_SERIAL
 
 name=dumble-latency
-workdir=$(mktemp -d)
+# Not Murmur's 64738: a server of the developer's own may hold that port, or its adb reverse.
+port=64739
 reversed=0
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   if [ "$reversed" = 1 ]; then
-    adb reverse --remove tcp:64738 >/dev/null 2>&1 || true
+    adb reverse --remove "tcp:$port" >/dev/null 2>&1 || true
   fi
-  rm -rf "$workdir"
 }
+# Before the trap: another run's container is not ours to remove.
+[ -z "$(docker ps -aq -f "name=^$name\$")" ] \
+  || die "a container named $name exists: another check is running, or one was killed (docker rm -f $name)"
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-if [ -n "$apk" ]; then
-  # Installing an APK of another package (the real app) would replace it.
-  aapt2=
-  for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
-    [ -n "$sdk" ] || continue
-    found=$(ls -d "$sdk"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n 1 || true)
-    if [ -n "$found" ]; then
-      aapt2=$found
-      break
-    fi
-  done
-  [ -n "$aapt2" ] || die "--apk needs aapt2 (Android SDK build-tools) to check the APK's package; set ANDROID_HOME"
-  declared=$("$aapt2" dump packagename "$apk") || die "cannot read $apk"
-  [ "$declared" = "$package" ] || die "$apk declares $declared, not $package"
-  case "$(adb get-serialno)" in
-    emulator-*) ;;
-    *) [ "$declared" != me.danielstiner.dumble ] \
-      || die "this would install over the app itself; build the APK with applicationIdSuffix \".latencytest\" (see docs/latency.md) and pass --package me.danielstiner.dumble.latencytest" ;;
-  esac
-  adb install -r "$apk"
-fi
 adb shell pm path "$package" | grep '^package:' >/dev/null \
   || die "$package is not installed. Build a copy and install it by hand; never a Gradle install or connected task, which can replace your own app. See docs/latency.md."
 # An install older than the alias has none.
@@ -114,7 +95,7 @@ adb shell dumpsys window | grep 'isKeyguardShowing=false' >/dev/null \
 case "$transport" in
   usb)
     host=127.0.0.1
-    publish=(-p 127.0.0.1:64738:64738/tcp)
+    publish=(-p "127.0.0.1:$port:64738/tcp")
     ;;
   lan)
     host=$lan_host
@@ -123,17 +104,17 @@ case "$transport" in
     elif [ "$(uname)" = Darwin ]; then
       host=$(ipconfig getifaddr en0 2>/dev/null || true)
     else
-      host=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
+      host=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)
     fi
     [ -n "$host" ] || die "no LAN address found; pass --host ADDRESS"
-    publish=(-p 64738:64738/tcp)
-    [ "$tcp" = 1 ] || publish+=(-p 64738:64738/udp)
+    publish=(-p "$port:64738/tcp")
+    [ "$tcp" = 1 ] || publish+=(-p "$port:64738/udp")
     ;;
 esac
 
 # autobanAttempts=0 as in ci.yml: Murmur bans an address after 10 connections in 120 s.
-docker rm -f "$name" >/dev/null 2>&1 || true
-docker run -d --rm --name "$name" -e MUMBLE_CONFIG_autobanAttempts=0 "${publish[@]}" "$image" >/dev/null
+docker run -d --rm --name "$name" -e MUMBLE_CONFIG_autobanAttempts=0 "${publish[@]}" \
+  mumblevoip/mumble-server:latest >/dev/null
 
 # Docker Desktop's proxy accepts on the host port before Murmur listens, so read the log.
 ready=0
@@ -149,7 +130,7 @@ done
 # The certificate is generated just after the listening line.
 fingerprint=
 for _ in $(seq 10); do
-  fingerprint=$(openssl s_client -connect 127.0.0.1:64738 </dev/null 2>/dev/null \
+  fingerprint=$(openssl s_client -connect "127.0.0.1:$port" </dev/null 2>/dev/null \
     | openssl x509 -outform DER 2>/dev/null | openssl dgst -sha256 -r | cut -d' ' -f1) || true
   case "$fingerprint" in
     *[!0-9a-f]*|"") ;;
@@ -161,7 +142,7 @@ done
 [ -n "$fingerprint" ] || die "could not read Murmur's certificate"
 
 if [ "$transport" = usb ]; then
-  adb reverse tcp:64738 tcp:64738 >/dev/null
+  adb reverse "tcp:$port" "tcp:$port" >/dev/null
   reversed=1
 fi
 
@@ -169,7 +150,7 @@ fi
 since=$(adb shell "date '+%m-%d %H:%M:%S.000'" | tr -d '\r')
 adb shell am start --activity-clear-task \
   -n "$package/me.danielstiner.dumble.LatencyCheck" \
-  --es host "$host" --ei port 64738 --es fingerprint "$fingerprint"
+  --es host "$host" --ei port "$port" --es fingerprint "$fingerprint" >&2
 
 path=
 for _ in $(seq 90); do
@@ -178,9 +159,9 @@ for _ in $(seq 90); do
   sleep 1
 done
 if [ -z "$path" ]; then
-  die "no results in 90 s; is $package installed with the latency alias, and unlocked? A check already running refuses a second one."
+  die "no results in 90 s; did the app crash or leave the screen? Try: adb logcat -d -b crash"
 fi
 
-adb pull "$path" "$workdir/results.txt" >/dev/null 2>&1 || die "could not pull $path"
-cat "$workdir/results.txt"
-grep '^result = ok$' "$workdir/results.txt" >/dev/null
+results=$(adb exec-out cat "$path") || die "could not read $path"
+printf '%s\n' "$results"
+grep -qx 'result = ok' <<<"$results" || exit 1

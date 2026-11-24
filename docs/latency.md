@@ -7,23 +7,28 @@ Murmur in Docker, points the device at it, launches the check, pulls and prints
 no alias, no results in 90 s).
 
 ```
-ANDROID_SERIAL=<serial> scripts/latency-check [--usb | --lan [--tcp]] [--host <address>] [-s <serial>] [--package <id>] [--apk <path>] [--image <ref>]
+scripts/latency-check [--usb | --lan [--tcp]] [--host <address>] [-s <serial>] [--package <id>]
 ```
 
-With more than one device attached, name one with `ANDROID_SERIAL` or `-s`. The screen must be on
-and unlocked.
+With more than one device attached, name one with `-s` or `ANDROID_SERIAL`. The screen must be on
+and unlocked. The script grants the package the microphone permission (and the local network
+permission for `--lan`) and leaves it granted; it changes nothing else on the device and installs
+nothing.
 
 | Flag | What it measures |
 |---|---|
 | `--usb` (default) | `adb reverse` to the computer. TCP only, so voice takes the TCP tunnel. Steady, needs no shared network; the one to compare builds with. |
-| `--lan` | The computer's LAN address: the real UDP path over Wi-Fi, with its latency and jitter. Needs port 64738 open for TCP and UDP. |
+| `--lan` | The computer's LAN address: the real UDP path over Wi-Fi, with its latency and jitter. Needs port 64739 open for TCP and UDP. |
 | `--lan --tcp` | Publishes only TCP, so voice falls back to the tunnel over the same Wi-Fi. Against `--lan` it isolates what UDP buys. |
 
 `--lan` finds the computer's LAN address itself (`en0` on macOS, the default route on Linux);
 `--host <address>` overrides it, e.g. with a VPN or Ethernet.
 
-Docker Desktop on macOS and Windows forwards ports through its own proxy; the round trip includes
-that hop.
+Docker Desktop forwards ports through its own proxy; the round trip includes that hop.
+
+`loop.phone` includes the jitter buffer's wait, which follows how packets arrive and so differs
+between the modes and from run to run. To compare two builds, compare `unaccounted`, or
+`loop.phone` beside `receive.jitter_buffer`.
 
 ## What it prints
 
@@ -44,17 +49,17 @@ and logs its path under the tag `LatencyCheck`; the script pulls and prints it. 
 | `network.ping` | Dumble's own ping on the leg carrying voice, for comparison |
 | `loop.phone` | t2 − t1: playout, speaker, air, microphone and capture |
 | `receive.jitter_buffer` | What playout held ahead of the probe's packet when it arrived |
-| `receive.jitter_buffer.target`, `.write_ahead` | The two parts of the depth a spurt waits for before it plays: the jitter estimator's target and the output stream's write-ahead. More than their sum is a burst that arrived at once |
-| `receive.codec_delay` | Opus's decode delay |
+| `receive.gate.target`, `receive.gate.write_ahead` | The two parts of the depth a spurt waits for before it plays: the jitter estimator's target and the output stream's write-ahead. A jitter buffer well past their sum is a burst that arrived at once |
+| `receive.shrunk_packets`, `receive.catch_up_packets` | Packets playout dropped to shed delay during the check. Above zero, the probe may have waited less than `receive.jitter_buffer` says, and `unaccounted` reads low |
+| `receive.codec_delay` | Opus's own delay, encoder to decoder |
 | `receive.audio_output` | The output stream's latency, from Oboe |
 | `send.input_buffer` | The input stream's latency, from Oboe |
 | `send.encode` | One packet's duration plus the mean encode time |
 | `unaccounted` | `loop.phone` less the jitter buffer, codec delay, audio output, input buffer and encode: what Dumble cannot read |
-| `estimate.network_ms` | Half the ping: the one-way leg Dumble's own estimate uses |
 | `detection.peak`, `detection.next_peak` | The probe's match in capture and the best other; found needs the first ≥ 0.1 and 5× the second |
 
 An emulator's microphone may be the computer's, so a check there can return `ok` or
-`not_detected`; neither describes a phone. The probe's level is `PROBE_PEAK` in `LatencyCheck.kt`
+`not_detected`; neither describes a phone. The probe's level is `PROBE_PEAK` in `ProbeExchange.kt`
 (−26 dBFS). Measured on a phone, its match is 11 to 14 times the next best.
 
 ## Testing beside your own app
@@ -69,9 +74,8 @@ adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
 scripts/latency-check --package me.danielstiner.dumble.latencytest
 ```
 
-or pass `--apk <path>` and the script installs it with `adb install -r`. The script never uses
-Gradle `install…` or `connected…` tasks: they install on every attached device and can replace or
-uninstall your own app. A debug build is signed with a different key, so installing it over the
-release app needs its data wiped; the suffix avoids that. The script refuses a package without the latency alias, and an `--apk` whose package differs from
-`--package` (it reads it with `aapt2` from the SDK's newest build-tools). The launch always names the full class
+Never use Gradle `install…` or `connected…` tasks for this: they install on every attached device
+and can replace or uninstall your own app. A debug build is signed with a different key, so
+installing it over the release app needs its data wiped; the suffix avoids that. The script
+refuses a package without the latency alias. The launch always names the full class
 `me.danielstiner.dumble.LatencyCheck`, which the suffix does not change.
