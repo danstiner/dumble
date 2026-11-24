@@ -5,9 +5,6 @@ package me.danielstiner.dumble.mumble.voice.latency
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -24,12 +21,9 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.ui.connect.FakeConnection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -96,65 +90,17 @@ class LatencyCheckTest {
 
     @Test fun captureHasFiveSecondsToOpen() = runTest {
         val rig = Rig(this)
-        rig.host.captureOpen.value = false
+        rig.session.captureOpen.value = false
         val outcome = rig.start()
         advance(5.seconds - 1.milliseconds)
-        rig.host.captureOpen.value = true
+        rig.session.captureOpen.value = true
         advance(5.seconds)
         assertTrue(outcome.getCompleted() is CheckOutcome.Measured)
     }
 
-    @Test fun packetsGoOutOnAbsoluteDeadlines() = runTest {
+    @Test fun aMeasuredCheckCarriesWhatTheExchangeAndTheConnectionReport() = runTest {
         val rig = Rig(this)
-        var waits = 0
-        rig.waitUntil = { deadline ->
-            delayUntil(deadline)
-            if (++waits == 6) delay(15.milliseconds)
-        }
-        val outcome = rig.start()
-        advance(5.seconds)
-        assertTrue(outcome.getCompleted() is CheckOutcome.Measured)
-
-        val warm = List(50) { n ->
-            Sent(2L * n, "warm $n", n == 49, 20.milliseconds * n + if (n == 5) 15.milliseconds else ZERO)
-        }
-        val spurt = List(33) { m -> Sent(200L + 2 * m, "probe $m", m == 32, 2.seconds + 20.milliseconds * m) }
-        val sent = rig.host.injects.map { Sent(it.frame, it.opus.decodeToString(), it.terminator, it.at - rig.origin) }
-        assertEquals(warm + spurt, sent)
-        assertEquals(
-            listOf(
-                FakeProbeCodec.Encode(0, 750.milliseconds, ZERO, 32_000),
-                FakeProbeCodec.Encode(1640, 200.milliseconds, 200.milliseconds, 32_000),
-            ),
-            rig.probe.encodes,
-        )
-    }
-
-    @Test fun theGateOpensWithTheProbeSpurtAndClosesAfterItsReturn() = runTest {
-        // The last probe packet goes at 2.64 s: its return plus 1 s, capped at 2 s after its send.
-        for ((echo, closes) in listOf(30.milliseconds to 3670.milliseconds, 1500.milliseconds to 4640.milliseconds)) {
-            val rig = Rig(this)
-            rig.host.echo = echo
-            val outcome = rig.start()
-            advance(2500.milliseconds)
-            val heard = CapturedPacket(250, byteArrayOf(1), rig.clock.markNow())
-            rig.host.captured(heard)
-            // Capture's pump keeps polling while locate decodes.
-            rig.probe.onLocate = { rig.host.captured(CapturedPacket(400, byteArrayOf(2), rig.clock.markNow())) }
-            advance(3.seconds)
-
-            val m = (outcome.getCompleted() as CheckOutcome.Measured).m
-            assertEquals("$echo", listOf(true to 2.seconds, false to closes), rig.gate())
-            assertEquals("$echo", List(50) { false } + List(33) { true }, rig.host.injects.map { it.gateOpen })
-            assertEquals("$echo", listOf(heard), m.captured)
-            assertEquals("$echo", listOf(listOf(heard) to CODEC_DELAY), rig.probe.searches)
-            assertEquals("$echo", rig.probe.located, m.located)
-        }
-    }
-
-    @Test fun theReturnIsTheOnsetPacketFromOurOwnSession() = runTest {
-        val rig = Rig(this)
-        rig.host.echo = null
+        rig.session.echo = null
         val stats = CaptureStats(50, 0, 400, 900, 0, 0, 0, 96, 0, 12.0)
         rig.conn.apply {
             roundTripTime.value = 40.milliseconds
@@ -163,54 +109,23 @@ class LatencyCheckTest {
             emitDepths(mapOf(SESSION to 960))
         }
         val outcome = rig.start()
-        fun arrive(session: Int, frame: Long, queued: Int) =
-            ArrivedPacket(session, frame, rig.clock.markNow(), queued, 0, 0).also(rig.host.arrived)
 
         advance(2300.milliseconds)
         rig.conn.voicePath.value = VoicePath.State()
-        arrive(OTHER, 220, 1)
-        arrive(SESSION, 218, 2)
-        val ours = arrive(SESSION, 220, 3)
-        arrive(SESSION, 220, 4)
+        // Through the two callbacks the check connected its session with.
+        val ours = ArrivedPacket(SESSION, 220, rig.clock.markNow(), 960, 0, 0).also(rig.session.arrived)
+        val heard = CapturedPacket(250, byteArrayOf(1), rig.clock.markNow()).also(rig.host.captured)
         advance(400.milliseconds)
-        arrive(OTHER, 264, 5)
-        advance(100.milliseconds)
-        arrive(SESSION, 264, 6)
+        rig.session.arrived(ArrivedPacket(SESSION, 264, rig.clock.markNow(), 0, 0, 0))
         advance(1.seconds)
 
         val expected = Measurements(
-            sent = rig.origin + 2200.milliseconds, returned = ours, captured = emptyList(), located = rig.probe.located,
+            sent = rig.origin + 2200.milliseconds, returned = ours, captured = listOf(heard), located = rig.probe.located,
             codecDelaySamples = CODEC_DELAY, effects = listOf("echo canceller"), effectsAllOff = true,
             route = SPEAKER, voicePath = VoicePath.State(onUdp = true, roundTrip = 35.milliseconds),
             roundTripTime = 40.milliseconds, captureStats = stats, playoutStats = rig.conn.playoutStats.value,
         )
         assertEquals(CheckOutcome.Measured(expected), outcome.getCompleted())
-        assertEquals(false to 3800.milliseconds, rig.gate().last())
-    }
-
-    @Test fun aMissingReturnTimesOut() = runTest {
-        val rig = Rig(this)
-        rig.host.echo = null
-        val outcome = rig.start()
-        advance(4640.milliseconds - 1.milliseconds)
-        assertFalse(outcome.isCompleted)
-        advance(1.milliseconds)
-
-        val failed = outcome.getCompleted() as CheckOutcome.Failed
-        assertEquals("the probe did not come back from the server", failed.reason)
-        assertEquals(rig.origin + 2200.milliseconds, failed.partial?.sent)
-        assertNull(failed.partial?.returned)
-        assertEquals(false to 4640.milliseconds, rig.gate().last())
-
-        // The onset back but never the spurt's last packet: still measured, once the cap passes.
-        val late = Rig(this)
-        late.host.echo = null
-        val measured = late.start()
-        advance(2300.milliseconds)
-        val ours = ArrivedPacket(SESSION, 220, late.clock.markNow(), 0, 0, 0).also(late.host.arrived)
-        advance(2340.milliseconds)
-        assertEquals(ours, (measured.getCompleted() as CheckOutcome.Measured).m.returned)
-        assertEquals(false to 4640.milliseconds, late.gate().last())
     }
 
     @Test fun aHoldOrRouteChangeOrDisconnectAbortsTheCheck() = runTest {
@@ -221,8 +136,8 @@ class LatencyCheckTest {
             },
             "the connection to the server ended" to { conn.status.value = ConnectionStatus.Reconnecting(1, SESSION) },
             "the connection to the server ended" to { conn.status.value = ConnectionStatus.Connected(1, OTHER) },
-            "the connection to the server ended or was replaced during the check" to { host.ended.value = true },
-            "capture closed during the check" to { host.captureOpen.value = false },
+            "the connection to the server ended or was replaced during the check" to { session.ended.value = true },
+            "capture closed during the check" to { session.captureOpen.value = false },
         )
         for ((reason, change) in cases) {
             val rig = Rig(this)
@@ -234,7 +149,7 @@ class LatencyCheckTest {
             val failed = outcome.getCompleted() as CheckOutcome.Failed
             assertEquals(reason, failed.reason)
             assertEquals(reason, rig.origin + 2200.milliseconds, failed.partial?.sent)
-            assertEquals(reason, 50 + 26, rig.host.injects.size)
+            assertEquals(reason, 50 + 26, rig.session.injects.size)
         }
     }
 
@@ -254,12 +169,12 @@ class LatencyCheckTest {
             }),
             Ending(
                 "capture did not open within 5s: is the microphone permission granted, or is another app using the microphone?",
-                { host.captureOpen.value = false },
+                { session.captureOpen.value = false },
             ),
             Ending(unencoded, { probe.codecDelay = -1 }),
             Ending(unencoded, { probe.warmPackets = 0 }),
             Ending(unencoded, { probe.spurtPackets = 10 }),
-            Ending("the probe did not come back from the server", { host.echo = null }),
+            Ending("the probe did not come back from the server", { session.echo = null }),
             Ending("another call took the microphone", {}, { conn.callHeld.value = true }),
             Ending("the check failed unexpectedly: java.lang.IllegalStateException: decoder gone", {
                 probe.onLocate = { error("decoder gone") }
@@ -296,22 +211,16 @@ class LatencyCheckTest {
             channelTree.value = ChannelTree(users = mapOf(SESSION to SELF))
             audioRoutes.value = AudioRoutes(listOf(EARPIECE, SPEAKER), current = SPEAKER)
         }
-        val host = FakeCheckHost(scope) { conn.onConnect() }
+        val session = FakeCheckSession(scope)
+        val host = FakeCheckHost(session) { conn.onConnect() }
         val probe = FakeProbeCodec()
-        var waitUntil: suspend (ComparableTimeMark) -> Unit = ::delayUntil
-
-        /** Each gate change, at its time since [origin]. */
-        fun gate() = host.gateChanges.map { (open, at) -> open to at - origin }
-
         fun start(): Deferred<CheckOutcome> =
-            scope.async { LatencyCheck(conn, host, probe, waitUntil).run(ENDPOINT, FINGERPRINT) }
+            scope.async { LatencyCheck(conn, host, probe).run(ENDPOINT, FINGERPRINT) }
                 .also { scope.runCurrent() }
     }
 
-    private data class Sent(val frame: Long, val payload: String, val terminator: Boolean, val at: Duration)
-
     private companion object {
-        const val SESSION = FakeCheckHost.SESSION
+        const val SESSION = FakeCheckSession.SESSION
         const val OTHER = 8
         const val CODEC_DELAY = 312
         val ENDPOINT = MumbleEndpoint.parse("murmur.test")
@@ -327,29 +236,13 @@ class LatencyCheckTest {
     }
 }
 
-/** The connection's side of a check and the session it connects: each injected packet comes back
- *  from the server after [echo]. */
-class FakeCheckHost(private val scope: TestScope, private val onConnect: () -> Unit) : CheckHost, CheckSession {
-    class Injected(
-        val frame: Long, val opus: ByteArray, val terminator: Boolean, val at: ComparableTimeMark, val gateOpen: Boolean,
-    )
-
-    override val clock = scope.testScheduler.timeSource
+/** The connection's side of a check: connects [session] unless [grants] is off. */
+class FakeCheckHost(private val session: FakeCheckSession, private val onConnect: () -> Unit) : CheckHost {
     var grants = true
-    var echo: Duration? = 30.milliseconds
     val connects = mutableListOf<Pair<MumbleEndpoint, String>>()
+
+    /** What the check connected to hear capture's packets. */
     var captured: (CapturedPacket) -> Unit = {}; private set
-    var arrived: (ArrivedPacket) -> Unit = {}; private set
-    val injects = mutableListOf<Injected>()
-    val gateChanges = mutableListOf<Pair<Boolean, ComparableTimeMark>>()
-    private var gateOpen = false
-    override val captureOpen = MutableStateFlow(true)
-    override val ended = MutableStateFlow(false)
-    override val effects: CheckEffects = object : CheckEffects {
-        override val names = listOf("echo canceller")
-        override fun allOff() = true
-        override fun restore() = true
-    }
 
     override fun connectForCheck(
         endpoint: MumbleEndpoint,
@@ -361,56 +254,8 @@ class FakeCheckHost(private val scope: TestScope, private val onConnect: () -> U
         if (!grants) return null
         connects += endpoint to fingerprint
         this.captured = captured
-        this.arrived = arrived
+        session.arrived = arrived
         onConnect()
-        return this
-    }
-
-    override fun inject(frameNumber: Long, opusData: ByteArray, terminator: Boolean): Boolean {
-        injects += Injected(frameNumber, opusData, terminator, clock.markNow(), gateOpen)
-        echo?.let { after ->
-            scope.backgroundScope.launch {
-                delay(after)
-                arrived(ArrivedPacket(SESSION, frameNumber, clock.markNow(), 0, 0, 0))
-            }
-        }
-        return true
-    }
-
-    override fun setGateOpen(open: Boolean) {
-        gateOpen = open
-        gateChanges += open to clock.markNow()
-    }
-
-    companion object {
-        /** The session id the fake server gives a check. */
-        const val SESSION = 7
-    }
-}
-
-/** Packets named for what they carry, and one canned search result. */
-class FakeProbeCodec : ProbeCodec {
-    data class Encode(val peak: Int, val lead: Duration, val tail: Duration, val bitrate: Int)
-
-    var codecDelay = 312
-    var warmPackets = 50
-    var spurtPackets = 33
-    val located = Located(48_000, 9000.0, 300.0, found = true)
-    val encodes = mutableListOf<Encode>()
-    val searches = mutableListOf<Pair<List<CapturedPacket>, Int>>()
-    var onLocate: () -> Unit = {}
-
-    override fun encodeProbeSpurt(peak: Int, lead: Duration, tail: Duration, bitrate: Int): List<ByteArray> {
-        encodes += Encode(peak, lead, tail, bitrate)
-        val kind = if (peak == 0) "warm" else "probe"
-        return List(if (peak == 0) warmPackets else spurtPackets) { "$kind $it".encodeToByteArray() }
-    }
-
-    override fun codecDelaySamples(bitrate: Int) = codecDelay
-
-    override fun locate(packets: List<CapturedPacket>, codecDelaySamples: Int): Located {
-        searches += packets to codecDelaySamples
-        onLocate()
-        return located
+        return session
     }
 }

@@ -1584,22 +1584,28 @@ TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroWithItsTerminatorLost) {
     expectClean(*e, "mumble-web with its terminator lost");
 }
 
-int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Ahead* ahead) {
+int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Offered* offered) {
     const std::vector<uint8_t> p = encode(1);
-    return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, ahead);
+    return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, offered);
+}
+
+int offerAhead(PlayoutEngine& e, int32_t session, int32_t* ahead) {
+    PlayoutEngine::Offered offered{};
+    const int code = offerAhead(e, session, &offered);
+    *ahead = offered.aheadSamples;
+    return code;
 }
 
 // A fill decodes with the mutex released, and the packet it has popped is then in neither the
 // queue nor the decoder. The hook runs there, on the fill's own thread.
 TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     auto e = newEngine();
-    PlayoutEngine::Ahead first{-1, -1, -1, -1};
+    int32_t first = -1;
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &first));
-    EXPECT_EQ(0, first.queuedSamples) << "nothing is ahead of a speaker's first packet";
-    EXPECT_EQ(0, first.decodedSamples);
+    EXPECT_EQ(0, first) << "nothing is ahead of a speaker's first packet";
     arm(*e, 7, kColdStartPackets - 1);
 
-    PlayoutEngine::Ahead inside{-1, -1, -1, -1};
+    int32_t inside = -1;
     int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
         if (popped++ == 0) {
@@ -1611,13 +1617,12 @@ TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
     int32_t live = 0;
     e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
     ASSERT_EQ(1, popped);
-    EXPECT_EQ((kColdStartPackets - 1) * kFrame, inside.queuedSamples);
-    EXPECT_EQ(kFrame, inside.decodedSamples) << "the popped packet, whole: none of it is mixed yet";
+    EXPECT_EQ(kColdStartPackets * kFrame, inside) << "the popped packet still counts: none of it is mixed yet";
 
-    PlayoutEngine::Ahead after{-1, -1, -1, -1};
+    int32_t after = -1;
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &after));
-    EXPECT_EQ(kColdStartPackets * kFrame, after.queuedSamples) << "the packet offered inside the fill";
-    EXPECT_EQ(kFrame / 2, after.decodedSamples) << "the fill mixed half of the popped packet";
+    EXPECT_EQ(kColdStartPackets * kFrame + kFrame / 2, after)
+        << "the packet offered inside the fill, less the half packet the fill mixed";
 }
 
 // The output going down releases a slot whose decoder still holds audio. A slot a fill retires
@@ -1632,17 +1637,16 @@ TEST(PlayoutEngine, NothingIsAheadOfASpeakerReleasedWithAudioStillDecoded) {
     e->setOutputDown(true);
     e->setOutputDown(false);
 
-    PlayoutEngine::Ahead ahead{-1, -1, -1, -1};
+    int32_t ahead = -1;
     ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ(0, ahead.queuedSamples);
-    EXPECT_EQ(0, ahead.decodedSamples);
+    EXPECT_EQ(0, ahead);
 }
 
 TEST(PlayoutEngine, OfferReportsTheGateInItsTwoParts) {
     auto e = newEngine();
     e->setWriteAheadSamples(480);
-    PlayoutEngine::Ahead ahead{-1, -1, -1, -1};
-    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
-    EXPECT_EQ(pl::kColdStartSamples, ahead.targetSamples);
-    EXPECT_EQ(480, ahead.writeAheadSamples);
+    PlayoutEngine::Offered offered{-1, -1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &offered));
+    EXPECT_EQ(pl::kColdStartSamples, offered.targetSamples);
+    EXPECT_EQ(480, offered.writeAheadSamples);
 }
