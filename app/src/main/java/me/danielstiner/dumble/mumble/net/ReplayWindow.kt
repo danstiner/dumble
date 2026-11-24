@@ -64,18 +64,18 @@ internal class ReplayWindow {
     }
 
     /**
-     * Records the counter [hint] names as accepted, once its tag has verified, and returns how far
-     * it sat from the top: positive when it moved the top, otherwise how late it was. A forward
-     * step shifts the bitmap by the same amount; a jump of a whole window leaves nothing live to
-     * keep, since `newTop − 63` is then past the old top.
+     * Records [nonce], the counter [rebuildIfNew] produced, as accepted now that its tag has
+     * verified, and returns how far it sat from the top: positive when it becomes the new top,
+     * otherwise how late it was. Moving the top shifts the bitmap by the same amount; a jump of a
+     * whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
      */
-    fun accept(hint: Int): Int {
-        val offset = offsetFor(hint)
+    fun accept(nonce: ByteArray): Int {
+        val offset = offsetFor(nonce[0].toInt())
         if (offset > 0) {
             // Kotlin masks a Long shift to six bits, so a jump of exactly the window size would
             // otherwise leave the bitmap unshifted and mark all 63 slots below the new top spent.
             bitmap = if (offset >= WINDOW) 1L else (bitmap shl offset) or 1L
-            addToCounter(top, offset, top)
+            nonce.copyInto(top)
         } else {
             bitmap = bitmap or (1L shl -offset)
         }

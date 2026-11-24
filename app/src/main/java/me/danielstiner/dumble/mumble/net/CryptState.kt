@@ -148,7 +148,7 @@ class CryptState {
             (tag[2].toInt() xor wire2.toInt())
         if (!unforged || diff != 0) return -1
 
-        val offset = window.accept(hint)
+        val offset = window.accept(nonce)
         if (offset > 0) advanced += offset else late++
         good++
         return plainLen
