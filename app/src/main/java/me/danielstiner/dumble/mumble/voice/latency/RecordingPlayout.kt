@@ -22,9 +22,7 @@ class RecordingPlayout(
         val offered = engine.offer(session, opusData, frameNumber, terminator)
         if (offered.code == NativePlayout.OFFER_ACCEPTED) {
             try {
-                arrived(ArrivedPacket(
-                    session, frameNumber, at, offered.aheadSamples, offered.targetSamples, offered.writeAheadSamples,
-                ))
+                arrived(ArrivedPacket(session, frameNumber, at, offered.aheadSamples))
             } catch (t: Throwable) {
                 // This runs on the transport's reader, which a check's bug must not end. Logged
                 // once: packets come fifty a second.

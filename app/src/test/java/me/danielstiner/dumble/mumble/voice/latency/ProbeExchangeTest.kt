@@ -74,7 +74,7 @@ class ProbeExchangeTest {
         rig.session.echo = null
         val outcome = rig.start()
         fun arrive(session: Int, frame: Long, queued: Int) =
-            ArrivedPacket(session, frame, rig.clock.markNow(), queued, 0, 0).also(rig.exchange::onArrived)
+            ArrivedPacket(session, frame, rig.clock.markNow(), queued).also(rig.exchange::onArrived)
 
         advance(2300.milliseconds)
         arrive(OTHER, 220, 1)
@@ -119,7 +119,7 @@ class ProbeExchangeTest {
         late.session.echo = null
         val heard = late.start()
         advance(2300.milliseconds)
-        val ours = ArrivedPacket(SESSION, 220, late.clock.markNow(), 0, 0, 0).also(late.exchange::onArrived)
+        val ours = ArrivedPacket(SESSION, 220, late.clock.markNow(), 0).also(late.exchange::onArrived)
         advance(2340.milliseconds)
         assertTrue(heard.getCompleted().isSuccess)
         assertEquals(ours, late.exchange.returned)
@@ -246,7 +246,7 @@ class FakeCheckSession(private val scope: TestScope) : CheckSession {
         echo?.let { after ->
             scope.backgroundScope.launch {
                 delay(after)
-                arrived(ArrivedPacket(SESSION, frameNumber, clock.markNow(), 0, 0, 0))
+                arrived(ArrivedPacket(SESSION, frameNumber, clock.markNow(), 0))
             }
         }
         return true
