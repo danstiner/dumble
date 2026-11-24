@@ -1583,3 +1583,55 @@ TEST(PlayoutEngineClients, MumbleWebRestartsAtZeroWithItsTerminatorLost) {
     EXPECT_EQ(2 * kSpurtFills - 4, drainSpurt(*e)) << "the rest of both spurts, nothing refused";
     expectClean(*e, "mumble-web with its terminator lost");
 }
+
+int offerAhead(PlayoutEngine& e, int32_t session, PlayoutEngine::Ahead* ahead) {
+    const std::vector<uint8_t> p = encode(1);
+    return e.offer(session, p.data(), int(p.size()), frameFor(session)++, false, kArrival, ahead);
+}
+
+// A fill decodes with the mutex released, and the packet it has popped is then in neither the
+// queue nor the decoder. The hook runs there, on the fill's own thread.
+TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacketEvenInsideAFill) {
+    auto e = newEngine();
+    PlayoutEngine::Ahead first{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &first));
+    EXPECT_EQ(0, first.queuedSamples) << "nothing is ahead of a speaker's first packet";
+    EXPECT_EQ(0, first.decodedSamples);
+    arm(*e, 7, kColdStartPackets - 1);
+
+    PlayoutEngine::Ahead inside{-1, -1};
+    int popped = 0;
+    e->betweenPopAndDecodeForTest = [&] {
+        if (popped++ == 0) ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &inside));
+    };
+    std::vector<int16_t> pcm(kFrame / 2);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    ASSERT_EQ(1, popped);
+    EXPECT_EQ((kColdStartPackets - 1) * kFrame, inside.queuedSamples);
+    EXPECT_EQ(kFrame, inside.decodedSamples) << "the popped packet, whole: none of it is mixed yet";
+
+    PlayoutEngine::Ahead after{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &after));
+    EXPECT_EQ(kColdStartPackets * kFrame, after.queuedSamples) << "the packet offered inside the fill";
+    EXPECT_EQ(kFrame / 2, after.decodedSamples) << "the fill mixed half of the popped packet";
+}
+
+// The output going down releases a slot whose decoder still holds audio. A slot a fill retires
+// has already played its decoder out.
+TEST(PlayoutEngine, NothingIsAheadOfASpeakerReleasedWithAudioStillDecoded) {
+    auto e = newEngine();
+    arm(*e, 7);
+    std::vector<int16_t> pcm(kFrame / 2);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    e->setOutputDown(true);
+    e->setOutputDown(false);
+
+    PlayoutEngine::Ahead ahead{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ(0, ahead.queuedSamples);
+    EXPECT_EQ(0, ahead.decodedSamples);
+}

@@ -29,7 +29,7 @@ std::unique_ptr<PlayoutEngine> PlayoutEngine::create(int sampleRate, int maxQuan
 }
 
 int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber,
-                         bool terminator, BootClock::time_point arrival) {
+                         bool terminator, BootClock::time_point arrival, Ahead* ahead) {
     // Judge the payload before the mutex. Extracting the sample count here is also what keeps the
     // packet queue free of Opus details.
     int verdict = kOfferAccepted;
@@ -67,6 +67,7 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
         return kOfferSpeakerCap;
     }
     PacketQueue& queue = queues_[slot];
+    if (ahead) *ahead = {queue.depthSamples(), decodedAhead_[slot]};
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator, frameNumber);
     } else {
@@ -191,6 +192,12 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 const JitterEstimator* est = estimatorForSlot(live[n]);
                 len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
                                 est && !est->discontinuous(), &concealSamples);
+                // The packet leaves the queue's count and joins this one under the same lock, so an
+                // offer() reading both never finds it in neither.
+                if (len > 0) {
+                    decodedAhead_[live[n]] +=
+                        AudioDecoder::packetSamples(packetScratch_, len, sampleRate_);
+                }
             }
             // One frame per pop keeps the cursor and the fifo in step whatever the callback size;
             // how far the hole is concealed is the queue's decision (see PacketQueue::pop). Not
@@ -201,6 +208,9 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 continue;
             }
             if (len <= 0) break;
+#ifdef DUMBLE_TESTING
+            if (betweenPopAndDecodeForTest) betweenPopAndDecodeForTest();
+#endif
             decoder.decode(packetScratch_, len);
         }
         // Conceal a mid-spurt shortfall rather than let drain zero-pad it. The concealed frame then
@@ -226,6 +236,8 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
             PacketQueue& queue = queues_[i];
             const bool audible = produced[n] > 0;
             audible_[i] = audible;
+            // From the decoder itself once a fill, so the count cannot drift from it.
+            decodedAhead_[i] = decoders_[i]->available();
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
             if (audible) sessions[producing++] = sessions_[i];
             // Judged before endFill, which closes the gate speaking() reads. One gap, one charge,
@@ -395,6 +407,7 @@ void PlayoutEngine::releaseSlot(int i) {
     outOfOrderPackets_ += queues_[i].outOfOrderPackets();
     queues_[i].reset();
     decoders_[i]->reset();
+    decodedAhead_[i] = 0;
     audible_[i] = false;
     slots_.clear(i);
 }

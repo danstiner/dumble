@@ -137,6 +137,7 @@ struct Packet {
     uint64_t frame;
     bool terminator;
     milliseconds sent, arrival;
+    int64_t ahead = 0;   // samples playout said it held for the speaker before this packet
 };
 
 struct Call {
@@ -190,9 +191,11 @@ Call simulate(const Scenario& s, const std::vector<int16_t>& microphone, millise
 
         // Before this millisecond's fill, so a packet is never one output callback late.
         for (; delivered < call.packets.size() && call.packets[delivered].arrival <= t; delivered++) {
-            const Packet& p = call.packets[delivered];
+            Packet& p = call.packets[delivered];
+            pl::PlayoutEngine::Ahead ahead{};
             playout->offer(kSession, p.data.data(), int(p.data.size()), p.frame, p.terminator,
-                           BootClock::time_point(p.arrival));
+                           BootClock::time_point(p.arrival), &ahead);
+            p.ahead = ahead.queuedSamples + ahead.decodedSamples;
         }
 
         if (t % s.outputCallback == 0ms) {
@@ -242,6 +245,11 @@ std::vector<Breakdown> measure(const Scenario& s, int64_t codec) {
         b.network = pl::samplesIn(carrier->arrival - carrier->sent);
         b.writeAhead = pl::samplesIn(writeAhead(s));
         b.jitterBuffer = b.total - b.packetization - b.network - codec - b.writeAhead;
+        // What playout said it held ahead of the packet, plus the wait for the next fill, is the
+        // wait measured here from the output. Exact while playout does not adapt in between.
+        const milliseconds untilFill = (s.outputCallback - carrier->arrival % s.outputCallback) % s.outputCallback;
+        EXPECT_EQ(b.jitterBuffer, carrier->ahead + pl::samplesIn(untilFill))
+            << s.name << ": probe at " << at.count() << " ms";
         breakdowns.push_back(b);
     }
     return breakdowns;

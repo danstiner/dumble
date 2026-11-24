@@ -1,6 +1,9 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#ifdef DUMBLE_TESTING
+#include <functional>
+#endif
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -54,6 +57,13 @@ static_assert(kEstimatorSlots <= Bitmap::kCapacity,
  */
 class PlayoutEngine {
 public:
+    /** The wait ahead of an arriving packet: its sender's samples still encoded in the queue, and
+     *  those decoded but not yet mixed. */
+    struct Ahead {
+        int32_t queuedSamples;
+        int32_t decodedSamples;
+    };
+
     /** Any thread; no lock, nothing is shared until it returns. Null when libopus cannot build a
      *  decoder, or when `maxQuantumSamples` is outside (0, kMaxPacketSamples] — every buffer here
      *  and in each speaker is sized from it. */
@@ -67,9 +77,12 @@ public:
      *  terminator is accepted, since it carries no samples by definition. `frameNumber` is the
      *  sender's own frame counter, peer-controlled and sanity-checked by the estimator rather than
      *  here. `arrival` is when the packet became ready to queue: delay before that, local or
-     *  network, is jitter the target must cover. */
+     *  network, is jitter the target must cover.
+     *
+     *  `ahead`, for a latency check, is filled with what the engine held for the session before
+     *  this packet, when the packet gets a slot: the once-a-second stats are too coarse. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
-              BootClock::time_point arrival);
+              BootClock::time_point arrival, Ahead* ahead = nullptr);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement
@@ -179,6 +192,9 @@ public:
         heldForTest_ = false;
     }
     bool mutexHeldForTest() const { return heldForTest_.load(); }
+    /** Run on the fill thread between a pop and its decode, with mutex_ released and the packet in
+     *  neither the queue nor the decoder: where an `ahead` read must still count it. */
+    std::function<void()> betweenPopAndDecodeForTest;
 #endif
 
 private:
@@ -248,6 +264,11 @@ private:
     // Whether the slot produced in the last fill. Written in the commit phase and read by stats(),
     // both under mutex_. Zeroed on claim.
     bool audible_[kMaxSpeakers] = {};
+    // What the slot's decoder holds, decoded and not yet mixed, for offer() to read: the decoder
+    // itself belongs to the playback thread, which uses it with mutex_ released. Exact after a
+    // fill's commit. Inside a fill, and after a contended one until the next commit, it still
+    // counts the burst being mixed and misses anything that fill concealed. Zeroed on release.
+    int decodedAhead_[kMaxSpeakers] = {};
     // Samples a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only by real
     // audio, never by a fill that merely did not conceal: an expired hold would otherwise clear
     // its own counter and start concealing again on the next fill, forever. Keeps counting past
