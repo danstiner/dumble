@@ -48,8 +48,8 @@ internal class ReplayWindow {
 
     /**
      * Rebuilds the counter a packet carrying [hint] must have been sealed under and writes it to
-     * [out] as the nonce to try. False, with [out] untouched and no cipher work spent, when that
-     * counter has been accepted already.
+     * [out] as the nonce to try. False, with [out] untouched, when that counter has been accepted
+     * already.
      *
      * [hint] is the counter's low byte, all that travels. Its 256 values are split [MAX_LATE]
      * behind the top and the rest ahead, so candidates run `top-63` to `top+192` -- one guess
@@ -65,9 +65,9 @@ internal class ReplayWindow {
 
     /**
      * Records [nonce], the counter [rebuildNonce] produced, as accepted now that its tag has
-     * verified, and returns how far it sat from the top: positive when it becomes the new top,
-     * otherwise how late it was. Moving the top shifts the bitmap by the same amount; a jump of a
-     * whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
+     * verified, and returns its offset from the top: positive when it becomes the new top,
+     * negative when it arrived late. Moving the top shifts the bitmap by the same amount; a jump
+     * of a whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
      */
     fun accept(nonce: ByteArray): Int {
         val offset = offsetFor(nonce[0].toInt())
