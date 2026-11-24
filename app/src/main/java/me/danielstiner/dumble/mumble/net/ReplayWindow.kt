@@ -56,7 +56,7 @@ internal class ReplayWindow {
      * covering both loss and reordering, never a second decrypt attempt for an attacker to force.
      * Anything further out rebuilds to the wrong counter and fails the tag.
      */
-    fun rebuildIfNew(hint: Int, out: ByteArray): Boolean {
+    fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
         if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
         addToCounter(top, offset, out)
@@ -64,7 +64,7 @@ internal class ReplayWindow {
     }
 
     /**
-     * Records [nonce], the counter [rebuildIfNew] produced, as accepted now that its tag has
+     * Records [nonce], the counter [rebuildNonce] produced, as accepted now that its tag has
      * verified, and returns how far it sat from the top: positive when it becomes the new top,
      * otherwise how late it was. Moving the top shifts the bitmap by the same amount; a jump of a
      * whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
