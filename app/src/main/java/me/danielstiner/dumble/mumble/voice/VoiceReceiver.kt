@@ -50,11 +50,16 @@ class VoiceReceiver(
     // Seam: where the poll runs; the connection passes its own.
     context: CoroutineContext = Dispatchers.Default,
 ) {
+    /** What [PlayoutEngine.offer] answers. [code] is one of [NativePlayout]'s `OFFER_*` codes.
+     *  [aheadSamples] is what the engine held for the sender before an accepted packet, queued or
+     *  decoded and not yet played: the wait ahead of it. It means nothing for a refused packet. */
+    class Offered(val code: Int, val aheadSamples: Int)
+
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
-        /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
-         *  own frame counter, which the engine measures arrival jitter against. */
-        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Int
+        /** Reader thread. [frameNumber] is the sender's own frame counter, which the engine
+         *  measures arrival jitter against. */
+        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Offered
 
         /** Poll only. Returns the live speaker count and fills the four arrays for it;
          *  `audible[i]` is 1 when `sessions[i]` produced in the last fill. Negative when the
@@ -204,7 +209,7 @@ class VoiceReceiver(
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
             val code = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
-                                  audio.isTerminator)
+                                  audio.isTerminator).code
             val refusal = when (code) {
                 NativePlayout.OFFER_SPEAKER_CAP -> "speaker cap reached; ignoring further sessions"
                 NativePlayout.OFFER_PACKET_TOO_LARGE -> "dropping oversized opus payload"
