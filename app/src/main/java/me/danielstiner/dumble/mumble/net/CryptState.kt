@@ -132,15 +132,12 @@ class CryptState {
         val wire1 = src[2]
         val wire2 = src[3]
 
-        val offset = window.offsetFor(hint)
-        // A replay costs no AES: the bitmap answers first.
-        if (window.alreadyAccepted(offset)) {
+        // A replay costs no AES: the bitmap answers first. Otherwise guessing is free: a wrong
+        // guess makes the wrong nonce and the tag will not match.
+        if (!window.nonceFor(hint, nonce)) {
             replay++
             return -1
         }
-
-        // Guessing is free: a wrong guess makes the wrong nonce and the tag will not match.
-        window.nonceAt(offset, nonce)
 
         // open() hands back unverified plaintext and a recomputed tag; only this comparison
         // authenticates. Its false return means the final block has the shape the XEX* forgery
@@ -151,7 +148,7 @@ class CryptState {
             (tag[2].toInt() xor wire2.toInt())
         if (!unforged || diff != 0) return -1
 
-        window.accept(offset)
+        val offset = window.accept(hint)
         if (offset > 0) advanced += offset else late++
         good++
         return plainLen
