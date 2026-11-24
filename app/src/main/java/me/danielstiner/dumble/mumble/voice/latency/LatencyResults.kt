@@ -1,6 +1,6 @@
 package me.danielstiner.dumble.mumble.voice.latency
 
-import me.danielstiner.dumble.mumble.voice.FRAME_NUMBER_SAMPLES
+import me.danielstiner.dumble.mumble.voice.FRAME_SAMPLES
 import me.danielstiner.dumble.mumble.voice.SAMPLE_RATE
 import me.danielstiner.dumble.mumble.voice.SendDelay
 import java.util.Locale
@@ -100,9 +100,9 @@ object LatencyResults {
         val offset = m.located?.offsetSamples ?: return null
         val packets = m.captured.sortedBy { it.frameNumber }
         val first = packets.firstOrNull()?.frameNumber ?: return null
-        val onsetFrame = first + offset / FRAME_NUMBER_SAMPLES
+        val onsetFrame = first + offset / FRAME_SAMPLES
         val carrier = packets.lastOrNull { it.frameNumber <= onsetFrame } ?: return null
-        val inPacket = offset - (carrier.frameNumber - first) * FRAME_NUMBER_SAMPLES
+        val inPacket = offset - (carrier.frameNumber - first) * FRAME_SAMPLES
         return carrier.at + inPacket.sampleDuration() - returned.at
     }
 

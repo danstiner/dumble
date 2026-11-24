@@ -6,8 +6,7 @@ package me.danielstiner.dumble.mumble.voice
  *  PlayoutEngine::create, so it has nothing of its own to drift. */
 const val SAMPLE_RATE = 48000
 
-/** One 10 ms frame at [SAMPLE_RATE], the unit Mumble's `frame_number` counts in. Nothing in the
- *  app reads it; the device tests count queued audio in it. */
+/** One 10 ms frame at [SAMPLE_RATE], the unit Mumble's `frame_number` counts in. */
 const val FRAME_SAMPLES = 480
 
 /** Twin of the native engine's kMaxSpeakers (PlayoutConstants.h), where the reasoning for the

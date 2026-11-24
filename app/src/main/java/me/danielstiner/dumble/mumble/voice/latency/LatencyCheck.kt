@@ -61,10 +61,10 @@ class LatencyCheck(
         val check = host.connectForCheck(endpoint, USERNAME, fingerprint, exchange::onCaptured, exchange::onArrived)
             ?: return CheckOutcome.Refused("Dumble is connected to a server; disconnect first")
 
-        fun measurements(sent: ComparableTimeMark, heard: Heard): Measurements {
+        fun measurements(sent: ComparableTimeMark, located: Located?): Measurements {
             val effects = check.effects
             return Measurements(
-                sent = sent, returned = exchange.returned, captured = heard.captured, located = heard.located,
+                sent = sent, returned = exchange.returned, captured = exchange.captured, located = located,
                 codecDelaySamples = exchange.codecDelaySamples,
                 effects = effects?.names.orEmpty(), effectsAllOff = effects?.allOff() ?: false,
                 route = connection.audioRoutes.value.current, voicePath = pathAtOnset,
@@ -120,13 +120,13 @@ class LatencyCheck(
                 within(unopened, CAPTURE_TIMEOUT) { check.captureOpen.first { it } }
                 abortOn(check.captureOpen, "capture closed during the check") { !it }
 
-                val heard = exchange.run(check, session, progress) { pathAtOnset = connection.voicePath.value }
-                CheckOutcome.Measured(measurements(checkNotNull(exchange.sent), heard))
+                val located = exchange.run(check, session, progress) { pathAtOnset = connection.voicePath.value }
+                CheckOutcome.Measured(measurements(checkNotNull(exchange.sent), located))
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             val reason = if (e is CheckFailure) e.message else "the check failed unexpectedly: $e"
-            CheckOutcome.Failed(reason, exchange.sent?.let { measurements(it, Heard(exchange.captured, located = null)) })
+            CheckOutcome.Failed(reason, exchange.sent?.let { measurements(it, located = null) })
         } finally {
             // The session is the check's own: ending it puts back everything the check changed.
             connection.disconnect()
