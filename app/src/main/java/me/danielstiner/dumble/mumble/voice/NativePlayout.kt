@@ -72,8 +72,7 @@ object NativePlayout {
     external fun pause(handle: Long)
 
     /** With [ahead], of at least two entries, an accepted packet also fills `ahead[0]` with the
-     *  samples already queued for [session] and `ahead[1]` with those decoded but not yet played,
-     *  and the call waits out a fill in flight to read them. */
+     *  samples already queued for [session] and `ahead[1]` with those decoded but not yet played. */
     external fun offer(
         handle: Long,
         session: Int,
@@ -97,12 +96,7 @@ object NativePlayout {
 
 /** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
 class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
-    override fun offer(
-        session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, measureAhead: Boolean,
-    ): VoiceReceiver.Offered {
-        if (!measureAhead) {
-            return VoiceReceiver.Offered(NativePlayout.offer(handle, session, opusData, frameNumber, terminator))
-        }
+    override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): VoiceReceiver.Offered {
         val ahead = IntArray(2)
         val code = NativePlayout.offer(handle, session, opusData, frameNumber, terminator, ahead)
         return VoiceReceiver.Offered(code, ahead[0] + ahead[1])

@@ -47,11 +47,8 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
 
     @Volatile var targetsBySession: Map<Int, Int> = emptyMap()
 
-    /** What [offer] reports ahead of a packet per session, when asked. */
+    /** What [offer] reports ahead of a packet, per session. */
     @Volatile var aheadBySession: Map<Int, Int> = emptyMap()
-
-    /** How many offers asked what was ahead of them. */
-    val aheadAsked = AtomicInteger()
 
     /** The counters as native would report them: monotonic, with latency -1 until a stream
      *  reports one. */
@@ -72,12 +69,10 @@ class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
         opusData: ByteArray,
         frameNumber: Long,
         terminator: Boolean,
-        measureAhead: Boolean,
     ): VoiceReceiver.Offered {
         checkLive()
-        if (measureAhead) aheadAsked.incrementAndGet()
         offered += Offer(session, opusData, frameNumber, terminator)
-        return VoiceReceiver.Offered(offerResult, if (measureAhead) aheadBySession[session] ?: 0 else 0)
+        return VoiceReceiver.Offered(offerResult, aheadBySession[session] ?: 0)
     }
 
     override fun readStats(

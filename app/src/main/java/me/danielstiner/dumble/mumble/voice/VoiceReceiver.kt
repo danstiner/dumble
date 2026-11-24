@@ -54,15 +54,14 @@ class VoiceReceiver(
 ) {
     /** What [PlayoutEngine.offer] answers. [code] is one of [NativePlayout]'s `OFFER_*` codes.
      *  [aheadSamples] is what the engine held for the sender before an accepted packet, queued or
-     *  decoded and not yet played: the wait ahead of it. 0 unless it was asked for. */
-    class Offered(val code: Int, val aheadSamples: Int = 0)
+     *  decoded and not yet played: the wait ahead of it. */
+    class Offered(val code: Int, val aheadSamples: Int)
 
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
         /** Reader thread. [frameNumber] is the sender's own frame counter, which the engine
-         *  measures arrival jitter against. [measureAhead], for a latency check's receive tap only,
-         *  fills [Offered.aheadSamples] and makes the call wait out a fill in flight to read it. */
-        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean, measureAhead: Boolean = false): Offered
+         *  measures arrival jitter against. */
+        fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Offered
 
         /** Poll only. Returns the live speaker count and fills the four arrays for it;
          *  `audible[i]` is 1 when `sessions[i]` produced in the last fill. Negative when the
@@ -219,7 +218,7 @@ class VoiceReceiver(
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
             val offered = live.offer(session, audio.opusData.toByteArray(), audio.frameNumber,
-                                     audio.isTerminator, measureAhead = tap != null)
+                                     audio.isTerminator)
             val code = offered.code
             if (tap != null && at != null && code == NativePlayout.OFFER_ACCEPTED) {
                 try {

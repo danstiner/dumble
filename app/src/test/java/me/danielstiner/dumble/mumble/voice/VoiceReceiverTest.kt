@@ -540,16 +540,6 @@ class VoiceReceiverTest {
     }
 
     @Test
-    fun withNoTapTheEngineIsNeverAskedWhatItHolds() {
-        val fake = FakePlayoutEngine()
-        polling(fake) { rx ->
-            rx.offer(audioPayload(session = 5))
-            assertEquals(0, fake.aheadAsked.get())
-            assertEquals(1, fake.offered.size)
-        }
-    }
-
-    @Test
     fun aPacketTheEngineRefusesIsNotTappedAsArrived() {
         val fake = FakePlayoutEngine()
         polling(fake) { rx ->

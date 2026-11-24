@@ -1606,33 +1606,58 @@ TEST(PlayoutEngine, OfferReportsWhatWasAheadOfThePacket) {
     EXPECT_EQ(kFrame / 2, ahead.decodedSamples);
 }
 
-// A fill decodes with the mutex released, and the packet it has popped is then in neither count.
-// An offer asking what is ahead must wait the fill out, or it reads a packet short.
-TEST(PlayoutEngine, OfferAskingWhatIsAheadWaitsOutAFillInFlight) {
+// A fill decodes with the mutex released, and the packet it has popped is then in neither the
+// queue nor the decoder. An offer landing there must still count it. The hook runs at exactly that
+// point with the mutex free, so the offer is made from it, on the fill's own thread.
+TEST(PlayoutEngine, OfferInsideAFillStillCountsThePoppedPacket) {
     auto e = newEngine();
     arm(*e, 7);
-    const std::vector<uint8_t> p = encode(1);
-    std::atomic<bool> offering{false};
-    PlayoutEngine::Ahead ahead{-1, -1};
-    std::thread reader;
+    PlayoutEngine::Ahead inside{-1, -1};
+    int popped = 0;
     e->betweenPopAndDecodeForTest = [&] {
-        if (reader.joinable()) return;
-        reader = std::thread([&] {
-            offering = true;
-            EXPECT_EQ(pl::kOfferAccepted,
-                      e->offer(7, p.data(), int(p.size()), frameFor(7)++, false, kArrival, &ahead));
-        });
-        // Room for the reader to reach the engine and, were it not to wait, to read. It cannot be
-        // seen waiting from here, so an offer that did not wait could pass this test, but one
-        // that waits cannot fail it.
-        while (!offering) std::this_thread::yield();
-        for (int i = 0; i < 20000 && ahead.queuedSamples < 0; i++) std::this_thread::yield();
+        if (popped++ == 0) ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &inside));
     };
     std::vector<int16_t> pcm(kFrame / 2);
     std::vector<int32_t> speaking(pl::kMaxSpeakers);
     int32_t live = 0;
     e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
-    reader.join();
-    EXPECT_EQ((kColdStartPackets - 1) * kFrame, ahead.queuedSamples);
-    EXPECT_EQ(kFrame / 2, ahead.decodedSamples) << "the popped packet, decoded and half played";
+    ASSERT_EQ(1, popped);
+    EXPECT_EQ((kColdStartPackets - 1) * kFrame, inside.queuedSamples);
+    EXPECT_EQ(kFrame, inside.decodedSamples) << "the popped packet, whole: none of it is mixed yet";
+
+    PlayoutEngine::Ahead after{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &after));
+    EXPECT_EQ(kColdStartPackets * kFrame, after.queuedSamples) << "the packet offered inside the fill";
+    EXPECT_EQ(kFrame / 2, after.decodedSamples) << "the fill mixed half of the popped packet";
+}
+
+// The count offer() reads is a copy of the decoder's, kept by the fill. Every way a speaker's
+// decoder is filled or emptied has to leave the two equal once the fill has returned.
+TEST(PlayoutEngine, WhatIsAheadMatchesTheDecoderAfterAHoleAndAfterTheSpeakerRetires) {
+    auto e = newEngine();
+    const std::vector<uint8_t> p = encode(1);
+    arm(*e, 7);
+    frameFor(7)++;   // one packet lost: the pop before it asks the decoder to conceal a frame
+    for (int i = 0; i < 2; i++) offer(*e, 7, p);
+    std::vector<int16_t> pcm(kFrame / 2);
+    std::vector<int32_t> speaking(pl::kMaxSpeakers);
+    int32_t live = 0;
+    // Every packet before the hole, then half of the frame concealed in its place.
+    for (int i = 0; i < 2 * kColdStartPackets + 1; i++) {
+        e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    }
+    ASSERT_EQ(kFrame, e->stats().lostSamples) << "the fill reached the hole";
+    PlayoutEngine::Ahead ahead{-1, -1};
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ(2 * kFrame, ahead.queuedSamples) << "the two packets behind the hole";
+    EXPECT_EQ(kFrame / 2, ahead.decodedSamples) << "the half of the concealed frame not yet mixed";
+
+    // Played out, retired, and back: the new slot starts with nothing ahead.
+    for (int i = 0; i < 400 && (i == 0 || live > 0); i++) {
+        e->fillQuantum(pcm.data(), kFrame / 2, speaking.data(), &live);
+    }
+    ASSERT_EQ(0, live);
+    ASSERT_EQ(pl::kOfferAccepted, offerAhead(*e, 7, &ahead));
+    EXPECT_EQ(0, ahead.queuedSamples);
+    EXPECT_EQ(0, ahead.decodedSamples);
 }

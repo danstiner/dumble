@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cstring>
 #include <ctime>
-#include <thread>
 #include "core/AudioDecoder.h"
 #include "core/Mixer.h"
 
@@ -50,14 +49,7 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
     // protobuf field, so we should respect it even if the opus data is malformed.
     if (verdict != kOfferAccepted && !terminator) return verdict;
 
-    std::unique_lock<std::mutex> guard(mutex_);
-    // Read under the mutex, so a false is safe to act on: a fill that starts after it gets no
-    // further than its first acquisition while this call holds the lock.
-    while (ahead && filling_.load(std::memory_order_acquire)) {
-        guard.unlock();
-        std::this_thread::yield();
-        guard.lock();
-    }
+    std::lock_guard<std::mutex> guard(mutex_);
     const int slot = slotFor(session);
     // Before the cap's early return: a packet refused for want of a slot still arrived, and its
     // sender is exactly the one whose estimate we want warm for when a slot frees.
@@ -75,7 +67,7 @@ int PlayoutEngine::offer(int32_t session, const uint8_t* data, int len, uint64_t
         return kOfferSpeakerCap;
     }
     PacketQueue& queue = queues_[slot];
-    if (ahead) *ahead = {queue.depthSamples(), decoders_[slot]->available()};
+    if (ahead) *ahead = {queue.depthSamples(), decodedAhead_[slot]};
     if (verdict == kOfferAccepted) {
         queue.offer(data, len, samples, terminator, frameNumber);
     } else {
@@ -136,12 +128,6 @@ int PlayoutEngine::fillQuantum(int16_t* out, int samples, int32_t* sessions,
 }
 
 int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_t* liveSpeakers) {
-    // Set before the first acquisition and cleared on every return, contended ones included.
-    struct Filling {
-        std::atomic<bool>& flag;
-        explicit Filling(std::atomic<bool>& f) : flag(f) { flag.store(true, std::memory_order_release); }
-        ~Filling() { flag.store(false, std::memory_order_release); }
-    } filling(filling_);
     const int64_t started = monotonicMicros();
     // Taken (blocking mode) or attempted (realtime mode); every acquisition below is this one.
     const auto acquire = [this] {
@@ -206,6 +192,13 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
                 const JitterEstimator* est = estimatorForSlot(live[n]);
                 len = queue.pop(packetScratch_, kMaxPacketBytes, target[n],
                                 est && !est->discontinuous(), &concealSamples);
+                // The packet leaves the queue's count and joins this one under the same lock, so an
+                // offer() reading both never finds it in neither.
+                if (concealSamples > 0) {
+                    decodedAhead_[live[n]] += concealSamples;
+                } else if (len > 0) {
+                    decodedAhead_[live[n]] += AudioDecoder::packetSamples(packetScratch_, len, sampleRate_);
+                }
             }
             // One frame per pop keeps the cursor and the fifo in step whatever the callback size;
             // how far the hole is concealed is the queue's decision (see PacketQueue::pop). Not
@@ -244,6 +237,8 @@ int PlayoutEngine::fillOnce(int16_t* out, int samples, int32_t* sessions, int32_
             PacketQueue& queue = queues_[i];
             const bool audible = produced[n] > 0;
             audible_[i] = audible;
+            // From the decoder itself once a fill, so the count cannot drift from it.
+            decodedAhead_[i] = decoders_[i]->available();
             // sessions_[i] is still the speaker the snapshot saw — see the snapshot comment.
             if (audible) sessions[producing++] = sessions_[i];
             // Judged before endFill, which closes the gate speaking() reads. One gap, one charge,
@@ -413,6 +408,7 @@ void PlayoutEngine::releaseSlot(int i) {
     outOfOrderPackets_ += queues_[i].outOfOrderPackets();
     queues_[i].reset();
     decoders_[i]->reset();
+    decodedAhead_[i] = 0;
     audible_[i] = false;
     slots_.clear(i);
 }

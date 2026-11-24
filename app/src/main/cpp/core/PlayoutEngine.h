@@ -77,8 +77,8 @@ public:
      *  network, is jitter the target must cover.
      *
      *  `ahead`, for a latency check, is filled with what the engine held for the session before
-     *  this packet, when the packet gets a slot. Asking for it makes the call wait out a fill in
-     *  flight, the one case where the reader does wait: the once-a-second stats are too coarse. */
+     *  this packet, when the packet gets a slot: the once-a-second stats are too coarse. A read
+     *  that lands inside a fill still counts the burst that fill is producing. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
               BootClock::time_point arrival, Ahead* ahead = nullptr);
 
@@ -190,8 +190,8 @@ public:
         heldForTest_ = false;
     }
     bool mutexHeldForTest() const { return heldForTest_.load(); }
-    /** Run on the fill thread between a pop and its decode, the packet then being in neither the
-     *  queue nor the decoder: the state an `ahead` read must never see. */
+    /** Run on the fill thread between a pop and its decode, with mutex_ released and the packet in
+     *  neither the queue nor the decoder: where an `ahead` read must still count it. */
     std::function<void()> betweenPopAndDecodeForTest;
 #endif
 
@@ -250,10 +250,6 @@ private:
     // could not take it — so stats() and the next fill read them atomically.
     std::atomic<uint64_t> contendedFills_{0};
     std::atomic<int32_t> lastLive_{0};
-    // True for the length of fillOnce. A fill decodes with mutex_ released, and a packet it has
-    // popped and not yet decoded is in neither the queue nor the decoder, so offer() reads `ahead`
-    // only while this is false.
-    std::atomic<bool> filling_{false};
 #ifdef DUMBLE_TESTING
     std::atomic<bool> heldForTest_{false};
 #endif
@@ -266,6 +262,12 @@ private:
     // Whether the slot produced in the last fill. Written in the commit phase and read by stats(),
     // both under mutex_. Zeroed on claim.
     bool audible_[kMaxSpeakers] = {};
+    // Samples the slot's decoder holds, decoded and not yet mixed, for offer() to read: the decoder
+    // itself belongs to the playback thread, which decodes with mutex_ released. A pop adds the
+    // packet it hands the decoder, and the commit phase sets the decoder's own count, so between
+    // the two it still holds the burst being mixed. A contended fill skips that commit and leaves
+    // it up to one burst high until the next. Zeroed on release.
+    int decodedAhead_[kMaxSpeakers] = {};
     // Samples a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only by real
     // audio, never by a fill that merely did not conceal: an expired hold would otherwise clear
     // its own counter and start concealing again on the next fill, forever. Keeps counting past
