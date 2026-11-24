@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.activity.viewModels
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
@@ -24,18 +25,43 @@ import me.danielstiner.dumble.ui.connect.ConnectScreen
 import me.danielstiner.dumble.ui.connect.ConnectUiState
 import me.danielstiner.dumble.ui.connect.ConnectViewModel
 import me.danielstiner.dumble.ui.connect.ConnectedScreen
+import me.danielstiner.dumble.ui.latency.LatencyCheckScreen
+import me.danielstiner.dumble.ui.latency.LatencyCheckState
+import me.danielstiner.dumble.ui.latency.LatencyCheckViewModel
 import me.danielstiner.dumble.ui.theme.DumbleTheme
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private val latencyCheck: LatencyCheckViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Only a fresh launch through the alias: a rotation or process restore has a saved state.
+        // A constant, not "$packageName.LatencyCheck": an applicationIdSuffix changes the package
+        // but not the alias's class name.
+        if (savedInstanceState == null && intent.component?.className == LATENCY_CHECK_ALIAS) {
+            latencyCheck.start(
+                intent.getStringExtra("host"),
+                // Either an int or a string extra: `--ei` and `--es` are both easy to type.
+                intent.getStringExtra("port") ?: intent.getIntExtra("port", -1).takeIf { it != -1 }?.toString(),
+                intent.getStringExtra("fingerprint"),
+            )
+        }
         setContent {
             DumbleTheme {
-                DumbleAppContent()
+                val check by latencyCheck.state.collectAsStateWithLifecycle()
+                if (check != LatencyCheckState.Idle) {
+                    LatencyCheckScreen(check, onBack = latencyCheck::dismiss, modifier = Modifier.fillMaxSize())
+                } else {
+                    DumbleAppContent()
+                }
             }
         }
+    }
+
+    private companion object {
+        const val LATENCY_CHECK_ALIAS = "me.danielstiner.dumble.LatencyCheck"
     }
 }
 
