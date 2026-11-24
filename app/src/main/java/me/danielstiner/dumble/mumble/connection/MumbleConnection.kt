@@ -1053,8 +1053,13 @@ class MumbleConnection internal constructor(
 
     override fun cancelTrust() = disconnect()
 
-    override fun disconnect() {
+    override fun disconnect() = end(only = null)
+
+    /** Ends the current session; with [only], unless a different session or a trust prompt holds
+     *  the connection. */
+    private fun end(only: Session?) {
         val prior = synchronized(lock) {
+            if (only != null && current !== only && (current != null || trustPrompt != null)) return
             retireAndClearLocked(ConnectionStatus.Idle)?.also { call.end() }
         }
         prior?.let { teardown(it) }
@@ -1112,6 +1117,8 @@ class MumbleConnection internal constructor(
             gate = open
             this@MumbleConnection.apply(session)
         }
+
+        override fun end() = end(only = session)
     }
 
     /**

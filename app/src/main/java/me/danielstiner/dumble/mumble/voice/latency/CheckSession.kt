@@ -48,4 +48,8 @@ interface CheckSession {
     fun inject(frameNumber: Long, opusData: ByteArray, terminator: Boolean): Boolean
 
     fun setGateOpen(open: Boolean)
+
+    /** Ends the session and leaves the connection idle. Does nothing once another session or a
+     *  trust prompt has taken its place: that one is the user's. */
+    fun end()
 }
