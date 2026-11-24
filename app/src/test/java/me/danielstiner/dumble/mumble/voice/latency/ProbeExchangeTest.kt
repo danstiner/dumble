@@ -20,6 +20,7 @@ import org.junit.Test
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.ZERO
+import kotlin.time.Duration.Companion.microseconds
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -61,8 +62,7 @@ class ProbeExchangeTest {
             rig.exchange.onCaptured(packet)
             advance(3.seconds)
 
-            assertEquals("$echo", rig.probe.located, outcome.getCompleted().getOrThrow())
-            assertEquals("$echo", listOf(packet), rig.exchange.captured)
+            assertTrue("$echo", outcome.getCompleted().isSuccess)
             assertEquals("$echo", listOf(true to 2.seconds, false to closes), rig.gate())
             assertEquals("$echo", List(50) { false } + List(33) { true }, rig.session.injects.map { it.gateOpen })
             assertEquals("$echo", listOf(listOf(packet) to CODEC_DELAY), rig.probe.searches)
@@ -126,6 +126,42 @@ class ProbeExchangeTest {
         assertEquals(false to 4640.milliseconds, late.gate().last())
     }
 
+    @Test fun theOnsetIsItsPacketsTimePlusItsPlaceInThePacket() = runTest {
+        // The onset's real time is fixed. Moving the packet grid 600 samples earlier puts it 600
+        // samples into its packet, in the packet's second frame, and the packet leaves that much
+        // earlier.
+        for (phase in listOf(0, 600)) {
+            val packets = (0..4).map { j -> 100L + 2 * j to 100.milliseconds + (960L * (j + 1) - phase).seconds / 48000 }
+            val heard = heard(Located(960L * 3 + phase, 0.9, 0.2, found = true), packets)
+            assertEquals("$phase", Triple(180.milliseconds, 0.9, 0.2), heard)
+        }
+    }
+
+    @Test fun theOnsetsPacketIsChosenByFrameNumberAcrossAGap() = runTest {
+        // Capture skipped frame 104: the onset's frame 106 is the third packet, and the fourth,
+        // where its offset would count to, holds frame 108. Handed over out of order.
+        val gapped = listOf(106L to 200.milliseconds, 100L to 100.milliseconds, 108L to 300.milliseconds, 102L to 120.milliseconds)
+        assertEquals(202500.microseconds, heard(Located(3000, 0.9, 0.2, found = true), gapped)?.first)
+    }
+
+    @Test fun aMatchThatDoesNotCountHasNoTime() = runTest {
+        val packets = listOf(100L to 100.milliseconds)
+        assertEquals(Triple(null, 0.3, 0.29), heard(Located(0, 0.3, 0.29, found = false), packets))
+        assertEquals("before capture's first sample", Triple(null, 0.9, 0.2), heard(Located(-1, 0.9, 0.2, found = true), packets))
+        assertNull("capture produced nothing", heard(Located(0, 0.9, 0.2, found = true), emptyList()))
+    }
+
+    /** What an exchange hears when capture produced [packets], each a frame number and its time
+     *  since the origin, and the codec answers [located]: t2 since the origin, and the two peaks. */
+    private fun TestScope.heard(located: Located, packets: List<Pair<Long, Duration>>): Triple<Duration?, Double, Double>? {
+        val rig = Rig(this)
+        rig.probe.located = located
+        for ((frame, at) in packets) rig.exchange.onCaptured(CapturedPacket(frame, ByteArray(0), rig.origin + at))
+        val outcome = rig.start()
+        advance(5.seconds)
+        return outcome.getCompleted().getOrThrow()?.let { Triple(it.at?.minus(rig.origin), it.peak, it.nextPeak) }
+    }
+
     @Test fun aPacketTheConnectionDoesNotTakeEndsTheExchange() = runTest {
         val rig = Rig(this)
         rig.session.takes = false
@@ -165,7 +201,7 @@ class ProbeExchangeTest {
         /** Each gate change, at its time since [origin]. */
         fun gate() = session.gateChanges.map { (open, at) -> open to at - origin }
 
-        fun start(): Deferred<Result<Located?>> =
+        fun start(): Deferred<Result<Heard?>> =
             scope.async { runCatching { exchange.run(session, SESSION) { onsets += clock.markNow() - origin } } }
                 .also { scope.runCurrent() }
     }
@@ -242,7 +278,7 @@ class FakeProbeCodec : ProbeCodec {
     var codecDelay = 312
     var warmPackets = 50
     var spurtPackets = 33
-    val located = Located(48_000, 9000.0, 300.0, found = true)
+    var located = Located(48_000, 9000.0, 300.0, found = true)
     val encodes = mutableListOf<Encode>()
     val searches = mutableListOf<Pair<List<CapturedPacket>, Int>>()
     var onLocate: () -> Unit = {}
@@ -255,9 +291,9 @@ class FakeProbeCodec : ProbeCodec {
 
     override fun codecDelaySamples(bitrate: Int) = codecDelay
 
-    override fun locate(packets: List<CapturedPacket>, codecDelaySamples: Int): Located {
+    override fun locate(packets: List<CapturedPacket>, codecDelaySamples: Int): Located? {
         searches += packets to codecDelaySamples
         onLocate()
-        return located
+        return located.takeIf { packets.isNotEmpty() }
     }
 }
