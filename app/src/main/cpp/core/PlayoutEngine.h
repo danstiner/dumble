@@ -59,8 +59,8 @@ class PlayoutEngine {
 public:
     /** What offer() tells a latency check. `aheadSamples` is the wait ahead of the packet: its
      *  sender's samples still queued, plus those decoded and not yet mixed. The other two are the
-     *  depth a spurt's gate waits for, in its parts: the estimator's target, and the write-ahead
-     *  every target is raised by. A wait well past their sum is a burst that arrived at once. */
+     *  depth a closed gate waits for, in its parts: the estimator's target, this packet's arrival
+     *  already counted, and the write-ahead every target is raised by. */
     struct Offered {
         int32_t aheadSamples;
         int32_t targetSamples;
@@ -82,8 +82,8 @@ public:
      *  here. `arrival` is when the packet became ready to queue: delay before that, local or
      *  network, is jitter the target must cover.
      *
-     *  `offered`, for a latency check, is filled when the packet gets a slot, with what held
-     *  before it: the once-a-second stats are too coarse for that. */
+     *  `offered`, for a latency check, is filled when the packet gets a slot: the once-a-second
+     *  stats are too coarse for that. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
               BootClock::time_point arrival, Offered* offered = nullptr);
 
