@@ -52,9 +52,8 @@ class VoiceReceiver(
 ) {
     /** What [PlayoutEngine.offer] answers. [code] is one of [NativePlayout]'s `OFFER_*` codes.
      *  [aheadSamples] is what the engine held for the sender before an accepted packet, queued or
-     *  decoded and not yet played: the wait ahead of it. A closed gate waits for [targetSamples]
-     *  plus [writeAheadSamples]. None of the three means anything for a refused packet. */
-    class Offered(val code: Int, val aheadSamples: Int, val targetSamples: Int, val writeAheadSamples: Int)
+     *  decoded and not yet played: the wait ahead of it. It means nothing for a refused packet. */
+    class Offered(val code: Int, val aheadSamples: Int)
 
     /** Seam so JVM tests can drive the receiver without loading native code. */
     interface PlayoutEngine {
