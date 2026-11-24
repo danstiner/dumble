@@ -28,3 +28,6 @@ private const val FRAMING_BYTES_PER_PACKET = 37
  *  no other way. */
 const val ACCOUNTED_BITRATE =
     TRANSMIT_BITRATE + FRAMING_BYTES_PER_PACKET * PACKETS_PER_SECOND * 8
+
+/** Mumble's frame-number unit, 10 ms at 48 kHz: the protocol's tick, not the playback frame. */
+const val FRAME_NUMBER_SAMPLES = 480
