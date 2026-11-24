@@ -12,7 +12,7 @@ data class CryptStats(
     val resync: Int,
     /**
      * Datagrams [CryptState.decrypt] refused, for any reason the wire could cause: a runt, a tag
-     * that did not match, a counter already accepted, or a packet that beat the key exchange.
+     * that did not match, a counter already consumed, or a packet that beat the key exchange.
      * Local only; the wire has no field for it.
      */
     val rejected: Int,
