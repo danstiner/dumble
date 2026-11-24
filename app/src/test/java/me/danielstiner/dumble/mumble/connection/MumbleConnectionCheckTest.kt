@@ -14,11 +14,13 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
 import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CheckEffects
 import me.danielstiner.dumble.mumble.voice.latency.CheckSession
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -30,15 +32,24 @@ class MumbleConnectionCheckTest {
 
     @get:Rule val timeout = hangGuard()
 
-    /** A connection on the rig, with every capture engine and pump it made, and what a check on
-     *  it was handed; [wrapCapture] wraps each fake capture engine it opens. */
+    private class FakeEffects : CheckEffects {
+        var restores = 0; private set
+        override val names = emptyList<String>()
+        override fun allOff() = true
+        override fun restore(): Boolean { restores++; return true }
+    }
+
+    /** A connection on the rig, with every capture engine, pump and set of effects it made, and
+     *  what a check on it was handed; [wrapCapture] wraps each fake capture engine it opens. */
     private class Live(
         rig: Rig,
         wrapCapture: (FakeCaptureHandle) -> VoiceSender.CaptureHandle = { it },
+        throwingEffects: Boolean = false,
     ) {
         val transports = mutableListOf<FakeControlTransport>()
         val handles = mutableListOf<FakeCaptureHandle>()
         val senders = mutableListOf<VoiceSender>()
+        val effects = mutableListOf<FakeEffects>()
         val captured = mutableListOf<CapturedPacket>()
         val arrived = mutableListOf<ArrivedPacket>()
         val playout = FakePlayoutEngine()
@@ -49,6 +60,10 @@ class MumbleConnectionCheckTest {
             newPlayout = { playout }, call = call,
             startPump = { senders += it; rig.startPump(it) },
             captureClock = rig.clock, udpClock = rig.clock,
+            captureEffects = {
+                if (throwingEffects) throw IllegalStateException("no effects here")
+                FakeEffects().also { effects += it }
+            },
             context = rig.dispatcher, blocking = rig.dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
 
@@ -118,16 +133,19 @@ class MumbleConnectionCheckTest {
         val live = Live(this)
         val check = checking(live)
         assertFalse(check.captureOpen.value)
+        assertNull("nothing to turn off without a stream", check.effects)
         live.conn.requestCapture()
         assertSettled("capture opens") { check.captureOpen.value }
 
         live.call.hold()
         assertSettled("a call hold releases capture") { live.handles[0].destroyed }
         assertFalse(check.captureOpen.value)
+        assertEquals("the closed stream's effects are put back", 1, live.effects[0].restores)
 
         live.call.resume()
         assertSettled("capture reopens") { live.handles.size == 2 }
         assertTrue(check.captureOpen.value)
+        assertSame("the new stream's effects go off too", live.effects[1], check.effects)
 
         live.handles[1].script(frame(7))
         settle()
@@ -224,6 +242,7 @@ class MumbleConnectionCheckTest {
         settle()
 
         assertFalse(check.captureOpen.value)
+        assertEquals(1, live.effects.single().restores)
     }
 
     /** No release runs for a pump that ends on its own, yet its stream is closed all the same. */
@@ -235,6 +254,7 @@ class MumbleConnectionCheckTest {
         assertSettled("the engine is freed") { live.handles[0].destroyed }
 
         assertFalse(check.captureOpen.value)
+        assertEquals(1, live.effects.single().restores)
     }
 
     /** The stream closes when its release does, whether or not the pump ever reports its exit. */
@@ -246,6 +266,18 @@ class MumbleConnectionCheckTest {
         settle()
 
         assertFalse(check.captureOpen.value)
+        assertEquals(1, live.effects.single().restores)
+    }
+
+    /** The platform's effects are best effort: a throw there must not leave a capture with no
+     *  pump, nor pass for effects turned off. */
+    @Test fun aThrowingEffectsCallStillStartsThePump() = deterministic {
+        val live = Live(this, throwingEffects = true)
+        val check = capturing(live)
+
+        assertTrue(check.captureOpen.value)
+        assertEquals("the pump started", 1, live.senders.size)
+        assertNull(check.effects)
     }
 
     /** What a check adds is on its session alone. */
@@ -262,6 +294,7 @@ class MumbleConnectionCheckTest {
         assertEquals(VoiceSender.NORMAL_TALKING_TARGET, parse(live.voice().single()).target)
         assertEquals("the packet played", 1, live.playout.offered.size)
         assertTrue("and was reported to no check", live.arrived.isEmpty())
+        assertTrue(live.effects.isEmpty())
     }
 
     private companion object {

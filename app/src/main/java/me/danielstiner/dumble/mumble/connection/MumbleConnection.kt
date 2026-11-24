@@ -55,6 +55,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.CaptureSessionId
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
@@ -63,7 +64,9 @@ import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CaptureEffects
 import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CheckEffects
 import me.danielstiner.dumble.mumble.voice.latency.CheckHost
 import me.danielstiner.dumble.mumble.voice.latency.CheckSession
 import me.danielstiner.dumble.mumble.voice.latency.RecordingPlayout
@@ -127,6 +130,9 @@ class MumbleConnection internal constructor(
     // against a fake instead of a socket and its reader thread.
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
         { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
+    // Seam: what a latency check turns off on an open capture stream; the platform's effects on a
+    // device.
+    private val captureEffects: () -> CheckEffects = { NoCheckEffects },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
 ) : Connection, CheckHost {
     @Inject constructor(
@@ -138,6 +144,7 @@ class MumbleConnection internal constructor(
         { openNativePlayout() },
         AndroidVoiceCall(context),
         networkWatch = AndroidNetworkWatch(context),
+        captureEffects = { CaptureEffects.disable(CaptureSessionId.get(context)) },
         newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
     )
 
@@ -475,15 +482,25 @@ class MumbleConnection internal constructor(
         val capture = CaptureSession(handle, sender)
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
         session.capture = capture
-        check?.captureOpen?.value = true
+        if (check != null) {
+            // Contained: a throw here would leave capture published with no pump to close its
+            // stream. Null then, which a check reads as the effects still on.
+            check.effects = runCatching { captureEffects() }
+                .onFailure { Log.e(TAG, "capture effects could not be turned off", it) }
+                .getOrNull()
+            check.captureOpen.value = true
+        }
         // Before the pump starts, so its first poll already reads the mode and the gate.
         capture.apply(session)
         startPump(sender)
     }
 
-    /** [check]'s capture stream is closed, or past using. Lifecycle consumer only. */
+    /** [check]'s capture stream is closed, or past using: its effects go back. Lifecycle consumer
+     *  only, so a release and a pump's own exit cannot both restore. */
     private fun captureClosed(check: Check) {
         check.captureOpen.value = false
+        check.effects?.restore()
+        check.effects = null
     }
 
     /** Whichever transport the session's link has voice on; dropped while it has none. A datagram
@@ -1081,6 +1098,8 @@ class MumbleConnection internal constructor(
         /** Set by [connect] before the session is published. */
         lateinit var session: Session
         @Volatile var gate = false
+        /** Lifecycle consumer writes it. */
+        @Volatile override var effects: CheckEffects? = null
         override val clock get() = captureClock
         override val captureOpen = MutableStateFlow(false)
         override val ended = MutableStateFlow(false)
@@ -1252,5 +1271,11 @@ class MumbleConnection internal constructor(
         val TUNNEL_PING: ByteArray =
             byteArrayOf(1) + MumbleUdpProtos.Ping.newBuilder().setTimestamp(1).build().toByteArray()
     }
+}
+
+private object NoCheckEffects : CheckEffects {
+    override val names = emptyList<String>()
+    override fun allOff() = true
+    override fun restore() = true
 }
 
