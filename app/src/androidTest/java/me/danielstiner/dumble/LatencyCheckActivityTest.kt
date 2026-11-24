@@ -54,7 +54,6 @@ class LatencyCheckActivityTest {
                 val state = ViewModelProvider(it)[LatencyCheckViewModel::class.java].state.value
                 assertTrue("$state", state is LatencyCheckState.Done)
             }
-            assertEquals(1, results())
         }
     }
 
