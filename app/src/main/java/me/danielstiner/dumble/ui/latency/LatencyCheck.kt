@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.voice.AudioRoute
@@ -41,7 +42,9 @@ class LatencyCheck(
     private val callVolume: () -> CallVolume?,
 ) {
     /** Runs on the caller's context, which must not be the main thread ([ProbeExchange.run]);
-     *  [progress] names each step for the page. */
+     *  [progress] names each step for the page. The server must present the certificate with
+     *  [fingerprint]: the lowercase hex SHA-256 of its leaf in DER, compared exactly, so not as
+     *  `openssl x509 -fingerprint -sha256` prints it, uppercase with colons. */
     suspend fun run(endpoint: MumbleEndpoint, fingerprint: String, progress: (String) -> Unit = {}): CheckOutcome {
         val exchange = ProbeExchange(probe)
         // Read as t0 is marked: an abort clears the route and the effects before a partial is built.
@@ -49,7 +52,10 @@ class LatencyCheck(
         var routeAtOnset: AudioRoute? = null
         var effectsAtOnset: CheckEffects? = null
         var volume: CallVolume? = null
-        val check = host.connectForCheck(endpoint, USERNAME, fingerprint, exchange::onCaptured, exchange::onArrived)
+        // The session's pin store for this one check, holding the one certificate it was given.
+        // Trust is then decided as for any connect, and the user's pins never learn this server.
+        val pins = InMemoryPinStore().apply { put(endpoint.address, fingerprint) }
+        val check = host.connectForCheck(endpoint, USERNAME, pins, exchange::onCaptured, exchange::onArrived)
             ?: return CheckOutcome.Refused("Dumble is connected to a server; disconnect first")
 
         fun measurements(sent: ComparableTimeMark, heard: Heard?): Measurements {
@@ -74,6 +80,8 @@ class LatencyCheck(
                 null -> throw CheckFailure("could not connect within $CONNECT_TIMEOUT")
                 is ConnectionStatus.Error ->
                     throw CheckFailure("could not connect: ${answer.kind}" + answer.detail?.let { " ($it)" }.orEmpty())
+                is ConnectionStatus.PinMismatch ->
+                    throw CheckFailure("the server's certificate ${answer.presented} is not the one given")
                 else -> throw CheckFailure("the connection ended before it was up")
             }
             val session = connected.sessionId
