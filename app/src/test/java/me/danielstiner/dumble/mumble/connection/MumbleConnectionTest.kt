@@ -47,6 +47,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -1847,6 +1848,48 @@ class MumbleConnectionTest {
 
         conn.disconnect()
         assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
+    }
+
+    /** A connect given a pin store reads its server's pin there, whatever the app's store says
+     *  about the address. */
+    @Test fun aConnectGivenAPinStoreReadsItsPinThere() = deterministic {
+        val endpoint = MumbleEndpoint.parse("localhost")
+        val appPins = InMemoryPinStore().apply { put(endpoint.address, "stale") }
+        val given = InMemoryPinStore().apply { put(endpoint.address, "ab12") }
+        val expected = CopyOnWriteArrayList<String?>()
+        val conn = own(MumbleConnection(
+            appPins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin -> expected += pin; FakeControlTransport { _, _ -> } })
+
+        conn.connect(endpoint, "latency-check", null, given)
+        handshaking(conn)
+
+        assertEquals(listOf<String?>("ab12"), expected)
+        assertEquals("stale", appPins.get(endpoint.address))
+    }
+
+    /** A trust prompt on such a session is answered into the store it was given, and the
+     *  reconnect reads it back from there: the app's store never learns the certificate. */
+    @Test fun trustingAPromptWritesToTheStoreTheSessionWasGiven() = deterministic {
+        val endpoint = MumbleEndpoint.parse("localhost")
+        val appPins = InMemoryPinStore()
+        val given = InMemoryPinStore()
+        val expected = CopyOnWriteArrayList<String?>()
+        val conn = own(MumbleConnection(
+            appPins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin ->
+            expected += pin
+            FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("cd34") }
+        })
+
+        conn.connect(endpoint, "latency-check", null, given)
+        assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
+        conn.trustAndConnect()
+        handshaking(conn)
+
+        assertEquals(listOf(null, "cd34"), expected)
+        assertEquals("cd34", given.get(endpoint.address))
+        assertNull(appPins.get(endpoint.address))
     }
 
     // ---- Real threads, by design. These run on runBlocking and the default dispatchers with

@@ -207,7 +207,7 @@ class MumbleConnection internal constructor(
      * session, not the connection, because a release must find the session that opened the
      * microphone rather than whichever session replaced it.
      *
-     * The first six fields are immutable identity. The mutable ones are either `@Volatile`
+     * The first seven fields are immutable identity. The mutable ones are either `@Volatile`
      * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
      */
     private class Session(
@@ -215,6 +215,9 @@ class MumbleConnection internal constructor(
         val endpoint: MumbleEndpoint,
         val username: String,
         val password: String?,
+        /** Where the server's pin is read and a trust prompt's answer is written: the app's
+         *  store, or the one a connect was given. */
+        val pins: PinStore,
         /** Built once per session and fed packets by its link; never owns a transport. */
         val receiver: VoiceReceiver,
         /** The driver and the receiver's collectors. Cancelled by [teardown], last. */
@@ -616,7 +619,14 @@ class MumbleConnection internal constructor(
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
-        connect(endpoint, username, password, answering = null)
+        connect(endpoint, username, password, pinStore, answering = null)
+
+    /** As [connect], with [pins] as the session's pin store in place of the app's. Trust is
+     *  decided the same way; only where the pin is read and written differs. The latency check's,
+     *  for a throwaway server whose certificate must never reach the user's pins, so it is not on
+     *  [Connection]. */
+    internal fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore) =
+        connect(endpoint, username, password, pins, answering = null)
 
     /**
      * Retire, call start and publish are one critical section: connects run on two threads (the
@@ -626,7 +636,7 @@ class MumbleConnection internal constructor(
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
      * dismissed it, and then this does nothing.
      */
-    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, answering: Session?) {
+    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore, answering: Session?) {
         val prior: Session?
         val session: Session
         synchronized(lock) {
@@ -637,7 +647,7 @@ class MumbleConnection internal constructor(
             // only a session whose link comes up ever reaches — building eagerly would leak one per
             // session that fails or is superseded before that.
             session = Session(
-                gen, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+                gen, endpoint, username, password, pins, VoiceReceiver(newPlayout, context = scope.coroutineContext),
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
             current = session
@@ -672,7 +682,7 @@ class MumbleConnection internal constructor(
      */
     private suspend fun drive(session: Session) {
         val gen = session.gen
-        val pin = pinStore.get(session.endpoint.address)
+        val pin = session.pins.get(session.endpoint.address)
         Log.i(TAG, "connect gen=$gen endpoint=${session.endpoint.address} user=${session.username} storedPin=${pin != null}")
         // The loop below runs for minutes beside a live platform call: an escape would leave
         // the call up with nothing driving it.
@@ -985,8 +995,8 @@ class MumbleConnection internal constructor(
         val session = synchronized(lock) { trustPrompt } ?: return
         val presented = session.presented ?: return
         scope.launch {
-            pinStore.put(session.endpoint.address, presented)
-            connect(session.endpoint, session.username, session.password, answering = session)
+            session.pins.put(session.endpoint.address, presented)
+            connect(session.endpoint, session.username, session.password, session.pins, answering = session)
         }
     }
 
