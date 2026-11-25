@@ -33,7 +33,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoute
@@ -2147,7 +2147,7 @@ class AppStateImplTest {
         udps.single().listener.onPingReply(20.milliseconds)
         fake.listener!!.onFrame(serverSync(1))   // the ping loop starts with the session
 
-        elapse(SessionStateMachine.PING_INTERVAL_MS.milliseconds)
+        elapse(ConnectionStateMachine.PING_INTERVAL_MS.milliseconds)
 
         val ping = fake.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
         assertEquals("the accepted reply, counted", 1, ping.udpPackets)

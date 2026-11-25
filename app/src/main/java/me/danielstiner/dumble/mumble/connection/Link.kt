@@ -6,7 +6,7 @@ import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.UdpTransport
 import me.danielstiner.dumble.mumble.net.VoicePath
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class Link(
     val transport: MumbleControlTransport,
-    val stateMachine: SessionStateMachine,
+    val stateMachine: ConnectionStateMachine,
     /** Opened once the control connection is up, closed with the link; inert in between if it
      *  could not be opened, and voice stays tunneled. */
     val udp: UdpTransport,

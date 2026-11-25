@@ -33,7 +33,7 @@ import java.time.Instant
 import kotlin.concurrent.thread
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class SessionStateMachineTest {
+class ConnectionStateMachineTest {
 
     @get:Rule val timeout = hangGuard()
 
@@ -62,8 +62,8 @@ class SessionStateMachineTest {
         return frame(TcpMessageType.Ping, MumbleProtos.Ping.newBuilder().setTimestamp(ping.timestamp).build())
     }
 
-    private fun synchronizedSm(ch: FakeChannel, scope: CoroutineScope): SessionStateMachine {
-        val sm = SessionStateMachine(ch, "tester", null, scope).apply { start() }
+    private fun synchronizedSm(ch: FakeChannel, scope: CoroutineScope): ConnectionStateMachine {
+        val sm = ConnectionStateMachine(ch, "tester", null, scope).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
         return sm
     }
@@ -71,7 +71,7 @@ class SessionStateMachineTest {
     @Test
     fun sendsVersionThenAuthenticateOnStart() = runTest {
         val ch = FakeChannel()
-        SessionStateMachine(ch, "tester", null, backgroundScope).start()
+        ConnectionStateMachine(ch, "tester", null, backgroundScope).start()
 
         assertEquals(listOf(TcpMessageType.Version, TcpMessageType.Authenticate), ch.sent.map { it.first })
     }
@@ -82,7 +82,7 @@ class SessionStateMachineTest {
     @Test
     fun startDoesNotResurrectASessionThatAlreadyFailed() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope)
 
         sm.onClosed(java.io.IOException("connection reset"))
         sm.start()
@@ -110,7 +110,7 @@ class SessionStateMachineTest {
     @Test
     fun aVersionThatNeverLeavesFailsImmediately() = runTest {
         val ch = FailingChannel(TcpMessageType.Version)
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         val state = sm.state.value as ConnectionState.Failed
         assertEquals(FailReason.IO, state.reason)
@@ -121,7 +121,7 @@ class SessionStateMachineTest {
     @Test
     fun anAuthenticateThatNeverLeavesFailsImmediately() = runTest {
         val ch = FailingChannel(TcpMessageType.Authenticate)
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         val state = sm.state.value as ConnectionState.Failed
         assertEquals(FailReason.IO, state.reason)
@@ -151,15 +151,15 @@ class SessionStateMachineTest {
     // runCurrent so the ping coroutine's body actually starts here. It marks the anchor the
     // silence is measured from, and scope.launch only queues it -- without this the anchor is taken
     // one advance late and every silence reads an interval short.
-    private fun TestScope.pingSm(ch: ControlChannel, bootClock: TestTimeSource): SessionStateMachine {
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock).apply { start() }
+    private fun TestScope.pingSm(ch: ControlChannel, bootClock: TestTimeSource): ConnectionStateMachine {
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
         runCurrent()
         return sm
     }
 
     /** What the UI computes: elapsedNow() on the published mark, which needs no clock of its own. */
-    private fun pingAge(sm: SessionStateMachine): Duration =
+    private fun pingAge(sm: ConnectionStateMachine): Duration =
         sm.lastServerReplyAt.value?.elapsedNow() ?: Duration.ZERO
 
     // A link replying every interval never reads degraded. Silence oscillates between zero and one
@@ -172,7 +172,7 @@ class SessionStateMachineTest {
         val sm = pingSm(ch, bootClock)
 
         repeat(6) {
-            advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+            advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
             sm.onFrame(replyToLastPing(ch))
             assertEquals(Duration.ZERO, pingAge(sm))
         }
@@ -184,17 +184,17 @@ class SessionStateMachineTest {
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
 
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         val first = pingAge(sm)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         val second = pingAge(sm)
 
         assertTrue("age must grow while nothing replies, was $first then $second", second > first)
         assertTrue("two intervals of age must not yet read degraded",
-            second < SessionStateMachine.DEGRADED_PING_AGE)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+            second < ConnectionStateMachine.DEGRADED_PING_AGE)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         assertTrue("three intervals of age must read degraded",
-            pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+            pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
     }
 
     /** Three missed replies end the link as a timeout with its sync kept, so the driver replaces
@@ -205,9 +205,9 @@ class SessionStateMachineTest {
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
 
-        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        repeat(2) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
         assertEquals("two missed replies do not end the link", ConnectionState.Synchronized(1), sm.state.value)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
 
         val failed = sm.state.value as ConnectionState.Failed
         assertEquals(FailReason.TIMEOUT, failed.reason)
@@ -223,9 +223,9 @@ class SessionStateMachineTest {
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
 
-        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        repeat(2) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
         sm.onFrame(replyToLastPing(ch))
-        repeat(2) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
+        repeat(2) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
 
         assertEquals(ConnectionState.Synchronized(1), sm.state.value)
     }
@@ -235,8 +235,8 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
-        repeat(4) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
-        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+        repeat(4) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
 
         sm.onFrame(replyToLastPing(ch))
 
@@ -256,14 +256,14 @@ class SessionStateMachineTest {
             val pings = mutableListOf<TcpFrame>()
 
             repeat(8) {
-                advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+                advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
                 pings += replyToLastPing(ch)
                 pings.getOrNull(pings.size - 1 - lagIntervals)?.let { r -> sm.onFrame(r) }
                 if (it >= lagIntervals) {
                     assertTrue(
                         "lag $lagIntervals: a link replying to every ping must not read degraded, " +
                             "was ${pingAge(sm)}",
-                        pingAge(sm) < SessionStateMachine.DEGRADED_PING_AGE,
+                        pingAge(sm) < ConnectionStateMachine.DEGRADED_PING_AGE,
                     )
                 }
             }
@@ -280,17 +280,17 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         val stale = replyToLastPing(ch)
-        repeat(3) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
-        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+        repeat(3) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
 
         sm.onFrame(stale)
         assertEquals(Duration.ZERO, pingAge(sm))
 
         // And silence resuming climbs again from there, so a dying link is still reported.
-        repeat(3) { advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1) }
-        assertTrue(pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE)
+        repeat(3) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
+        assertTrue(pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
     }
 
     // The blind spot a count of unanswered pings could not see. delay() schedules on
@@ -304,7 +304,7 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         sm.onFrame(replyToLastPing(ch))
         assertEquals(Duration.ZERO, pingAge(sm))
 
@@ -313,7 +313,7 @@ class SessionStateMachineTest {
 
         assertTrue(
             "a doze past the server's reap must read as silence, was ${pingAge(sm)}",
-            pingAge(sm) >= SessionStateMachine.DEGRADED_PING_AGE,
+            pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE,
         )
     }
 
@@ -325,23 +325,23 @@ class SessionStateMachineTest {
     fun aPingThatCannotBeQueuedStillAgesButIsNotItselfFatal() = runTest {
         val ch = FailingChannel(TcpMessageType.Ping)
         val bootClock = TestTimeSource()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock)
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, bootClock = bootClock)
             .apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(9).build()))
         runCurrent()
 
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS * 2 + 100)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS * 2 + 100)
         assertTrue(pingAge(sm) > Duration.ZERO)
         assertEquals("two refused pings end nothing", ConnectionState.Synchronized(9), sm.state.value)
 
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         assertEquals("the missing replies do", FailReason.TIMEOUT, (sm.state.value as ConnectionState.Failed).reason)
     }
 
     @Test
     fun startIsIdempotent() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.start()
 
@@ -354,7 +354,7 @@ class SessionStateMachineTest {
     @Test
     fun serverSyncReachesSynchronized() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(42).build()))
 
@@ -370,7 +370,7 @@ class SessionStateMachineTest {
     @Test
     fun theSyncStampOutlivesAFailureThatFollowsAtOnce() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(42).build()))
         sm.onClosed(java.io.IOException("server went away"))
@@ -385,7 +385,7 @@ class SessionStateMachineTest {
     @Test
     fun aClosedConnectionEndsAnEstablishedSession() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(42).build()))
         assertEquals(ConnectionState.Synchronized(42), sm.state.value)
 
@@ -401,7 +401,7 @@ class SessionStateMachineTest {
     @Test
     fun aCloseDoesNotOverwriteAnEarlierFailureReason() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder().setReason("banned").build()))
         assertEquals(FailReason.AUTH_REJECT, (sm.state.value as ConnectionState.Failed).reason)
 
@@ -415,7 +415,7 @@ class SessionStateMachineTest {
     @Test
     fun rejectBecomesAuthRejectWithReason() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder().setReason("bad password").build()))
 
@@ -429,7 +429,7 @@ class SessionStateMachineTest {
     @Test
     fun aRejectCarriesItsTypeIntoFailed() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder()
             .setType(MumbleProtos.Reject.RejectType.WrongServerPW)
@@ -477,7 +477,7 @@ class SessionStateMachineTest {
     fun theKeyExchangeKeysTheCipherAndPingsUdp() = runTest {
         val ch = FakeChannel()
         var pings = 0
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply {
             udpPing = { pings++ }
             start()
         }
@@ -498,7 +498,7 @@ class SessionStateMachineTest {
     fun aMalformedKeyExchangeIsIgnoredAndTheSessionLives() = runTest {
         val ch = FakeChannel()
         var pings = 0
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply {
             udpPing = { pings++ }
             start()
         }
@@ -515,7 +515,7 @@ class SessionStateMachineTest {
     fun aServerNonceAloneMovesOnlyOurDecryptCounter() = runTest {
         val ch = FakeChannel()
         var pings = 0
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply {
             udpPing = { pings++ }
             start()
         }
@@ -534,7 +534,7 @@ class SessionStateMachineTest {
     @Test
     fun aShortServerNonceIsIgnored() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(keyExchange())
 
         sm.onFrame(serverNonceOnly(ByteArray(8) { 9 }))
@@ -546,7 +546,7 @@ class SessionStateMachineTest {
     @Test
     fun anEmptyCryptSetupRepliesWithOurSendCounter() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(keyExchange())
         // Two packets sealed, so the counter has moved off its seed and the reply must say so.
         val scratch = ByteArray(32)
@@ -563,7 +563,7 @@ class SessionStateMachineTest {
     @Test
     fun requestCryptResyncSendsAnEmptyCryptSetup() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.requestCryptResync()
 
@@ -575,7 +575,7 @@ class SessionStateMachineTest {
     @Test
     fun thePingCarriesTheCryptCounters() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(keyExchange())
         // Three datagrams from the server, the middle one lost: good 2, lost 1.
         val server = CryptState().apply { setKeys(cryptKey, serverNonce, clientNonce) }
@@ -586,7 +586,7 @@ class SessionStateMachineTest {
         }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
 
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 100)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS + 100)
 
         val ping = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
         assertEquals(2, ping.good)
@@ -601,7 +601,7 @@ class SessionStateMachineTest {
     fun udpPingFiresAtKeyingThenEachTick() = runTest {
         val ch = FakeChannel()
         var pings = 0
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply {
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply {
             udpPing = { pings++ }
             start()
         }
@@ -612,16 +612,16 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
         assertEquals("not at ServerSync: the keying ping's reply has had no time to arrive", 1, pings)
 
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS + 1)
         assertEquals("once per tick", 2, pings)
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS + 1)
         assertEquals(3, pings)
     }
 
     @Test
     fun versionFramePopulatesServerVersion() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV2(MumbleVersion.encodeV2(1, 5, 735))
@@ -635,7 +635,7 @@ class SessionStateMachineTest {
     @Test
     fun unknownMessageIdIsIgnored() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0, 1, 2)))
         sm.onFrame(TcpFrame(9999, byteArrayOf(1)))
@@ -646,7 +646,7 @@ class SessionStateMachineTest {
     @Test
     fun textMessageFrameResolvesTheSenderNameEagerly() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
         sm.onFrame(frame(TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder().setSession(5).setName("alice").setChannelId(0).build()))
 
@@ -661,7 +661,7 @@ class SessionStateMachineTest {
     @Test
     fun senderNameSurvivesTheSenderLeaving() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
         sm.onFrame(frame(TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder().setSession(5).setName("alice").setChannelId(0).build()))
         sm.onFrame(frame(TcpMessageType.TextMessage,
@@ -721,7 +721,7 @@ class SessionStateMachineTest {
     @Test
     fun textMessageWithoutActorHasNullActor() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
 
         // A server/system broadcast carries no actor; null keeps it from rendering as "user 0".
         sm.onFrame(frame(TcpMessageType.TextMessage,
@@ -733,7 +733,7 @@ class SessionStateMachineTest {
     @Test
     fun permissionDeniedAppendsAStructuredDenial() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.PermissionDenied,
             MumbleProtos.PermissionDenied.newBuilder()
@@ -749,7 +749,7 @@ class SessionStateMachineTest {
     @Test
     fun permissionDeniedCapturesTheChannelForAPermissionDenial() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(1000) }).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.ChannelState,
             MumbleProtos.ChannelState.newBuilder().setChannelId(7).setName("Gaming").build()))
@@ -767,17 +767,17 @@ class SessionStateMachineTest {
     @Test
     fun messageLogIsCappedAtMaxMessages() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
 
-        repeat(SessionStateMachine.MAX_MESSAGES + 5) { i ->
+        repeat(ConnectionStateMachine.MAX_MESSAGES + 5) { i ->
             sm.onFrame(frame(TcpMessageType.TextMessage,
                 MumbleProtos.TextMessage.newBuilder().setActor(1).setMessage("m$i").build()))
         }
 
-        assertEquals(SessionStateMachine.MAX_MESSAGES, sm.messages.value.size)
+        assertEquals(ConnectionStateMachine.MAX_MESSAGES, sm.messages.value.size)
         // Oldest dropped, newest kept.
         assertEquals("m5", (sm.messages.value.first() as ChatMessage.Remote).htmlBody)
-        assertEquals("m${SessionStateMachine.MAX_MESSAGES + 4}", (sm.messages.value.last() as ChatMessage.Remote).htmlBody)
+        assertEquals("m${ConnectionStateMachine.MAX_MESSAGES + 4}", (sm.messages.value.last() as ChatMessage.Remote).htmlBody)
     }
 
     // The unread marker anchors on instance identity, so a real wrap past the cap must not clone
@@ -786,8 +786,8 @@ class SessionStateMachineTest {
     @Test
     fun cappedLogPreservesInstanceIdentityAcrossAWrap() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
-        repeat(SessionStateMachine.MAX_MESSAGES) { i ->
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(0) }).apply { start() }
+        repeat(ConnectionStateMachine.MAX_MESSAGES) { i ->
             sm.onFrame(frame(TcpMessageType.TextMessage,
                 MumbleProtos.TextMessage.newBuilder().setActor(1).setMessage("m$i").build()))
         }
@@ -808,7 +808,7 @@ class SessionStateMachineTest {
     @Test
     fun sendTextGoesToMyChannelVerbatimAndEchoesLocally() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(2000) }).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope, clock = { Instant.ofEpochMilli(2000) }).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
         sm.onFrame(frame(TcpMessageType.UserState,
             MumbleProtos.UserState.newBuilder().setSession(1).setName("me").setChannelId(7).build()))
@@ -826,7 +826,7 @@ class SessionStateMachineTest {
     @Test
     fun sendTextBeforeSynchronizedIsANoOp() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         assertFalse(sm.sendText("hi"))
         assertTrue(ch.sent.none { it.first == TcpMessageType.TextMessage })
@@ -838,7 +838,7 @@ class SessionStateMachineTest {
         sent.filter { it.first == TcpMessageType.UserState }.map { it.second as MumbleProtos.UserState }
 
     private fun synchronizedMachine(ch: FakeChannel, scope: CoroutineScope, session: Int = 4) =
-        SessionStateMachine(ch, "tester", null, scope).apply {
+        ConnectionStateMachine(ch, "tester", null, scope).apply {
             start()
             onFrame(frame(TcpMessageType.ServerSync,
                 MumbleProtos.ServerSync.newBuilder().setSession(session).build()))
@@ -865,7 +865,7 @@ class SessionStateMachineTest {
     @Test
     fun selfStateBeforeSynchronizedIsANoOp() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         assertFalse(sm.sendSelfState(DeafenState().mute(true)))
         assertTrue("nothing may reach the wire before we have a session", ch.userStates().isEmpty())
@@ -926,7 +926,7 @@ class SessionStateMachineTest {
     @Test
     fun channelAndUserStateFramesBuildTheChannelTree() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.ChannelState,
             MumbleProtos.ChannelState.newBuilder().setChannelId(0).setName("Root").build()))
@@ -941,7 +941,7 @@ class SessionStateMachineTest {
     @Test
     fun removeFramesPruneTheChannelTree() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(frame(TcpMessageType.ChannelState,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Gaming").build()))
         sm.onFrame(frame(TcpMessageType.UserState,
@@ -957,9 +957,9 @@ class SessionStateMachineTest {
     @Test
     fun handshakeThatNeverCompletesTimesOut() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
-        advanceTimeBy(SessionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
+        advanceTimeBy(ConnectionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
 
         val state = sm.state.value
         assertTrue("expected TIMEOUT, was $state",
@@ -969,10 +969,10 @@ class SessionStateMachineTest {
     @Test
     fun pingsStartAfterSynchronized() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(1).build()))
 
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS * 2 + 100)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS * 2 + 100)
 
         assertEquals(2, ch.sent.count { it.first == TcpMessageType.Ping })
     }
@@ -980,9 +980,9 @@ class SessionStateMachineTest {
     @Test
     fun noPingsBeforeSynchronized() = runTest {
         val ch = FakeChannel()
-        SessionStateMachine(ch, "tester", null, backgroundScope).start()
+        ConnectionStateMachine(ch, "tester", null, backgroundScope).start()
 
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS * 2 + 100)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS * 2 + 100)
 
         assertEquals(0, ch.sent.count { it.first == TcpMessageType.Ping })
     }
@@ -992,7 +992,7 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
 
         // The reply carries the stamp we sent, so the round trip is however long it took to come
         // back — not the age of the newest ping, which is what a locally-remembered send time
@@ -1009,10 +1009,10 @@ class SessionStateMachineTest {
     @Test
     fun synchronizedSessionSurvivesTheDeadline() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
         sm.onFrame(frame(TcpMessageType.ServerSync, MumbleProtos.ServerSync.newBuilder().setSession(7).build()))
 
-        advanceTimeBy(SessionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
+        advanceTimeBy(ConnectionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
 
         assertEquals(ConnectionState.Synchronized(7), sm.state.value)
         assertFalse("channel must not be closed after a successful handshake", ch.closed)
@@ -1024,9 +1024,9 @@ class SessionStateMachineTest {
     @Test
     fun firstFailureWinsOverALaterOne() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
-        advanceTimeBy(SessionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
+        advanceTimeBy(ConnectionStateMachine.HANDSHAKE_DEADLINE_MS + 1_000)
         sm.onFrame(frame(TcpMessageType.Reject, MumbleProtos.Reject.newBuilder().setReason("late").build()))
 
         val state = sm.state.value as ConnectionState.Failed
@@ -1055,7 +1055,7 @@ class SessionStateMachineTest {
         val ackA = java.util.concurrent.atomic.AtomicInteger(0)
         val ackB = java.util.concurrent.atomic.AtomicInteger(0)
         val stop = java.util.concurrent.atomic.AtomicBoolean(false)
-        val smRef = java.util.concurrent.atomic.AtomicReference<SessionStateMachine>()
+        val smRef = java.util.concurrent.atomic.AtomicReference<ConnectionStateMachine>()
         val violation = java.util.concurrent.atomic.AtomicReference<String>()
 
         val sync = frame(
@@ -1093,7 +1093,7 @@ class SessionStateMachineTest {
             while (i <= trials && violation.get() == null) {
                 val ch = FakeChannel()
                 val s = CoroutineScope(Dispatchers.Default + SupervisorJob())
-                val sm = SessionStateMachine(ch, "tester", null, s).apply { start() }
+                val sm = ConnectionStateMachine(ch, "tester", null, s).apply { start() }
                 smRef.set(sm)
                 gen.set(i)
                 // The final state alone can't distinguish "fail() legitimately won" from "fail()
@@ -1132,22 +1132,22 @@ class SessionStateMachineTest {
     @Test
     fun versionMessageCarriesBothEncodings() = runTest {
         val ch = FakeChannel()
-        SessionStateMachine(ch, "tester", null, backgroundScope).start()
+        ConnectionStateMachine(ch, "tester", null, backgroundScope).start()
 
         val version = ch.sent.first { it.first == TcpMessageType.Version }.second as MumbleProtos.Version
         assertEquals(
             MumbleVersion.encodeV2(
-                SessionStateMachine.CLIENT_MAJOR,
-                SessionStateMachine.CLIENT_MINOR,
-                SessionStateMachine.CLIENT_PATCH,
+                ConnectionStateMachine.CLIENT_MAJOR,
+                ConnectionStateMachine.CLIENT_MINOR,
+                ConnectionStateMachine.CLIENT_PATCH,
             ),
             version.versionV2,
         )
         assertEquals(
             MumbleVersion.encodeV1(
-                SessionStateMachine.CLIENT_MAJOR,
-                SessionStateMachine.CLIENT_MINOR,
-                SessionStateMachine.CLIENT_PATCH,
+                ConnectionStateMachine.CLIENT_MAJOR,
+                ConnectionStateMachine.CLIENT_MINOR,
+                ConnectionStateMachine.CLIENT_PATCH,
             ),
             version.versionV1,
         )
@@ -1156,9 +1156,9 @@ class SessionStateMachineTest {
     @Test
     fun tunneledAudioReachesTheListener() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope)
         val seen = mutableListOf<ByteArray>()
-        sm.audioListener = SessionStateMachine.AudioListener { payload -> seen += payload }
+        sm.audioListener = ConnectionStateMachine.AudioListener { payload -> seen += payload }
 
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(7)
@@ -1175,7 +1175,7 @@ class SessionStateMachineTest {
     @Test
     fun tunneledAudioWithNoListenerIsIgnored() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope)
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope)
         // No listener attached — the frame must be dropped, not throw.
         sm.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0, 1, 2)))
     }
@@ -1183,7 +1183,7 @@ class SessionStateMachineTest {
     @Test
     fun aServerBelowOnePointFiveIsRejected() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
@@ -1199,7 +1199,7 @@ class SessionStateMachineTest {
     @Test
     fun aLegacyEncodedServerBelowOnePointFiveIsRejected() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV1(MumbleVersion.encodeV1(1, 4, 287))
@@ -1214,7 +1214,7 @@ class SessionStateMachineTest {
     @Test
     fun aFutureMajorIsAccepted() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV2(MumbleVersion.encodeV2(2, 0, 0))
@@ -1226,7 +1226,7 @@ class SessionStateMachineTest {
     @Test
     fun exactlyOnePointFiveIsAccepted() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV2(MumbleVersion.encodeV2(1, 5, 0))
@@ -1239,7 +1239,7 @@ class SessionStateMachineTest {
     @Test
     fun serverVersionIsPublishedEvenWhenTooOld() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         sm.onFrame(frame(TcpMessageType.Version, MumbleProtos.Version.newBuilder()
             .setVersionV2(MumbleVersion.encodeV2(1, 4, 287))
@@ -1310,7 +1310,7 @@ class SessionStateMachineTest {
     @Test
     fun requestUserStatsBeforeSynchronizedIsANoOp() = runTest {
         val ch = FakeChannel()
-        val sm = SessionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
+        val sm = ConnectionStateMachine(ch, "tester", null, backgroundScope).apply { start() }
 
         assertFalse(sm.requestUserStats(9))
         assertTrue(ch.sent.none { it.first == TcpMessageType.UserStats })
@@ -1428,7 +1428,7 @@ class SessionStateMachineTest {
         val ch = FakeChannel()
         val bootClock = TestTimeSource()
         val sm = pingSm(ch, bootClock)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
         val first = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
         assertEquals(0, first.tcpPackets)
         assertEquals(0, first.udpPackets)
@@ -1439,7 +1439,7 @@ class SessionStateMachineTest {
         sm.onFrame(frame(TcpMessageType.Ping, first))
         sm.udpPingAnswered(2.milliseconds)
         sm.udpPingAnswered(4.milliseconds)
-        advanceBoth(bootClock, SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1)
 
         val next = ch.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
         assertEquals(1, next.tcpPackets)

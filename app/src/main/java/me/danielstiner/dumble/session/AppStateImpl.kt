@@ -47,11 +47,11 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
@@ -75,7 +75,7 @@ import kotlin.time.TimeSource
 
 /**
  * Owns the whole connection: the blocking TLS connect (which throws trust exceptions before the
- * protocol starts) and the [SessionStateMachine] that follows, unified into one [status] flow.
+ * protocol starts) and the [ConnectionStateMachine] that follows, unified into one [status] flow.
  *
  * One live [Session] at a time, guarded by [generation]; each session's driver opens its [Link].
  * A blocking handshake cannot be preempted by teardown — the socket is not owned until it
@@ -108,7 +108,7 @@ class AppStateImpl internal constructor(
     // the UDP transport — which reads zero off-device, so a test injects one; and the ping
     // interval, so a test can keep the ticker out of its way.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
-    private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
+    private val pingIntervalMs: Long = ConnectionStateMachine.PING_INTERVAL_MS,
     // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
     // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
@@ -583,7 +583,7 @@ class AppStateImpl internal constructor(
         val gen = session.gen
         val linkScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
         val transport = newTransport(pin)
-        val stateMachine = SessionStateMachine(
+        val stateMachine = ConnectionStateMachine(
             transport, session.username, session.password, linkScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
@@ -792,7 +792,7 @@ class AppStateImpl internal constructor(
                 .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
         }
         link.stateMachine.udpPing = { link.udp.sendPing() }
-        link.stateMachine.audioListener = SessionStateMachine.AudioListener { payload ->
+        link.stateMachine.audioListener = ConnectionStateMachine.AudioListener { payload ->
             session.receiver.onVoicePacket(payload, payload.size)
         }
         link.stateMachine.start()
@@ -819,7 +819,7 @@ class AppStateImpl internal constructor(
             link.stateMachine.messages.collect {
                 publishFromLink(
                     session, link, _messages,
-                    (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES),
+                    (session.carried + it).takeLast(ConnectionStateMachine.MAX_MESSAGES),
                 )
             }
         }

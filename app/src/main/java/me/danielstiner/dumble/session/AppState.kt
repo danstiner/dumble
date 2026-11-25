@@ -27,7 +27,7 @@ interface AppState {
 
     /**
      * When the server last said anything — seeded at ServerSync, then advanced by each ping reply;
-     * null while disconnected. The UI ages it against `SessionStateMachine.DEGRADED_PING_AGE`.
+     * null while disconnected. The UI ages it against `ConnectionStateMachine.DEGRADED_PING_AGE`.
      *
      * The instant rather than the age, because the age is stale the moment it is published and
      * what changes it is the passage of time; the UI derives it against its own clock.

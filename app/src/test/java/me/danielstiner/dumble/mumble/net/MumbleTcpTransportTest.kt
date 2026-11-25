@@ -234,7 +234,7 @@ class MumbleTcpTransportTest {
     }
 
     // Same non-overlap contract, but the case listenerCallbacksNeverOverlap could not reach: the
-    // listener closes the channel from inside its own onFrame — exactly what SessionStateMachine
+    // listener closes the channel from inside its own onFrame — exactly what ConnectionStateMachine
     // does on a Reject. onClosed must still be delivered only after onFrame returns, not nested on
     // the same call stack. Deterministic, no cross-thread timing.
     @Test

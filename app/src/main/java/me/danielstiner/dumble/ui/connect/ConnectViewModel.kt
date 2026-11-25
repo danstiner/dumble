@@ -237,7 +237,7 @@ class ConnectViewModel internal constructor(
     // reconnected list can't fool identity. A message dropped past MAX_MESSAGES, or one from a prior
     // session, simply isn't found, so unread falls back to "everything visible" (≤ MAX_MESSAGES). This
     // relies on the log being append-only, so instances stay stable across emissions — see
-    // SessionStateMachine.appendMessage.
+    // ConnectionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = appState.messages.value.lastOrNull()
 
     /** The generation [ConnectUiState.connectedSince] was marked for; null while disconnected. */

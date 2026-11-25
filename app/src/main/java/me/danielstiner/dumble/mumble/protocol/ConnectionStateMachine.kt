@@ -34,7 +34,7 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos
  * [MutableStateFlow]. [sent] is one immutable value rather than three booleans so its parts cannot
  * be read torn apart.
  */
-class SessionStateMachine(
+class ConnectionStateMachine(
     private val channel: ControlChannel,
     private val username: String,
     private val password: String?,

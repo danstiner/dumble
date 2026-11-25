@@ -13,7 +13,7 @@ import kotlin.time.TimeSource
  * screen off spends most of its life suspended. The alternatives both stop with the CPU:
  * `System.nanoTime` and [TimeSource.Monotonic] built on it, and `SystemClock.uptimeMillis`. Use
  * those only to measure something about our own execution, where sleep genuinely is not elapsed
- * time — see `SessionStateMachine`'s ticker-stall check, which wants exactly that.
+ * time — see `ConnectionStateMachine`'s ticker-stall check, which wants exactly that.
  *
  * Backed by `SystemClock.elapsedRealtimeNanos`, which on Android is `clock_gettime(CLOCK_BOOTTIME)`
  * — see `system/core/libutils/SystemClock.cpp`, where `uptimeNanos` reads `SYSTEM_TIME_MONOTONIC`
