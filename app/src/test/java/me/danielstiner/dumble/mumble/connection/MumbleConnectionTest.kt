@@ -582,11 +582,6 @@ class MumbleConnectionTest {
         assertTrue(message, cond())
     }
 
-    private fun serverSync(session: Int) = TcpFrame(
-        TcpMessageType.ServerSync.id,
-        MumbleProtos.ServerSync.newBuilder().setSession(session).build().toByteArray(),
-    )
-
     private fun userRemove(session: Int, reason: String) = TcpFrame(
         TcpMessageType.UserRemove.id,
         MumbleProtos.UserRemove.newBuilder().setSession(session).setReason(reason).build().toByteArray(),
@@ -1861,7 +1856,7 @@ class MumbleConnectionTest {
             appPins, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { pin -> expected += pin; FakeControlTransport { _, _ -> } })
 
-        conn.connect(endpoint, "latency-check", null, given)
+        conn.connectForCheck(endpoint, "latency-check", given, {}, {})
         handshaking(conn)
 
         assertEquals(listOf<String?>("ab12"), expected)
@@ -1882,7 +1877,7 @@ class MumbleConnectionTest {
             FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("cd34") }
         })
 
-        conn.connect(endpoint, "latency-check", null, given)
+        conn.connectForCheck(endpoint, "latency-check", given, {}, {})
         assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
         conn.trustAndConnect()
         handshaking(conn)

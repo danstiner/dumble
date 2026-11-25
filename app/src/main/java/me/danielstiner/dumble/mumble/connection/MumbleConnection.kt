@@ -62,6 +62,11 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
+import me.danielstiner.dumble.mumble.voice.latency.ArrivedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CapturedPacket
+import me.danielstiner.dumble.mumble.voice.latency.CheckHost
+import me.danielstiner.dumble.mumble.voice.latency.CheckSession
+import me.danielstiner.dumble.mumble.voice.latency.RecordingPlayout
 import me.danielstiner.dumble.mumble.voice.openNativeCapture
 import me.danielstiner.dumble.mumble.voice.openNativePlayout
 import me.danielstiner.dumble.time.BootTimeSource
@@ -101,8 +106,8 @@ class MumbleConnection internal constructor(
     // Seam: what runs a built pump — its own thread, or a test that steps it.
     private val startPump: (VoiceSender) -> Unit = VoiceSender::start,
     // Seam: the pump's clock, for its stats cadence and its speech stall, so a test that steps the
-    // pump runs both on the scheduler's time.
-    private val captureClock: TimeSource = TimeSource.Monotonic,
+    // pump runs both on the scheduler's time. A latency check's packets are marked on it too.
+    private val captureClock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
     // Seams: the clock of everything that must count sleep — the sync stamp, the reconnect budget,
     // the UDP transport — which reads zero off-device, so a test injects one; and the ping
     // interval, so a test can keep the ticker out of its way.
@@ -123,7 +128,7 @@ class MumbleConnection internal constructor(
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
         { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
-) : Connection {
+) : Connection, CheckHost {
     @Inject constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,
@@ -207,7 +212,7 @@ class MumbleConnection internal constructor(
      * session, not the connection, because a release must find the session that opened the
      * microphone rather than whichever session replaced it.
      *
-     * The first seven fields are immutable identity. The mutable ones are either `@Volatile`
+     * The first eight fields are immutable identity. The mutable ones are either `@Volatile`
      * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
      */
     private class Session(
@@ -216,8 +221,10 @@ class MumbleConnection internal constructor(
         val username: String,
         val password: String?,
         /** Where the server's pin is read and a trust prompt's answer is written: the app's
-         *  store, or the one a connect was given. */
+         *  store, or the one a check's connect was given. */
         val pins: PinStore,
+        /** The latency check this session was connected for, or null. */
+        val check: Check?,
         /** Built once per session and fed packets by its link; never owns a transport. */
         val receiver: VoiceReceiver,
         /** The driver and the receiver's collectors. Cancelled by [teardown], last. */
@@ -296,10 +303,13 @@ class MumbleConnection internal constructor(
         fun apply(session: Session) {
             synchronized(this) {
                 if (destroyed) return
+                // A check opens the gate itself; under voice activity an open gate still sends only
+                // what the detector calls speech.
+                val mode = if (session.check != null) TransmitMode.PushToTalk else transmitMode
                 // Only on a change: every mode write resets the engine's detector, mid-spurt too.
-                if (transmitMode != appliedMode) {
-                    handle.setTransmitMode(transmitMode)
-                    appliedMode = transmitMode
+                if (mode != appliedMode) {
+                    handle.setTransmitMode(mode)
+                    appliedMode = mode
                 }
                 sender.setTransmitting(wantsGate(session))
             }
@@ -450,8 +460,11 @@ class MumbleConnection internal constructor(
         // Leaves `wanted` set on failure, unlike onPumpExited's terminal branch: opens here are
         // command-rate-bounded rather than a loop, and a Talk press re-asks anyway.
         val handle = newCapture() ?: return
+        val check = session.check
+        // A check's session never sends capture: its pump is built with the check as its wire.
+        val wire: (ByteArray) -> Boolean = if (check != null) check::capture else { { sendVoice(session, it) } }
         val sender = VoiceSender(
-            handle, { sendVoice(session, it) },
+            handle, wire,
             onExit = { s -> send(CaptureCommand.PumpExited(session, s)) },
             onSpeaking = { publishSelfSpeaking(session.gen, it) },
             onStats = { publishCaptureStats(session.gen, it) },
@@ -618,15 +631,19 @@ class MumbleConnection internal constructor(
         return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
     }
 
-    override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
+    override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) {
         connect(endpoint, username, password, pinStore, answering = null)
+    }
 
-    /** As [connect], with [pins] as the session's pin store in place of the app's. Trust is
-     *  decided the same way; only where the pin is read and written differs. The latency check's,
-     *  for a throwaway server whose certificate must never reach the user's pins, so it is not on
-     *  [Connection]. */
-    internal fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore) =
-        connect(endpoint, username, password, pins, answering = null)
+    override fun connectForCheck(
+        endpoint: MumbleEndpoint,
+        username: String,
+        pins: PinStore,
+        captured: (CapturedPacket) -> Unit,
+        arrived: (ArrivedPacket) -> Unit,
+    ): CheckSession? = Check(captured, arrived).takeIf {
+        connect(endpoint, username, null, pins, answering = null, check = it)
+    }
 
     /**
      * Retire, call start and publish are one critical section: connects run on two threads (the
@@ -634,22 +651,33 @@ class MumbleConnection internal constructor(
      * Every end goes out under it too, so none can land after a later start.
      *
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
-     * dismissed it, and then this does nothing.
+     * dismissed it, and then this does nothing. Nor does a [check]'s connect while a session is
+     * live or a trust prompt is showing: a check never replaces what the user has open. False when
+     * it did nothing.
      */
-    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore, answering: Session?) {
+    private fun connect(
+        endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore, answering: Session?,
+        check: Check? = null,
+    ): Boolean {
         val prior: Session?
         val session: Session
         synchronized(lock) {
-            if (answering != null && trustPrompt !== answering) return
+            if (answering != null && trustPrompt !== answering) return false
+            if (check != null && (current != null || trustPrompt != null)) return false
             prior = retireAndClearLocked(ConnectionStatus.Connecting)
             val gen = generation
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
             // only a session whose link comes up ever reaches — building eagerly would leak one per
             // session that fails or is superseded before that.
+            // A check's session plays through an engine that reports each arrival to the check.
+            val playout = if (check == null) newPlayout else {
+                { newPlayout()?.let { RecordingPlayout(it, captureClock, check.arrived) } }
+            }
             session = Session(
-                gen, endpoint, username, password, pins, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+                gen, endpoint, username, password, pins, check, VoiceReceiver(playout, context = scope.coroutineContext),
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
+            check?.session = session
             current = session
             // Here rather than in requestCapture(): tying the call to the connection, not the
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
@@ -672,6 +700,7 @@ class MumbleConnection internal constructor(
         session.scope.launch { session.receiver.speakingSessions.collect { publishSpeaking(session.gen, it) } }
         session.scope.launch { session.receiver.playoutStats.collect { publishPlayoutStats(session.gen, it) } }
         session.scope.launch { drive(session) }
+        return true
     }
 
     /**
@@ -1022,10 +1051,44 @@ class MumbleConnection internal constructor(
         send(CaptureCommand.Acquire(session))
     }
 
+    /** A latency check's side of its own session, [Session.check], for that session's whole life. */
+    private inner class Check(
+        val captured: (CapturedPacket) -> Unit,
+        val arrived: (ArrivedPacket) -> Unit,
+    ) : CheckSession {
+        /** Set by [connect] before the session is published. */
+        lateinit var session: Session
+        @Volatile var gate = false
+        override val clock get() = captureClock
+        /** Pump thread only. */
+        private var failed = false
+
+        /** The pump's wire on a check's session: the packet goes to the check and nowhere else.
+         *  True, as a packet delivered. Pump thread, which a check's bug must not end. */
+        fun capture(packet: ByteArray): Boolean {
+            val at = captureClock.markNow()
+            try {
+                val audio = MumbleUdpProtos.Audio.parser().parseFrom(packet, 1, packet.size - 1)
+                captured(CapturedPacket(audio.frameNumber, audio.opusData.toByteArray(), at))
+            } catch (t: Throwable) {
+                // Once: packets come fifty a second.
+                if (!failed) Log.e(TAG, "capture record failed", t)
+                failed = true
+            }
+            return true
+        }
+
+        /** Level first, then the live capture, as [setTransmitting]. */
+        override fun setGateOpen(open: Boolean) {
+            gate = open
+            this@MumbleConnection.apply(session)
+        }
+    }
+
     /**
-     * Re-derive the gate: open when not muted and either Talk is held or voice activity is on.
-     * Wanting it open also asks for a session, which is what brings one back after a terminal
-     * engine failure.
+     * Re-derive the gate: open when not muted and either Talk is held or voice activity is on; on
+     * a check's session, when not muted and the check has opened it. Wanting it open also asks for
+     * a session, which is what brings one back after a terminal engine failure.
      *
      * Levels first, then the live session — the mirror of [openCapture], which publishes the
      * session and then reads the levels. Each side writes one volatile and reads the other, so a
@@ -1039,8 +1102,11 @@ class MumbleConnection internal constructor(
         session.capture?.apply(session)
     }
 
-    private fun wantsGate(session: Session) =
-        !session.selfState.muted && (session.pressed || transmitMode == TransmitMode.VoiceActivity)
+    private fun wantsGate(session: Session): Boolean {
+        val check = session.check
+        return !session.selfState.muted &&
+            if (check != null) check.gate else session.pressed || transmitMode == TransmitMode.VoiceActivity
+    }
 
     /** A press while muted stays shut: mute has no engine-side existence, so nothing below this
      *  refuses it. */
