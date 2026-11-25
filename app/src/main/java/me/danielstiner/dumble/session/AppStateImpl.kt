@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.Link
+import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -77,7 +77,7 @@ import kotlin.time.TimeSource
  * Owns the whole connection: the blocking TLS connect (which throws trust exceptions before the
  * protocol starts) and the [ConnectionStateMachine] that follows, unified into one [status] flow.
  *
- * One live [Session] at a time, guarded by [generation]; each session's driver opens its [Link].
+ * One live [Session] at a time, guarded by [generation]; each session's driver opens its [Connection].
  * A blocking handshake cannot be preempted by teardown — the socket is not owned until it
  * publishes — so a superseded link can complete late and would otherwise clobber a newer
  * session's status. Every write is therefore checked under [lock] — on the generation, or for the
@@ -222,10 +222,10 @@ class AppStateImpl internal constructor(
         val scope: CoroutineScope,
         /** The link carrying this session, or null until the driver has built one. Written only
          *  under [lock], by the driver; read on the pump thread by [sendVoice]. */
-        @Volatile var link: Link? = null,
+        @Volatile var connection: Connection? = null,
         /** A replacement link being opened; the driver's, written under [lock] so a teardown
          *  during its blocking handshake finds it and closes it. */
-        @Volatile var next: Link? = null,
+        @Volatile var next: Connection? = null,
         /** Chat from links this session has already replaced, oldest first. Written by the driver
          *  at the swap, read by the new link's collector on its own scope. */
         @Volatile var carried: List<ChatMessage> = emptyList(),
@@ -351,9 +351,9 @@ class AppStateImpl internal constructor(
      * the close, on a live link; the UI blocking on Reconnecting is what keeps it from reading as
      * "you left".
      */
-    private fun <T> publishFromLink(session: Session, link: Link, flow: MutableStateFlow<T>, value: T) =
+    private fun <T> publishFromConnection(session: Session, connection: Connection, flow: MutableStateFlow<T>, value: T) =
         synchronized(lock) {
-            if (session.gen == generation && session.link === link && !link.isClosed) flow.value = value
+            if (session.gen == generation && session.connection === connection && !connection.isClosed) flow.value = value
         }
 
     /**
@@ -470,12 +470,12 @@ class AppStateImpl internal constructor(
      *  the socket refuses goes through the tunnel in the same call, and the next one already
      *  starts there. Pump thread: reads the link once, so a swap cannot split one packet. */
     private fun sendVoice(session: Session, payload: ByteArray): Boolean {
-        val link = session.link ?: return false
-        if (link.path.state.value.onUdp) {
-            if (link.udp.send(payload, payload.size)) return true
-            link.path.demote()
+        val connection = session.connection ?: return false
+        if (connection.path.state.value.onUdp) {
+            if (connection.udp.send(payload, payload.size)) return true
+            connection.path.demote()
         }
-        return link.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
+        return connection.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
     }
 
     /** Start releasing [capture]: close its stream synchronously, then leave the engine for the
@@ -579,12 +579,12 @@ class AppStateImpl internal constructor(
     }
 
     /** The pieces of one TLS connect, built but not yet connected. */
-    private fun buildLink(session: Session, pin: String?): Link {
+    private fun buildConnection(session: Session, pin: String?): Connection {
         val gen = session.gen
-        val linkScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+        val connectionScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
         val transport = newTransport(pin)
         val stateMachine = ConnectionStateMachine(
-            transport, session.username, session.password, linkScope,
+            transport, session.username, session.password, connectionScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
             bootClock = udpClock,
@@ -613,7 +613,7 @@ class AppStateImpl internal constructor(
             }
             override fun requestCryptResync() { stateMachine.requestCryptResync() }
         })
-        return Link(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, linkScope, blockingScope)
+        return Connection(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, connectionScope, blockingScope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
@@ -678,18 +678,18 @@ class AppStateImpl internal constructor(
         // The loop below runs for minutes beside a live platform call: an escape would leave
         // the call up with nothing driving it.
         try {
-            var link = buildLink(session, pin)
+            var connection = buildConnection(session, pin)
             // Published before the connect, so a teardown that lands during the blocking handshake
-            // finds the link and closes it; see Link.close for what the transport does with a
+            // finds the link and closes it; see Connection.close for what the transport does with a
             // handshake that finishes around that close.
             val live = synchronized(lock) {
-                if (current === session) { session.link = link; true } else false
+                if (current === session) { session.connection = connection; true } else false
             }
-            if (!live) { link.close(); return }   // superseded during the pin lookup
+            if (!live) { connection.close(); return }   // superseded during the pin lookup
 
-            open(session, link)?.let { fail(session, it); return }
-            if (!isLive(session)) { link.close(); return }   // superseded mid-handshake
-            wire(session, link)
+            open(session, connection)?.let { fail(session, it); return }
+            if (!isLive(session)) { connection.close(); return }   // superseded mid-handshake
+            wire(session, connection)
             // Its own coroutine so the state collector below subscribes before start() opens the
             // output stream, ~100 ms of HAL on a Pixel 7a, which is also why the lock is not held
             // across it — a teardown landing in between is the receiver's own latch to handle.
@@ -702,12 +702,12 @@ class AppStateImpl internal constructor(
             // link whose network merely stopped being the default is left alone: with a LAN
             // server on a WiFi that lost its uplink, it is the only link that reaches the server.
             // Filtered on the first link's stamp, so a change during its handshake still counts.
-            val firstDialedUnder = link.dialedUnder
+            val firstDialedUnder = connection.dialedUnder
             session.scope.launch {
                 networkChanges.filter { it != firstDialedUnder }.collect { changes ->
                     val doomed = synchronized(lock) {
                         session.next?.takeIf { it.dialedUnder != changes }
-                            ?: session.link?.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
+                            ?: session.connection?.takeIf { it.network?.let { n -> !networkWatch.isUp(n) } ?: true }
                     } ?: return@collect
                     val what = if (doomed === session.next) "the attempt" else "the link, its network gone"
                     Log.i(TAG, "network changed gen=$gen; closing $what")
@@ -720,16 +720,16 @@ class AppStateImpl internal constructor(
                 // Status is the driver's own collector, not one of the link's: the terminal Error
                 // must be on `status` before retire() cancels this coroutine's scope, and a Failed
                 // is never published before it is classified.
-                val failed = link.stateMachine.state
+                val failed = connection.stateMachine.state
                     .onEach { st ->
                         if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
                 // The link's own stamp, not what a collector on a conflating flow saw: it decides
                 // the retry and names the row the UI reads.
-                val synced = link.stateMachine.sync
+                val synced = connection.stateMachine.sync
                 // The first link dying before it synchronized is the connect failing, never
-                // retried; every later link came out of replaceLink synchronized.
+                // retried; every later link came out of replaceConnection synchronized.
                 if (synced == null) {
                     fail(session, mapState(gen, failed)!!)
                     return
@@ -755,8 +755,8 @@ class AppStateImpl internal constructor(
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
                 publishStatus(gen, SessionStatus.Reconnecting(gen, synced.sessionId))
-                link.close()
-                link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt, since = link.dialedUnder)
+                connection.close()
+                connection = replaceConnection(session, pin, deadline, diedAt = now, firstAttempt = attempt, since = connection.dialedUnder)
                     ?: return
             }
         } catch (t: Throwable) {
@@ -767,17 +767,17 @@ class AppStateImpl internal constructor(
     }
 
     /**
-     * Connects [link] and starts its protocol. Null on success; otherwise the status the failure
+     * Connects [connection] and starts its protocol. Null on success; otherwise the status the failure
      * maps to, with the link still open: the caller either drops it or retires the session it
      * belongs to, which closes it.
      */
-    private suspend fun open(session: Session, link: Link): SessionStatus? {
+    private suspend fun open(session: Session, connection: Connection): SessionStatus? {
         val listener = object : MumbleControlTransport.Listener {
-            override fun onFrame(f: TcpFrame) = link.stateMachine.onFrame(f)
-            override fun onClosed(cause: Throwable?) = link.stateMachine.onClosed(cause)
+            override fun onFrame(f: TcpFrame) = connection.stateMachine.onFrame(f)
+            override fun onClosed(cause: Throwable?) = connection.stateMachine.onClosed(cause)
         }
         try {
-            link.transport.connect(session.endpoint.host, session.endpoint.port, listener)
+            connection.transport.connect(session.endpoint.host, session.endpoint.port, listener)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             Log.w(TAG, "connect failed gen=${session.gen} for ${session.endpoint.address}", t)
@@ -787,38 +787,38 @@ class AppStateImpl internal constructor(
         // the cipher, and from then on the server sends our downlink over UDP whether or not we
         // ever transmit (docs/network.md, UDP voice), so it has to land on a socket already
         // listening. One that cannot be opened costs the session nothing but UDP.
-        link.transport.remoteAddress()?.let { remote ->
-            runCatching { link.udp.open(remote) }
+        connection.transport.remoteAddress()?.let { remote ->
+            runCatching { connection.udp.open(remote) }
                 .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
         }
-        link.stateMachine.udpPing = { link.udp.sendPing() }
-        link.stateMachine.audioListener = ConnectionStateMachine.AudioListener { payload ->
+        connection.stateMachine.udpPing = { connection.udp.sendPing() }
+        connection.stateMachine.audioListener = ConnectionStateMachine.AudioListener { payload ->
             session.receiver.onVoicePacket(payload, payload.size)
         }
-        link.stateMachine.start()
+        connection.stateMachine.start()
         return null
     }
 
-    /** Republishes [link]'s flows as the session's. The link must already be `session.link`. */
-    private fun wire(session: Session, link: Link) {
+    /** Republishes [connection]'s flows as the session's. The link must already be `session.connection`. */
+    private fun wire(session: Session, connection: Connection) {
         // Seeded here, before the driver publishes this link's Connected: a collector on its own
         // coroutine would leave the dead link's tree published under the new session id, one
         // without our own row in it.
         fun <T> republish(from: StateFlow<T>, into: MutableStateFlow<T>) {
-            publishFromLink(session, link, into, from.value)
-            link.scope.launch { from.collect { publishFromLink(session, link, into, it) } }
+            publishFromConnection(session, connection, into, from.value)
+            connection.scope.launch { from.collect { publishFromConnection(session, connection, into, it) } }
         }
-        republish(link.stateMachine.serverVersion, _serverVersion)
-        republish(link.stateMachine.roundTripTime, _roundTripTime)
-        republish(link.path.state, _voicePath)
-        republish(link.stateMachine.lastServerReplyAt, _lastServerReplyAt)
-        republish(link.stateMachine.channelTree, _channelTree)
-        republish(link.stateMachine.userStats, _userStats)
+        republish(connection.stateMachine.serverVersion, _serverVersion)
+        republish(connection.stateMachine.roundTripTime, _roundTripTime)
+        republish(connection.path.state, _voicePath)
+        republish(connection.stateMachine.lastServerReplyAt, _lastServerReplyAt)
+        republish(connection.stateMachine.channelTree, _channelTree)
+        republish(connection.stateMachine.userStats, _userStats)
         // Chat is the session's: what earlier links received stays ahead of this link's own.
-        link.scope.launch {
-            link.stateMachine.messages.collect {
-                publishFromLink(
-                    session, link, _messages,
+        connection.scope.launch {
+            connection.stateMachine.messages.collect {
+                publishFromConnection(
+                    session, connection, _messages,
                     (session.carried + it).takeLast(ConnectionStateMachine.MAX_MESSAGES),
                 )
             }
@@ -829,7 +829,7 @@ class AppStateImpl internal constructor(
         // follows the send.
         synchronized(lock) {
             session.selfState.takeIf { it != DeafenState() }
-                ?.let { link.stateMachine.sendSelfState(it) }
+                ?.let { connection.stateMachine.sendSelfState(it) }
         }
     }
 
@@ -838,7 +838,7 @@ class AppStateImpl internal constructor(
      * the deadline passes. Returns the synchronized link, swapped in and wired; null once the
      * session has been ended or parked here.
      */
-    private suspend fun replaceLink(
+    private suspend fun replaceConnection(
         session: Session,
         pin: String?,
         deadline: ComparableTimeMark,
@@ -846,7 +846,7 @@ class AppStateImpl internal constructor(
         firstAttempt: Int,
         /** The change count the dead link was dialed under. */
         since: Int,
-    ): Link? {
+    ): Connection? {
         val gen = session.gen
         var attempt = firstAttempt
         var seen = since
@@ -873,7 +873,7 @@ class AppStateImpl internal constructor(
                 if (lastDial == null || udpClock.markNow() - lastDial >= BACKOFF[1]) attempt = 0
             }
             if (backOff(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))) continue
-            val next = buildLink(session, pin)
+            val next = buildConnection(session, pin)
             // Published before the connect for the same reason the first link is: a teardown
             // mid-handshake has to find it.
             val live = synchronized(lock) {
@@ -918,7 +918,7 @@ class AppStateImpl internal constructor(
             val swapped = synchronized(lock) {
                 if (current === session) {
                     session.carried = _messages.value
-                    session.link = next
+                    session.connection = next
                     session.next = null
                     true
                 } else false
@@ -952,9 +952,9 @@ class AppStateImpl internal constructor(
     }
 
     /** Closes a replacement that will not be swapped in, and unpublishes it. */
-    private fun drop(session: Session, link: Link) {
-        link.close()
-        synchronized(lock) { if (session.next === link) session.next = null }
+    private fun drop(session: Session, connection: Connection) {
+        connection.close()
+        synchronized(lock) { if (session.next === connection) session.next = null }
     }
 
     /**
@@ -1000,11 +1000,11 @@ class AppStateImpl internal constructor(
         prior?.let { teardown(it) }
     }
 
-    override fun sendText(text: String): Boolean = current?.link?.stateMachine?.sendText(text) ?: false
+    override fun sendText(text: String): Boolean = current?.connection?.stateMachine?.sendText(text) ?: false
 
     override fun setSelfDeaf(on: Boolean) = ask { it.deafen(on) }
 
-    override fun requestUserStats(session: Int) { current?.link?.stateMachine?.requestUserStats(session) }
+    override fun requestUserStats(session: Int) { current?.connection?.stateMachine?.requestUserStats(session) }
 
     override fun requestAudioRoute(routeId: String) = call.requestRoute(routeId)
 
@@ -1062,7 +1062,7 @@ class AppStateImpl internal constructor(
             val session = current ?: return
             session.selfState = next(session.selfState)
             _selfState.value = session.selfState
-            session.link?.stateMachine?.sendSelfState(session.selfState)
+            session.connection?.stateMachine?.sendSelfState(session.selfState)
             session
         }
         apply(session)   // opens or closes a capture engine; never under the lock
@@ -1099,7 +1099,7 @@ class AppStateImpl internal constructor(
         blockingScope.launch { session.receiver.stop() }
         // Either the driver published the link under the lock before `current` was cleared, and
         // this closes it, or it will see the session is no longer current and close it itself.
-        session.link?.close()
+        session.connection?.close()
         session.next?.close()
         // Last: retire() reaches here from the driver, which runs on this scope.
         session.scope.cancel()

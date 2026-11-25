@@ -663,12 +663,12 @@ class AppStateImplTest {
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        val link = startedTransportAt(transports, 0)
-        link.listener!!.onFrame(serverSync(1))
+        val transport = startedTransportAt(transports, 0)
+        transport.listener!!.onFrame(serverSync(1))
         connected(app)
 
-        link.listener!!.onFrame(userRemove(session = 1, reason = "spam"))
-        link.listener!!.onClosed(IOException("reset"))
+        transport.listener!!.onFrame(userRemove(session = 1, reason = "spam"))
+        transport.listener!!.onClosed(IOException("reset"))
 
         assertSettled("kicked") { app.status.value == SessionStatus.Error(ErrorKind.KICKED, "spam") }
         assertSettled("the call ends") { call.ends == 1 }
@@ -1742,7 +1742,7 @@ class AppStateImplTest {
         assertSettled("the tree") { app.channelTree.value.channels.containsKey(1) }
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        // The replacement connects, then waits in replaceLink for a ServerSync this test never
+        // The replacement connects, then waits in replaceConnection for a ServerSync this test never
         // sends: the dead link is closed and nothing has been swapped in.
         startedTransportAt(transports, 1)
         assertTrue(app.status.value is SessionStatus.Reconnecting)
