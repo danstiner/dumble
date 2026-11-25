@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# Runs Dumble's adb-only latency check against a throwaway Murmur and prints the results.
+# Needs adb, docker and openssl. See docs/latency.md.
+set -eEuo pipefail
+# Exit 1 is kept for a check that ran and did not measure.
+trap 'exit 2' ERR
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: scripts/latency-check [--usb | --lan [--tcp]] [--host ADDRESS] [--package ID] [-s SERIAL]
+  --usb       adb reverse to this computer's Murmur (default)
+  --lan       the phone connects over Wi-Fi to this computer's LAN address
+  --tcp       with --lan: publish TCP only, so voice takes the TCP tunnel
+  --host      with --lan: the address the device reaches this computer at (default: detected)
+  --package   package to test (default me.danielstiner.dumble)
+  -s          device serial, same as ANDROID_SERIAL
+exit: 0 result ok, 1 any other result, 2 the check could not run
+USAGE
+  exit 2
+}
+
+transport=usb
+tcp=0
+package=me.danielstiner.dumble
+lan_host=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --usb) transport=usb ;;
+    --lan) transport=lan ;;
+    --tcp) tcp=1 ;;
+    --host) [ $# -ge 2 ] || usage; lan_host=$2; shift ;;
+    --package) [ $# -ge 2 ] || usage; package=$2; shift ;;
+    -s) [ $# -ge 2 ] || usage; export ANDROID_SERIAL=$2; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+if [ "$tcp" = 1 ] && [ "$transport" != lan ]; then
+  echo "--tcp needs --lan" >&2
+  exit 2
+fi
+
+die() { echo "latency-check: $*" >&2; exit 2; }
+
+for tool in adb docker openssl; do
+  command -v "$tool" >/dev/null || die "$tool not found"
+done
+
+if [ -z "${ANDROID_SERIAL:-}" ]; then
+  attached=$(adb devices | awk 'NR > 1 && NF' | wc -l | tr -d ' ')
+  [ "$attached" -le 1 ] || die "$attached devices attached; name one with ANDROID_SERIAL or -s"
+fi
+[ "$(adb get-state 2>/dev/null)" = device ] || die "no device attached"
+# Pinned, so a device attached mid-run changes nothing.
+ANDROID_SERIAL=$(adb get-serialno)
+export ANDROID_SERIAL
+
+name=dumble-latency
+# Not Murmur's 64738: a server of the developer's own may hold that port, or its adb reverse.
+port=64739
+reversed=0
+cleanup() {
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  if [ "$reversed" = 1 ]; then
+    adb reverse --remove "tcp:$port" >/dev/null 2>&1 || true
+  fi
+}
+# Before the trap: another run's container is not ours to remove.
+[ -z "$(docker ps -aq -f "name=^$name\$")" ] \
+  || die "a container named $name exists: another check is running, or one was killed (docker rm -f $name)"
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+adb shell pm path "$package" | grep '^package:' >/dev/null \
+  || die "$package is not installed. Build a copy and install it by hand; never a Gradle install or connected task, which can replace your own app. See docs/latency.md."
+# The class's own name: an applicationIdSuffix changes the package and not this.
+activity=me.danielstiner.dumble.ui.latency.LatencyCheckActivity
+# An install older than the check has none.
+adb shell cmd package resolve-activity --brief -n "$package/$activity" \
+  | grep LatencyCheckActivity >/dev/null \
+  || die "$package has no latency check; on a personal phone pass --package (see docs/latency.md)"
+
+# Runtime permissions of the tested package itself, not a device setting.
+adb shell pm grant "$package" android.permission.RECORD_AUDIO \
+  || die "could not grant RECORD_AUDIO to $package"
+if [ "$transport" = lan ]; then
+  adb shell pm grant "$package" android.permission.ACCESS_LOCAL_NETWORK \
+    || echo "latency-check: no ACCESS_LOCAL_NETWORK on this Android version, continuing" >&2
+fi
+
+# A launch behind the lock screen leaves the page invisible, and the microphone service cannot start.
+adb shell dumpsys power | grep 'mWakefulness=Awake' >/dev/null \
+  || die "screen is off; wake the device (adb shell input keyevent KEYCODE_WAKEUP)"
+adb shell dumpsys window | grep 'isKeyguardShowing=false' >/dev/null \
+  || die "device is locked or its lock state is unknown; unlock it"
+
+case "$transport" in
+  usb)
+    host=127.0.0.1
+    publish=(-p "127.0.0.1:$port:64738/tcp")
+    ;;
+  lan)
+    host=$lan_host
+    if [ -n "$host" ]; then
+      :
+    elif [ "$(uname)" = Darwin ]; then
+      host=$(ipconfig getifaddr en0 2>/dev/null || true)
+    else
+      host=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)
+    fi
+    [ -n "$host" ] || die "no LAN address found; pass --host ADDRESS"
+    publish=(-p "$port:64738/tcp")
+    [ "$tcp" = 1 ] || publish+=(-p "$port:64738/udp")
+    ;;
+esac
+
+# autobanAttempts=0 as in ci.yml: Murmur bans an address after 10 connections in 120 s.
+docker run -d --rm --name "$name" -e MUMBLE_CONFIG_autobanAttempts=0 "${publish[@]}" \
+  mumblevoip/mumble-server:latest >/dev/null
+
+# Docker Desktop's proxy accepts on the host port before Murmur listens, so read the log.
+ready=0
+for _ in $(seq 30); do
+  if docker logs "$name" 2>&1 | grep 'Server listening on' >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$ready" = 1 ] || die "Murmur did not start in 30 s"
+
+# The certificate is generated just after the listening line.
+fingerprint=
+for _ in $(seq 10); do
+  fingerprint=$(openssl s_client -connect "127.0.0.1:$port" </dev/null 2>/dev/null \
+    | openssl x509 -outform DER 2>/dev/null | openssl dgst -sha256 -r | cut -d' ' -f1) || true
+  case "$fingerprint" in
+    *[!0-9a-f]*|"") ;;
+    *) [ "${#fingerprint}" = 64 ] && break ;;
+  esac
+  fingerprint=
+  sleep 1
+done
+[ -n "$fingerprint" ] || die "could not read Murmur's certificate"
+
+if [ "$transport" = usb ]; then
+  adb reverse "tcp:$port" "tcp:$port" >/dev/null
+  reversed=1
+fi
+
+# logcat -T rejects a time without milliseconds and still exits 0.
+since=$(adb shell "date '+%m-%d %H:%M:%S.000'" | tr -d '\r')
+adb shell am start --activity-clear-task \
+  -n "$package/$activity" \
+  --es host "$host" --ei port "$port" --es fingerprint "$fingerprint" >&2
+
+path=
+for _ in $(seq 90); do
+  path=$(adb shell "logcat -d -T '$since' -s LatencyCheck:I" | tr -d '\r' | sed -n 's/.*results: //p' | tail -n 1)
+  [ -z "$path" ] || break
+  sleep 1
+done
+if [ -z "$path" ]; then
+  die "no results in 90 s; did the app crash or leave the screen? Try: adb logcat -d -b crash"
+fi
+
+results=$(adb exec-out cat "$path") || die "could not read $path"
+printf '%s\n' "$results"
+grep -qx 'result = ok' <<<"$results" || exit 1

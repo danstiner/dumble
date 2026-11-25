@@ -63,6 +63,7 @@ Start with [architecture](docs/architecture.md). Each subsystem has its own page
 | [docs/capture.md](docs/capture.md) | microphone to packets, the transmit gate, sharing the microphone |
 | [docs/voice-activity.md](docs/voice-activity.md) | the voice activity detector: design, constants, measurements |
 | [docs/playout.md](docs/playout.md) | packets to the speaker, the jitter buffer, measured latency |
+| [docs/latency.md](docs/latency.md) | the on-device latency check: how to run it and what its rows mean |
 | [docs/avatar-color.md](docs/avatar-color.md) | the specification for a user's avatar color |
 
 `AGENTS.md` holds the coding conventions, the non-goals and the test rules.
