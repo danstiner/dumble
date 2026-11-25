@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
+import me.danielstiner.dumble.mumble.connection.ConnectionOptions
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -45,15 +46,13 @@ import me.danielstiner.dumble.mumble.net.UdpTransport
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
-import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
-import me.danielstiner.dumble.mumble.protocol.TcpFrame
-import me.danielstiner.dumble.mumble.protocol.TcpMessageType
+import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -74,8 +73,8 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
- * Owns connecting to a server: the blocking TLS connect (which throws trust exceptions before the
- * protocol starts) and the [ConnectionStateMachine] that follows, unified into one [status] flow.
+ * Owns connecting to a server and what the user sees of it: each session's [Connection], its
+ * reconnects and its trust failures, unified into one [status] flow.
  *
  * One live [Session] at a time, guarded by [generation]; each session's driver opens its
  * [Connection]. A blocking handshake cannot be preempted by teardown — the socket is not owned
@@ -119,7 +118,7 @@ class AppStateImpl internal constructor(
     // dispatcher below here.
     private val context: CoroutineContext = Dispatchers.Default,
     private val blocking: CoroutineDispatcher = Dispatchers.IO,
-    // Seam: the UDP voice socket, so a test runs the app state's UDP wiring on virtual time
+    // Seam: the UDP voice socket, so a test runs a connection's UDP wiring on virtual time
     // against a fake instead of a socket and its reader thread.
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
         { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
@@ -466,18 +465,10 @@ class AppStateImpl internal constructor(
         startPump(sender)
     }
 
-    /** Whichever transport the session's connection has voice on; dropped while it has none. A
-     *  datagram the socket refuses goes through the tunnel in the same call, and the next one
-     *  already starts there. Pump thread: reads the connection once, so a swap cannot split
-     *  one packet. */
-    private fun sendVoice(session: Session, payload: ByteArray): Boolean {
-        val connection = session.connection ?: return false
-        if (connection.path.state.value.onUdp) {
-            if (connection.udp.send(payload, payload.size)) return true
-            connection.path.demote()
-        }
-        return connection.transport.sendRaw(TcpMessageType.UDPTunnel, payload)
-    }
+    /** On the session's connection; dropped while it has none. Pump thread: reads the connection
+     *  once, so a swap cannot split one packet. */
+    private fun sendVoice(session: Session, payload: ByteArray): Boolean =
+        session.connection?.sendVoice(payload) ?: false
 
     /** Start releasing [capture]: close its stream synchronously, then leave the engine for the
      *  pump's own exit to free via [onPumpExited]. Lifecycle consumer only; callers guarantee
@@ -579,42 +570,22 @@ class AppStateImpl internal constructor(
         return prior
     }
 
-    /** The pieces of one TLS connect, built but not yet connected. */
+    /** One TLS connect, built but not yet connected. */
     private fun buildConnection(session: Session, pin: String?): Connection {
-        val gen = session.gen
         val connectionScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
-        val transport = newTransport(pin)
-        val stateMachine = ConnectionStateMachine(
-            transport, session.username, session.password, connectionScope,
+        return Connection(
+            ConnectionOptions(
+                session.endpoint, session.username, session.password, pin,
+                voiceBitrate = ACCOUNTED_BITRATE,
+            ),
+            newTransport, newUdp, session.receiver::onVoicePacket,
+            networkWatch.current, networkChanges.value, connectionScope, blockingScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
             bootClock = udpClock,
             pingIntervalMs = pingIntervalMs,
+            gen = session.gen,
         )
-        val path = VoicePath()
-        val udp = newUdp(stateMachine.crypt, object : MumbleUdpTransport.Listener {
-            private var heard = false   // the server chose UDP for our downlink; logged once
-            override fun onVoicePacket(buf: ByteArray, len: Int) {
-                if (!heard) {
-                    heard = true
-                    Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
-                }
-                session.receiver.onVoicePacket(buf, len)
-            }
-            override fun onPingReply(roundTrip: Duration) {
-                if (path.onPingAnswered(roundTrip)) stateMachine.udpPingAnswered(roundTrip)
-            }
-            // Demoting brings the downlink back with our next spurt; the tunneled ping does it
-            // for a client that never speaks, since the server never re-learns an address
-            // (docs/network.md, When UDP stops working).
-            override fun onPingsUnanswered() {
-                Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
-                path.demote()
-                transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
-            }
-            override fun requestCryptResync() { stateMachine.requestCryptResync() }
-        })
-        return Connection(transport, stateMachine, udp, path, networkWatch.current, networkChanges.value, connectionScope, blockingScope)
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
@@ -723,14 +694,14 @@ class AppStateImpl internal constructor(
                 // Status is the driver's own collector, not one of the connection's: the terminal
                 // Error must be on `status` before retire() cancels this coroutine's scope, and a
                 // Failed is never published before it is classified.
-                val failed = connection.stateMachine.state
+                val failed = connection.state
                     .onEach { st ->
                         if (st !is ConnectionState.Failed) mapState(gen, st)?.let { publishStatus(gen, it) }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
                 // The connection's own stamp, not what a collector on a conflating flow saw: it
                 // decides the retry and names the row the UI reads.
-                val synced = connection.stateMachine.sync
+                val synced = connection.sync
                 // The first connection dying before it synchronized is the connect failing, never
                 // retried; every later connection came out of replaceConnection synchronized.
                 if (synced == null) {
@@ -776,30 +747,14 @@ class AppStateImpl internal constructor(
      * session it belongs to, which closes it.
      */
     private suspend fun open(session: Session, connection: Connection): SessionStatus? {
-        val listener = object : MumbleControlTransport.Listener {
-            override fun onFrame(f: TcpFrame) = connection.stateMachine.onFrame(f)
-            override fun onClosed(cause: Throwable?) = connection.stateMachine.onClosed(cause)
-        }
         try {
-            connection.transport.connect(session.endpoint.host, session.endpoint.port, listener)
+            connection.connect()
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             Log.w(TAG, "connect failed gen=${session.gen} for ${session.endpoint.address}", t)
             return mapConnectError(t, session)
         }
-        // Before start(): the ping that registers our address fires the instant CryptSetup keys
-        // the cipher, and from then on the server sends our downlink over UDP whether or not we
-        // ever transmit (docs/network.md, UDP voice), so it has to land on a socket already
-        // listening. One that cannot be opened costs the session nothing but UDP.
-        connection.transport.remoteAddress()?.let { remote ->
-            runCatching { connection.udp.open(remote) }
-                .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
-        }
-        connection.stateMachine.udpPing = { connection.udp.sendPing() }
-        connection.stateMachine.audioListener = ConnectionStateMachine.AudioListener { payload ->
-            session.receiver.onVoicePacket(payload, payload.size)
-        }
-        connection.stateMachine.start()
+        connection.start()
         return null
     }
 
@@ -815,16 +770,16 @@ class AppStateImpl internal constructor(
             publishFromConnection(session, connection, into, from.value)
             connection.scope.launch { from.collect { publishFromConnection(session, connection, into, it) } }
         }
-        republish(connection.stateMachine.serverVersion, _serverVersion)
-        republish(connection.stateMachine.roundTripTime, _roundTripTime)
-        republish(connection.path.state, _voicePath)
-        republish(connection.stateMachine.lastServerReplyAt, _lastServerReplyAt)
-        republish(connection.stateMachine.channelTree, _channelTree)
-        republish(connection.stateMachine.userStats, _userStats)
+        republish(connection.serverVersion, _serverVersion)
+        republish(connection.roundTripTime, _roundTripTime)
+        republish(connection.voicePath, _voicePath)
+        republish(connection.lastServerReplyAt, _lastServerReplyAt)
+        republish(connection.channelTree, _channelTree)
+        republish(connection.userStats, _userStats)
         // Chat is the session's: what earlier connections received stays ahead of this connection's
         // own.
         connection.scope.launch {
-            connection.stateMachine.messages.collect {
+            connection.messages.collect {
                 publishFromConnection(
                     session, connection, _messages,
                     (session.carried + it).takeLast(ConnectionStateMachine.MAX_MESSAGES),
@@ -837,7 +792,7 @@ class AppStateImpl internal constructor(
         // or follows the send.
         synchronized(lock) {
             session.selfState.takeIf { it != DeafenState() }
-                ?.let { connection.stateMachine.sendSelfState(it) }
+                ?.let { connection.sendSelfState(it) }
         }
     }
 
@@ -909,7 +864,7 @@ class AppStateImpl internal constructor(
             }
             // Only the state is watched before the swap: a half-built channel tree from the
             // handshake never reaches the UI.
-            val outcome = next.stateMachine.state.first {
+            val outcome = next.state.first {
                 it is ConnectionState.Synchronized || it is ConnectionState.Failed
             }
             if (outcome is ConnectionState.Failed) {
@@ -1009,11 +964,11 @@ class AppStateImpl internal constructor(
         prior?.let { teardown(it) }
     }
 
-    override fun sendText(text: String): Boolean = current?.connection?.stateMachine?.sendText(text) ?: false
+    override fun sendText(text: String): Boolean = current?.connection?.sendText(text) ?: false
 
     override fun setSelfDeaf(on: Boolean) = ask { it.deafen(on) }
 
-    override fun requestUserStats(session: Int) { current?.connection?.stateMachine?.requestUserStats(session) }
+    override fun requestUserStats(session: Int) { current?.connection?.requestUserStats(session) }
 
     override fun requestAudioRoute(routeId: String) = call.requestRoute(routeId)
 
@@ -1072,7 +1027,7 @@ class AppStateImpl internal constructor(
             val session = current ?: return
             session.selfState = next(session.selfState)
             _selfState.value = session.selfState
-            session.connection?.stateMachine?.sendSelfState(session.selfState)
+            session.connection?.sendSelfState(session.selfState)
             session
         }
         apply(session)   // opens or closes a capture engine; never under the lock
@@ -1151,11 +1106,6 @@ class AppStateImpl internal constructor(
 
         /** No number: an attempt that hangs can finish past the deadline. */
         const val GAVE_UP_DETAIL = "could not get back to the server"
-
-        /** Tunneled for its side effect, never answered. Any frame of two bytes or more would
-         *  do; this one is honest about what it is. */
-        val TUNNEL_PING: ByteArray =
-            byteArrayOf(1) + MumbleUdpProtos.Ping.newBuilder().setTimestamp(1).build().toByteArray()
     }
 }
 
