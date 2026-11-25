@@ -86,7 +86,8 @@ internal class ReplayWindow {
     private fun offsetFor(hint: Int): Int = (hint - top[0]).toByte().toInt()
 
     companion object {
-        /** How far behind the top a packet may arrive and still be accepted. Upstream allows 29. */
-        private const val MAX_LATE = 32
+        /** How far behind the top a packet may arrive and still be accepted: what one Long holds
+         *  beside the top. Upstream allows 29. */
+        private const val MAX_LATE = 63
     }
 }

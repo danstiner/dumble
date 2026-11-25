@@ -29,7 +29,7 @@ class ReplayWindowTest {
     @Test
     fun aRestartSpendsItsSeedAndEverythingBehindIt() {
         val window = windowAt(200)
-        // 32 behind is the window's spent slots, the rest is further back than it reaches.
+        // 63 behind is the window's spent slots, the rest is further back than it reaches.
         for (hint in 72..200) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
     }
 
@@ -38,12 +38,23 @@ class ReplayWindowTest {
         val window = windowAt(0)
         assertTrue(window.rebuildNonce(1, nonce))
         assertEquals(1, window.accept(nonce))
-        assertTrue(window.rebuildNonce(33, nonce))
-        assertEquals(32, window.accept(nonce))
+        assertTrue(window.rebuildNonce(64, nonce))
+        assertEquals(63, window.accept(nonce))
         // The old top is now the last slot the window reaches; the one the jump skipped is open.
         assertFalse(window.rebuildNonce(1, nonce))
         assertTrue(window.rebuildNonce(2, nonce))
-        assertEquals(-31, window.accept(nonce))
+        assertEquals(-62, window.accept(nonce))
+    }
+
+    // A Long shift masks its count to six bits, so without the distance check 65 behind would
+    // read the bit for 1 behind.
+    @Test
+    fun pastTheWindowIsRefusedThoughNeverSeen() {
+        val window = windowAt(0)
+        assertTrue(window.rebuildNonce(66, nonce))
+        assertEquals("a jump past the window, which leaves every slot below it open", 66, window.accept(nonce))
+        assertTrue("63 behind", window.rebuildNonce(3, nonce))
+        assertFalse("65 behind", window.rebuildNonce(1, nonce))
     }
 
     @Test

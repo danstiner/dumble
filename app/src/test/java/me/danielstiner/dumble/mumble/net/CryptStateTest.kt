@@ -127,13 +127,13 @@ class CryptStateTest {
     fun reorderingToTheWindowEdgeIsAcceptedAndOnePastItIsNot() {
         val (a, b) = pair()
         val held = send(a, payload(0))
-        repeat(32) { assertNotNull(receive(b, send(a, payload(it + 1)))) }
-        // Top is now 32 ahead of the held packet, the furthest back the window reaches.
+        repeat(63) { assertNotNull(receive(b, send(a, payload(it + 1)))) }
+        // Top is now 63 ahead of the held packet, the furthest back the window reaches.
         assertArrayEquals(payload(0), receive(b, held))
 
         val (c, d) = pair()
         val tooOld = send(c, payload(0))
-        repeat(33) { assertNotNull(receive(d, send(c, payload(it + 1)))) }
+        repeat(64) { assertNotNull(receive(d, send(c, payload(it + 1)))) }
         val before = d.stats()
         assertNull(receive(d, tooOld))
         assertEquals(before.copy(rejected = 1), d.stats())
