@@ -44,6 +44,19 @@
             </intent-filter>
         </activity>
 
+        <!-- adb only: starting it needs DUMP, which the shell holds and no app a user installs
+             can. A check connects to the server it is given with the user's certificate, opens
+             the microphone and takes the speaker; what it captures never leaves the phone.
+             Extras: host, port (an int), fingerprint. In a task of its own, so the
+             activity-clear-task flag replaces an earlier check's page and leaves the app's alone;
+             out of Recents, where reopening a closed page would start its check again. -->
+        <activity
+            android:name=".ui.latency.LatencyCheckActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:taskAffinity="" />
+
         <service
             android:name=".service.VoiceService"
             android:exported="false"
