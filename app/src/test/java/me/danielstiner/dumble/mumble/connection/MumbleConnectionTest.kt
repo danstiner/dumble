@@ -1850,42 +1850,46 @@ class MumbleConnectionTest {
         assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
     }
 
-    /** The latency check's own connection trusts the fingerprint it was handed, whatever the store
-     *  says about the address, and writes nothing to the store. */
-    @Test fun aPinnedConnectTrustsTheGivenFingerprintAndStoresNothing() = deterministic {
-        val pins = InMemoryPinStore()
+    /** A connect given a pin store reads its server's pin there, whatever the app's store says
+     *  about the address. */
+    @Test fun aConnectGivenAPinStoreReadsItsPinThere() = deterministic {
         val endpoint = MumbleEndpoint.parse("localhost")
-        pins.put(endpoint.address, "stale")
+        val appPins = InMemoryPinStore().apply { put(endpoint.address, "stale") }
+        val given = InMemoryPinStore().apply { put(endpoint.address, "ab12") }
         val expected = CopyOnWriteArrayList<String?>()
         val conn = own(MumbleConnection(
-            pins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+            appPins, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { pin -> expected += pin; FakeControlTransport { _, _ -> } })
 
-        conn.connectPinned(endpoint, "latency-check", "ab12")
+        conn.connect(endpoint, "latency-check", null, given)
         handshaking(conn)
 
         assertEquals(listOf<String?>("ab12"), expected)
-        assertEquals("stale", pins.get(endpoint.address))
+        assertEquals("stale", appPins.get(endpoint.address))
     }
 
-    /** A throwaway server's certificate is never one the user should be asked to trust. */
-    @Test fun aPinnedConnectsMismatchIsNotOfferedForTrust() = deterministic {
-        val pins = InMemoryPinStore()
-        val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
-            pins, udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { pin ->
-            FakeControlTransport { _, _ -> throw PinMismatchException(stored = pin!!, presented = "cd34") }
-                .also { transports += it }
-        })
+    /** A trust prompt on such a session is answered into the store it was given, and the
+     *  reconnect reads it back from there: the app's store never learns the certificate. */
+    @Test fun trustingAPromptWritesToTheStoreTheSessionWasGiven() = deterministic {
         val endpoint = MumbleEndpoint.parse("localhost")
+        val appPins = InMemoryPinStore()
+        val given = InMemoryPinStore()
+        val expected = CopyOnWriteArrayList<String?>()
+        val conn = own(MumbleConnection(
+            appPins, udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin ->
+            expected += pin
+            FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("cd34") }
+        })
 
-        conn.connectPinned(endpoint, "latency-check", "ab12")
-        assertSettled("mismatch ends the session") { conn.status.value is ConnectionStatus.Error }
+        conn.connect(endpoint, "latency-check", null, given)
+        assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
         conn.trustAndConnect()
+        handshaking(conn)
 
-        assertSettled("no second transport") { transports.size == 1 }
-        assertNull(pins.get(endpoint.address))
+        assertEquals(listOf(null, "cd34"), expected)
+        assertEquals("cd34", given.get(endpoint.address))
+        assertNull(appPins.get(endpoint.address))
     }
 
     // ---- Real threads, by design. These run on runBlocking and the default dispatchers with
