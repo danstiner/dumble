@@ -68,12 +68,12 @@ class VoiceService : Service() {
             )
         } catch (t: Throwable) {
             // ForegroundServiceStartNotAllowedException if we lost the race into the background.
-            // Dropping the service beats hard-crashing the process: the connection itself is
+            // Dropping the service beats hard-crashing the process: the app state itself is
             // unaffected, and transmit degrades to working only while the app is visible.
             Log.e(TAG, "startForeground failed; stopping service", t)
             stopSelf(startId)
         }
-        // Nothing to rebuild without a connection to attach to, and the connection lives in the
+        // Nothing to rebuild without an app state to attach to, and the app state lives in the
         // app process — a restart with a null intent would show a notification for a session that
         // no longer exists.
         return START_NOT_STICKY
@@ -136,7 +136,7 @@ class VoiceService : Service() {
      * SINGLE_TOP|CLEAR_TOP reuses the running activity instead of stacking a second one on top of
      * it. Measured, not assumed: an ACTION_MAIN/CATEGORY_LAUNCHER intent left two MainActivity
      * records in the same task, because a task rooted by an explicit-component start does not match
-     * a launcher-style intent. The duplicate is easy to miss — Connection is a singleton, so the
+     * a launcher-style intent. The duplicate is easy to miss — AppState is a singleton, so the
      * new activity's ViewModel shows the same live session — until Back reveals the stale copy.
      */
     private fun resumeIntent(): PendingIntent = PendingIntent.getActivity(

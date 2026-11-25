@@ -122,7 +122,7 @@ class AppStateImpl internal constructor(
     // dispatcher below here.
     private val context: CoroutineContext = Dispatchers.Default,
     private val blocking: CoroutineDispatcher = Dispatchers.IO,
-    // Seam: the UDP voice socket, so a test runs the connection's UDP wiring on virtual time
+    // Seam: the UDP voice socket, so a test runs the app state's UDP wiring on virtual time
     // against a fake instead of a socket and its reader thread.
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
         { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
@@ -201,14 +201,14 @@ class AppStateImpl internal constructor(
     private var trustPrompt: Session? = null
 
     /** The transmit mode, as a setting: outlives sessions and is applied to every session this
-     *  connection opens. UI thread writes it. */
+     *  app state opens. UI thread writes it. */
     @Volatile private var transmitMode = TransmitMode.VoiceActivity
 
     /**
      * What the user asked for, and what outlives its link: one per connect(), published as
      * [current] under [lock] and unpublished by the next connect(), by disconnect(), or by
      * [retire] when its link dies. Outlives being current too: capture state hangs off the
-     * session, not the connection, because a release must find the session that opened the
+     * session, not the app state, because a release must find the session that opened the
      * microphone rather than whichever session replaced it.
      *
      * The first six fields are immutable identity. The mutable ones are either `@Volatile`
@@ -645,7 +645,7 @@ class AppStateImpl internal constructor(
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
             current = session
-            // Here rather than in requestCapture(): tying the call to the connection, not the
+            // Here rather than in requestCapture(): tying the call to the app state, not the
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
             // survives backgrounding. The service starts a main-looper hop after this returns, while
             // the connect tap still has the app in front — a microphone service cannot start later.

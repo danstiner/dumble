@@ -317,7 +317,7 @@ class ConnectViewModelTest {
         vm.onChatDraftChange("  a<b & \"c\"  ")
         vm.sendMessage()
         advanceUntilIdle()
-        // Input shaping lives here now — the connection sends the body verbatim. io.ktor.util.escapeHTML
+        // Input shaping lives here now — the app state sends the body verbatim. io.ktor.util.escapeHTML
         // emits &quot;/&#x27; for quotes; both round-trip through Html.fromHtml at render.
         assertEquals(listOf("a&lt;b &amp; &quot;c&quot;"), app.sentTexts)
     }
@@ -437,7 +437,7 @@ class ConnectViewModelTest {
     }
 
     /**
-     * The press asks for capture too, but that pairing belongs to the connection and is pinned
+     * The press asks for capture too, but that pairing belongs to the app state and is pinned
      * there — CaptureLifecycleTest.aTalkPressAloneRebuildsAndTransmits. All the ViewModel owes is
      * forwarding the edge, which onTransmittingDrivesTheConnectionGate above covers.
      */

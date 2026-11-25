@@ -16,9 +16,9 @@ on the wire are in [mumble-protocol.md](mumble-protocol.md).
 ## Design
 
 ```
-UI ─► Connection (interface)
+UI ─► AppState (interface)
           │
-    MumbleConnection                    one live Session, guarded by a generation
+    AppStateImpl                        one live Session, guarded by a generation
           ├─► Link                      one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
@@ -214,7 +214,7 @@ picked.
 ### Outgoing voice: promote and demote
 
 `net/VoicePath` holds one fact per link: is outgoing voice on UDP? It starts as no.
-`MumbleConnection.sendVoice` reads it for every packet. The code has a name for each change:
+`AppStateImpl.sendVoice` reads it for every packet. The code has a name for each change:
 
 - **Promote:** outgoing voice switches from TCP to UDP, starting with the next packet.
 - **Demote:** outgoing voice goes back to TCP, starting with the next packet, and the count of
@@ -300,6 +300,6 @@ blocked in read.
 
 ## Tests
 
-`MumbleConnectionTest`, `MumbleTcpTransportTest`, `MumbleUdpTransportTest`, `VoicePathTest`,
+`AppStateImplTest`, `MumbleTcpTransportTest`, `MumbleUdpTransportTest`, `VoicePathTest`,
 `MumbleTrustManagerTest`, `SessionStateMachineTest`, and `LiveServerIntegrationTest` against a
 real server.

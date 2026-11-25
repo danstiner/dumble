@@ -26,9 +26,9 @@ Non-goals:
 ```
  UI (Compose, ConnectViewModel)        observes StateFlows, issues commands
       │
- Connection (interface)                what the UI sees; faked in ViewModel tests
+ AppState (interface)                  what the UI sees; faked in ViewModel tests
       │
- MumbleConnection                      one per process; owns everything below
+ AppStateImpl                          one per process; owns everything below
       │
       ├─ MumbleTcpTransport            TLS on the platform SSLSocket, certificate pinning
       │    └─ SessionStateMachine      control protocol: handshake, pings, channel tree, chat
@@ -44,8 +44,8 @@ One TLS connection carries the protobuf control messages. Voice initially goes o
 connection, but switches to UDP once a round-trip ping proves UDP connectivity. Audio is 48 kHz
 mono 16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packets.
 
-**Connection** ([network.md](network.md)). `MumbleConnection` is a Hilt singleton bound to the
-`Connection` interface. It runs the TLS connect, the protocol session and the reconnects, and
+**App state** ([network.md](network.md)). `AppStateImpl` is a Hilt singleton bound to the
+`AppState` interface. It runs the TLS connect, the protocol session and the reconnects, and
 publishes one `status` flow. One session is live at a time, and that session owns both audio
 pipelines and the platform call.
 
@@ -77,7 +77,7 @@ still listen in the background.
 
 | Thread | Runs | Constraint |
 |---|---|---|
-| Coroutines on `Dispatchers.Default` | `MumbleConnection`, `SessionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
+| Coroutines on `Dispatchers.Default` | `AppStateImpl`, `SessionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
 | TLS reader coroutine | inbound frames; tunneled voice goes straight to `VoiceReceiver.onVoicePacket` | sole caller of the transport's `onClosed` |
 | UDP reader thread | decrypts datagrams, hands voice to `VoiceReceiver.onVoicePacket` | |
 | Capture audio callback | `CaptureEngine.onPcm` | realtime: no locks, no allocation |
@@ -93,7 +93,8 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 | Path | Contents |
 |---|---|
 | `app/src/main/java/.../ui/` | screens, `ConnectViewModel`, theme |
-| `.../mumble/connection/` | `Connection`, `MumbleConnection`, `Link`, `ConnectionStatus` |
+| `.../session/` | `AppState`, `AppStateImpl` |
+| `.../mumble/connection/` | `Link`, `ConnectionStatus` |
 | `.../mumble/net/` | TLS and UDP transports, OCB2 (`Ocb2`, `CryptState`, `ReplayWindow`), trust and pins, client certificate, `VoicePath` |
 | `.../mumble/protocol/` | `SessionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |
 | `.../mumble/voice/` | `VoiceSender`, `VoiceReceiver`, JNI wrappers (`NativeCapture`, `NativePlayout`), `AndroidVoiceCall`, stats |

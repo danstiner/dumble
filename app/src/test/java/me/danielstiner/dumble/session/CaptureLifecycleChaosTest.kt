@@ -137,7 +137,7 @@ class CaptureLifecycleChaosTest {
     }
 
     /**
-     * One randomized concurrent storm against a fresh connection: [HAMMER_THREADS] threads firing
+     * One randomized concurrent storm against a fresh app state: [HAMMER_THREADS] threads firing
      * requestCapture/setTransmitting/hold/resume in random order and mix, plus one dedicated thread
      * firing connect/disconnect on its own schedule, then a settle phase that checks the consumer
      * is still alive and every engine it built is gone.

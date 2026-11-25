@@ -47,7 +47,7 @@ class CaptureLifecycleTest {
     @get:Rule val timeout = hangGuard()
 
     /**
-     * A connection on the rig's scheduler, torn down by it, whose capture pumps the rig steps: a
+     * An app state on the rig's scheduler, torn down by it, whose capture pumps the rig steps: a
      * release and the engine's free land in one `assertSettled`, and the pump's speech stall runs
      * on the scheduler's clock. Every handle here returns 0 where the engine would block.
      */

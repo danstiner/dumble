@@ -27,8 +27,8 @@ import kotlin.time.TestTimeSource
  * [ConnectViewModel]'s permission and speaking state under every interleaving a seed picks.
  *
  * The ViewModel is confined to Main: every public method is a UI-thread call in production, and
- * the connection reaches it only through `StateFlow` writes. So the race worth pinning is UI calls
- * against connection writes landing between the `uiState` combine's runs, not threads: each
+ * the app state reaches it only through `StateFlow` writes. So the race worth pinning is UI calls
+ * against app state writes landing between the `uiState` combine's runs, not threads: each
  * schedule is a seeded mix of both, with the Main dispatcher run at random points so updates
  * arrive singly and coalesced. What it gives up is thread-level parallelism of the `StateFlow`
  * writes themselves, which is `StateFlow`'s contract rather than the ViewModel's.
@@ -51,7 +51,7 @@ class ConnectViewModelChaosTest {
         val app = FakeAppState()
         val vm = ConnectViewModel(app, FakeConfigStore(null), TestTimeSource()) { heldInitially }
         try {
-            // Connectable, so onConnect() reaches the connection instead of failing validation.
+            // Connectable, so onConnect() reaches the app state instead of failing validation.
             vm.onHostChange("chaos.example"); vm.onUsernameChange("u"); vm.onPortChange("64738")
             repeat(STEPS) { step ->
                 val at = "seed=$seed step=$step"

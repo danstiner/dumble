@@ -89,7 +89,7 @@ data class ConnectUiState(
     // the Mute control says, not a reason to disable it.
     val inaudible: Boolean = false,
     val talkBlock: TalkBlock? = null,
-    // The user's setting; the connection applies it to every session.
+    // The user's setting; the app state applies it to every session.
     val transmitMode: TransmitMode = TransmitMode.VoiceActivity,
     // The platform's answer, not the last tap — same discipline as [deafened]. One round trip of
     // lag on the caption, and no second copy of the truth to drift.
@@ -177,13 +177,13 @@ class ConnectViewModel internal constructor(
         ),
     )
 
-    // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
+    // Kotlin's typed combine() maxes at 5 flows, so the app state's flows nest into snapshots to
     // keep the top-level inside it too. Split by what they describe rather than by arity.
     private val selfSnapshot = combine(appState.callHeld, appState.selfState) { held, self ->
         SelfSnapshot(held, self)
     }
 
-    private val connSnapshot = combine(
+    private val sessionSnapshot = combine(
         appState.status, appState.channelTree, appState.messages, appState.audioRoutes,
         selfSnapshot,
     ) { status, tree, msgs, routes, self -> ConnSnapshot(status, tree, msgs, routes, self) }
@@ -199,7 +199,7 @@ class ConnectViewModel internal constructor(
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
-            form, connSnapshot, healthSnapshot, appState.speakingSessions, appState.selfSpeaking,
+            form, sessionSnapshot, healthSnapshot, appState.speakingSessions, appState.selfSpeaking,
         ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
             val session = status.mySession
@@ -315,7 +315,7 @@ class ConnectViewModel internal constructor(
         )
     }
     fun sendMessage() {
-        // Trim and HTML-escape here, at the input boundary — the connection sends the body verbatim.
+        // Trim and HTML-escape here, at the input boundary — the app state sends the body verbatim.
         val body = form.value.chatDraft.trim()
         if (body.isEmpty()) return
         if (appState.sendText(body.escapeHTML())) form.value = form.value.copy(chatDraft = "")

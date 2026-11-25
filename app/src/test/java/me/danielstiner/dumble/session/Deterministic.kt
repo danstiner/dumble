@@ -17,11 +17,11 @@ import kotlin.time.Duration
 import kotlin.time.TimeSource
 
 /**
- * A converted test: everything the connection runs is on one StandardTestDispatcher, so
+ * A converted test: everything the app state runs is on one StandardTestDispatcher, so
  * nothing moves between two statements unless the test drives the scheduler, and `delay`
  * is virtual. The rule is drive, then assert — never await. runTest's own final drain
  * (`advanceUntilIdleOr`) would otherwise run the handshake deadline, the ping death and the
- * whole reconnect ladder on any connection left up, so every connection is built through
+ * whole reconnect ladder on any app state left up, so every app state is built through
  * [Rig.own] and torn down here.
  */
 internal fun deterministic(body: suspend Rig.() -> Unit) = runTest {
@@ -44,7 +44,7 @@ internal class Rig(val scope: TestScope) {
 
     fun own(app: AppStateImpl): AppStateImpl = app.also { owned += it }
 
-    /** Pass as `startPump`: the connection's capture pumps then run only when [settle] steps them,
+    /** Pass as `startPump`: the app state's capture pumps then run only when [settle] steps them,
      *  so their handles must never block a poll — `FakeCaptureHandle(blocking = false)`. */
     val startPump: (VoiceSender) -> Unit = { pumps += it }
 
@@ -85,7 +85,7 @@ internal class Rig(val scope: TestScope) {
         assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
     }
 
-    /** The nth transport the connection built, once it exists and has connected. */
+    /** The nth transport the app state built, once it exists and has connected. */
     fun transportAt(transports: List<FakeControlTransport>, index: Int): FakeControlTransport {
         assertSettled("transport $index must be built and connected") {
             transports.size > index && transports[index].listener != null

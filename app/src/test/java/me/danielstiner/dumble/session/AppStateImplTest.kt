@@ -1897,7 +1897,7 @@ class AppStateImplTest {
     // ---- the UDP voice socket ------------------------------------------------------------
     //
     // MumbleUdpTransportTest owns what the socket does. Here a FakeUdp stands in for it and the
-    // tests pin the connection's wiring, on the scheduler. The tests with a `peer` run the real
+    // tests pin the app state's wiring, on the scheduler. The tests with a `peer` run the real
     // socket end to end instead, against a loopback peer keyed as the server: our client_nonce is
     // its decrypt seed, its server_nonce ours.
 
@@ -1916,8 +1916,8 @@ class AppStateImplTest {
             .build().toByteArray(),
     )
 
-    /** A link's UDP socket: records what the connection asks of it, and keeps the listener the
-     *  connection built, so the test can play the server's side. */
+    /** A link's UDP socket: records what the app state asks of it, and keeps the listener the
+     *  app state built, so the test can play the server's side. */
     private class FakeUdp(val crypt: CryptState, val listener: MumbleUdpTransport.Listener) : UdpTransport {
         var openedOn: InetSocketAddress? = null
         var closed = false
@@ -1944,7 +1944,7 @@ class AppStateImplTest {
     private val serverAddress = InetSocketAddress.createUnresolved("mumble.invalid", 64738)
 
     // Each link's control transport and UDP socket, in link order, for the tests that build their
-    // connection from the two factories below.
+    // app state from the two factories below.
     private val controlTransports = mutableListOf<FakeControlTransport>()
     private val udps = mutableListOf<FakeUdp>()
 

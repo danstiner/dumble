@@ -54,14 +54,14 @@ session opens.
   deafen. It is not the server's echo, so the gate closes at the tap.
 - **Wanting the gate open also asks for capture again,** which is how capture comes back after a
   terminal failure.
-- **The transmit mode lives on the connection, not the session.** A rebuilt engine starts in
+- **The transmit mode lives on the app state, not the session.** A rebuilt engine starts in
   push-to-talk and is given the mode back.
 
 The KDoc on `apply` explains why a press cannot race the session opening.
 
 ## Lifecycle
 
-`MumbleConnection` owns it. Four sources ask for transitions concurrently: the Talk button,
+`AppStateImpl` owns it. Four sources ask for transitions concurrently: the Talk button,
 platform hold and resume, disconnect and reconnect, and the pump's own exit. Each transition is a
 command on one channel with a single consumer. State is kept as levels, not events, and
 `reconcile()` compares the levels and is the only place the capture session opens or closes.
@@ -95,7 +95,7 @@ session resumes by itself. A Talk press held through the hold transmits once it 
 
 ## Speaking indicator
 
-`VoiceSender` reports whether we are speaking, and `MumbleConnection` publishes it as
+`VoiceSender` reports whether we are speaking, and `AppStateImpl` publishes it as
 `selfSpeaking` in either transmit mode. A packet of speech that reaches the wire raises it. It is
 lowered by the first packet of the hangover (flagged `kFlagHangover` by the engine), a terminator,
 a refused send, 100 ms with no packet, and the pump ending. The indicator fades over the 200 ms
