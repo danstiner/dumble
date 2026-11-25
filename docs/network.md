@@ -24,7 +24,7 @@ UI ─► AppState (interface)
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
           │     │      cipher: CryptState; path: VoicePath
-          │     └─► SessionStateMachine  handshake, pings, channel tree, chat, cipher keys
+          │     └─► ConnectionStateMachine  handshake, pings, channel tree, chat, cipher keys
           └─► audio and the platform call     capture.md, playout.md
 ```
 
@@ -177,9 +177,9 @@ Measured: an on-link address is blocked, and a private address reached through t
 not. A public name can resolve to a local address. A `.local` name needs no special case: its
 lookup succeeds without the permission and its socket is then blocked like any other.
 
-### Protocol session
+### Connection state machine
 
-`protocol/SessionStateMachine`. It sends `Version` and `Authenticate`, then waits for `ServerSync`
+`protocol/ConnectionStateMachine`. It sends `Version` and `Authenticate`, then waits for `ServerSync`
 under its own 15 s deadline, since the transport's own timeouts (10 s each for the socket connect
 and the TLS handshake) end there. State transitions settle by compare-and-set, and the first failure
 wins.
@@ -301,5 +301,5 @@ blocked in read.
 ## Tests
 
 `AppStateImplTest`, `MumbleTcpTransportTest`, `MumbleUdpTransportTest`, `VoicePathTest`,
-`MumbleTrustManagerTest`, `SessionStateMachineTest`, and `LiveServerIntegrationTest` against a
+`MumbleTrustManagerTest`, `ConnectionStateMachineTest`, and `LiveServerIntegrationTest` against a
 real server.

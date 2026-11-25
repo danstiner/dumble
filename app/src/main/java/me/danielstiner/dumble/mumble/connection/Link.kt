@@ -10,8 +10,8 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * One TLS connect and what lives exactly as long as it: the protocol session on it, the UDP
- * socket keyed by that session's cipher, which of the two carries our voice, and the scope of
+ * One TLS connect and what lives exactly as long as it: the protocol state machine on it, the UDP
+ * socket keyed by that state machine's cipher, which of the two carries our voice, and the scope of
  * the collectors that republish its flows. Connect-once, like the transport it wraps: the
  * session above it outlives it, and a replacement is a new Link.
  */

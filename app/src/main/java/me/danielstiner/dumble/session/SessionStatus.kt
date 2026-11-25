@@ -58,7 +58,7 @@ enum class ErrorKind {
 }
 
 /**
- * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state
+ * Protocol state → session status. Null for [ConnectionState.Disconnected]: it is the state
  * machine's start value and the coordinator, not the protocol, owns the pre-handshake phases.
  * [gen] is stamped into [SessionStatus.Connected]; the protocol layer never learns it.
  */

@@ -31,10 +31,10 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.session.AppState
-import javax.inject.Inject
 import me.danielstiner.dumble.session.ErrorKind
 import me.danielstiner.dumble.session.SessionStatus
 import me.danielstiner.dumble.session.mySession
+import javax.inject.Inject
 
 sealed interface PortInput {
     data class Ok(val port: Int) : PortInput
@@ -50,7 +50,7 @@ fun parsePort(text: String): PortInput {
 
 /**
  * Overlay screens, orthogonal to connection state — Settings is reachable both before and during
- * a session. [Main] means no overlay: show whatever the connection status dictates.
+ * a session. [Main] means no overlay: show whatever the session status dictates.
  */
 enum class Route { Main, Settings, About }
 

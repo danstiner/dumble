@@ -57,7 +57,7 @@ others.
 Two encodings coexist. Legacy `version_v1` is a u32, `major<<16 | minor<<8 | patch`. Minor and patch
 saturate at 255, which real 1.3 to 1.5 point releases reach. `version_v2` is a u64 with 16 bits each
 for major, minor and patch at bits 48, 32 and 16; the low 16 are reserved. This client sends both,
-prefers v2 when reading, and announces itself as 1.5.0 (`SessionStateMachine.CLIENT_*`).
+prefers v2 when reading, and announces itself as 1.5.0 (`ConnectionStateMachine.CLIENT_*`).
 
 ### Handshake
 
@@ -283,11 +283,11 @@ This client matches desktop behaviour by default. Each departure is deliberate.
 
 | This client | Why | Cost | Where |
 |---|---|---|---|
-| Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
+| Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `ConnectionStateMachine` |
 | No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |
 | Replay bitmap instead of a generation table | The table can wedge the receive direction (Replay protection). | None on the wire. | `net/ReplayWindow.kt` |
 | IV window: 63 behind, 127 ahead | Ahead matches upstream. Behind is what the replay bitmap holds; upstream stops at 29 and gives no reason. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
 | Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
-| 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
+| 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `ConnectionStateMachine` |
 | UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |
 | A mute asked for while deafened is kept | It follows from storing the two asks separately. | None: no control can ask for it. | `DeafenState` |
