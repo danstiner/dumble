@@ -60,6 +60,7 @@ internal class ReplayWindow {
         val offset = offsetFor(hint)
         if (offset <= 0) {
             val behind = -offset
+            // Refused: further back than the bitmap records, or its bit says already accepted.
             if (behind > MAX_LATE || (bitmap ushr behind) and 1L != 0L) return false
         }
         addToCounter(top, offset, out)
