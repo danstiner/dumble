@@ -80,9 +80,11 @@ constexpr milliseconds kWarmGap = 1000ms;
 
 // The delay is the same for every sample of a spurt unless playout adapts inside it, so several
 // probes must agree on the total, and the test fails if they do not. No scenario here provokes
-// an adaptation: a shrink needs kShrinkCooldownSamples of produced audio first, and the measured
-// spurt is shorter. The parts can still differ between probes, as jitter moves time between the
-// network and the jitter buffer, so each part is pinned as its median.
+// an adaptation: a shrink needs kShrinkCooldownSamples of produced audio first, counted afresh for
+// the measured spurt because the warm spurt's slot retires in the gap, and every probe's onset is
+// heard before the spurt has produced that much. The parts can still differ between probes, as
+// jitter moves time between the network and the jitter buffer, so each part is pinned as its
+// median.
 constexpr int kProbes = 4;
 constexpr milliseconds kFirstProbe = 300ms;
 constexpr milliseconds kProbeSpacing = 500ms;
