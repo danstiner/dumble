@@ -27,19 +27,42 @@ class ReplayWindowTest {
     }
 
     @Test
-    fun aRestartSpendsItsSeedAndTheWholeWindowBelowIt() {
-        val window = windowAt(100)
-        for (hint in 37..100) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
-        // 64 behind is past the bitmap, so it is read as 192 ahead and left for the tag to fail.
-        assertTrue(window.rebuildNonce(36, nonce))
-        assertArrayEquals(ByteArray(16).also { it[0] = 36; it[1] = 1 }, nonce)
+    fun aRestartSpendsItsSeedAndEverythingBehindIt() {
+        val window = windowAt(200)
+        // The seed and the 63 below it are spent; the rest is further back than the window reaches.
+        for (hint in 72..200) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
     }
 
     @Test
-    fun oneNinetyTwoAheadRebuildsAndOneNinetyThreeAliasesToASpentSlot() {
+    fun aJumpOfTheWindowDepthKeepsTheOldTopSpent() {
         val window = windowAt(0)
-        assertTrue(window.rebuildNonce(192, nonce))
-        assertArrayEquals(ByteArray(16).also { it[0] = 192.toByte() }, nonce)
-        assertFalse(window.rebuildNonce(193, nonce))
+        assertTrue(window.rebuildNonce(1, nonce))
+        assertEquals(1, window.accept(nonce))
+        assertTrue(window.rebuildNonce(64, nonce))
+        assertEquals(63, window.accept(nonce))
+        // The old top is now the last slot the window reaches; the one the jump skipped is open.
+        assertFalse(window.rebuildNonce(1, nonce))
+        assertTrue(window.rebuildNonce(2, nonce))
+        assertEquals(-62, window.accept(nonce))
+    }
+
+    // A Long shift masks its count to six bits, so without the distance check 65 behind would
+    // read the bit for 1 behind.
+    @Test
+    fun pastTheWindowIsRefusedThoughNeverSeen() {
+        val window = windowAt(0)
+        assertTrue(window.rebuildNonce(66, nonce))
+        assertEquals("a jump past the window, which leaves every slot below it open", 66, window.accept(nonce))
+        assertTrue("63 behind", window.rebuildNonce(3, nonce))
+        assertFalse("65 behind", window.rebuildNonce(1, nonce))
+    }
+
+    @Test
+    fun oneTwentySevenAheadRebuildsAndOneMoreReadsAsBehind() {
+        val window = windowAt(200)
+        assertTrue(window.rebuildNonce(71, nonce))
+        // 200 + 127 carries into the second byte.
+        assertArrayEquals(ByteArray(16).also { it[0] = 71; it[1] = 1 }, nonce)
+        assertFalse(window.rebuildNonce(72, nonce))
     }
 }

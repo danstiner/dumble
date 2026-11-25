@@ -128,7 +128,7 @@ class CryptStateTest {
         val (a, b) = pair()
         val held = send(a, payload(0))
         repeat(63) { assertNotNull(receive(b, send(a, payload(it + 1)))) }
-        // Top is now 63 ahead of the held packet, the furthest back the bitmap reaches.
+        // Top is now 63 ahead of the held packet, the furthest back the window reaches.
         assertArrayEquals(payload(0), receive(b, held))
 
         val (c, d) = pair()
@@ -143,17 +143,17 @@ class CryptStateTest {
     @Test
     fun aBurstOfLossWithinTheReconstructionSpanStillDecodes() {
         val (a, b) = pair()
-        repeat(191) { send(a, payload(it)) }
+        repeat(126) { send(a, payload(it)) }
         assertArrayEquals(payload(7), receive(b, send(a, payload(7))))
-        assertEquals(CryptStats(good = 1, late = 0, lost = 191, resync = 0, rejected = 0), b.stats())
+        assertEquals(CryptStats(good = 1, late = 0, lost = 126, resync = 0, rejected = 0), b.stats())
     }
 
     @Test
     fun aBurstBeyondTheReconstructionSpanNeedsAResync() {
         val (a, b) = pair()
-        repeat(192) { send(a, payload(it)) }
-        // 193 ahead rebuilds as a packet behind us, and that slot is already spent, so the window
-        // refuses it before any decryption.
+        repeat(127) { send(a, payload(it)) }
+        // 128 ahead reads as 128 behind, further back than the window reaches, so it is refused
+        // before any decryption.
         assertNull(receive(b, send(a, payload(7))))
         assertEquals(CryptStats(good = 0, late = 0, lost = 0, resync = 0, rejected = 1), b.stats())
 
@@ -444,12 +444,12 @@ class CryptStateTest {
     }
 
     /**
-     * A forward jump of exactly the window size. Kotlin masks a Long shift count to six bits, so
+     * A forward jump of the bitmap's width. Kotlin masks a Long shift count to six bits, so
      * `bitmap shl 64` is `shl 0` -- without the guard the bitmap survives the jump unshifted and
      * every slot below the new top reads as spent.
      */
     @Test
-    fun aJumpOfExactlyTheWindowLeavesTheSlotsBelowItOpen() {
+    fun aJumpOfTheBitmapWidthLeavesTheSlotsBelowItOpen() {
         val (a, b) = pair()
         val datagrams = (0 until 64).map { send(a, payload(it)) }
 

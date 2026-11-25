@@ -137,7 +137,7 @@ class CryptStatePropertyTest {
      * The converse of [noCounterIsEverAcceptedTwice], and the half that was only ever argued: a
      * packet delivered while it is still inside the window must never be refused. The schedule
      * stays inside deliberately -- reordering is confined to groups well under the 63 the window
-     * tolerates, and dropped runs stay well under the 191 a forward jump can rebuild -- so every
+     * tolerates, and dropped runs stay well under the 126 a forward jump can skip -- so every
      * first delivery is one the receiver has no licence to reject, and every repeat is a replay.
      */
     @Test

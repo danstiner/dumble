@@ -207,22 +207,24 @@ carrying into the higher bytes. Only the low byte is sent, so the receiver rebui
 fifteen from the counter it holds and must choose among 256 candidates. That choice is local to
 the receiver: nothing on the wire records it.
 
-This client reads the byte as up to 63 behind the highest counter accepted, or up to 192 ahead. One
-guess covers both, so an attacker can never force a second decrypt.
+This client guesses the candidate nearest the highest counter it has accepted: 128 behind to 127
+ahead. There is only one guess, so an attacker can never force a second decrypt.
 
-- **63 behind** is 1.26 s of reordering at 50 packets a second, far more than networks produce.
-- **191 packets lost in a row** are ridden out. Loss bursts of seconds are routine (a WiFi roam, a
-  cell handoff), and only the behind side costs replay state.
-- Anything further away rebuilds to the wrong counter and fails the tag. At that distance a stale
-  packet and a forged one cannot be told apart.
+- **Up to 127 ahead** is decrypted, so 126 packets lost in a row are ridden out: 2.5 s of one
+  talker at 50 packets a second.
+- **Up to 63 behind** is decrypted unless already accepted. That is as far back as the replay
+  bitmap records, and 1.26 s of reordering, far more than networks produce.
+- **Further behind** is refused without decrypting.
 
-Upstream tolerates 29 behind and jumps ahead up to the 128-value ambiguity boundary.
+A sender more than 127 ahead is guessed wrong, so the stream needs a resync.
+
+Upstream accepts 29 behind and 127 ahead, plus 128 ahead when the byte has not wrapped.
 
 ### Replay protection
 
 Replays are rejected before any decryption. `ReplayWindow` keeps the sliding-window bitmap that
-IPsec uses (RFC 4303 §3.4.3) and SRTP requires at least 64 bits of (RFC 3711 §3.3.2): the highest counter
-accepted, plus one bit for each of the 63 below it, in one 64-bit word.
+IPsec uses (RFC 4303 §3.4.3): the highest counter accepted, plus one bit for each of the 63 below
+it, in one 64-bit word.
 
 Upstream keeps a 256-slot table, one slot per value of `iv[0]`, holding the `iv[1]` last accepted
 there. The table is zero-filled, so "never visited" looks like "visited when `iv[1]` was 0".
@@ -254,7 +256,7 @@ or ahead of it. Two edge cases:
 
 - A junk datagram can trigger a request just as a quiet stream resumes. Adopting the reply then
   reopens at most one window of just-resumed audio to replay, the same trade upstream makes.
-- A forged tag that wins a 2^24 collision can move the highest counter up to 192 ahead of the
+- A forged tag that wins a 2^24 collision can move the highest counter up to 127 ahead of the
   server. Adoption is what repairs that; refusing to move backwards would let one bad value
   reject every honest correction.
 
@@ -284,7 +286,7 @@ This client matches desktop behaviour by default. Each departure is deliberate.
 | Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
 | No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |
 | Replay bitmap instead of a generation table | The table can wedge the receive direction (Replay protection). | None on the wire. | `net/ReplayWindow.kt` |
-| Wider IV window: 63 behind, 191 lost in a row | Loss bursts of seconds are routine on mobile networks. | None on the wire; the choice is local to the receiver. | `net/CryptState.kt` |
+| IV window: 63 behind, 127 ahead | Ahead matches upstream. Behind is what the replay bitmap holds; upstream stops at 29 and gives no reason. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
 | Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
 | 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
 | UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |
