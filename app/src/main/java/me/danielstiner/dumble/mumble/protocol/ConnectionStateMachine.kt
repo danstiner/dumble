@@ -3,7 +3,6 @@ package me.danielstiner.dumble.mumble.protocol
 import android.util.Log
 import com.google.protobuf.ByteString
 import me.danielstiner.dumble.mumble.net.CryptState
-import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -45,6 +44,9 @@ class ConnectionStateMachine(
     // Seam: a test lengthens it to keep the ping ticker out of its way. Only the ticker reads it;
     // the thresholds derived from the constant stay.
     private val pingIntervalMs: Long = PING_INTERVAL_MS,
+    // What our voice costs as the server accounts it, for the max_bandwidth warning; zero never
+    // warns.
+    private val voiceBitrate: Int = 0,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -91,8 +93,8 @@ class ConnectionStateMachine(
      * CryptSetup keys [crypt], which is when the server can first match our address, then once
      * per tick beside the TCP ping, so one ticker carries both as desktop's does. Not at
      * ServerSync as well: that follows keying within milliseconds, and a ping whose reply had no
-     * time to arrive would read as unanswered to anything judging the cadence. Null until
-     * AppStateImpl wires it.
+     * time to arrive would read as unanswered to anything judging the cadence. Null until the
+     * connection wires it.
      */
     @Volatile var udpPing: (() -> Unit)? = null
 
@@ -200,11 +202,10 @@ class ConnectionStateMachine(
                     deadlineJob?.cancel()
                     startPings()
                     // Over-cap packets are dropped silently, so the symptom is otherwise
-                    // undiagnosable one-way audio. ACCOUNTED_BITRATE derives from the encoder's
-                    // own rate so the two cannot drift.
-                    if (sync.maxBandwidth in 1 until ACCOUNTED_BITRATE) {
+                    // undiagnosable one-way audio.
+                    if (sync.maxBandwidth in 1 until voiceBitrate) {
                         Log.w(TAG, "server max_bandwidth=${sync.maxBandwidth} is below our fixed " +
-                            "$ACCOUNTED_BITRATE — the server will silently drop audio packets " +
+                            "$voiceBitrate — the server will silently drop audio packets " +
                             "over the cap")
                     }
                 }

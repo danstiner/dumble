@@ -215,7 +215,7 @@ picked.
 ### Outgoing voice: promote and demote
 
 `net/VoicePath` holds one fact per connection: is outgoing voice on UDP? It starts as no.
-`AppStateImpl.sendVoice` reads it for every packet. The code has a name for each change:
+`Connection.sendVoice` reads it for every packet. The code has a name for each change:
 
 - **Promote:** outgoing voice switches from TCP to UDP, starting with the next packet.
 - **Demote:** outgoing voice goes back to TCP, starting with the next packet, and the count of
