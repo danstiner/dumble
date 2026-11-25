@@ -47,39 +47,47 @@ internal class ReplayWindow {
     }
 
     /**
-     * Where the sender's counter sits relative to the top, from its low byte alone. The 256 values
-     * that byte can take are split [MAX_LATE] behind and the rest ahead, so offsets run `top-63` to
-     * `top+192` -- one guess covering both loss and reordering, never a second decrypt attempt for
-     * an attacker to force. Anything further out rebuilds to the wrong counter and fails the tag.
+     * Rebuilds the counter a packet carrying [hint] must have been sealed under and writes it to
+     * [out] as the nonce to try. False, with [out] untouched, when that counter has been accepted
+     * already.
+     *
+     * [hint] is the counter's low byte, the only part of it sent on the wire. Its 256 values are
+     * split [MAX_LATE] behind the top and the rest ahead, so candidates run `top-63` to `top+192`
+     * -- one guess covering both loss and reordering, never a second decrypt attempt for an
+     * attacker to force. Anything further out rebuilds to the wrong counter and fails the tag.
      */
-    fun offsetFor(hint: Int): Int {
-        val step = (hint - top[0]) and 0xFF
-        return if (step > 0xFF - MAX_LATE) step - 0x100 else step
+    fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
+        val offset = offsetFor(hint)
+        // Bit k is the counter k below the top, so a counter at or behind the top is bit -offset.
+        if (offset <= 0 && (bitmap ushr -offset) and 1L != 0L) return false
+        addToCounter(top, offset, out)
+        return true
     }
 
-    /** Whether the counter at [offset] has been accepted already. Costs no cipher work. */
-    fun alreadyAccepted(offset: Int): Boolean =
-        offset <= 0 && (bitmap ushr -offset) and 1L != 0L
-
-    /** Writes the counter at [offset] into [out] as the nonce to try. */
-    fun nonceAt(offset: Int, out: ByteArray) = addToCounter(top, offset, out)
-
     /**
-     * Records the counter at [offset] as accepted. A forward offset carries the top with it and
-     * shifts the bitmap by the same amount; a jump of a whole window leaves nothing live to keep,
-     * since `newTop − 63` is then past the old top.
-     *
-     * Independent of [nonceAt]; the two are correct in any order.
+     * Records [nonce], the counter [rebuildNonce] produced, as accepted now that its tag has
+     * verified, and returns its offset from the top: positive when it becomes the new top,
+     * negative when it arrived late. Moving the top shifts the bitmap by the same amount; a jump
+     * of a whole window leaves nothing live to keep, since `newTop − 63` is then past the old top.
      */
-    fun accept(offset: Int) {
+    fun accept(nonce: ByteArray): Int {
+        val offset = offsetFor(nonce[0].toInt())
         if (offset > 0) {
             // Kotlin masks a Long shift to six bits, so a jump of exactly the window size would
             // otherwise leave the bitmap unshifted and mark all 63 slots below the new top spent.
             bitmap = if (offset >= WINDOW) 1L else (bitmap shl offset) or 1L
-            addToCounter(top, offset, top)
+            nonce.copyInto(top)
         } else {
             bitmap = bitmap or (1L shl -offset)
         }
+        return offset
+    }
+
+    private fun offsetFor(hint: Int): Int {
+        // How far ahead of the top the hint sits, modulo 256: 0 to 255.
+        val step = (hint - top[0]) and 0xFF
+        // The top MAX_LATE of those are read as behind instead: 193..255 become -63..-1.
+        return if (step > 0xFF - MAX_LATE) step - 0x100 else step
     }
 
     companion object {

@@ -8,7 +8,7 @@ package me.danielstiner.dumble.mumble.net
  *     bytes 1..3  the first three bytes of the OCB2 tag
  *     bytes 4..   ciphertext, as long as the plaintext
  *
- * so it costs [HEADER_LEN] bytes. Only that low byte travels, and the receiver rebuilds the other
+ * so it costs [HEADER_LEN] bytes. Only that low byte is sent, and the receiver rebuilds the other
  * fifteen from the counter it already holds.
  *
  * Three threads share one instance -- control channel keying and reading stats, send path, receive
@@ -132,15 +132,12 @@ class CryptState {
         val wire1 = src[2]
         val wire2 = src[3]
 
-        val offset = window.offsetFor(hint)
-        // A replay costs no AES: the bitmap answers first.
-        if (window.alreadyAccepted(offset)) {
+        // A replay costs no AES: the bitmap answers first. Otherwise guessing is free: a wrong
+        // guess makes the wrong nonce and the tag will not match.
+        if (!window.rebuildNonce(hint, nonce)) {
             replay++
             return -1
         }
-
-        // Guessing is free: a wrong guess makes the wrong nonce and the tag will not match.
-        window.nonceAt(offset, nonce)
 
         // open() hands back unverified plaintext and a recomputed tag; only this comparison
         // authenticates. Its false return means the final block has the shape the XEX* forgery
@@ -151,7 +148,7 @@ class CryptState {
             (tag[2].toInt() xor wire2.toInt())
         if (!unforged || diff != 0) return -1
 
-        window.accept(offset)
+        val offset = window.accept(nonce)
         if (offset > 0) advanced += offset else late++
         good++
         return plainLen
