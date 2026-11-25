@@ -49,6 +49,7 @@ and logs its path under the tag `LatencyCheck`; the script pulls and prints it. 
 | `network.ping` | Dumble's own ping on the leg carrying voice, for comparison |
 | `loop.phone` | t2 − t1: playout, speaker, air, microphone and capture |
 | `receive.jitter_buffer` | What playout held ahead of the probe's packet when it arrived |
+| `receive.gate` | The depth a spurt waits for before it plays: the jitter estimator's target plus the output stream's write-ahead, read as the probe's spurt ends. When the jitter buffer reads past it by more than a packet and an output callback, more arrived together than the gate asked for: usually a burst the network held |
 | `receive.shrunk_packets`, `receive.catch_up_packets` | Packets playout dropped to shed delay during the check. Above zero, the probe may have waited less than `receive.jitter_buffer` says, and `unaccounted` reads low |
 | `receive.codec_delay` | Opus's own delay, encoder to decoder |
 | `receive.audio_output` | The output stream's latency, from Oboe |

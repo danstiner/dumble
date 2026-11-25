@@ -25,7 +25,7 @@ class LatencyResultsTest {
     private fun playout(latency: Double? = 25.0) = PlayoutStats(
         latencyMs = latency, underruns = 0, concealedGaps = 0, droppedPackets = 0, shrunkPackets = 1,
         catchUpPackets = 2, contendedFills = 0, fillMicrosMax = 0, fillMicrosMean = 0, lostSamples = 0,
-        outOfOrderPackets = 0, bufferedSamples = emptyMap(), targetSamples = emptyMap(),
+        outOfOrderPackets = 0, bufferedSamples = emptyMap(), targetSamples = mapOf(2 to 4800, 1 to 720),
     )
 
     private fun measurements(
@@ -68,6 +68,7 @@ class LatencyResultsTest {
                 network.ping = 30.00
                 loop.phone = 112.50
                 receive.jitter_buffer = 30.00
+                receive.gate = 15.00
                 receive.shrunk_packets = 1
                 receive.catch_up_packets = 2
                 receive.codec_delay = 6.50
@@ -133,6 +134,7 @@ class LatencyResultsTest {
         assertEquals("failed", failed["result"])
         assertEquals("the probe did not come back from the server", failed["reason"])
         assertFalse("loop.phone" in failed)
+        assertFalse("the last stats may be the warm spurt's", "receive.gate" in failed)
 
         assertEquals("failed", lines(text(CheckOutcome.Failed("x", null)))["result"])
     }

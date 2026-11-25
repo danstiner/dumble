@@ -75,6 +75,12 @@ object LatencyResults {
             row("network.ping", ping?.ms())
             row("loop.phone", loop?.ms())
             row("receive.jitter_buffer", jitter?.ms())
+            // The depth the probe's spurt waited for, not counted in unaccounted. From the last
+            // stats published, which a check that ran to its end has from the close of that spurt;
+            // missing when its speaker had retired before they were read.
+            val gate = m.returned?.takeIf { outcome is CheckOutcome.Measured }
+                ?.let { m.playoutStats?.targetSamples?.get(it.session) }
+            row("receive.gate", gate?.toLong()?.sampleDuration()?.ms())
             // Either above zero and playout dropped audio to catch up during the check: the onset
             // may have waited less than receive.jitter_buffer says.
             row("receive.shrunk_packets", m.playoutStats?.shrunkPackets)
