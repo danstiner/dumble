@@ -1,14 +1,14 @@
 package me.danielstiner.dumble.ui.connect
 
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
 
 /**
  * Human wording for a failed connect. Our own words rather than the server's reason, which differs
  * between servers; the reason shows only for a rejection we have no words for. Murmur and Grumble
  * answer a blank password with the same reject as a wrong one, hence [passwordBlank].
  */
-fun connectErrorText(error: ConnectionStatus.Error, passwordBlank: Boolean): String = when (error.kind) {
+fun connectErrorText(error: SessionStatus.Error, passwordBlank: Boolean): String = when (error.kind) {
     ErrorKind.WRONG_SERVER_PASSWORD -> if (passwordBlank) "This server needs a password" else "Wrong server password"
     ErrorKind.WRONG_USER_PASSWORD ->
         if (passwordBlank) "This name is registered: enter its password, or choose another"
@@ -29,7 +29,7 @@ fun connectErrorText(error: ConnectionStatus.Error, passwordBlank: Boolean): Str
 }
 
 /** The system's or the server's own words, shown smaller under [connectErrorText]. */
-fun connectErrorDetail(error: ConnectionStatus.Error): String? = when (error.kind) {
+fun connectErrorDetail(error: SessionStatus.Error): String? = when (error.kind) {
     // The headline already is the server's reason, or says what our own exception does.
     ErrorKind.AUTH_REJECTED, ErrorKind.LOCAL_NETWORK_BLOCKED -> null
     else -> error.detail?.ifBlank { null }

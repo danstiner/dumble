@@ -14,14 +14,14 @@ import me.danielstiner.dumble.mumble.channeltree.Channel
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.protocol.UserStats
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.TransmitMode
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -114,9 +114,9 @@ class ConnectViewModelTest {
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
         val edits = listOf({ vm.onHostChange("h2") }, { vm.onPortChange("64739") }, { vm.onUsernameChange("u2") }, { vm.onPasswordChange("p") })
         for ((i, edit) in edits.withIndex()) {
-            app.status.value = ConnectionStatus.Connecting
+            app.status.value = SessionStatus.Connecting
             vm.onConnect()
-            app.status.value = ConnectionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
+            app.status.value = SessionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
             runCurrent()
             assertFalse("connect $i", vm.uiState.value.editedSinceConnect)
             edit()
@@ -129,10 +129,10 @@ class ConnectViewModelTest {
         val app = FakeAppState()
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
-        app.onConnect = { app.status.value = ConnectionStatus.Connecting }
+        app.onConnect = { app.status.value = SessionStatus.Connecting }
         vm.onConnect()
         vm.onUsernameChange("u2")
-        app.status.value = ConnectionStatus.Error(ErrorKind.USERNAME_TAKEN, null)
+        app.status.value = SessionStatus.Error(ErrorKind.USERNAME_TAKEN, null)
         runCurrent()
         assertFalse(vm.uiState.value.editedSinceConnect)
     }
@@ -140,7 +140,7 @@ class ConnectViewModelTest {
     /** The new form's password is blank, whatever the rejected connect sent. */
     @Test fun aRejectionFromBeforeTheFormOpenedIsAlreadyRetired() = runTest(dispatcher) {
         val app = FakeAppState()
-        app.status.value = ConnectionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
+        app.status.value = SessionStatus.Error(ErrorKind.WRONG_SERVER_PASSWORD, null)
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         runCurrent()
         assertTrue(vm.uiState.value.editedSinceConnect)
@@ -151,7 +151,7 @@ class ConnectViewModelTest {
         val app = FakeAppState()
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
-        app.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        app.status.value = SessionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
         runCurrent()
         assertTrue(vm.uiState.value.askLocalNetwork)
         vm.onLocalNetworkAsked()
@@ -167,7 +167,7 @@ class ConnectViewModelTest {
         val app = FakeAppState()
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         vm.onHostChange("h"); vm.onUsernameChange("u"); vm.onPortChange("64738")
-        app.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        app.status.value = SessionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
         runCurrent()
         vm.onLocalNetworkAsked()
         var askedDuringConnect = false
@@ -181,7 +181,7 @@ class ConnectViewModelTest {
 
     @Test fun aBlockFromBeforeThisViewModelIsNotAskedAgain() = runTest(dispatcher) {
         val app = FakeAppState()
-        app.status.value = ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
+        app.status.value = SessionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, null)
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         runCurrent()
         assertFalse(vm.uiState.value.askLocalNetwork)
@@ -362,7 +362,7 @@ class ConnectViewModelTest {
         val vm = ConnectViewModel(app, FakeConfigStore(null), clock)
         advanceUntilIdle()
         vm.openSettings(); advanceUntilIdle()
-        app.status.value = ConnectionStatus.Connected(gen = 1, sessionId = 1)
+        app.status.value = SessionStatus.Connected(gen = 1, sessionId = 1)
         advanceUntilIdle()
         assertEquals(Route.Settings, vm.uiState.value.route)
         // Backing out lands on Main, which now renders the connected screen rather than the form.
@@ -737,7 +737,7 @@ class ConnectViewModelTest {
         runCurrent()
         assertNotNull(vm.uiState.value.connectedSince)
 
-        app.status.value = ConnectionStatus.Error(ErrorKind.DISCONNECTED, null)
+        app.status.value = SessionStatus.Error(ErrorKind.DISCONNECTED, null)
         runCurrent()
 
         assertNull(vm.uiState.value.connectedSince)

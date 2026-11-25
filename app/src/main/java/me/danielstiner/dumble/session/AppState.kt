@@ -5,7 +5,6 @@ import kotlin.time.Duration
 import kotlin.time.ComparableTimeMark
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.DeafenState
@@ -18,7 +17,7 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 
 /** The coordinator surface the UI depends on — narrow so the ViewModel can be tested with a fake. */
 interface AppState {
-    val status: StateFlow<ConnectionStatus>
+    val status: StateFlow<SessionStatus>
     val serverVersion: StateFlow<ServerVersion?>
     val roundTripTime: StateFlow<Duration?>
 

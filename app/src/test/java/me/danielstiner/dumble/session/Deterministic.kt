@@ -7,7 +7,6 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.VoiceSender
@@ -76,13 +75,13 @@ internal class Rig(val scope: TestScope) {
         settle()
     }
 
-    fun connected(app: AppStateImpl): ConnectionStatus.Connected {
-        assertSettled("connected") { app.status.value is ConnectionStatus.Connected }
-        return app.status.value as ConnectionStatus.Connected
+    fun connected(app: AppStateImpl): SessionStatus.Connected {
+        assertSettled("connected") { app.status.value is SessionStatus.Connected }
+        return app.status.value as SessionStatus.Connected
     }
 
     fun handshaking(app: AppStateImpl) {
-        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
+        assertSettled("handshaking") { app.status.value is SessionStatus.Handshaking }
     }
 
     /** The nth transport the app state built, once it exists and has connected. */

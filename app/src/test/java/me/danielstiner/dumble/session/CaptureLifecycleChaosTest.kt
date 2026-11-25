@@ -5,7 +5,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -159,7 +158,7 @@ class CaptureLifecycleChaosTest {
         ) { FakeControlTransport { _, _ -> } }
 
         app.connect(endpoint, "user", null)
-        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+        withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
         // The storm starts on an open engine, so every round races the lifecycle against a live
         // capture however its schedule falls, and the checks below can never pass on a storm that
         // only ever met a disconnected connection.
@@ -246,7 +245,7 @@ class CaptureLifecycleChaosTest {
         // consumer's runCatching comment in AppStateImpl),
         // so this is the one invariant that would otherwise never announce its own failure.
         app.connect(endpoint, "user", null)
-        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+        withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
         val before = created.get()
         app.requestCapture()
         awaitTrue(c.violations, "seed=$seed: the consumer did not build an engine for the final requestCapture()") {

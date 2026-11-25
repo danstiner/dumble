@@ -4,15 +4,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.session.SessionStatus
 
 /** Shown when status is AwaitingTrust (first contact) or PinMismatch (cert changed). */
 @Composable
-fun TrustDialog(status: ConnectionStatus, onTrust: () -> Unit, onCancel: () -> Unit) {
+fun TrustDialog(status: SessionStatus, onTrust: () -> Unit, onCancel: () -> Unit) {
     val (title, body, confirm) = when (status) {
-        is ConnectionStatus.AwaitingTrust ->
+        is SessionStatus.AwaitingTrust ->
             Triple("Unrecognized server certificate", grouped(status.fingerprint), "Trust & connect")
-        is ConnectionStatus.PinMismatch ->
+        is SessionStatus.PinMismatch ->
             Triple(
                 "Certificate changed",
                 "This server's certificate is different from the one you trusted. It may be a routine key " +

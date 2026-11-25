@@ -11,8 +11,8 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -79,7 +79,7 @@ class ConnectViewModelChaosTest {
 
             // A floor the random mix cannot promise: the merge must fire when all three line up.
             val own = OWN_SESSION_IDS[0]
-            app.status.value = ConnectionStatus.Connected(gen = 1, sessionId = own)
+            app.status.value = SessionStatus.Connected(gen = 1, sessionId = own)
             vm.onMicrophonePermissionResult(true)
             app.selfSpeaking.value = true
             runCurrent()
@@ -98,19 +98,19 @@ class ConnectViewModelChaosTest {
      */
     private fun assertNeverSpeaksWithoutMic(vm: ConnectViewModel, at: String) {
         val s = vm.uiState.value
-        val me = (s.status as? ConnectionStatus.Connected)?.sessionId ?: return
+        val me = (s.status as? SessionStatus.Connected)?.sessionId ?: return
         if (me in s.speakingSessions && !s.microphoneGranted) {
             fail("$at: session $me shown speaking without the microphone: ${s.speakingSessions}")
         }
     }
 
     // Biased toward Connected, the only status the invariant reads.
-    private fun randomStatus(r: Random): ConnectionStatus = when (r.nextInt(10)) {
-        0 -> ConnectionStatus.Idle
-        1 -> ConnectionStatus.Connecting
-        2 -> ConnectionStatus.Handshaking
-        in 3..7 -> ConnectionStatus.Connected(gen = 1, sessionId = OWN_SESSION_IDS.random(r))
-        else -> ConnectionStatus.Error(ErrorKind.entries.random(r), null)
+    private fun randomStatus(r: Random): SessionStatus = when (r.nextInt(10)) {
+        0 -> SessionStatus.Idle
+        1 -> SessionStatus.Connecting
+        2 -> SessionStatus.Handshaking
+        in 3..7 -> SessionStatus.Connected(gen = 1, sessionId = OWN_SESSION_IDS.random(r))
+        else -> SessionStatus.Error(ErrorKind.entries.random(r), null)
     }
 
     private companion object {
