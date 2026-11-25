@@ -157,7 +157,8 @@ class VoiceReceiverTest {
         }
     }
 
-    /** Connecting during a phone call: the hold lands before the link is up to start the receiver. */
+    /** Connecting during a phone call: the hold lands before the connection is up to start the
+     *  receiver. */
     @Test
     fun aHoldBeforeStartKeepsTheStreamClosedUntilTheResume() {
         val fake = FakePlayoutEngine()
@@ -501,7 +502,7 @@ class VoiceReceiverTest {
     }
 
     /**
-     * Mirrors AppStateImpl.teardown(): an attempt superseded or failing before its link comes
+     * Mirrors AppStateImpl.teardown(): an attempt superseded or failing before its connection comes
      * up calls stop() on a receiver whose start() was never reached. newEngine must never run on
      * that path: an engine built at construction would leak one per such attempt.
      */

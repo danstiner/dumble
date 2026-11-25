@@ -3,8 +3,8 @@ package me.danielstiner.dumble.mumble.protocol
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 
 /** Why a connection ended. Only what this layer can actually report; trust failures never reach it.
- *  [KICKED] and [BANNED] are the server removing us by name, the one end a synchronized link can
- *  reach other than its socket dying. */
+ *  [KICKED] and [BANNED] are the server removing us by name, the one end a synchronized connection
+ *  can reach other than its socket dying. */
 enum class FailReason { AUTH_REJECT, TIMEOUT, IO, VERSION_TOO_OLD, KICKED, BANNED }
 
 sealed interface ConnectionState {

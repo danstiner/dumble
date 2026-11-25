@@ -9,8 +9,8 @@ import kotlin.time.TimeSource
  * The clock that keeps counting while the device is asleep.
  *
  * This is the one to anchor anything measured against the outside world — a call's duration, how
- * long a link has been silent — because those are judged in real elapsed time and a phone with the
- * screen off spends most of its life suspended. The alternatives both stop with the CPU:
+ * long a connection has been silent — because those are judged in real elapsed time and a phone
+ * with the screen off spends most of its life suspended. The alternatives both stop with the CPU:
  * `System.nanoTime` and [TimeSource.Monotonic] built on it, and `SystemClock.uptimeMillis`. Use
  * those only to measure something about our own execution, where sleep genuinely is not elapsed
  * time — see `ConnectionStateMachine`'s ticker-stall check, which wants exactly that.

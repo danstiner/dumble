@@ -162,9 +162,9 @@ class ConnectionStateMachineTest {
     private fun pingAge(sm: ConnectionStateMachine): Duration =
         sm.lastServerReplyAt.value?.elapsedNow() ?: Duration.ZERO
 
-    // A link replying every interval never reads degraded. Silence oscillates between zero and one
-    // interval by construction -- it is time since the last reply, and the link is only asked once
-    // per interval -- which is why the threshold sits at three.
+    // A connection replying every interval never reads degraded. Silence oscillates between zero
+    // and one interval by construction -- it is time since the last reply, and the connection is
+    // only asked once per interval -- which is why the threshold sits at three.
     @Test
     fun anAnsweredLinkNeverReadsDegraded() = runTest {
         val ch = FakeChannel()
@@ -197,8 +197,8 @@ class ConnectionStateMachineTest {
             pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
     }
 
-    /** Three missed replies end the link as a timeout with its sync kept, so the driver replaces
-     *  it rather than reporting a connect failure. */
+    /** Three missed replies end the connection as a timeout with its sync kept, so the driver
+     *  replaces it rather than reporting a connect failure. */
     @Test
     fun threeMissedRepliesEndTheLinkAsATimeout() = runTest {
         val ch = FakeChannel()
@@ -245,8 +245,9 @@ class ConnectionStateMachineTest {
 
     // A round trip of several intervals is a slow link, not a dead one. Every reply on it lands
     // after the next call has re-stamped, so matching only the newest stamp would register no reply
-    // at all and the link would read permanently silent while answering every ping. A duration does
-    // not care which ping a reply names, so this needs no rule about outstanding pings.
+    // at all and the connection would read permanently silent while answering every ping. A
+    // duration does not care which ping a reply names, so this needs no rule about outstanding
+    // pings.
     @Test
     fun aRoundTripOfSeveralIntervalsNeverReadsDegraded() = runTest {
         for (lagIntervals in 1..3) {
@@ -272,9 +273,9 @@ class ConnectionStateMachineTest {
     }
 
     // A reply for a long-superseded ping still clears the silence: whichever ping it names, the
-    // link spoke. Dan's call 2026-08-13, replacing the earlier rule that rejected a superseded
-    // reply outright -- that rule cannot coexist with tolerating a round trip longer than the
-    // interval, since both are replies arriving after their successor was sent.
+    // connection spoke. Dan's call 2026-08-13, replacing the earlier rule that rejected a
+    // superseded reply outright -- that rule cannot coexist with tolerating a round trip longer
+    // than the interval, since both are replies arriving after their successor was sent.
     @Test
     fun aLateReplyForASupersededPingIsStillTheLinkSpeaking() = runTest {
         val ch = FakeChannel()
@@ -288,7 +289,7 @@ class ConnectionStateMachineTest {
         sm.onFrame(stale)
         assertEquals(Duration.ZERO, pingAge(sm))
 
-        // And silence resuming climbs again from there, so a dying link is still reported.
+        // And silence resuming climbs again from there, so a dying connection is still reported.
         repeat(3) { advanceBoth(bootClock, ConnectionStateMachine.PING_INTERVAL_MS + 1) }
         assertTrue(pingAge(sm) >= ConnectionStateMachine.DEGRADED_PING_AGE)
     }
@@ -320,7 +321,7 @@ class ConnectionStateMachineTest {
     // A ping that never reached the wire is two claims, both load-bearing: it cannot be answered,
     // so the last reply keeps ageing, and the refusal is not itself fatal -- a full queue or a dead
     // transport must not end the session on the spot, since the reader reports that death on its
-    // own path. The missing replies are what end the link, at the same threshold as any.
+    // own path. The missing replies are what end the connection, at the same threshold as any.
     @Test
     fun aPingThatCannotBeQueuedStillAgesButIsNotItselfFatal() = runTest {
         val ch = FailingChannel(TcpMessageType.Ping)
@@ -362,10 +363,10 @@ class ConnectionStateMachineTest {
     }
 
     /**
-     * The stamp is the driver's evidence that this link ever reached the server, and what it
-     * decides to replace a link on. Taken here rather than from a collector on [state], which
-     * conflates: a link that synchronized and died inside one emission would otherwise read as one
-     * that never got on at all, and the connect would be reported as having failed.
+     * The stamp is the driver's evidence that this connection ever reached the server, and what it
+     * decides to replace a connection on. Taken here rather than from a collector on [state], which
+     * conflates: a connection that synchronized and died inside one emission would otherwise read
+     * as one that never got on at all, and the connect would be reported as having failed.
      */
     @Test
     fun theSyncStampOutlivesAFailureThatFollowsAtOnce() = runTest {
@@ -673,8 +674,8 @@ class ConnectionStateMachineTest {
     }
 
     /**
-     * Our own removal ends the link as the server's decision, with who and why. The socket close
-     * that follows keeps that reason; the socket close alone would read as a dead link.
+     * Our own removal ends the connection as the server's decision, with who and why. The socket
+     * close that follows keeps that reason; the socket close alone would read as a dead connection.
      */
     @Test
     fun ourOwnUserRemoveIsAKick() = runTest {

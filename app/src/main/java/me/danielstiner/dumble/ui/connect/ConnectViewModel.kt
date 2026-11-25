@@ -139,7 +139,7 @@ private data class SelfSnapshot(val callHeld: Boolean, val selfState: DeafenStat
 /** Both audio engines' counters, paired so [HealthSnapshot] stays inside combine's arity cap. */
 private data class AudioSnapshot(val playoutStats: PlayoutStats?, val captureStats: CaptureStats?)
 
-/** How the link is carrying the session, as opposed to what is on it. */
+/** How the connection is carrying the session, as opposed to what is on it. */
 private data class HealthSnapshot(
     val roundTripTime: Duration?,
     val lastServerReplyAt: ComparableTimeMark?,
@@ -268,8 +268,8 @@ class ConnectViewModel internal constructor(
                 // Keyed on the generation, not on connected-ness: status is a StateFlow, so the
                 // disconnect between two calls can be conflated away, and a nullness comparison
                 // would then treat the second call as a continuation of the first. Not on the
-                // server's session id either: a link rebuilt under the same call gets a new one
-                // while the call the user is timing goes on.
+                // server's session id either: a connection rebuilt under the same call gets a new
+                // one while the call the user is timing goes on.
                 val gen = when (s) {
                     is SessionStatus.Connected -> s.gen
                     is SessionStatus.Reconnecting -> s.gen

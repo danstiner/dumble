@@ -507,8 +507,8 @@ class ConnectViewModelTest {
     }
 
     /**
-     * Through an outage no echo arrives at all: the tree is frozen at the dead link's close. Read
-     * from it, a second tap asks for the same thing again and the control never moves.
+     * Through an outage no echo arrives at all: the tree is frozen at the dead connection's close.
+     * Read from it, a second tap asks for the same thing again and the control never moves.
      */
     @Test fun aMuteTakenDuringTheOutageCanBeTakenBack() = runTest(dispatcher) {
         val app = FakeAppState()
@@ -659,7 +659,7 @@ class ConnectViewModelTest {
         assertNotEquals(first, vm.uiState.value.connectedSince)
     }
 
-    /** A new server session under the same generation is a rebuilt link, not a new call: the
+    /** A new server session under the same generation is a rebuilt connection, not a new call: the
      *  timer keeps counting from the connect the user made. */
     @Test fun aNewSessionIdUnderTheSameGenerationKeepsTheCallTimer() = runTest(dispatcher) {
         val app = FakeAppState()

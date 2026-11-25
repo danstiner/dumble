@@ -576,9 +576,9 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * Connecting during a phone call: the call reports the hold as it starts, before the link is up
-     * and the receiver started. A capture asked for afterwards stays refused, and the receiver's
-     * poll never starts the output stream, until the resume.
+     * Connecting during a phone call: the call reports the hold as it starts, before the connection
+     * is up and the receiver started. A capture asked for afterwards stays refused, and the
+     * receiver's poll never starts the output stream, until the resume.
      */
     @Test fun aCallThatStartsHeldHoldsCaptureAndPlayout() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()

@@ -10,25 +10,26 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * One TLS connect and what lives exactly as long as it: the protocol state machine on it, the UDP
- * socket keyed by that state machine's cipher, which of the two carries our voice, and the scope of
+ * One TLS connect and what lives exactly as long as it: the state machine on it, the UDP
+ * socket keyed by its cipher, which of the two carries our voice, and the scope of
  * the collectors that republish its flows. Connect-once, like the transport it wraps: the
- * session above it outlives it, and a replacement is a new Link.
+ * session above it outlives it, and a replacement is a new Connection.
  */
-internal class Link(
+internal class Connection(
     val transport: MumbleControlTransport,
     val stateMachine: ConnectionStateMachine,
-    /** Opened once the control connection is up, closed with the link; inert in between if it
+    /** Opened once the control transport is up, closed with the connection; inert in between if it
      *  could not be opened, and voice stays tunneled. */
     val udp: UdpTransport,
     /** Which transport carries our voice; `AppStateImpl.sendVoice` routes by it. */
     val path: VoicePath,
-    /** The default network this link was dialed on, or null when there was none to know. */
+    /** The default network this connection was dialed on, or null when there was none to know. */
     val network: Any?,
-    /** The app state's count of network changes when this link was dialed, so whether the
+    /** The app state's count of network changes when this connection was dialed, so whether the
      *  network has changed since is one compare. */
     val dialedUnder: Int,
-    /** Everything that lives exactly as long as the link: its collectors and its state machine. */
+    /** Everything that lives exactly as long as the connection: its collectors and its state
+     *  machine. */
     val scope: CoroutineScope,
     /** The app state's; never cancelled, where the blocking closes run. */
     private val blockingScope: CoroutineScope,
@@ -36,7 +37,7 @@ internal class Link(
     private val closed = AtomicBoolean(false)
 
     /** Raised outside the app state's lock, so a check-then-write against it can still lose
-     *  the race; see AppStateImpl.publishFromLink. */
+     *  the race; see AppStateImpl.publishFromConnection. */
     val isClosed: Boolean get() = closed.get()
 
     /**

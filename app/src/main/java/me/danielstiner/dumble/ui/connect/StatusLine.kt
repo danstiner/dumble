@@ -19,7 +19,7 @@ internal fun statusLine(
     pingAge: Duration,
     reconnecting: Boolean = false,
 ): String = buildString {
-    // A round trip measured on the dead link is stale, and the outage is what this line says.
+    // A round trip measured on the dead connection is stale, and the outage is what this line says.
     if (reconnecting) {
         append("Reconnecting…")
         if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
@@ -28,7 +28,7 @@ internal fun statusLine(
     append("Connected")
     if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
     // Either the latency or the outage, never both: a round trip measured before the replies
-    // stopped is not evidence about a link that is currently silent.
+    // stopped is not evidence about a connection that is currently silent.
     if (pingAge >= ConnectionStateMachine.DEGRADED_PING_AGE) {
         append(" · ").append("no response")
         return@buildString

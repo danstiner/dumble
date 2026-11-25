@@ -94,7 +94,7 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 |---|---|
 | `app/src/main/java/.../ui/` | screens, `ConnectViewModel`, theme |
 | `.../session/` | `AppState`, `AppStateImpl`, `SessionStatus` |
-| `.../mumble/connection/` | `Link` |
+| `.../mumble/connection/` | `Connection` |
 | `.../mumble/net/` | TLS and UDP transports, OCB2 (`Ocb2`, `CryptState`, `ReplayWindow`), trust and pins, client certificate, `VoicePath` |
 | `.../mumble/protocol/` | `ConnectionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |
 | `.../mumble/voice/` | `VoiceSender`, `VoiceReceiver`, JNI wrappers (`NativeCapture`, `NativePlayout`), `AndroidVoiceCall`, stats |

@@ -34,9 +34,10 @@ fun talkBlock(
     microphoneGranted: Boolean,
     reconnecting: Boolean = false,
 ): TalkBlock? = when {
-    // Permission first: a link coming back cannot unblock it, and the Mute control keys off this.
+    // Permission first: a connection coming back cannot unblock it, and the Mute control keys off
+    // this.
     !microphoneGranted -> TalkBlock.NO_MICROPHONE
-    // The held link is dead, and our own row is a link out of date.
+    // The held connection is dead, and our own row is out of date.
     reconnecting -> TalkBlock.RECONNECTING
     asked.deafened -> TalkBlock.DEAFENED
     asked.muted || me?.mute == true || me?.suppress == true -> TalkBlock.MUTED

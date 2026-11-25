@@ -85,8 +85,8 @@ changed fields set. Nothing is polled.
 ### Ping
 
 The client must ping or be dropped: murmur's default drops a silent connection after about 30 s.
-This client pings every 5 s (`PING_INTERVAL_MS`). A link with no reply for three intervals is ended
-as a timeout and replaced ([network.md](network.md), Reconnect).
+This client pings every 5 s (`PING_INTERVAL_MS`). A connection with no reply for three intervals
+is ended as a timeout and replaced ([network.md](network.md), Reconnect).
 
 The `Ping` message also carries statistics, which the server stores and returns to other clients
 in `UserStats`:
@@ -98,7 +98,7 @@ in `UserStats`:
 - **Round trips**: mean and variance over the last twenty replies for each of TCP and UDP
   (`tcp_ping_avg`, `udp_ping_avg`, `*_ping_var`), and reply counts (`tcp_packets`, `udp_packets`,
   which count ping replies and not voice, on desktop too). This is how another client shows our
-  round trip. A UDP average being present means a UDP ping has round-tripped on this link; it
+  round trip. A UDP average being present means a UDP ping has round-tripped on this connection; it
   stays set after our voice falls back to TCP (`PingAverage`).
 
 ### Self mute and deafen
