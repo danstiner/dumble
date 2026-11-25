@@ -45,7 +45,7 @@ class PingGapLogTest {
     /** Two calls, with the real clock moved by [realAdvance] before the second. */
     private fun tickTwice(realAdvance: kotlin.time.Duration) = runTest {
         val bootClock = TestTimeSource()
-        val sm = SessionStateMachine(
+        val sm = ConnectionStateMachine(
             FakeChannel(), "tester", null, backgroundScope, bootClock = bootClock,
         ).apply { start() }
         sm.onFrame(
@@ -54,12 +54,12 @@ class PingGapLogTest {
                 MumbleProtos.ServerSync.newBuilder().setSession(1).build().toByteArray(),
             ),
         )
-        bootClock += SessionStateMachine.PING_INTERVAL_MS.milliseconds
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        bootClock += ConnectionStateMachine.PING_INTERVAL_MS.milliseconds
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS + 1)
         assertEquals("an ordinary interval must not warn", 0, gapWarnings().size)
 
         bootClock += realAdvance
-        advanceTimeBy(SessionStateMachine.PING_INTERVAL_MS + 1)
+        advanceTimeBy(ConnectionStateMachine.PING_INTERVAL_MS + 1)
     }
 
     @Test

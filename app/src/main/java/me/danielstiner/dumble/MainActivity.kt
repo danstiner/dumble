@@ -14,8 +14,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.mumble.voice.PlayoutDelay
 import me.danielstiner.dumble.mumble.voice.SendDelay
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.mySession
+import me.danielstiner.dumble.session.SessionStatus
+import me.danielstiner.dumble.session.mySession
 import me.danielstiner.dumble.ui.about.AboutScreen
 import me.danielstiner.dumble.ui.connect.Route
 import me.danielstiner.dumble.ui.settings.SettingsScreen
@@ -89,7 +89,7 @@ private fun DumbleAppContent(vm: ConnectViewModel = hiltViewModel()) {
                     // mid-call.
                     server = runCatching { state.draft.endpoint.label }.getOrDefault(""),
                     sessionId = mySession,
-                    reconnecting = state.status is ConnectionStatus.Reconnecting,
+                    reconnecting = state.status is SessionStatus.Reconnecting,
                     connectedSince = state.connectedSince,
                     roundTripTime = state.roundTripTime,
                     voicePath = state.voicePath,

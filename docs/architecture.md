@@ -31,7 +31,7 @@ Non-goals:
  AppStateImpl                          one per process; owns everything below
       │
       ├─ MumbleTcpTransport            TLS on the platform SSLSocket, certificate pinning
-      │    └─ SessionStateMachine      control protocol: handshake, pings, channel tree, chat
+      │    └─ ConnectionStateMachine   control protocol: handshake, pings, channel tree, chat
       ├─ MumbleUdpTransport            voice datagrams, encrypted with OCB2
       │
       ├─ VoiceSender ── CaptureEngine ── OboeCapture ── microphone      capture.md
@@ -45,7 +45,7 @@ connection, but switches to UDP once a round-trip ping proves UDP connectivity. 
 mono 16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packets.
 
 **App state** ([network.md](network.md)). `AppStateImpl` is a Hilt singleton bound to the
-`AppState` interface. It runs the TLS connect, the protocol session and the reconnects, and
+`AppState` interface. It runs the TLS connect, the connection state machine and the reconnects, and
 publishes one `status` flow. One session is live at a time, and that session owns both audio
 pipelines and the platform call.
 
@@ -77,7 +77,7 @@ still listen in the background.
 
 | Thread | Runs | Constraint |
 |---|---|---|
-| Coroutines on `Dispatchers.Default` | `AppStateImpl`, `SessionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
+| Coroutines on `Dispatchers.Default` | `AppStateImpl`, `ConnectionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
 | TLS reader coroutine | inbound frames; tunneled voice goes straight to `VoiceReceiver.onVoicePacket` | sole caller of the transport's `onClosed` |
 | UDP reader thread | decrypts datagrams, hands voice to `VoiceReceiver.onVoicePacket` | |
 | Capture audio callback | `CaptureEngine.onPcm` | realtime: no locks, no allocation |
@@ -93,10 +93,10 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 | Path | Contents |
 |---|---|
 | `app/src/main/java/.../ui/` | screens, `ConnectViewModel`, theme |
-| `.../session/` | `AppState`, `AppStateImpl` |
-| `.../mumble/connection/` | `Link`, `ConnectionStatus` |
+| `.../session/` | `AppState`, `AppStateImpl`, `SessionStatus` |
+| `.../mumble/connection/` | `Link` |
 | `.../mumble/net/` | TLS and UDP transports, OCB2 (`Ocb2`, `CryptState`, `ReplayWindow`), trust and pins, client certificate, `VoicePath` |
-| `.../mumble/protocol/` | `SessionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |
+| `.../mumble/protocol/` | `ConnectionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |
 | `.../mumble/voice/` | `VoiceSender`, `VoiceReceiver`, JNI wrappers (`NativeCapture`, `NativePlayout`), `AndroidVoiceCall`, stats |
 | `.../service/`, `.../data/`, `.../di/` | foreground service, DataStore-backed stores, Hilt modules |
 | `app/src/main/cpp/core/` | portable engines: capture, playout, codec wrappers, voice activity detector |
@@ -123,7 +123,7 @@ input streams can therefore never be open at once.
 **Publish last.** A `StateFlow` emission is a promise that everything the new state implies is
 already in place: the timer armed, the resource built. A reader that acts on the emission must
 find it there, so the bookkeeping is written before the state. The exception is a write that is
-also the guard settling a race, such as `SessionStateMachine`'s `compareAndSet` out of
+also the guard settling a race, such as `ConnectionStateMachine`'s `compareAndSet` out of
 `Handshaking`. There the bookkeeping follows on the same thread, and a test drives the scheduler
 past it with `runCurrent()` instead of resuming on the emission.
 

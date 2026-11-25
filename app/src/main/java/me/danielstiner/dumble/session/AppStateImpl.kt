@@ -28,10 +28,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.connection.Link
-import me.danielstiner.dumble.mumble.connection.mapState
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -50,11 +47,11 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
@@ -78,7 +75,7 @@ import kotlin.time.TimeSource
 
 /**
  * Owns the whole connection: the blocking TLS connect (which throws trust exceptions before the
- * protocol starts) and the [SessionStateMachine] that follows, unified into one [status] flow.
+ * protocol starts) and the [ConnectionStateMachine] that follows, unified into one [status] flow.
  *
  * One live [Session] at a time, guarded by [generation]; each session's driver opens its [Link].
  * A blocking handshake cannot be preempted by teardown — the socket is not owned until it
@@ -111,7 +108,7 @@ class AppStateImpl internal constructor(
     // the UDP transport — which reads zero off-device, so a test injects one; and the ping
     // interval, so a test can keep the ticker out of its way.
     private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
-    private val pingIntervalMs: Long = SessionStateMachine.PING_INTERVAL_MS,
+    private val pingIntervalMs: Long = ConnectionStateMachine.PING_INTERVAL_MS,
     // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
     private val sleep: suspend (Duration) -> Unit = { delay(it) },
     // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
@@ -144,8 +141,8 @@ class AppStateImpl internal constructor(
     /** Never cancelled; the launches that block. */
     private val blockingScope = CoroutineScope(SupervisorJob() + blocking)
 
-    private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
-    override val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
+    private val _status = MutableStateFlow<SessionStatus>(SessionStatus.Idle)
+    override val status: StateFlow<SessionStatus> = _status.asStateFlow()
     private val _serverVersion = MutableStateFlow<ServerVersion?>(null)
     override val serverVersion: StateFlow<ServerVersion?> = _serverVersion.asStateFlow()
     private val _roundTripTime = MutableStateFlow<Duration?>(null)
@@ -341,7 +338,7 @@ class AppStateImpl internal constructor(
     // Session-scoped flows: guarded on the generation alone, under the lock that bumps it, so a
     // superseded session's late writes are no-ops. A retired session (current cleared, generation
     // not bumped) may still land a write: its terminal values are what the user is looking at.
-    private fun publishStatus(gen: Int, s: ConnectionStatus) = synchronized(lock) { if (gen == generation) _status.value = s }
+    private fun publishStatus(gen: Int, s: SessionStatus) = synchronized(lock) { if (gen == generation) _status.value = s }
     private fun publishSpeaking(gen: Int, s: Set<Int>) = synchronized(lock) { if (gen == generation) _speakingSessions.value = s }
     private fun publishPlayoutStats(gen: Int, p: PlayoutStats?) = synchronized(lock) { if (gen == generation) _playoutStats.value = p }
     private fun publishCaptureStats(gen: Int, c: CaptureStats?) = synchronized(lock) { if (gen == generation) _captureStats.value = c }
@@ -556,7 +553,7 @@ class AppStateImpl internal constructor(
      * is what makes the writes safe: every publish helper checks one of the two under it, and the
      * release is ordered ahead of anything the successor asks. Caller holds [lock].
      */
-    private fun retireAndClearLocked(status: ConnectionStatus): Session? {
+    private fun retireAndClearLocked(status: SessionStatus): Session? {
         val prior = current
         current = null; generation += 1
         trustPrompt = null
@@ -586,7 +583,7 @@ class AppStateImpl internal constructor(
         val gen = session.gen
         val linkScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
         val transport = newTransport(pin)
-        val stateMachine = SessionStateMachine(
+        val stateMachine = ConnectionStateMachine(
             transport, session.username, session.password, linkScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
@@ -635,7 +632,7 @@ class AppStateImpl internal constructor(
         val session: Session
         synchronized(lock) {
             if (answering != null && trustPrompt !== answering) return
-            prior = retireAndClearLocked(ConnectionStatus.Connecting)
+            prior = retireAndClearLocked(SessionStatus.Connecting)
             val gen = generation
             // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
             // only a session whose link comes up ever reaches — building eagerly would leak one per
@@ -757,7 +754,7 @@ class AppStateImpl internal constructor(
                     attempt = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
-                publishStatus(gen, ConnectionStatus.Reconnecting(gen, synced.sessionId))
+                publishStatus(gen, SessionStatus.Reconnecting(gen, synced.sessionId))
                 link.close()
                 link = replaceLink(session, pin, deadline, diedAt = now, firstAttempt = attempt, since = link.dialedUnder)
                     ?: return
@@ -765,7 +762,7 @@ class AppStateImpl internal constructor(
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             Log.e(TAG, "driver failed gen=$gen", t)
-            fail(session, ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, t.message))
+            fail(session, SessionStatus.Error(ErrorKind.CONNECT_FAILED, t.message))
         }
     }
 
@@ -774,7 +771,7 @@ class AppStateImpl internal constructor(
      * maps to, with the link still open: the caller either drops it or retires the session it
      * belongs to, which closes it.
      */
-    private suspend fun open(session: Session, link: Link): ConnectionStatus? {
+    private suspend fun open(session: Session, link: Link): SessionStatus? {
         val listener = object : MumbleControlTransport.Listener {
             override fun onFrame(f: TcpFrame) = link.stateMachine.onFrame(f)
             override fun onClosed(cause: Throwable?) = link.stateMachine.onClosed(cause)
@@ -795,7 +792,7 @@ class AppStateImpl internal constructor(
                 .onFailure { Log.w(TAG, "no UDP socket; voice stays tunneled", it) }
         }
         link.stateMachine.udpPing = { link.udp.sendPing() }
-        link.stateMachine.audioListener = SessionStateMachine.AudioListener { payload ->
+        link.stateMachine.audioListener = ConnectionStateMachine.AudioListener { payload ->
             session.receiver.onVoicePacket(payload, payload.size)
         }
         link.stateMachine.start()
@@ -822,7 +819,7 @@ class AppStateImpl internal constructor(
             link.stateMachine.messages.collect {
                 publishFromLink(
                     session, link, _messages,
-                    (session.carried + it).takeLast(SessionStateMachine.MAX_MESSAGES),
+                    (session.carried + it).takeLast(ConnectionStateMachine.MAX_MESSAGES),
                 )
             }
         }
@@ -862,7 +859,7 @@ class AppStateImpl internal constructor(
             val remaining = deadline - udpClock.markNow()
             if (remaining <= Duration.ZERO) {
                 Log.w(TAG, "gave up gen=$gen")
-                fail(session, ConnectionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
+                fail(session, SessionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
                 return null
             }
             // delay's clock and the deadline's boot clock disagree only across a suspend, and the
@@ -892,8 +889,8 @@ class AppStateImpl internal constructor(
                 drop(session, next)
                 // The server's certificate changed, or Android is blocking this address. Both wait
                 // on the user, so end the session and show the prompt a fresh connect would.
-                if (failure is ConnectionStatus.AwaitingTrust || failure is ConnectionStatus.PinMismatch ||
-                    (failure as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
+                if (failure is SessionStatus.AwaitingTrust || failure is SessionStatus.PinMismatch ||
+                    (failure as? SessionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
                 ) {
                     fail(session, failure)
                     return null
@@ -945,8 +942,8 @@ class AppStateImpl internal constructor(
      * on, and retiring keeps a Talk press from opening a microphone against a finished call. A
      * trust prompt is kept aside for [trustAndConnect] first, since it can follow at once.
      */
-    private fun fail(session: Session, status: ConnectionStatus) {
-        if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
+    private fun fail(session: Session, status: SessionStatus) {
+        if (status is SessionStatus.AwaitingTrust || status is SessionStatus.PinMismatch) {
             Log.i(TAG, "handshake stopped for trust decision: $status")
             synchronized(lock) { if (session.gen == generation) trustPrompt = session }
         }
@@ -969,7 +966,7 @@ class AppStateImpl internal constructor(
         gen: Int,
         failed: ConnectionState.Failed,
         diedAt: ComparableTimeMark,
-    ): ConnectionStatus? = when (failed.reason) {
+    ): SessionStatus? = when (failed.reason) {
         FailReason.IO, FailReason.TIMEOUT -> null
         // Past GHOST_REAP the name is someone else's, and retrying would only end on a timeout
         // that says nothing about why. Every other rejection is final at once.
@@ -998,7 +995,7 @@ class AppStateImpl internal constructor(
 
     override fun disconnect() {
         val prior = synchronized(lock) {
-            retireAndClearLocked(ConnectionStatus.Idle)?.also { call.end() }
+            retireAndClearLocked(SessionStatus.Idle)?.also { call.end() }
         }
         prior?.let { teardown(it) }
     }
@@ -1108,19 +1105,19 @@ class AppStateImpl internal constructor(
         session.scope.cancel()
     }
 
-    private fun mapConnectError(t: Throwable, session: Session): ConnectionStatus {
+    private fun mapConnectError(t: Throwable, session: Session): SessionStatus {
         val chain = generateSequence(t as Throwable?) { it.cause }.toList()
         (chain.firstOrNull { it is UntrustedCertificateException } as? UntrustedCertificateException)?.let {
             session.presented = it.fingerprint
-            return ConnectionStatus.AwaitingTrust(it.fingerprint)
+            return SessionStatus.AwaitingTrust(it.fingerprint)
         }
         (chain.firstOrNull { it is PinMismatchException } as? PinMismatchException)?.let {
             session.presented = it.presented
-            return ConnectionStatus.PinMismatch(it.stored, it.presented)
+            return SessionStatus.PinMismatch(it.stored, it.presented)
         }
-        if (chain.any { it is LocalNetworkBlockedException }) return ConnectionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, t.message)
-        if (chain.any { it is SocketTimeoutException }) return ConnectionStatus.Error(ErrorKind.TIMEOUT, t.message)
-        return ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, t.message)
+        if (chain.any { it is LocalNetworkBlockedException }) return SessionStatus.Error(ErrorKind.LOCAL_NETWORK_BLOCKED, t.message)
+        if (chain.any { it is SocketTimeoutException }) return SessionStatus.Error(ErrorKind.TIMEOUT, t.message)
+        return SessionStatus.Error(ErrorKind.CONNECT_FAILED, t.message)
     }
 
     private companion object {

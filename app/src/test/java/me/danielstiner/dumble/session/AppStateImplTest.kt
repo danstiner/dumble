@@ -16,8 +16,6 @@ import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.connection.FakeNetworkWatch
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -35,7 +33,7 @@ import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.AudioRoute
@@ -82,8 +80,8 @@ class AppStateImplTest {
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.TIMEOUT, err.kind)
     }
 
@@ -103,7 +101,7 @@ class AppStateImplTest {
         transports[0].listener!!.onClosed(IOException("reset"))
 
         assertSettled("the block ends the session") {
-            (app.status.value as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
+            (app.status.value as? SessionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
         }
     }
 
@@ -314,8 +312,8 @@ class AppStateImplTest {
         ) { FakeControlTransport { _, _ -> throw IOException("connection refused") }.also { transports += it } })
 
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.CONNECT_FAILED, err.kind)
         assertSettled("the failure must end the call") { call.ends == 1 }
 
@@ -323,7 +321,7 @@ class AppStateImplTest {
 
         assertSettled("no microphone may open for a retired session") { handles.isEmpty() }
         assertEquals(1, call.ends)
-        assertTrue("retire() must not reset the terminal status", app.status.value is ConnectionStatus.Error)
+        assertTrue("retire() must not reset the terminal status", app.status.value is SessionStatus.Error)
         assertSettled("retire must close the link") { transports.single().closed }
     }
 
@@ -345,14 +343,14 @@ class AppStateImplTest {
         val endpoint = MumbleEndpoint.parse("localhost")
 
         app.connect(endpoint, "user", null)
-        assertSettled("awaiting trust") { app.status.value is ConnectionStatus.AwaitingTrust }
+        assertSettled("awaiting trust") { app.status.value is SessionStatus.AwaitingTrust }
         assertSettled("the prompt must end the call") { call.ends == 1 }
 
         app.requestCapture()
 
         assertSettled("no microphone may open while a prompt is up") { handles.isEmpty() }
         assertSettled("the stopped handshake's transport is closed") { transports.single().closed }
-        assertTrue(app.status.value is ConnectionStatus.AwaitingTrust)
+        assertTrue(app.status.value is SessionStatus.AwaitingTrust)
 
         app.trustAndConnect()
         handshaking(app)
@@ -374,12 +372,12 @@ class AppStateImplTest {
         })
         val endpoint = MumbleEndpoint.parse("localhost")
         app.connect(endpoint, "user", null)
-        assertSettled("awaiting trust") { app.status.value is ConnectionStatus.AwaitingTrust }
+        assertSettled("awaiting trust") { app.status.value is SessionStatus.AwaitingTrust }
 
         app.trustAndConnect()
         app.cancelTrust()
 
-        assertSettled("the cancel must stand") { app.status.value == ConnectionStatus.Idle }
+        assertSettled("the cancel must stand") { app.status.value == SessionStatus.Idle }
         assertEquals(1, call.starts.size)
         assertEquals(1, transports.size)
         assertEquals("the pin Trust saved", "ab12", pins.get(endpoint.address))
@@ -551,7 +549,7 @@ class AppStateImplTest {
         }
 
         refused.completeExceptionally(IOException("connection refused"))
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        assertSettled("error") { app.status.value is SessionStatus.Error }
         assertFalse("the end clears the hold", app.callHeld.value)
         assertEquals("the end clears the routes", AudioRoutes(), app.audioRoutes.value)
 
@@ -629,9 +627,9 @@ class AppStateImplTest {
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        assertSettled("reconnecting") { app.status.value == ConnectionStatus.Reconnecting(first.gen, 1) }
+        assertSettled("reconnecting") { app.status.value == SessionStatus.Reconnecting(first.gen, 1) }
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
 
         assertEquals("one platform call for the whole session", 1, call.starts.size)
         assertEquals("the call must not end across a reconnect", 0, call.ends)
@@ -650,8 +648,8 @@ class AppStateImplTest {
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         transportAt(transports, 0).listener!!.onClosed(IOException("reset"))
 
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("no replacement for a link that never came up", 1, transports.size)
     }
@@ -672,7 +670,7 @@ class AppStateImplTest {
         link.listener!!.onFrame(userRemove(session = 1, reason = "spam"))
         link.listener!!.onClosed(IOException("reset"))
 
-        assertSettled("kicked") { app.status.value == ConnectionStatus.Error(ErrorKind.KICKED, "spam") }
+        assertSettled("kicked") { app.status.value == SessionStatus.Error(ErrorKind.KICKED, "spam") }
         assertSettled("the call ends") { call.ends == 1 }
         assertEquals("no replacement after a kick", 1, transports.size)
     }
@@ -699,7 +697,7 @@ class AppStateImplTest {
         // Our close unblocks the reader, whose exit is what reports the death.
         transports[0].listener!!.onClosed(IOException("closed"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the call must not end across a loss", 0, call.ends)
     }
 
@@ -782,8 +780,8 @@ class AppStateImplTest {
 
         assertSettled("the link is closed as soon as it is wired") { transports[0].closed }
         transports[0].listener!!.onClosed(IOException("closed"))
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("never retried", 1, transports.size)
     }
@@ -881,7 +879,7 @@ class AppStateImplTest {
         network.switchTo("cell")
 
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the wait was cut, not waited out", listOf(0.seconds, 1.seconds, 0.seconds), waits.toList())
     }
 
@@ -915,7 +913,7 @@ class AppStateImplTest {
 
         assertSettled("the attempt in flight is abandoned") { transports[1].closed }
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("attempt 0 again on the new network", listOf(Duration.ZERO, Duration.ZERO), waits.toList())
     }
 
@@ -968,11 +966,11 @@ class AppStateImplTest {
 
         startedTransportAt(transports, 1).listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
         transportAt(transports, 2)   // retried
-        assertTrue("still reconnecting after a UsernameInUse", app.status.value is ConnectionStatus.Reconnecting)
+        assertTrue("still reconnecting after a UsernameInUse", app.status.value is SessionStatus.Reconnecting)
 
         transports[2].listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.WrongServerPW))
-        assertSettled("error") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.WRONG_SERVER_PASSWORD, err.kind)
         assertSettled("giving up ends the call") { call.ends == 1 }
         assertEquals("no attempt after a final rejection", 3, transports.size)
@@ -1002,8 +1000,8 @@ class AppStateImplTest {
         // 0+1+2+4+8+16+30+30+29 = 120 s: the ninth 30 s wait would overrun, so it is clamped to
         // the 29 s left and spent on one last attempt, which lands exactly on the deadline.
         elapse(120.seconds)
-        assertSettled("gave up") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("gave up") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("could not get back to the server", err.detail)
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30, 29).map { it.seconds }, waits.toList())
@@ -1076,9 +1074,9 @@ class AppStateImplTest {
 
         // Two minutes of reconnecting on top of the 58 s spent connected: the give-up is at 178 s.
         elapse(118.seconds)   // t = 177: the clamped last wait is still running
-        assertSettled("still inside the given-back budget") { app.status.value is ConnectionStatus.Reconnecting }
+        assertSettled("still inside the given-back budget") { app.status.value is SessionStatus.Reconnecting }
         elapse(1.seconds)     // t = 178: the last attempt is refused and the budget is spent
-        assertSettled("gave up") { app.status.value is ConnectionStatus.Error }
+        assertSettled("gave up") { app.status.value is SessionStatus.Error }
     }
 
     /**
@@ -1104,8 +1102,8 @@ class AppStateImplTest {
             startedTransportAt(transports, i).listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
         }
 
-        assertSettled("final rejection") { app.status.value is ConnectionStatus.Error }
-        val err = app.status.value as ConnectionStatus.Error
+        assertSettled("final rejection") { app.status.value is SessionStatus.Error }
+        val err = app.status.value as SessionStatus.Error
         assertEquals(ErrorKind.USERNAME_TAKEN, err.kind)
         assertEquals("no attempt after the name proved to be someone else's", 8, transports.size)
     }
@@ -1275,7 +1273,7 @@ class AppStateImplTest {
         assertEquals(listOf(false to true), transports[0].selfStates())
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        assertSettled("reconnecting") { app.status.value is ConnectionStatus.Reconnecting }
+        assertSettled("reconnecting") { app.status.value is SessionStatus.Reconnecting }
         app.setMuted(false)                       // nothing live to carry it
 
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
@@ -1294,7 +1292,7 @@ class AppStateImplTest {
         connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        assertSettled("reconnecting") { app.status.value is ConnectionStatus.Reconnecting }
+        assertSettled("reconnecting") { app.status.value is SessionStatus.Reconnecting }
         app.setSelfDeaf(true)
 
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
@@ -1329,7 +1327,7 @@ class AppStateImplTest {
         var rowAtConnected: User? = null
         scope.backgroundScope.launch(Dispatchers.Unconfined) {
             app.status.collect {
-                if (it is ConnectionStatus.Connected && it.sessionId == 2) rowAtConnected = app.channelTree.value.users[2]
+                if (it is SessionStatus.Connected && it.sessionId == 2) rowAtConnected = app.channelTree.value.users[2]
             }
         }
 
@@ -1481,7 +1479,7 @@ class AppStateImplTest {
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        assertSettled("pin mismatch") { app.status.value == ConnectionStatus.PinMismatch("aa", "bb") }
+        assertSettled("pin mismatch") { app.status.value == SessionStatus.PinMismatch("aa", "bb") }
         assertSettled("the prompt must end the call") { call.ends == 1 }
         assertSettled("the dead link and its refused replacement are both closed") {
             transports.size == 2 && transports.all { it.closed }
@@ -1510,10 +1508,10 @@ class AppStateImplTest {
 
         elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the link
 
-        assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), app.status.value)
+        assertEquals(SessionStatus.Reconnecting(first.gen, 1), app.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the call rides through", 0, call.ends)
     }
 
@@ -1573,7 +1571,7 @@ class AppStateImplTest {
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
+        assertSettled("handshaking") { app.status.value is SessionStatus.Handshaking }
 
         // Reach the receiver first, so there is a live playout and a started stream to release.
         playout.liveSessions = setOf(9)
@@ -1590,12 +1588,12 @@ class AppStateImplTest {
         // The server rejects the login: a terminal state nobody asked for.
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
-        assertSettled("rejected") { app.status.value is ConnectionStatus.Error }
-        assertEquals(ErrorKind.AUTH_REJECTED, (app.status.value as ConnectionStatus.Error).kind)
+        assertSettled("rejected") { app.status.value is SessionStatus.Error }
+        assertEquals(ErrorKind.AUTH_REJECTED, (app.status.value as SessionStatus.Error).kind)
 
         assertSettled("a failed session must destroy the playout engine") { playout.destroyed }
         // The error must survive the teardown — it is what the user is looking at.
-        assertTrue("retire() must not reset the terminal status", app.status.value is ConnectionStatus.Error)
+        assertTrue("retire() must not reset the terminal status", app.status.value is SessionStatus.Error)
     }
 
     @Test fun speakingSessionsPopulateThenClearOnDisconnect() = deterministic {
@@ -1605,7 +1603,7 @@ class AppStateImplTest {
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
+        assertSettled("handshaking") { app.status.value is SessionStatus.Handshaking }
 
         // The engine's answer to the packet below: session 9 holds a slot and is producing.
         playout.liveSessions = setOf(9)
@@ -1642,7 +1640,7 @@ class AppStateImplTest {
             FakeControlTransport { _, _ -> }.apply { remote = InetSocketAddress.createUnresolved("nowhere.invalid", 1) }.also { fake = it }
         })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
+        assertSettled("handshaking") { app.status.value is SessionStatus.Handshaking }
         fake.listener!!.onFrame(keyExchange())
         fake.listener!!.onFrame(serverSync())
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
@@ -1672,7 +1670,7 @@ class AppStateImplTest {
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
         assertSettled("the superseded link must be closed") { transports.single().closed }
-        assertEquals("no clobber", ConnectionStatus.Idle, app.status.value)
+        assertEquals("no clobber", SessionStatus.Idle, app.status.value)
         assertEquals(ChannelTree(), app.channelTree.value)
     }
 
@@ -1722,7 +1720,7 @@ class AppStateImplTest {
         transports[0].listener!!.onClosed(IOException("reset"))
 
         assertSettled("both links must be closed") { transports.size == 2 && transports.all { it.closed } }
-        assertEquals(ConnectionStatus.Idle, app.status.value)
+        assertEquals(SessionStatus.Idle, app.status.value)
         assertEquals("the call ends once", 1, call.ends)
     }
 
@@ -1747,7 +1745,7 @@ class AppStateImplTest {
         // The replacement connects, then waits in replaceLink for a ServerSync this test never
         // sends: the dead link is closed and nothing has been swapped in.
         startedTransportAt(transports, 1)
-        assertTrue(app.status.value is ConnectionStatus.Reconnecting)
+        assertTrue(app.status.value is SessionStatus.Reconnecting)
         assertTrue("the dead link must be closed", transports[0].closed)
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(2).setName("Late").build().toByteArray()))
@@ -1879,13 +1877,13 @@ class AppStateImplTest {
             app.connect(endpoint, "user", null)
 
             val awaiting = withTimeout(5_000) {
-                app.status.first { it is ConnectionStatus.AwaitingTrust }
-            } as ConnectionStatus.AwaitingTrust
+                app.status.first { it is SessionStatus.AwaitingTrust }
+            } as SessionStatus.AwaitingTrust
             assertEquals(sha256Hex(srv.leafCertificate.encoded), awaiting.fingerprint)
 
             app.trustAndConnect()
 
-            withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+            withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
             assertEquals(sha256Hex(srv.leafCertificate.encoded), pins.get(endpoint.address))
 
             app.disconnect()
@@ -1996,7 +1994,7 @@ class AppStateImplTest {
 
     private suspend fun connectToHandshaking(app: AppStateImpl) {
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+        withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
     }
 
     private fun serverSync() = TcpFrame(TcpMessageType.ServerSync.id,
@@ -2067,7 +2065,7 @@ class AppStateImplTest {
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
 
-        assertSettled("rejected") { app.status.value is ConnectionStatus.Error }
+        assertSettled("rejected") { app.status.value is SessionStatus.Error }
         assertTrue("a retired session must not leak its socket", udps.single().closed)
     }
 
@@ -2149,7 +2147,7 @@ class AppStateImplTest {
         udps.single().listener.onPingReply(20.milliseconds)
         fake.listener!!.onFrame(serverSync(1))   // the ping loop starts with the session
 
-        elapse(SessionStateMachine.PING_INTERVAL_MS.milliseconds)
+        elapse(ConnectionStateMachine.PING_INTERVAL_MS.milliseconds)
 
         val ping = fake.sent.last { it.first == TcpMessageType.Ping }.second as MumbleProtos.Ping
         assertEquals("the accepted reply, counted", 1, ping.udpPackets)

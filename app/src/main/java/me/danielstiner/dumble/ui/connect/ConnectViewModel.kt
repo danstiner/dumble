@@ -22,9 +22,6 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.data.ServerProfile
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
-import me.danielstiner.dumble.mumble.connection.mySession
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.DeafenState
@@ -34,6 +31,9 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.session.AppState
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
+import me.danielstiner.dumble.session.mySession
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -50,7 +50,7 @@ fun parsePort(text: String): PortInput {
 
 /**
  * Overlay screens, orthogonal to connection state — Settings is reachable both before and during
- * a session. [Main] means no overlay: show whatever the connection status dictates.
+ * a session. [Main] means no overlay: show whatever the session status dictates.
  */
 enum class Route { Main, Settings, About }
 
@@ -60,7 +60,7 @@ data class ConnectUiState(
     val password: String = "",
     val portError: String? = null,
     val hostError: String? = null,
-    val status: ConnectionStatus = ConnectionStatus.Idle,
+    val status: SessionStatus = SessionStatus.Idle,
     /**
      * Whether the block now showing has been asked about; each connect resets it. Held here because
      * the error outlives the screen, which would forget and ask again when the user comes back, and
@@ -122,11 +122,11 @@ data class ConnectUiState(
      * after the connect, with no change to see.
      */
     val askLocalNetwork: Boolean
-        get() = (status as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED && !localNetworkAsked
+        get() = (status as? SessionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED && !localNetworkAsked
 }
 
 private data class ConnSnapshot(
-    val status: ConnectionStatus,
+    val status: SessionStatus,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
     val audioRoutes: AudioRoutes,
@@ -172,8 +172,8 @@ class ConnectViewModel internal constructor(
             // The status outlives this view model, so an error already showing is not new: the one
             // before asked, or, if none was open when it landed, the next Connect will. Nor is it
             // about this form, whose password starts blank whatever was sent.
-            localNetworkAsked = appState.status.value is ConnectionStatus.Error,
-            editedSinceConnect = appState.status.value is ConnectionStatus.Error,
+            localNetworkAsked = appState.status.value is SessionStatus.Error,
+            editedSinceConnect = appState.status.value is SessionStatus.Error,
         ),
     )
 
@@ -206,7 +206,7 @@ class ConnectViewModel internal constructor(
             val me = session?.let { c.channelTree.users[it] }
             // Nothing past the reconnect to cover: the swap publishes the replacement's tree before
             // its Connected, so our row is there to read.
-            val reconnecting = status is ConnectionStatus.Reconnecting
+            val reconnecting = status is SessionStatus.Reconnecting
             val block = talkBlock(me, c.self.selfState, f.microphoneGranted, reconnecting)
             // Still gated on the block: the packets are real, but the server discards a muted or
             // suppressed talker's audio, and showing yourself speaking then would be a lie.
@@ -237,7 +237,7 @@ class ConnectViewModel internal constructor(
     // reconnected list can't fool identity. A message dropped past MAX_MESSAGES, or one from a prior
     // session, simply isn't found, so unread falls back to "everything visible" (≤ MAX_MESSAGES). This
     // relies on the log being append-only, so instances stay stable across emissions — see
-    // SessionStateMachine.appendMessage.
+    // ConnectionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = appState.messages.value.lastOrNull()
 
     /** The generation [ConnectUiState.connectedSince] was marked for; null while disconnected. */
@@ -271,8 +271,8 @@ class ConnectViewModel internal constructor(
                 // server's session id either: a link rebuilt under the same call gets a new one
                 // while the call the user is timing goes on.
                 val gen = when (s) {
-                    is ConnectionStatus.Connected -> s.gen
-                    is ConnectionStatus.Reconnecting -> s.gen
+                    is SessionStatus.Connected -> s.gen
+                    is SessionStatus.Reconnecting -> s.gen
                     else -> null
                 }
                 if (gen == anchoredGen) return@collect
@@ -298,7 +298,7 @@ class ConnectViewModel internal constructor(
     // Only an edit made with the rejection on screen retires it. One made while the connect is
     // still in flight would hide the answer before it arrives.
     private fun edit(change: (ConnectUiState) -> ConnectUiState) {
-        val retires = form.value.editedSinceConnect || appState.status.value is ConnectionStatus.Error
+        val retires = form.value.editedSinceConnect || appState.status.value is SessionStatus.Error
         form.value = change(form.value).copy(editedSinceConnect = retires)
     }
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }

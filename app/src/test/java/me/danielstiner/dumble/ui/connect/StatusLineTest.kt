@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import me.danielstiner.dumble.mumble.net.VoicePath
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.time.Duration.Companion.milliseconds
@@ -55,10 +55,10 @@ class StatusLineTest {
      * stale latency beside a dead link is exactly the readout that misleads during a device gate.
      */
     @Test fun degradedReplacesTheRoundTripRatherThanJoiningIt() =
-        assertEquals("Connected · 12:34 · no response", statusLine(754, 4.1.milliseconds, onUdp, SessionStateMachine.DEGRADED_PING_AGE))
+        assertEquals("Connected · 12:34 · no response", statusLine(754, 4.1.milliseconds, onUdp, ConnectionStateMachine.DEGRADED_PING_AGE))
 
     @Test fun degradedShowsWithNoRoundTripEverRecorded() =
-        assertEquals("Connected · 12:34 · no response", statusLine(754, null, tunneled, SessionStateMachine.DEGRADED_PING_AGE))
+        assertEquals("Connected · 12:34 · no response", statusLine(754, null, tunneled, ConnectionStateMachine.DEGRADED_PING_AGE))
 
     /** Reconnecting drops both the latency and "no response"; only elapsed time survives. */
     @Test fun reconnectingShowsOnlyTheElapsedTime() {

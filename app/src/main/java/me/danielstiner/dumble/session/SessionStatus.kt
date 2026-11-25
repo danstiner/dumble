@@ -1,36 +1,36 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 
 /** The whole-connection state the UI observes: TLS + trust + protocol, unified. */
-sealed interface ConnectionStatus {
-    data object Idle : ConnectionStatus
-    data object Connecting : ConnectionStatus
-    data class AwaitingTrust(val fingerprint: String) : ConnectionStatus
-    data class PinMismatch(val stored: String, val presented: String) : ConnectionStatus
-    data object Handshaking : ConnectionStatus
+sealed interface SessionStatus {
+    data object Idle : SessionStatus
+    data object Connecting : SessionStatus
+    data class AwaitingTrust(val fingerprint: String) : SessionStatus
+    data class PinMismatch(val stored: String, val presented: String) : SessionStatus
+    data object Handshaking : SessionStatus
     /** [gen] is this connection's own generation, one per connect(); [sessionId] is the server's,
      *  and changes with every link. */
-    data class Connected(val gen: Int, val sessionId: Int) : ConnectionStatus
+    data class Connected(val gen: Int, val sessionId: Int) : SessionStatus
     /** The session's link died and a replacement is being opened under the same generation;
      *  [lastSessionId] is the server session the UI's own row still belongs to. */
-    data class Reconnecting(val gen: Int, val lastSessionId: Int) : ConnectionStatus
-    data class Error(val kind: ErrorKind, val detail: String?) : ConnectionStatus
+    data class Reconnecting(val gen: Int, val lastSessionId: Int) : SessionStatus
+    data class Error(val kind: ErrorKind, val detail: String?) : SessionStatus
 }
 
 /** Our own server session, or null when there is none: through a reconnect the UI keeps reading the
  *  row of the session the dead link had. */
-val ConnectionStatus.mySession: Int?
+val SessionStatus.mySession: Int?
     get() = when (this) {
-        is ConnectionStatus.Connected -> sessionId
-        is ConnectionStatus.Reconnecting -> lastSessionId
+        is SessionStatus.Connected -> sessionId
+        is SessionStatus.Reconnecting -> lastSessionId
         else -> null
     }
 
 /**
- * Why a connection ended, for the UI to put in its own words. [ConnectionStatus.Error.detail]
+ * Why a connection ended, for the UI to put in its own words. [SessionStatus.Error.detail]
  * carries the system's or the server's text beside it.
  */
 enum class ErrorKind {
@@ -58,21 +58,21 @@ enum class ErrorKind {
 }
 
 /**
- * Protocol state → whole-connection status. Null for [ConnectionState.Disconnected]: it is the state
+ * Protocol state → session status. Null for [ConnectionState.Disconnected]: it is the state
  * machine's start value and the coordinator, not the protocol, owns the pre-handshake phases.
- * [gen] is stamped into [ConnectionStatus.Connected]; the protocol layer never learns it.
+ * [gen] is stamped into [SessionStatus.Connected]; the protocol layer never learns it.
  */
-fun mapState(gen: Int, s: ConnectionState): ConnectionStatus? = when (s) {
+fun mapState(gen: Int, s: ConnectionState): SessionStatus? = when (s) {
     ConnectionState.Disconnected -> null
-    ConnectionState.Handshaking -> ConnectionStatus.Handshaking
-    is ConnectionState.Synchronized -> ConnectionStatus.Connected(gen, s.sessionId)
+    ConnectionState.Handshaking -> SessionStatus.Handshaking
+    is ConnectionState.Synchronized -> SessionStatus.Connected(gen, s.sessionId)
     is ConnectionState.Failed -> when (s.reason) {
-        FailReason.AUTH_REJECT -> ConnectionStatus.Error(rejectKind(s.rejectType), s.detail)
-        FailReason.TIMEOUT -> ConnectionStatus.Error(ErrorKind.TIMEOUT, s.detail)
-        FailReason.IO -> ConnectionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
-        FailReason.VERSION_TOO_OLD -> ConnectionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
-        FailReason.KICKED -> ConnectionStatus.Error(ErrorKind.KICKED, s.detail)
-        FailReason.BANNED -> ConnectionStatus.Error(ErrorKind.BANNED, s.detail)
+        FailReason.AUTH_REJECT -> SessionStatus.Error(rejectKind(s.rejectType), s.detail)
+        FailReason.TIMEOUT -> SessionStatus.Error(ErrorKind.TIMEOUT, s.detail)
+        FailReason.IO -> SessionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
+        FailReason.VERSION_TOO_OLD -> SessionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
+        FailReason.KICKED -> SessionStatus.Error(ErrorKind.KICKED, s.detail)
+        FailReason.BANNED -> SessionStatus.Error(ErrorKind.BANNED, s.detail)
     }
 }
 

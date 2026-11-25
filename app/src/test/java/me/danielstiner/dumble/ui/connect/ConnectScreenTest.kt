@@ -10,8 +10,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -56,7 +56,7 @@ class ConnectScreenTest {
         compose.onAllNodesWithText("This server needs a password").assertCountEquals(0)
     }
 
-    private fun rejected(kind: ErrorKind) = ConnectionStatus.Error(kind, "the server's reason")
+    private fun rejected(kind: ErrorKind) = SessionStatus.Error(kind, "the server's reason")
 
     private fun show(state: ConnectUiState) = compose.setContent {
         ConnectScreen(state, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})

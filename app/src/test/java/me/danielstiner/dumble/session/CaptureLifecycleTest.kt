@@ -9,7 +9,6 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
@@ -707,7 +706,7 @@ class CaptureLifecycleTest {
                 call = call,
             ) { FakeControlTransport { _, _ -> } }
             app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-            withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+            withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
             app.requestCapture()
 
             val hammer = Thread { repeat(500) { i -> app.setTransmitting(i % 2 == 0) } }

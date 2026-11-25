@@ -24,7 +24,7 @@ import me.danielstiner.dumble.mumble.net.sha256Hex
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import org.junit.Assert.assertArrayEquals
@@ -78,7 +78,7 @@ class LiveServerIntegrationTest {
 
         val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.address))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val session = SessionStateMachine(transport, "dumble-ci", password, scope)
+        val session = ConnectionStateMachine(transport, "dumble-ci", password, scope)
 
         try {
             connectWithRetry(transport, target, port, session)
@@ -114,14 +114,14 @@ class LiveServerIntegrationTest {
         val pins = InMemoryPinStore().apply { put(endpoint.address, fingerprint) }
         val transport = MumbleTcpTransport(expectedPin = pins.get(endpoint.address))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val session = SessionStateMachine(transport, "dumble-ci-voice", password, scope)
+        val session = ConnectionStateMachine(transport, "dumble-ci-voice", password, scope)
 
         // A single TOC byte is a legal Opus packet (RFC 6716 3.1): SILK-NB, 20 ms, mono, code 0.
         // Nothing here decodes it — the server relays audio untouched and this is a JVM test.
         val fixture = byteArrayOf(0x08)
 
         val echoed = CompletableDeferred<ByteArray>()
-        session.audioListener = SessionStateMachine.AudioListener { payload ->
+        session.audioListener = ConnectionStateMachine.AudioListener { payload ->
             if (payload.isNotEmpty() && payload[0].toInt() == 0) {
                 val audio = MumbleUdpProtos.Audio.parseFrom(payload.copyOfRange(1, payload.size))
                 if (!audio.opusData.isEmpty) echoed.complete(audio.opusData.toByteArray())
@@ -164,7 +164,7 @@ class LiveServerIntegrationTest {
             identityStore = identity?.let { FixedIdentity(it) } ?: NoClientIdentity,
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val session = SessionStateMachine(transport, name, password, scope)
+        val session = ConnectionStateMachine(transport, name, password, scope)
         // The boot clock reads zero on the JVM; the round trip needs a real one.
         val udp = MumbleUdpTransport(session.crypt, udpListener, TimeSource.Monotonic)
 
@@ -227,7 +227,7 @@ class LiveServerIntegrationTest {
         val listener = Client("dumble-ci-listener", heard)
         val talker = Client("dumble-ci-talker", Recorder())
         val tunneled = LinkedBlockingQueue<ByteArray>()
-        listener.session.audioListener = SessionStateMachine.AudioListener { tunneled.add(it) }
+        listener.session.audioListener = ConnectionStateMachine.AudioListener { tunneled.add(it) }
         val fixture = byteArrayOf(0x08)
         try {
             listener.connect()
@@ -265,7 +265,7 @@ class LiveServerIntegrationTest {
         val listener = Client("dumble-ci-nudger", heard)
         val talker = Client("dumble-ci-talker2", Recorder())
         val tunneled = LinkedBlockingQueue<ByteArray>()
-        listener.session.audioListener = SessionStateMachine.AudioListener { tunneled.add(it) }
+        listener.session.audioListener = ConnectionStateMachine.AudioListener { tunneled.add(it) }
         val fixture = byteArrayOf(0x08)
         try {
             listener.connect()
@@ -430,7 +430,7 @@ class LiveServerIntegrationTest {
         transport: MumbleTcpTransport,
         host: String,
         port: Int,
-        session: SessionStateMachine,
+        session: ConnectionStateMachine,
         tap: (TcpFrame) -> Unit = {},
     ) {
         val attempts = 5

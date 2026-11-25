@@ -9,7 +9,7 @@ import kotlin.time.Duration.Companion.microseconds
 
 /**
  * What the server measures about one user — the half of the path we cannot see from here. Ours is
- * [SessionStateMachine.roundTripTime]; together they approximate the path between two people.
+ * [ConnectionStateMachine.roundTripTime]; together they approximate the path between two people.
  *
  * Carries its own [session] because it arrives asynchronously: a reply for the user whose sheet
  * was just closed must not be read as belonging to whoever is on screen now.

@@ -1,7 +1,7 @@
 package me.danielstiner.dumble.ui.connect
 
 import me.danielstiner.dumble.mumble.net.VoicePath
-import me.danielstiner.dumble.mumble.protocol.SessionStateMachine
+import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import kotlin.time.Duration
 
 /**
@@ -29,7 +29,7 @@ internal fun statusLine(
     if (elapsedSeconds != null) append(" · ").append(formatDuration(elapsedSeconds))
     // Either the latency or the outage, never both: a round trip measured before the replies
     // stopped is not evidence about a link that is currently silent.
-    if (pingAge >= SessionStateMachine.DEGRADED_PING_AGE) {
+    if (pingAge >= ConnectionStateMachine.DEGRADED_PING_AGE) {
         append(" · ").append("no response")
         return@buildString
     }

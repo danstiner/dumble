@@ -36,8 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
-import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.session.ErrorKind
+import me.danielstiner.dumble.session.SessionStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,9 +55,9 @@ fun ConnectScreen(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val idle = state.status is ConnectionStatus.Idle || state.status is ConnectionStatus.Error
+    val idle = state.status is SessionStatus.Idle || state.status is SessionStatus.Error
     val canConnect = idle && state.draft.host.isNotBlank() && state.draft.username.isNotBlank() && state.portError == null
-    val error = state.status as? ConnectionStatus.Error
+    val error = state.status as? SessionStatus.Error
     val errorText = error?.let { connectErrorText(it, state.password.isBlank()) }
     val errorPlace = error?.let { connectErrorPlace(it.kind) }
     val usernameError = errorText.takeIf { errorPlace == ErrorPlace.USERNAME && !state.editedSinceConnect }
@@ -153,7 +153,7 @@ fun ConnectScreen(
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
             )
             Button(onClick = connect, enabled = canConnect, modifier = Modifier.fillMaxWidth()) {
-                Text(if (state.status is ConnectionStatus.Connecting || state.status is ConnectionStatus.Handshaking) "Connecting…" else "Connect")
+                Text(if (state.status is SessionStatus.Connecting || state.status is SessionStatus.Handshaking) "Connecting…" else "Connect")
             }
             if (error != null && errorText != null && errorPlace == ErrorPlace.BELOW_CONNECT) {
                 Column {
@@ -173,7 +173,7 @@ fun ConnectScreen(
         }
     }
 
-    if (state.status is ConnectionStatus.AwaitingTrust || state.status is ConnectionStatus.PinMismatch) {
+    if (state.status is SessionStatus.AwaitingTrust || state.status is SessionStatus.PinMismatch) {
         TrustDialog(state.status, onTrust = onTrust, onCancel = onCancelTrust)
     }
 }

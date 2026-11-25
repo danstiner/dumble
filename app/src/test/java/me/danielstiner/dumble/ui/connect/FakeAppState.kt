@@ -6,7 +6,6 @@ import kotlin.time.Duration
 import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
-import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.protocol.DeafenState
@@ -17,9 +16,10 @@ import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.session.AppState
+import me.danielstiner.dumble.session.SessionStatus
 
 class FakeAppState : AppState {
-    override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
+    override val status = MutableStateFlow<SessionStatus>(SessionStatus.Idle)
     override val serverVersion = MutableStateFlow<ServerVersion?>(null)
     override val roundTripTime = MutableStateFlow<Duration?>(null)
     override val voicePath = MutableStateFlow(VoicePath.State())
@@ -79,9 +79,9 @@ class FakeAppState : AppState {
 
     override fun requestUserStats(session: Int) { userStatsRequests += session }
 
-    fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = ConnectionStatus.Connected(gen, sessionId) }
+    fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = SessionStatus.Connected(gen, sessionId) }
     fun emitReconnecting(gen: Int, lastSessionId: Int) {
-        status.value = ConnectionStatus.Reconnecting(gen, lastSessionId)
+        status.value = SessionStatus.Reconnecting(gen, lastSessionId)
     }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
 
