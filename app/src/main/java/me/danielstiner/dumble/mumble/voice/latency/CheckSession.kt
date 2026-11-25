@@ -1,5 +1,6 @@
 package me.danielstiner.dumble.mumble.voice.latency
 
+import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.PinStore
 import kotlin.time.TimeSource
@@ -35,5 +36,21 @@ interface CheckSession {
      *  two sources cannot be subtracted. */
     val clock: TimeSource.WithComparableMarks
 
+    /** True while a capture stream is open on the session. */
+    val captureOpen: StateFlow<Boolean>
+
+    /** True once the check can go no further: the session ended, or its link was replaced by one
+     *  that never saw the start of the check's numbering. */
+    val ended: StateFlow<Boolean>
+
+    /** One prebuilt Opus packet to the server's loopback target; false if no link took it. Any
+     *  thread. */
+    fun inject(frameNumber: Long, opusData: ByteArray, terminator: Boolean): Boolean
+
     fun setGateOpen(open: Boolean)
+
+    /** Ends the session, or dismisses the trust prompt it stopped at, and leaves the connection
+     *  idle. Does nothing once another session or its trust prompt has taken its place: that one
+     *  is the user's. */
+    fun end()
 }

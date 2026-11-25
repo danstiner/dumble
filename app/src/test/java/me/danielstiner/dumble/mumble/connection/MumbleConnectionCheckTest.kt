@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
@@ -18,10 +19,12 @@ import me.danielstiner.dumble.mumble.voice.latency.CheckSession
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 
 /** A latency check's own session: what it is built to do from its connect to its end. */
@@ -30,19 +33,23 @@ class MumbleConnectionCheckTest {
     @get:Rule val timeout = hangGuard()
 
     /** A connection on the rig, with every capture engine and pump it made, and what a check on
-     *  it was handed. */
-    private class Live(rig: Rig) {
+     *  it was handed; [wrapCapture] wraps each fake capture engine it opens. */
+    private class Live(
+        rig: Rig,
+        wrapCapture: (FakeCaptureHandle) -> VoiceSender.CaptureHandle = { it },
+    ) {
         val transports = mutableListOf<FakeControlTransport>()
         val handles = mutableListOf<FakeCaptureHandle>()
         val senders = mutableListOf<VoiceSender>()
         val captured = mutableListOf<CapturedPacket>()
         val arrived = mutableListOf<ArrivedPacket>()
-        val playout = FakePlayoutEngine()
+        /** The newest session's engine. */
+        var playout = FakePlayoutEngine()
         val call = FakeVoiceCall()
         val conn = rig.own(MumbleConnection(
             InMemoryPinStore(),
-            newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
-            newPlayout = { playout }, call = call,
+            newCapture = { wrapCapture(FakeCaptureHandle(blocking = false).also { handles += it }) },
+            newPlayout = { FakePlayoutEngine().also { playout = it } }, call = call,
             startPump = { senders += it; rig.startPump(it) },
             captureClock = rig.clock, udpClock = rig.clock,
             context = rig.dispatcher, blocking = rig.dispatcher,
@@ -61,6 +68,14 @@ class MumbleConnectionCheckTest {
                 .setOpusData(ByteString.copyFrom(byteArrayOf(1))).build().toByteArray(),
         ))
     }
+
+    /** Its stop reaches no poll, so its pump never exits. */
+    private val wedged: (FakeCaptureHandle) -> VoiceSender.CaptureHandle =
+        { object : VoiceSender.CaptureHandle by it { override fun stop() {} } }
+
+    /** Its stop throws, so its release never gets as far as closing the stream. */
+    private val stopThrows: (FakeCaptureHandle) -> VoiceSender.CaptureHandle =
+        { object : VoiceSender.CaptureHandle by it { override fun stop() { throw IllegalStateException("stop") } } }
 
     private fun Rig.synchronize(live: Live) {
         startedTransportAt(live.transports, 0).listener!!.onFrame(serverSync(SELF))
@@ -104,17 +119,36 @@ class MumbleConnectionCheckTest {
     /** Every pump the session opens is built with the check as its wire. */
     @Test fun aCaptureReopenedOnACheckSessionGoesToTheCheckToo() = deterministic {
         val live = Live(this)
-        capturing(live)
+        val check = checking(live)
+        assertFalse(check.captureOpen.value)
+        live.conn.requestCapture()
+        assertSettled("capture opens") { check.captureOpen.value }
 
         live.call.hold()
         assertSettled("a call hold releases capture") { live.handles[0].destroyed }
+        assertFalse(check.captureOpen.value)
+
         live.call.resume()
         assertSettled("capture reopens") { live.handles.size == 2 }
+        assertTrue(check.captureOpen.value)
 
         live.handles[1].script(frame(7))
         settle()
         assertEquals(listOf(7L), live.captured.map { it.frameNumber })
         assertTrue(live.voice().isEmpty())
+    }
+
+    @Test fun injectedPacketsGoToTheLoopbackTarget() = deterministic {
+        val live = Live(this)
+        val check = checking(live)
+
+        assertTrue(check.inject(40, byteArrayOf(4, 5, 6), terminator = true))
+
+        val audio = parse(live.voice().single())
+        assertEquals(VoiceSender.SERVER_LOOPBACK_TARGET, audio.target)
+        assertEquals(40L, audio.frameNumber)
+        assertTrue(audio.isTerminator)
+        assertArrayEquals(byteArrayOf(4, 5, 6), audio.opusData.toByteArray())
     }
 
     @Test fun aCheckSessionIsPushToTalkOnTheChecksOwnGate() = deterministic {
@@ -149,6 +183,61 @@ class MumbleConnectionCheckTest {
         assertEquals("on the clock capture's packets are marked on", 30.milliseconds, packet.at - live.captured.single().at)
     }
 
+    /** A check measures one link: after a swap its numbering and its arrivals are another link's. */
+    @Test fun aLinkSwapEndsTheCheck() = deterministic {
+        val live = Live(this)
+        val check = checking(live)
+
+        live.transports[0].listener!!.onClosed(IOException("reset"))
+        startedTransportAt(live.transports, 1).listener!!.onFrame(serverSync(SELF))
+        connected(live.conn)
+
+        assertTrue(check.ended.value)
+        assertFalse(check.inject(40, byteArrayOf(1), terminator = false))
+    }
+
+    @Test fun aDisconnectEndsTheCheck() = deterministic {
+        val live = Live(this)
+        val check = checking(live)
+        assertFalse(check.ended.value)
+
+        live.conn.disconnect()
+
+        assertTrue(check.ended.value)
+    }
+
+    @Test fun aCheckEndsItsOwnSessionAndNoOther() = deterministic {
+        val live = Live(this)
+        val check = checking(live)
+        check.end()
+        assertTrue(check.ended.value)
+        assertEquals(ConnectionStatus.Idle, live.conn.status.value)
+
+        live.conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(live.transports, 1).listener!!.onFrame(serverSync(SELF))
+        connected(live.conn)
+        check.end()
+        assertSettled("the user's session stands") { live.conn.status.value is ConnectionStatus.Connected }
+        assertEquals(2, live.transports.size)
+    }
+
+    /** A certificate the check's store does not hold stops at the trust prompt, as any connect's
+     *  would. Ending the check dismisses it, so the next check can connect. */
+    @Test fun aCheckEndingDismissesItsOwnTrustPrompt() = deterministic {
+        val endpoint = MumbleEndpoint.parse("localhost")
+        val pins = InMemoryPinStore().apply { put(endpoint.address, "ab12") }
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin -> FakeControlTransport { _, _ -> throw PinMismatchException(stored = pin!!, presented = "cd34") } })
+
+        val check = conn.connectForCheck(endpoint, "check", pins, {}, {})!!
+        assertSettled("the mismatch") { conn.status.value is ConnectionStatus.PinMismatch }
+        check.end()
+
+        assertEquals(ConnectionStatus.Idle, conn.status.value)
+        assertNotNull(conn.connectForCheck(endpoint, "check", pins, {}, {}))
+    }
+
     @Test fun aCheckDoesNotReplaceALiveSession() = deterministic {
         val live = Live(this)
         live.conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
@@ -158,6 +247,40 @@ class MumbleConnectionCheckTest {
 
         assertSettled("the user's session stands") { live.conn.status.value is ConnectionStatus.Connected }
         assertEquals(1, live.transports.size)
+    }
+
+    /** A release whose stop throws never reports a pump exit, and the stream is past using. */
+    @Test fun aStopThatThrowsStillClosesCaptureForTheCheck() = deterministic {
+        val live = Live(this, wrapCapture = stopThrows)
+        val check = capturing(live)
+        assertTrue(check.captureOpen.value)
+
+        live.conn.disconnect()
+        settle()
+
+        assertFalse(check.captureOpen.value)
+    }
+
+    /** No release runs for a pump that ends on its own, yet its stream is closed all the same. */
+    @Test fun aCaptureThatDiesClosesForTheCheck() = deterministic {
+        val live = Live(this)
+        val check = capturing(live)
+
+        live.handles[0].script(FakeCaptureHandle.Step.Unavailable)
+        assertSettled("the engine is freed") { live.handles[0].destroyed }
+
+        assertFalse(check.captureOpen.value)
+    }
+
+    /** The stream closes when its release does, whether or not the pump ever reports its exit. */
+    @Test fun aReleaseClosesCaptureForTheCheckBeforeThePumpExits() = deterministic {
+        val live = Live(this, wrapCapture = wedged)
+        val check = capturing(live)
+
+        live.call.hold()
+        settle()
+
+        assertFalse(check.captureOpen.value)
     }
 
     /** What a check adds is on its session alone. */
