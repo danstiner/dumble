@@ -42,7 +42,7 @@ internal class Rig(val scope: TestScope) {
     val owned = mutableListOf<AppStateImpl>()
     private val pumps = mutableListOf<VoiceSender>()
 
-    fun own(conn: AppStateImpl): AppStateImpl = conn.also { owned += it }
+    fun own(app: AppStateImpl): AppStateImpl = app.also { owned += it }
 
     /** Pass as `startPump`: the connection's capture pumps then run only when [settle] steps them,
      *  so their handles must never block a poll — `FakeCaptureHandle(blocking = false)`. */
@@ -76,13 +76,13 @@ internal class Rig(val scope: TestScope) {
         settle()
     }
 
-    fun connected(conn: AppStateImpl): ConnectionStatus.Connected {
-        assertSettled("connected") { conn.status.value is ConnectionStatus.Connected }
-        return conn.status.value as ConnectionStatus.Connected
+    fun connected(app: AppStateImpl): ConnectionStatus.Connected {
+        assertSettled("connected") { app.status.value is ConnectionStatus.Connected }
+        return app.status.value as ConnectionStatus.Connected
     }
 
-    fun handshaking(conn: AppStateImpl) {
-        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+    fun handshaking(app: AppStateImpl) {
+        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
     }
 
     /** The nth transport the connection built, once it exists and has connected. */

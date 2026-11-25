@@ -51,7 +51,7 @@ class CaptureLifecycleTest {
      * release and the engine's free land in one `assertSettled`, and the pump's speech stall runs
      * on the scheduler's clock. Every handle here returns 0 where the engine would block.
      */
-    private fun Rig.connection(
+    private fun Rig.appState(
         newCapture: () -> VoiceSender.CaptureHandle? = { null },
         call: VoiceCall = NoVoiceCall,
         stuckPumpMillis: Long = 1_000L,
@@ -65,9 +65,9 @@ class CaptureLifecycleTest {
     ) { newTransport() })
 
     /** Connects and settles in Handshaking, where every test here stays: none sends a ServerSync. */
-    private fun Rig.connectTo(conn: AppStateImpl, host: String = "localhost") {
-        conn.connect(MumbleEndpoint.parse(host), "user", null)
-        handshaking(conn)
+    private fun Rig.connectTo(app: AppStateImpl, host: String = "localhost") {
+        app.connect(MumbleEndpoint.parse(host), "user", null)
+        handshaking(app)
     }
 
     /**
@@ -109,12 +109,12 @@ class CaptureLifecycleTest {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
         var opens = 0
-        val conn = connection(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
-        connectTo(conn)
-        conn.requestCapture()
+        val app = appState(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the engine must open") { opens == 1 }
 
-        conn.disconnect()
+        app.disconnect()
         assertEquals("disconnect must end the call without waiting for the pump", 1, call.ends)
         assertSettled("teardown must request a stop") { handle.stopCalled }
         elapse(500.milliseconds)   // well past the wedge deadline
@@ -133,9 +133,9 @@ class CaptureLifecycleTest {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
         var opens = 0
-        val conn = connection(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
-        connectTo(conn)
-        conn.requestCapture()
+        val app = appState(newCapture = { opens++; handle }, call = call, stuckPumpMillis = 100L)
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the engine must open") { opens == 1 }
 
         call.hold()
@@ -176,23 +176,23 @@ class CaptureLifecycleTest {
         val live = AtomicInteger()
         val peak = AtomicInteger()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { CountingHandle(live, peak) }, call = call)
+        val app = appState(newCapture = { CountingHandle(live, peak) }, call = call)
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the first engine must open") { live.get() == 1 }
 
         call.hold()
         assertSettled("the hold must release the engine") { live.get() == 0 }
 
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("a hold must refuse a start") { live.get() == 0 }
 
         call.resume()
         assertSettled("resuming must rebuild") { live.get() == 1 }
         assertEquals("never two microphone streams at once", 1, peak.get())
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnect must release the engine") { live.get() == 0 }
     }
 
@@ -204,11 +204,11 @@ class CaptureLifecycleTest {
         val playout = FakePlayoutEngine()
         val call = FakeVoiceCall()
         lateinit var fake: FakeControlTransport
-        val conn = connection(
+        val app = appState(
             newPlayout = { playout }, call = call,
             newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
         )
-        connectTo(conn)
+        connectTo(app)
         playout.liveSessions = setOf(9)
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
@@ -237,11 +237,11 @@ class CaptureLifecycleTest {
         val call = FakeVoiceCall()
         val stuck = TestCoroutineScheduler()
         lateinit var fake: FakeControlTransport
-        val conn = connection(
+        val app = appState(
             newPlayout = { playout }, call = call, blocking = StandardTestDispatcher(stuck),
             newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
         )
-        connectTo(conn)
+        connectTo(app)
         playout.liveSessions = setOf(9)
         val audio = MumbleUdpProtos.Audio.newBuilder()
             .setSenderSession(9)
@@ -255,7 +255,7 @@ class CaptureLifecycleTest {
             elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
             assertEquals("a hold must pause the stream without the capture consumer", "pause", playout.calls.last())
         } finally {
-            conn.disconnect()
+            app.disconnect()
             stuck.runCurrent()   // the receiver's stop is queued there; it ends the poll
         }
     }
@@ -282,13 +282,13 @@ class CaptureLifecycleTest {
     @Test fun holdThenDisconnectDestroysTheEngineExactlyOnce() = deterministic {
         val handle = DestroyCountingHandle()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { handle }, call = call)
-        connectTo(conn)
-        conn.requestCapture()
+        val app = appState(newCapture = { handle }, call = call)
+        connectTo(app)
+        app.requestCapture()
 
         call.hold()
         assertSettled("the hold must release the engine") { handle.destroys.get() == 1 }
-        conn.disconnect()
+        app.disconnect()
 
         assertSettled("the engine must be freed exactly once") { handle.destroys.get() == 1 }
     }
@@ -320,14 +320,14 @@ class CaptureLifecycleTest {
     @Test fun reconnectWhileCapturingClosesTheFirstStreamBeforeOpeningTheSecond() = deterministic {
         val log = ConcurrentLinkedQueue<String>()
         val handles = CopyOnWriteArrayList<RecordingHandle>()
-        val conn = connection(newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } })
+        val app = appState(newCapture = { RecordingHandle(log, "e${handles.size}").also { handles += it } })
 
-        connectTo(conn, "first")
-        conn.requestCapture()
+        connectTo(app, "first")
+        app.requestCapture()
         assertSettled("the first engine must open") { handles.size == 1 }
 
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        conn.requestCapture()
+        app.connect(MumbleEndpoint.parse("second"), "user", null)
+        app.requestCapture()
         assertSettled("the second engine must open") { handles.size == 2 }
         assertEquals("the first engine must be released", 1, handles[0].destroys.get())
 
@@ -337,7 +337,7 @@ class CaptureLifecycleTest {
             order.indexOf("e0:stop") < order.indexOf("e1:create"),
         )
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
     }
 
@@ -345,19 +345,19 @@ class CaptureLifecycleTest {
     @Test fun aStaleHoldDoesNotTouchTheLiveSession() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn, "first")
+        connectTo(app, "first")
         val staleGen = 1   // the first connect's generation
 
-        connectTo(conn, "second")
-        conn.requestCapture()
+        connectTo(app, "second")
+        app.requestCapture()
         assertSettled("the live attempt must be capturing") { handles.any { !it.destroyed } }
 
         call.holdFor(staleGen)
         assertSettled("a stale hold must not release the live engine") { handles.any { !it.destroyed } }
-        assertFalse("a stale hold must not raise the banner", conn.callHeld.value)
-        conn.disconnect()
+        assertFalse("a stale hold must not raise the banner", app.callHeld.value)
+        app.disconnect()
     }
 
     /**
@@ -370,18 +370,18 @@ class CaptureLifecycleTest {
     @Test fun aTalkPressDuringAHoldTransmitsOnResume() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn)
-        conn.setTransmitMode(TransmitMode.PushToTalk)
-        conn.requestCapture()
+        connectTo(app)
+        app.setTransmitMode(TransmitMode.PushToTalk)
+        app.requestCapture()
         assertSettled("the first engine must open") { handles.size == 1 }
 
         call.hold()
         assertSettled("the hold must release the engine") { handles[0].destroyed }
 
         // While held there is no capture session for the press to reach; it lands on the level.
-        conn.setTransmitting(true)
+        app.setTransmitting(true)
         assertSettled("a press while held must open nothing") { handles.size == 1 }
 
         call.resume()
@@ -389,31 +389,31 @@ class CaptureLifecycleTest {
         assertSettled("the rebuilt session must come up transmitting") { handles[1].gateOpen }
 
         // The release still closes it: the level is user intent, not a latch.
-        conn.setTransmitting(false)
+        app.setTransmitting(false)
         assertSettled("releasing Talk must close the gate") { !handles[1].gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** Voice activity arms by "not muted", push-to-talk by the thumb. A switch must re-derive the
      *  gate, or the armed voice-activity session survives with nobody holding a button. */
     @Test fun switchingToPushToTalkDisarmsAVoiceActivitySession() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
 
-        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        app.setTransmitMode(TransmitMode.VoiceActivity)
         assertSettled("voice activity must arm the gate") { handles[0].gateOpen }
         assertEquals(TransmitMode.VoiceActivity, handles[0].transmitMode)
 
-        conn.setTransmitMode(TransmitMode.PushToTalk)
+        app.setTransmitMode(TransmitMode.PushToTalk)
         assertFalse("push-to-talk must not inherit voice activity's armed gate", handles[0].gateOpen)
         assertEquals(TransmitMode.PushToTalk, handles[0].transmitMode)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A rebuilt engine defaults to push-to-talk, so the mode must be reapplied to every session
@@ -421,25 +421,25 @@ class CaptureLifecycleTest {
     @Test fun voiceActivitySurvivesAHold() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the first engine must open") { handles.size == 1 }
-        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        app.setTransmitMode(TransmitMode.VoiceActivity)
         assertSettled("voice activity must arm the gate") { handles[0].gateOpen }
 
         call.hold()
         assertSettled("the hold must release the engine") { handles[0].destroyed }
-        assertTrue("the hold must publish", conn.callHeld.value)
+        assertTrue("the hold must publish", app.callHeld.value)
         call.resume()
         assertSettled("the resume must rebuild") { handles.size == 2 }
-        assertFalse("the resume clears it", conn.callHeld.value)
+        assertFalse("the resume clears it", app.callHeld.value)
 
         assertSettled("the rebuilt engine must come up in voice activity") { handles[1].transmitMode == TransmitMode.VoiceActivity }
         assertSettled("and armed, since nothing muted us") { handles[1].gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A mute must lower the level, not just close the gate: the next rebuild — a cellular call
@@ -447,13 +447,13 @@ class CaptureLifecycleTest {
     @Test fun aMuteUnderAHeldTalkSurvivesARebuild() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         assertSettled("the press must open an engine, transmitting") { handles.size == 1 && handles[0].gateOpen }
 
-        conn.setMuted(true)
+        app.setMuted(true)
         assertSettled("the mute must close the gate") { !handles[0].gateOpen }
 
         call.hold()
@@ -463,105 +463,105 @@ class CaptureLifecycleTest {
         assertFalse("the rebuilt session must be running", handles[1].stopped)
         assertFalse("a muted rebuild must not come up transmitting", handles[1].gateOpen)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** Mute has no engine-side existence, and the Talk button is only disabled once the server
      *  echoes `self_mute` — every press before that echo lands here with the control still live. */
     @Test fun aPressWhileMutedMustNotArm() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
 
-        connectTo(conn)
-        conn.setTransmitMode(TransmitMode.PushToTalk)
-        conn.requestCapture()
+        connectTo(app)
+        app.setTransmitMode(TransmitMode.PushToTalk)
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
 
-        conn.setMuted(true)
-        conn.setTransmitting(true)
+        app.setMuted(true)
+        app.setTransmitting(true)
         assertFalse("a muted microphone must stay shut under the thumb", handles[0].gateOpen)
 
-        conn.setTransmitting(false)
-        conn.setMuted(false)
+        app.setTransmitting(false)
+        app.setMuted(false)
         assertFalse("an unmute is not a press", handles[0].gateOpen)
-        conn.setTransmitting(true)
+        app.setTransmitting(true)
         assertSettled("a fresh press works") { handles[0].gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** Push-to-talk has no Mute control, so a self-mute carried into it would disable Talk with
      *  nothing to lift it. */
     @Test fun switchingToPushToTalkLiftsASelfMute() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
 
-        connectTo(conn)
-        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        connectTo(app)
+        app.setTransmitMode(TransmitMode.VoiceActivity)
         assertSettled("voice activity must open an armed engine") { handles.size == 1 && handles[0].gateOpen }
-        conn.setMuted(true)
+        app.setMuted(true)
         assertFalse(handles[0].gateOpen)
 
-        conn.setTransmitMode(TransmitMode.PushToTalk)
+        app.setTransmitMode(TransmitMode.PushToTalk)
         assertFalse("push-to-talk's gate is the thumb", handles[0].gateOpen)
-        conn.setTransmitting(true)
+        app.setTransmitting(true)
         assertSettled("a press must open the gate, the mute having been lifted") { handles[0].gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** The mute it lifts is the user's own. A deafen stands and takes over a mute set before it,
      *  so the undeafen is what clears Talk. */
     @Test fun switchingToPushToTalkLeavesADeafenStanding() = deterministic {
-        val conn = connection()
-        connectTo(conn)
-        conn.setTransmitMode(TransmitMode.VoiceActivity)
-        conn.setMuted(true)
-        conn.setSelfDeaf(true)
+        val app = appState()
+        connectTo(app)
+        app.setTransmitMode(TransmitMode.VoiceActivity)
+        app.setMuted(true)
+        app.setSelfDeaf(true)
 
-        conn.setTransmitMode(TransmitMode.PushToTalk)
-        assertTrue("the deafen stands", conn.selfState.value.deafened)
-        conn.setSelfDeaf(false)
-        assertEquals("and the undeafen lifts the mute with it", DeafenState(), conn.selfState.value)
+        app.setTransmitMode(TransmitMode.PushToTalk)
+        assertTrue("the deafen stands", app.selfState.value.deafened)
+        app.setSelfDeaf(false)
+        assertEquals("and the undeafen lifts the mute with it", DeafenState(), app.selfState.value)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** An unmute satisfies voice activity's condition for the gate and not push-to-talk's. */
     @Test fun unmutingReArmsOnlyUnderVoiceActivity() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
 
-        connectTo(conn)
-        conn.setTransmitMode(TransmitMode.PushToTalk)
-        conn.requestCapture()
+        connectTo(app)
+        app.setTransmitMode(TransmitMode.PushToTalk)
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
 
-        conn.setMuted(true)
-        conn.setMuted(false)
+        app.setMuted(true)
+        app.setMuted(false)
         assertFalse("under push-to-talk an unmute must not press the button", handles[0].gateOpen)
 
-        conn.setTransmitMode(TransmitMode.VoiceActivity)
+        app.setTransmitMode(TransmitMode.VoiceActivity)
         assertSettled("voice activity must arm the gate") { handles[0].gateOpen }
-        conn.setMuted(true)
+        app.setMuted(true)
         assertFalse("a mute must disarm", handles[0].gateOpen)
-        conn.setMuted(false)
+        app.setMuted(false)
         assertSettled("under voice activity an unmute must re-arm") { handles[0].gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A resume from a superseded call must not lift the live session's hold, nor its banner. */
     @Test fun aStaleResumeDoesNotClearTheLiveHold() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn, "first")
+        connectTo(app, "first")
         val staleGen = 1   // the first connect's generation
 
-        connectTo(conn, "second")
-        conn.requestCapture()
+        connectTo(app, "second")
+        app.requestCapture()
         assertSettled("the live attempt must open") { handles.size == 1 }
 
         call.hold()   // holds the live generation (2)
@@ -569,11 +569,11 @@ class CaptureLifecycleTest {
 
         call.resumeFor(staleGen)   // a resume for the superseded call (1), not the live hold
         assertSettled("a stale resume must not reopen capture the platform still holds") { handles.size == 1 }
-        assertTrue("a stale resume must not clear the banner", conn.callHeld.value)
+        assertTrue("a stale resume must not clear the banner", app.callHeld.value)
 
         call.resume()   // the genuine resume, for the live generation
         assertSettled("the genuine resume must rebuild") { handles.size == 2 }
-        conn.disconnect()
+        app.disconnect()
     }
 
     /**
@@ -586,16 +586,16 @@ class CaptureLifecycleTest {
         val playout = FakePlayoutEngine()
         var engines = 0
         val call = FakeVoiceCall()
-        val conn = connection(
+        val app = appState(
             newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
             newPlayout = { engines++; playout },
             call = call,
         )
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         call.hold()
-        handshaking(conn)
+        handshaking(app)
 
-        conn.requestCapture()
+        app.requestCapture()
         elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
         assertEquals("the receiver must be polling", 1, engines)
         assertTrue("a held call must open no capture engine", handles.isEmpty())
@@ -605,7 +605,7 @@ class CaptureLifecycleTest {
         elapse(VoiceReceiver.POLL_MILLIS.milliseconds)
         assertEquals("resuming must open one capture engine", 1, handles.size)
         assertTrue("resuming must start the stream", playout.started)
-        conn.disconnect()
+        app.disconnect()
     }
 
     /**
@@ -618,15 +618,15 @@ class CaptureLifecycleTest {
         val rebuilt = CopyOnWriteArrayList<FakeCaptureHandle>()
         var first = true
         val call = FakeVoiceCall()
-        val conn = connection(
+        val app = appState(
             newCapture = {
                 if (first) { first = false; handle }
                 else FakeCaptureHandle(blocking = false).also { rebuilt += it }
             },
             call = call, stuckPumpMillis = 100L,
         )
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the engine must open") { !first }
 
         call.hold()
@@ -639,7 +639,7 @@ class CaptureLifecycleTest {
         assertSettled("the exit must rebuild") { rebuilt.size == 1 }
         elapse(300.milliseconds)   // past the wedge check, the one timer the release armed
         assertEquals("exactly one rebuild", 1, rebuilt.size)
-        conn.disconnect()
+        app.disconnect()
     }
 
     /**
@@ -649,7 +649,7 @@ class CaptureLifecycleTest {
     @Test fun aTerminalPumpExitDoesNotReopenButAStartCaptureDoes() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(
+        val app = appState(
             newCapture = {
                 FakeCaptureHandle(blocking = false).also {
                     // Only the first engine fails: a reopen loop then shows as a second engine
@@ -661,14 +661,14 @@ class CaptureLifecycleTest {
             call = call,
         )
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the failed engine must be released") { handles.size == 1 && handles[0].destroyed }
         assertEquals("a terminal exit must not reopen on its own", 1, handles.size)
 
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("a user retry must rebuild") { handles.size == 2 }
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A handle that reports a gate touched after it was freed — the use-after-free, made loud. */
@@ -701,23 +701,23 @@ class CaptureLifecycleTest {
         repeat(20) {
             val handle = GateAfterDestroyHandle()
             val call = FakeVoiceCall()
-            val conn = AppStateImpl(
+            val app = AppStateImpl(
                 InMemoryPinStore(),
                 newCapture = { handle },
                 call = call,
             ) { FakeControlTransport { _, _ -> } }
-            conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
-            conn.requestCapture()
+            app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+            withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
+            app.requestCapture()
 
-            val hammer = Thread { repeat(500) { i -> conn.setTransmitting(i % 2 == 0) } }
+            val hammer = Thread { repeat(500) { i -> app.setTransmitting(i % 2 == 0) } }
             hammer.start()
             // No wait for the engine to open first: Acquire and this hold's Held share one serial
             // queue, so openCapture() has already run by the time Held is dispatched.
             call.hold()
             hammer.join(2_000)
             assertFalse("the gate reached a freed handle", handle.gateAfterDestroy)
-            conn.disconnect()
+            app.disconnect()
         }
     }
 
@@ -746,11 +746,11 @@ class CaptureLifecycleTest {
      */
     @Test fun aDisconnectDuringNewCaptureLeavesTheStaleHandleUnattached() = deterministic {
         val handle = PollRecordingHandle()
-        lateinit var conn: AppStateImpl
-        conn = connection(newCapture = { conn.disconnect(); handle })
-        connectTo(conn)
+        lateinit var app: AppStateImpl
+        app = appState(newCapture = { app.disconnect(); handle })
+        connectTo(app)
 
-        conn.requestCapture()
+        app.requestCapture()
 
         assertSettled("the stale handle must be stopped") { handle.stopped }
         assertTrue("the stale handle must be destroyed", handle.destroyed)
@@ -765,19 +765,19 @@ class CaptureLifecycleTest {
     /** A handler that throws must not kill the consumer — a dead one fails silently and forever. */
     @Test fun aThrowingHandlerDoesNotKillTheConsumer() = deterministic {
         val opened = AtomicInteger()
-        val conn = connection(newCapture = {
+        val app = appState(newCapture = {
             // First open throws from inside the consumer; later ones behave.
             if (opened.getAndIncrement() == 0) throw IllegalStateException("boom")
             FakeCaptureHandle(blocking = false)
         })
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the throwing open must have been attempted") { opened.get() == 1 }
 
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("the consumer must still be alive") { opened.get() == 2 }
-        conn.disconnect()
+        app.disconnect()
     }
 
     private suspend fun awaitTrue(what: String, timeoutMillis: Long = 5_000, cond: () -> Boolean) {
@@ -793,38 +793,38 @@ class CaptureLifecycleTest {
      *  press whose session never opened is not speech. */
     @Test fun speakingFollowsThePacketsAndNotTheGate() = deterministic {
         val handle = FakeCaptureHandle(blocking = false)
-        val conn = connection(newCapture = { handle })
+        val app = appState(newCapture = { handle })
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         assertSettled("the engine must open, transmitting") { handle.gateOpen }
-        assertFalse("an open gate alone is not speech", conn.selfSpeaking.value)
+        assertFalse("an open gate alone is not speech", app.selfSpeaking.value)
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), 0L, terminator = false))
-        assertSettled("a packet on the wire is") { conn.selfSpeaking.value }
+        assertSettled("a packet on the wire is") { app.selfSpeaking.value }
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(4), 2L, terminator = false, hangover = true))
-        assertSettled("and released once speech stops, the hangover still going out") { !conn.selfSpeaking.value }
+        assertSettled("and released once speech stops, the hangover still going out") { !app.selfSpeaking.value }
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     @Test fun aTerminatorIsNotSpeech() = deterministic {
         val handle = FakeCaptureHandle(blocking = false)
         lateinit var fake: FakeControlTransport
-        val conn = connection(
+        val app = appState(
             newCapture = { handle }, newTransport = { FakeControlTransport { _, _ -> }.also { fake = it } },
         )
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         assertSettled("the engine must open") { handle.gateOpen }
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), 4L, terminator = true))
         assertSettled("the terminator must reach the wire") { fake.sentRaw.size == 1 }
-        assertFalse("a terminator must not light the halo", conn.selfSpeaking.value)
+        assertFalse("a terminator must not light the halo", app.selfSpeaking.value)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A wedged pump never reports its own end, so the release must lower speaking, or it carries
@@ -832,20 +832,20 @@ class CaptureLifecycleTest {
     @Test fun releasingCaptureClearsSpeaking() = deterministic {
         val handle = WedgedCaptureHandle()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { handle }, call = call)
+        val app = appState(newCapture = { handle }, call = call)
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         handle.speak()
-        assertSettled("a packet lights it") { conn.selfSpeaking.value }
+        assertSettled("a packet lights it") { app.selfSpeaking.value }
 
         // No time passes and the pump never exits, so only the release can have lowered it.
         call.hold()
         assertSettled("the hold must request a stop") { handle.stopCalled }
-        assertFalse("the release must clear it", conn.selfSpeaking.value)
+        assertFalse("the release must clear it", app.selfSpeaking.value)
 
         handle.release()
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** A pump that outlives its session reports its end late, while the next session talks. */
@@ -853,41 +853,41 @@ class CaptureLifecycleTest {
         val wedged = WedgedCaptureHandle()
         val next = FakeCaptureHandle(blocking = false)
         val handles = ArrayDeque(listOf(wedged, next))
-        val conn = connection(newCapture = { handles.removeFirst() })
+        val app = appState(newCapture = { handles.removeFirst() })
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         wedged.speak()
-        assertSettled("the first session speaks") { conn.selfSpeaking.value }
-        conn.disconnect()
+        assertSettled("the first session speaks") { app.selfSpeaking.value }
+        app.disconnect()
         assertSettled("teardown must request a stop") { wedged.stopCalled }
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         assertSettled("the next session opens its own engine") { handles.isEmpty() && next.gateOpen }
         next.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), 0L, terminator = false))
-        assertSettled("the next session speaks") { conn.selfSpeaking.value }
+        assertSettled("the next session speaks") { app.selfSpeaking.value }
 
         wedged.release()
         assertSettled("the wedged pump exits") { wedged.destroyed }
-        assertTrue("its end must not lower the next session's halo", conn.selfSpeaking.value)
+        assertTrue("its end must not lower the next session's halo", app.selfSpeaking.value)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** Re-applying the mode a session already has must leave a held press alone. */
     @Test fun reApplyingPushToTalkDoesNotDropAHeldPress() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } })
 
-        connectTo(conn)
-        conn.setTransmitting(true)
+        connectTo(app)
+        app.setTransmitting(true)
         assertSettled("the press must open an engine, transmitting") { handles.size == 1 && handles[0].gateOpen }
 
-        conn.setTransmitMode(TransmitMode.PushToTalk)
+        app.setTransmitMode(TransmitMode.PushToTalk)
         assertTrue("re-applying the mode must leave the press alone", handles[0].gateOpen)
 
-        conn.disconnect()
+        app.disconnect()
     }
 
     /** The hold already released the session, so this disconnect runs no release of its own:
@@ -895,16 +895,16 @@ class CaptureLifecycleTest {
     @Test fun disconnectClearsSpeaking() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = connection(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
+        val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
-        connectTo(conn)
-        conn.requestCapture()
+        connectTo(app)
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
         call.hold()
-        assertSettled("the hold must publish") { conn.callHeld.value }
+        assertSettled("the hold must publish") { app.callHeld.value }
 
-        conn.disconnect()
-        assertSettled("disconnect must clear the hold") { !conn.callHeld.value }
-        assertFalse(conn.selfSpeaking.value)
+        app.disconnect()
+        assertSettled("disconnect must clear the hold") { !app.callHeld.value }
+        assertFalse(app.selfSpeaking.value)
     }
 }

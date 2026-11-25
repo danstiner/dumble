@@ -38,7 +38,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class VoiceService : Service() {
 
-    @Inject lateinit var connection: AppState
+    @Inject lateinit var appState: AppState
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -47,7 +47,7 @@ class VoiceService : Service() {
             // Handled here rather than in a BroadcastReceiver so the thing that represents the call
             // is the thing that ends it. Nothing else to do: disconnect tears the session down, and
             // that teardown is what stops this service.
-            connection.disconnect()
+            appState.disconnect()
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_STOP) {

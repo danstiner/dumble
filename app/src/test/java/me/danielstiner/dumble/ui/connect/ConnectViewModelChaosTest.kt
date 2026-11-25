@@ -48,8 +48,8 @@ class ConnectViewModelChaosTest {
         val r = Random(seed)
         val heldInitially = r.nextBoolean()
         var granted = heldInitially
-        val conn = FakeAppState()
-        val vm = ConnectViewModel(conn, FakeConfigStore(null), TestTimeSource()) { heldInitially }
+        val app = FakeAppState()
+        val vm = ConnectViewModel(app, FakeConfigStore(null), TestTimeSource()) { heldInitially }
         try {
             // Connectable, so onConnect() reaches the connection instead of failing validation.
             vm.onHostChange("chaos.example"); vm.onUsernameChange("u"); vm.onPortChange("64738")
@@ -62,16 +62,16 @@ class ConnectViewModelChaosTest {
                     3 -> vm.onConnect()
                     4 -> vm.onDisconnect()
                     5 -> if (r.nextBoolean()) vm.openChat() else vm.closeChat()
-                    6 -> conn.status.value = randomStatus(r)
-                    7 -> conn.speakingSessions.value = OTHER_SESSION_IDS.filter { r.nextBoolean() }.toSet()
-                    8 -> conn.messages.value = List(r.nextInt(0, 4)) {
+                    6 -> app.status.value = randomStatus(r)
+                    7 -> app.speakingSessions.value = OTHER_SESSION_IDS.filter { r.nextBoolean() }.toSet()
+                    8 -> app.messages.value = List(r.nextInt(0, 4)) {
                         ChatMessage.Remote(OTHER_SESSION_IDS.random(r), "peer", "hi", Instant.EPOCH)
                     }
-                    9 -> conn.selfSpeaking.value = r.nextBoolean()
+                    9 -> app.selfSpeaking.value = r.nextBoolean()
                     else -> {
                         runCurrent()
                         assertEquals("$at: microphoneGranted", granted, vm.uiState.value.microphoneGranted)
-                        assertEquals("$at: status", conn.status.value, vm.uiState.value.status)
+                        assertEquals("$at: status", app.status.value, vm.uiState.value.status)
                     }
                 }
                 assertNeverSpeaksWithoutMic(vm, at)
@@ -79,9 +79,9 @@ class ConnectViewModelChaosTest {
 
             // A floor the random mix cannot promise: the merge must fire when all three line up.
             val own = OWN_SESSION_IDS[0]
-            conn.status.value = ConnectionStatus.Connected(gen = 1, sessionId = own)
+            app.status.value = ConnectionStatus.Connected(gen = 1, sessionId = own)
             vm.onMicrophonePermissionResult(true)
-            conn.selfSpeaking.value = true
+            app.selfSpeaking.value = true
             runCurrent()
             assertTrue("seed=$seed: Connected, granted and speaking must show us speaking",
                 own in vm.uiState.value.speakingSessions)

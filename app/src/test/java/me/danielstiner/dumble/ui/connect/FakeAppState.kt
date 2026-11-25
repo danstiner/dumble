@@ -6,7 +6,6 @@ import kotlin.time.Duration
 import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
-import me.danielstiner.dumble.session.AppState
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.VoicePath
@@ -17,6 +16,7 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
+import me.danielstiner.dumble.session.AppState
 
 class FakeAppState : AppState {
     override val status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
