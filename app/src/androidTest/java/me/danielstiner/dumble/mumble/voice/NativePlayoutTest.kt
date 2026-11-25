@@ -190,6 +190,15 @@ class NativePlayoutTest {
         assertEquals(0, stats().speakers)
     }
 
+    @Test
+    fun offerReportsWhatWasAheadOfThePacket() {
+        val ahead = intArrayOf(-1)
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
+        assertEquals("nothing ahead of the first packet", 0, ahead[0])
+        assertEquals(NativePlayout.OFFER_ACCEPTED, NativePlayout.offer(handle, SESSION, TONE_10MS, nextFrame(), false, ahead))
+        assertEquals("the first packet, queued: no stream is pulling", FRAME_SAMPLES, ahead[0])
+    }
+
     private companion object {
         const val SESSION = 7
 

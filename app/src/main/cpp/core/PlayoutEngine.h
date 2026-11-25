@@ -1,6 +1,9 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#ifdef DUMBLE_TESTING
+#include <functional>
+#endif
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -67,9 +70,13 @@ public:
      *  terminator is accepted, since it carries no samples by definition. `frameNumber` is the
      *  sender's own frame counter, peer-controlled and sanity-checked by the estimator rather than
      *  here. `arrival` is when the packet became ready to queue: delay before that, local or
-     *  network, is jitter the target must cover. */
+     *  network, is jitter the target must cover.
+     *
+     *  `aheadSamples`, for a latency check, is set to the wait ahead of this packet when it gets
+     *  a slot: its sender's samples still queued, plus those decoded and not yet mixed. The
+     *  once-a-second stats are too coarse for that. */
     int offer(int32_t session, const uint8_t* data, int len, uint64_t frameNumber, bool terminator,
-              BootClock::time_point arrival);
+              BootClock::time_point arrival, int32_t* aheadSamples = nullptr);
 
     /**
      * Playback thread, and only ever one; takes mutex_, and releases it to decode. A requirement
@@ -179,6 +186,9 @@ public:
         heldForTest_ = false;
     }
     bool mutexHeldForTest() const { return heldForTest_.load(); }
+    /** Run on the fill thread between a pop and its decode, with mutex_ released and the packet in
+     *  neither the queue nor the decoder: where an `ahead` read must still count it. */
+    std::function<void()> betweenPopAndDecodeForTest;
 #endif
 
 private:
@@ -248,6 +258,11 @@ private:
     // Whether the slot produced in the last fill. Written in the commit phase and read by stats(),
     // both under mutex_. Zeroed on claim.
     bool audible_[kMaxSpeakers] = {};
+    // What the slot's decoder holds, decoded and not yet mixed, for offer() to read: the decoder
+    // itself belongs to the playback thread, which uses it with mutex_ released. Exact after a
+    // fill's commit. Inside a fill, and after a contended one until the next commit, it still
+    // counts the burst being mixed and misses anything that fill concealed. Zeroed on release.
+    int decodedAhead_[kMaxSpeakers] = {};
     // Samples a claimed slot has starved mid-spurt, and so the hold's clock. Cleared only by real
     // audio, never by a fill that merely did not conceal: an expired hold would otherwise clear
     // its own counter and start concealing again on the next fill, forever. Keeps counting past
