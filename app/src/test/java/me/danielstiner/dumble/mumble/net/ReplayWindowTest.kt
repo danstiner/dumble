@@ -34,14 +34,16 @@ class ReplayWindowTest {
     }
 
     @Test
-    fun aSlotOpenedByAJumpIsAcceptedThirtyTwoBehindAndNotThirtyThree() {
+    fun aJumpOfTheWindowDepthKeepsTheOldTopSpent() {
         val window = windowAt(0)
-        assertTrue(window.rebuildNonce(100, nonce))
-        assertEquals(100, window.accept(nonce))
-        assertFalse(window.rebuildNonce(67, nonce))
-        assertTrue(window.rebuildNonce(68, nonce))
-        assertEquals(-32, window.accept(nonce))
-        assertFalse(window.rebuildNonce(68, nonce))
+        assertTrue(window.rebuildNonce(1, nonce))
+        assertEquals(1, window.accept(nonce))
+        assertTrue(window.rebuildNonce(33, nonce))
+        assertEquals(32, window.accept(nonce))
+        // The old top is now the last slot the window reaches; the one the jump skipped is open.
+        assertFalse(window.rebuildNonce(1, nonce))
+        assertTrue(window.rebuildNonce(2, nonce))
+        assertEquals(-31, window.accept(nonce))
     }
 
     @Test

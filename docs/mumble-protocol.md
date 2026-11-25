@@ -214,7 +214,7 @@ attacker can never force a second decrypt.
 - **Up to 127 ahead** is accepted, so 126 packets lost in a row are ridden out: 2.5 s of one
   talker at 50 packets a second.
 - **Up to 32 behind** is accepted if the replay window has not seen it. That is 0.64 s of
-  reordering, far more than networks produce.
+  reordering for one talker, far more than networks produce.
 - **Further behind** is refused without decrypting. A sender more than 127 ahead reads as one of
   these, or rebuilds to the wrong counter and fails the tag; either way it takes a resync.
 
@@ -286,7 +286,7 @@ This client matches desktop behaviour by default. Each departure is deliberate.
 | Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
 | No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |
 | Replay bitmap instead of a generation table | The table can wedge the receive direction (Replay protection). | None on the wire. | `net/ReplayWindow.kt` |
-| IV window: 32 behind, 127 ahead | Upstream's 29 and 127, as a signed byte and one comparison. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
+| IV window: 32 behind, 127 ahead | Close to upstream's 29 and 127, as a signed byte and one comparison. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
 | Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
 | 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
 | UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |
