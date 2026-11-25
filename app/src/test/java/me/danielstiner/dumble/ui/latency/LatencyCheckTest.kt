@@ -14,6 +14,7 @@ import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.PinStore
 import me.danielstiner.dumble.mumble.net.VoicePath
 import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
@@ -50,8 +51,8 @@ class LatencyCheckTest {
 
     @Test fun aRejectedOrMismatchedConnectFailsWithItsReason() = runTest {
         val answers = mapOf(
-            ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, "certificate ff is not the one given") to
-                "could not connect: CONNECT_FAILED (certificate ff is not the one given)",
+            ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, "refused") to "could not connect: CONNECT_FAILED (refused)",
+            ConnectionStatus.PinMismatch(FINGERPRINT, "ff") to "the server's certificate ff is not the one given",
             ConnectionStatus.Idle to ENDED,
         )
         for ((answer, reason) in answers) {
@@ -59,7 +60,9 @@ class LatencyCheckTest {
             rig.conn.onConnect = { rig.conn.status.value = answer }
             val outcome = rig.start()
             assertEquals(CheckOutcome.Failed(reason, null), outcome.getCompleted())
-            assertEquals(listOf(ENDPOINT to FINGERPRINT), rig.host.connects)
+            val (endpoint, pins) = rig.host.connects.single()
+            assertEquals(ENDPOINT, endpoint)
+            assertEquals(FINGERPRINT, pins.get(ENDPOINT.address))
         }
 
         val rig = Rig(this)
@@ -289,7 +292,7 @@ class LatencyCheckTest {
 /** The connection's side of a check: connects [session] unless [grants] is off. */
 class FakeCheckHost(private val session: FakeCheckSession, private val onConnect: () -> Unit) : CheckHost {
     var grants = true
-    val connects = mutableListOf<Pair<MumbleEndpoint, String>>()
+    val connects = mutableListOf<Pair<MumbleEndpoint, PinStore>>()
 
     /** What the check connected to hear capture's packets. */
     var captured: (CapturedPacket) -> Unit = {}; private set
@@ -297,12 +300,12 @@ class FakeCheckHost(private val session: FakeCheckSession, private val onConnect
     override fun connectForCheck(
         endpoint: MumbleEndpoint,
         username: String,
-        fingerprint: String,
+        pins: PinStore,
         captured: (CapturedPacket) -> Unit,
         arrived: (ArrivedPacket) -> Unit,
     ): CheckSession? {
         if (!grants) return null
-        connects += endpoint to fingerprint
+        connects += endpoint to pins
         this.captured = captured
         session.arrived = arrived
         onConnect()

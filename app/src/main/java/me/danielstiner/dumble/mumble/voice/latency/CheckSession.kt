@@ -2,6 +2,7 @@ package me.danielstiner.dumble.mumble.voice.latency
 
 import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.PinStore
 import kotlin.time.TimeSource
 
 /** The capture effects a check turns off; [CaptureEffects] on a device, a fake in JVM tests. */
@@ -14,11 +15,10 @@ interface CheckEffects {
 /** The connection's side of a latency check. */
 interface CheckHost {
     /**
-     * Connects a session that is a latency check's own for its whole life. It trusts exactly
-     * [fingerprint] and records nothing: no pin, no trust prompt. [fingerprint] is the lowercase
-     * hex SHA-256 of the server's leaf certificate in DER, compared exactly:
-     * `openssl x509 -fingerprint -sha256` prints uppercase with colons and won't match. A different
-     * certificate ends the session in an error.
+     * Connects a session that is a latency check's own for its whole life. Trust is decided as
+     * for any connect, with [pins] in place of the app's pin store: the server's pin is read
+     * there and a trust prompt's answer written there, so the user's pins never learn a
+     * throwaway server. A certificate [pins] does not hold ends the session in a trust prompt.
      *
      * On that session capture runs push-to-talk on [CheckSession.setGateOpen] alone, with its
      * effects off while it is open; every packet it produces goes to [captured], on the pump
@@ -31,7 +31,7 @@ interface CheckHost {
     fun connectForCheck(
         endpoint: MumbleEndpoint,
         username: String,
-        fingerprint: String,
+        pins: PinStore,
         captured: (CapturedPacket) -> Unit,
         arrived: (ArrivedPacket) -> Unit,
     ): CheckSession?
@@ -61,7 +61,8 @@ interface CheckSession {
 
     fun setGateOpen(open: Boolean)
 
-    /** Ends the session and leaves the connection idle. Does nothing once another session or a
-     *  trust prompt has taken its place: that one is the user's. */
+    /** Ends the session, or dismisses the trust prompt it stopped at, and leaves the connection
+     *  idle. Does nothing once another session or its trust prompt has taken its place: that one
+     *  is the user's. */
     fun end()
 }
