@@ -207,16 +207,19 @@ carrying into the higher bytes. Only the low byte is sent, so the receiver rebui
 fifteen from the counter it holds and must choose among 256 candidates. That choice is local to
 the receiver: nothing on the wire records it.
 
-This client reads the byte as the counter nearest the highest one accepted: the difference of the
-two low bytes as a signed byte, 128 behind to 127 ahead. One guess covers both directions, so an
-attacker can never force a second decrypt.
+This client guesses the candidate nearest the highest counter it has accepted. That is the
+difference of the two low bytes read as a signed byte: 128 behind to 127 ahead. There is only ever
+one guess, so an attacker can never force a second decrypt.
 
-- **Up to 127 ahead** is accepted, so 126 packets lost in a row are ridden out: 2.5 s of one
-  talker at 50 packets a second.
-- **Up to 63 behind** is accepted if the replay window has not seen it: what one 64-bit word
-  records. That is 1.26 s of reordering for one talker, far more than networks produce.
-- **Further behind** is refused without decrypting. A sender more than 127 ahead reads as one of
-  these, or rebuilds to the wrong counter and fails the tag; either way it takes a resync.
+- **1 to 127 ahead** is decrypted, so 126 packets lost in a row are ridden out. That is 2.5 s of
+  one talker at 50 packets a second.
+- **1 to 63 behind** is decrypted unless that counter was already accepted. 63 is as far back as
+  the replay bitmap records (Replay protection). It is 1.26 s of reordering for one talker, far
+  more than networks produce.
+- **64 to 128 behind** is refused without decrypting.
+
+A packet that is really more than 127 ahead gets the wrong guess: it is refused as behind or fails
+the tag. The packets after it fare the same, so the stream needs a resync.
 
 Upstream accepts 29 behind and 127 ahead, plus 128 ahead when the byte has not wrapped.
 
