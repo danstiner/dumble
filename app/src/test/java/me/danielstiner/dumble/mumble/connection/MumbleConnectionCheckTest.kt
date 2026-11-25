@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString
 import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
+import me.danielstiner.dumble.mumble.net.PinMismatchException
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
 import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
@@ -19,6 +20,7 @@ import me.danielstiner.dumble.mumble.voice.latency.CheckSession
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -235,6 +237,23 @@ class MumbleConnectionCheckTest {
         check.end()
         assertSettled("the user's session stands") { live.conn.status.value is ConnectionStatus.Connected }
         assertEquals(2, live.transports.size)
+    }
+
+    /** A certificate the check's store does not hold stops at the trust prompt, as any connect's
+     *  would. Ending the check dismisses it, so the next check can connect. */
+    @Test fun aCheckEndingDismissesItsOwnTrustPrompt() = deterministic {
+        val endpoint = MumbleEndpoint.parse("localhost")
+        val pins = InMemoryPinStore().apply { put(endpoint.address, "ab12") }
+        val conn = own(MumbleConnection(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { pin -> FakeControlTransport { _, _ -> throw PinMismatchException(stored = pin!!, presented = "cd34") } })
+
+        val check = conn.connectForCheck(endpoint, "check", pins, {}, {})!!
+        assertSettled("the mismatch") { conn.status.value is ConnectionStatus.PinMismatch }
+        check.end()
+
+        assertEquals(ConnectionStatus.Idle, conn.status.value)
+        assertNotNull(conn.connectForCheck(endpoint, "check", pins, {}, {}))
     }
 
     @Test fun aCheckDoesNotReplaceALiveSession() = deterministic {
