@@ -192,7 +192,7 @@ class CryptStatePropertyTest {
             }
             val stats = receiver.stats()
             assertEquals("seed=$seed: good", accepted, stats.good)
-            assertEquals("seed=$seed: replay count", replays, stats.replay)
+            assertEquals("seed=$seed: rejected count", replays, stats.rejected)
             // Conservation: every counter up to the highest accepted is either good or still
             // missing, and reordering registered as late without inflating either.
             assertEquals("seed=$seed: good + lost", highest, stats.good + stats.lost)
