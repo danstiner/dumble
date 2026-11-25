@@ -161,7 +161,7 @@ class CaptureLifecycleChaosTest {
         withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }
         // The storm starts on an open engine, so every round races the lifecycle against a live
         // capture however its schedule falls, and the checks below can never pass on a storm that
-        // only ever met a disconnected connection.
+        // only ever met a disconnected app state.
         app.requestCapture()
         awaitTrue(c.violations, "seed=$seed: no engine opened before the storm") { created.get() > 0 }
 
@@ -230,7 +230,7 @@ class CaptureLifecycleChaosTest {
         // its stack.
         threads.forEach { it.join() }
 
-        // Settle into a known state — the storm can leave the connection live, held, or idle at
+        // Settle into a known state — the storm can leave the app state live, held, or idle at
         // random — then check the two things that must be true no matter which: the consumer is
         // still alive, and it leaked nothing.
         app.disconnect()

@@ -263,8 +263,8 @@ NAT gave us a new port, the server would go on sending to a dead address. We wou
 while the control connection looked healthy. The same happens on a link where our pings reach
 the server but its answers never reach us: it has our address, and we cannot hear on it.
 
-So whenever two UDP pings in a row go unanswered, whether or not outgoing voice was on UDP, the
-connection also sends one ping over TCP (`TUNNEL_PING`). The server never answers it. Its
+So whenever two UDP pings in a row go unanswered, whether or not outgoing voice was on UDP,
+this app also sends one ping over TCP (`TUNNEL_PING`). The server never answers it. Its
 arrival is enough: the server switches our incoming voice to TCP on any `UDPTunnel` frame,
 before decoding it, so no other user hears anything. When the cause was a refused voice
 datagram, that datagram went over TCP and had the same effect.

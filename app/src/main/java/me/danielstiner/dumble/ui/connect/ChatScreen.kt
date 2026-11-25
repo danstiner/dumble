@@ -91,7 +91,7 @@ fun ChatScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // No item key: connection.messages is append-only (or cleared wholesale on reconnect),
+            // No item key: AppState.messages is append-only (or cleared wholesale on reconnect),
             // never reordered, so positional identity is stable. ChatMessage has no id to key on.
             items(messages) { msg -> MessageRow(msg, mySession) }
         }

@@ -12,7 +12,7 @@ class FakeControlTransport(
 ) : MumbleControlTransport {
     @Volatile var closed = false; private set
     @Volatile var listener: MumbleControlTransport.Listener? = null
-    /** Where the connection will aim its UDP socket; null, the default, means no socket. */
+    /** Where the app state will aim its UDP socket; null, the default, means no socket. */
     @Volatile var remote: InetSocketAddress? = null
     val sent = CopyOnWriteArrayList<Pair<TcpMessageType, MessageLite>>()
     val sentRaw = CopyOnWriteArrayList<Pair<TcpMessageType, ByteArray>>()

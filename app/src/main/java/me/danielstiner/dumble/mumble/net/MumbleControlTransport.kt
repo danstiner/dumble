@@ -5,7 +5,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import java.net.InetSocketAddress
 
 /**
- * What the connection coordinator needs from a transport: the blocking connect plus the send/close of
+ * What the app state needs from a transport: the blocking connect plus the send/close of
  * [ControlChannel]. Kept narrow so a test can supply a controllable fake for the races the real socket
  * cannot reproduce deterministically (supersede mid-handshake, connect timeout).
  */

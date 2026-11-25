@@ -42,8 +42,8 @@ class ConnectionStateMachine(
     private val clock: () -> Instant = Instant::now,
     // Counts deep sleep, unlike System.nanoTime. See BootTimeSource.
     private val bootClock: TimeSource.WithComparableMarks = BootTimeSource,
-    // Seam: a connection test that watches the UDP ping cadence would otherwise wait real
-    // intervals out. Only the ticker reads it; the thresholds derived from the constant stay.
+    // Seam: a test lengthens it to keep the ping ticker out of its way. Only the ticker reads it;
+    // the thresholds derived from the constant stay.
     private val pingIntervalMs: Long = PING_INTERVAL_MS,
 ) {
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -91,8 +91,8 @@ class ConnectionStateMachine(
      * CryptSetup keys [crypt], which is when the server can first match our address, then once
      * per tick beside the TCP ping, so one ticker carries both as desktop's does. Not at
      * ServerSync as well: that follows keying within milliseconds, and a ping whose reply had no
-     * time to arrive would read as unanswered to anything judging the cadence. Null until the
-     * connection wires it.
+     * time to arrive would read as unanswered to anything judging the cadence. Null until
+     * AppStateImpl wires it.
      */
     @Volatile var udpPing: (() -> Unit)? = null
 

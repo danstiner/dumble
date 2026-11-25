@@ -4,14 +4,14 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 
-/** The whole-connection state the UI observes: TLS + trust + protocol, unified. */
+/** The session's status as the UI observes it: TLS + trust + protocol, unified. */
 sealed interface SessionStatus {
     data object Idle : SessionStatus
     data object Connecting : SessionStatus
     data class AwaitingTrust(val fingerprint: String) : SessionStatus
     data class PinMismatch(val stored: String, val presented: String) : SessionStatus
     data object Handshaking : SessionStatus
-    /** [gen] is this connection's own generation, one per connect(); [sessionId] is the server's,
+    /** [gen] is the app state's own generation, one per connect(); [sessionId] is the server's,
      *  and changes with every link. */
     data class Connected(val gen: Int, val sessionId: Int) : SessionStatus
     /** The session's link died and a replacement is being opened under the same generation;
