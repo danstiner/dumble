@@ -49,8 +49,8 @@ fun parsePort(text: String): PortInput {
 }
 
 /**
- * Overlay screens, orthogonal to connection state — Settings is reachable both before and during
- * a session. [Main] means no overlay: show whatever the session status dictates.
+ * Overlay screens, orthogonal to the session status — Settings is reachable both before and during
+ * a session. [Main] means no overlay: show whatever that status dictates.
  */
 enum class Route { Main, Settings, About }
 
@@ -125,7 +125,7 @@ data class ConnectUiState(
         get() = (status as? SessionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED && !localNetworkAsked
 }
 
-private data class ConnSnapshot(
+private data class SessionSnapshot(
     val status: SessionStatus,
     val channelTree: ChannelTree,
     val messages: List<ChatMessage>,
@@ -133,7 +133,7 @@ private data class ConnSnapshot(
     val self: SelfSnapshot,
 )
 
-/** The call's own two, paired so [ConnSnapshot] stays inside combine's arity cap. */
+/** The call's own two, paired so [SessionSnapshot] stays inside combine's arity cap. */
 private data class SelfSnapshot(val callHeld: Boolean, val selfState: DeafenState)
 
 /** Both audio engines' counters, paired so [HealthSnapshot] stays inside combine's arity cap. */
@@ -186,7 +186,7 @@ class ConnectViewModel internal constructor(
     private val sessionSnapshot = combine(
         appState.status, appState.channelTree, appState.messages, appState.audioRoutes,
         selfSnapshot,
-    ) { status, tree, msgs, routes, self -> ConnSnapshot(status, tree, msgs, routes, self) }
+    ) { status, tree, msgs, routes, self -> SessionSnapshot(status, tree, msgs, routes, self) }
 
     private val audioSnapshot = combine(appState.playoutStats, appState.captureStats) { p, c ->
         AudioSnapshot(p, c)

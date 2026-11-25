@@ -253,7 +253,7 @@ class LiveServerIntegrationTest {
     }
 
     /**
-     * The mechanism the connection's answer to unanswered pings rests on: the server moves a
+     * The mechanism the app state's answer to unanswered pings rests on: the server moves a
      * client's downlink back to the tunnel on any frame that client tunnels, a ping included,
      * and does not move it out again on a further UDP ping. Same shape as the test above, then
      * one tunneled ping from the listener before the talker speaks.

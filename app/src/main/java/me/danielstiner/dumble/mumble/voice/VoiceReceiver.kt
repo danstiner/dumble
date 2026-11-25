@@ -47,7 +47,7 @@ class VoiceReceiver(
     private val newEngine: () -> PlayoutEngine?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
-    // Seam: where the poll runs; the connection passes its own.
+    // Seam: where the poll runs; the app state passes its own.
     context: CoroutineContext = Dispatchers.Default,
 ) {
     /** Seam so JVM tests can drive the receiver without loading native code. */
@@ -290,7 +290,7 @@ class VoiceReceiver(
             // audible to the first that sees nobody. Published once a second inside one and once
             // at its close, so a spurt shorter than a second still reports — a stall segments
             // glitchy speech into exactly such spurts. The closing sample goes out before the
-            // speaking set clears; the connection re-collects each flow on its own, so that
+            // speaking set clears; the app state re-collects each flow on its own, so that
             // order holds at this seam, not necessarily at the UI.
             if (speaking.isNotEmpty() && !inSpurt) {
                 inSpurt = true
