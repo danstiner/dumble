@@ -21,22 +21,22 @@ internal class Link(
     /** Opened once the control connection is up, closed with the link; inert in between if it
      *  could not be opened, and voice stays tunneled. */
     val udp: UdpTransport,
-    /** Which transport carries our voice; `MumbleConnection.sendVoice` routes by it. */
+    /** Which transport carries our voice; `AppStateImpl.sendVoice` routes by it. */
     val path: VoicePath,
     /** The default network this link was dialed on, or null when there was none to know. */
     val network: Any?,
-    /** The connection's count of network changes when this link was dialed, so whether the
+    /** The app state's count of network changes when this link was dialed, so whether the
      *  network has changed since is one compare. */
     val dialedUnder: Int,
     /** Everything that lives exactly as long as the link: its collectors and its state machine. */
     val scope: CoroutineScope,
-    /** The connection's; never cancelled, where the blocking closes run. */
+    /** The app state's; never cancelled, where the blocking closes run. */
     private val blockingScope: CoroutineScope,
 ) {
     private val closed = AtomicBoolean(false)
 
-    /** Raised outside the connection's lock, so a check-then-write against it can still lose
-     *  the race; see MumbleConnection.publishFromLink. */
+    /** Raised outside the app state's lock, so a check-then-write against it can still lose
+     *  the race; see AppStateImpl.publishFromLink. */
     val isClosed: Boolean get() = closed.get()
 
     /**
@@ -46,7 +46,7 @@ internal class Link(
      */
     fun close() {
         if (!closed.compareAndSet(false, true)) return
-        // On the connection's blocking scope because the TLS close blocks: SSLSocket.close can
+        // On the app state's blocking scope because the TLS close blocks: SSLSocket.close can
         // stall writing close-notify to a dead peer, and one slow socket must not delay anything
         // else. UDP first: its close never blocks, and datagrams would otherwise keep arriving
         // while the TLS close stalls.

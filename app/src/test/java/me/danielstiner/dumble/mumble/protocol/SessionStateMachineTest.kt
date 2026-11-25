@@ -846,7 +846,7 @@ class SessionStateMachineTest {
 
     /**
      * The wire shape. What to send is the session's to decide — [DeafenState] holds the rules and
-     * `MumbleConnection` holds the state — and this ships it verbatim for our own session, both
+     * `AppStateImpl` holds the state — and this ships it verbatim for our own session, both
      * fields together, because murmur forces mute on with deaf and never takes it back off.
      */
     @Test

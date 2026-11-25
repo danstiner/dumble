@@ -1,4 +1,4 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CancellableContinuation
@@ -16,6 +16,10 @@ import me.danielstiner.dumble.hangGuard
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.channeltree.User
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
+import me.danielstiner.dumble.mumble.connection.FakeNetworkWatch
 import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.LocalNetworkBlockedException
@@ -69,73 +73,73 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
-class MumbleConnectionTest {
+class AppStateImplTest {
 
     @get:Rule val timeout = hangGuard()
 
     @Test fun connectTimeoutMapsToTimeoutError() = deterministic {
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> throw SocketTimeoutException("connect timed out") } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.TIMEOUT, err.kind)
     }
 
     /** Retrying can't help until the user answers, and they are only asked once the session ends. */
     @Test fun aBlockOnAReconnectEndsTheSession() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) {
             val replacement = transports.size == 1
             FakeControlTransport { _, _ -> if (replacement) throw LocalNetworkBlockedException() }.also { transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
         assertSettled("the block ends the session") {
-            (conn.status.value as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
+            (app.status.value as? ConnectionStatus.Error)?.kind == ErrorKind.LOCAL_NETWORK_BLOCKED
         }
     }
 
     @Test fun channelTreeSurfacesReducedFrames() = deterministic {
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })   // connects, stays open
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
         fake.listener!!.onFrame(TcpFrame(
             TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
         ))
 
-        assertSettled("channel tree") { conn.channelTree.value.channels.containsKey(1) }
-        assertEquals("Root", conn.channelTree.value.channels[1]!!.name)
+        assertSettled("channel tree") { app.channelTree.value.channels.containsKey(1) }
+        assertEquals("Root", app.channelTree.value.channels[1]!!.name)
     }
 
     @Test fun disconnectResetsChannelTree() = deterministic {
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         fake.listener!!.onFrame(TcpFrame(
             TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
         ))
-        assertSettled("channel tree") { conn.channelTree.value.channels.containsKey(1) }
+        assertSettled("channel tree") { app.channelTree.value.channels.containsKey(1) }
 
-        conn.disconnect()
+        app.disconnect()
 
-        assertEquals(ChannelTree(), conn.channelTree.value)
+        assertEquals(ChannelTree(), app.channelTree.value)
     }
 
     /**
@@ -147,11 +151,11 @@ class MumbleConnectionTest {
      */
     @Test fun connectingOverALiveConnectionClearsThePriorSessionsState() = deterministic {
         val fakes = mutableListOf<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fakes += it } })
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("first"), "user", null)
+        handshaking(app)
         fakes[0].listener!!.onFrame(TcpFrame(
             TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray(),
@@ -160,75 +164,75 @@ class MumbleConnectionTest {
             TcpMessageType.TextMessage.id,
             MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray(),
         ))
-        assertSettled("channel tree") { conn.channelTree.value.channels.containsKey(1) }
-        assertSettled("messages") { conn.messages.value.isNotEmpty() }
+        assertSettled("channel tree") { app.channelTree.value.channels.containsKey(1) }
+        assertSettled("messages") { app.messages.value.isNotEmpty() }
 
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
+        app.connect(MumbleEndpoint.parse("second"), "user", null)
 
         // Sampled, not awaited: connect() clears under the same lock that bumps the generation, so
         // it has already happened when the call returns, and every publish helper is gen-checked so
         // the retired session cannot write these again.
-        assertEquals(ChannelTree(), conn.channelTree.value)
-        assertEquals(emptyList<ChatMessage>(), conn.messages.value)
+        assertEquals(ChannelTree(), app.channelTree.value)
+        assertEquals(emptyList<ChatMessage>(), app.messages.value)
     }
 
     @Test fun messagesSurfaceFromTheSession() = deterministic {
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
             MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray()))
 
-        assertSettled("messages") { conn.messages.value.isNotEmpty() }
-        assertEquals("yo", (conn.messages.value.single() as ChatMessage.Remote).htmlBody)
+        assertSettled("messages") { app.messages.value.isNotEmpty() }
+        assertEquals("yo", (app.messages.value.single() as ChatMessage.Remote).htmlBody)
     }
 
     @Test fun disconnectClearsMessages() = deterministic {
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.TextMessage.id,
             MumbleProtos.TextMessage.newBuilder().setActor(9).setMessage("yo").build().toByteArray()))
-        assertSettled("messages") { conn.messages.value.isNotEmpty() }
+        assertSettled("messages") { app.messages.value.isNotEmpty() }
 
-        conn.disconnect()
+        app.disconnect()
 
-        assertEquals(emptyList<ChatMessage>(), conn.messages.value)
+        assertEquals(emptyList<ChatMessage>(), app.messages.value)
     }
 
     @Test fun sendTextRoutesToTheLiveSessionAndEchoes() = deterministic {
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.ServerSync.id,
             MumbleProtos.ServerSync.newBuilder().setSession(1).build().toByteArray()))
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
             MumbleProtos.UserState.newBuilder().setSession(1).setChannelId(0).build().toByteArray()))
-        connected(conn)
+        connected(app)
 
-        val ok = conn.sendText("hello")
+        val ok = app.sendText("hello")
 
         assertTrue(ok)
         assertTrue(fake.sent.any { it.first == TcpMessageType.TextMessage })
-        assertSettled("messages") { conn.messages.value.isNotEmpty() }
-        assertEquals("hello", (conn.messages.value.single() as ChatMessage.Remote).htmlBody)
+        assertSettled("messages") { app.messages.value.isNotEmpty() }
+        assertEquals("hello", (app.messages.value.single() as ChatMessage.Remote).htmlBody)
     }
 
     @Test fun sendTextWithNoConnectionReturnsFalse() = deterministic {
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        assertFalse(conn.sendText("hi"))
+        assertFalse(app.sendText("hi"))
     }
 
     /**
@@ -238,13 +242,13 @@ class MumbleConnectionTest {
     @Test fun aDisconnectDuringTheHandshakeClosesTheLink() = deterministic {
         val gate = CompletableDeferred<Unit>()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> gate.await() }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         assertSettled("the driver must reach the handshake") { transports.firstOrNull()?.listener != null }
 
-        conn.disconnect()
+        app.disconnect()
 
         assertSettled("teardown must close the link the driver published") { transports.single().closed }
         gate.complete(Unit)   // inert: the cancelled wait ignores it
@@ -267,30 +271,30 @@ class MumbleConnectionTest {
             override suspend fun remove(key: String) = Unit
         }
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(pins, udpClock = clock, context = dispatcher, blocking = dispatcher) {
+        val app = own(AppStateImpl(pins, udpClock = clock, context = dispatcher, blocking = dispatcher) {
             FakeControlTransport { _, _ -> }.also { transports += it }
         })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         assertSettled("the driver is parked in the pin lookup") { parked.isCompleted }
         val wait = parked.getCompleted()
-        conn.disconnect()
+        app.disconnect()
         wait.resume(Unit)   // ignored once cancelled; a driver that survived would run on and build
         assertSettled("the cancelled driver must build nothing") { transports.isEmpty() }
     }
 
     @Test fun callStartsWithTheConnectionNotTheMicrophone() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { null }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
         // No requestCapture() anywhere in this test: connecting alone must start the call.
         assertSettled("connecting must start the call with the server host") { call.starts == listOf("localhost") }
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnecting must end the call") { call.ends == 1 }
     }
 
@@ -303,23 +307,23 @@ class MumbleConnectionTest {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(),
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> throw IOException("connection refused") }.also { transports += it } })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.CONNECT_FAILED, err.kind)
         assertSettled("the failure must end the call") { call.ends == 1 }
 
-        conn.requestCapture()
+        app.requestCapture()
 
         assertSettled("no microphone may open for a retired session") { handles.isEmpty() }
         assertEquals(1, call.ends)
-        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
+        assertTrue("retire() must not reset the terminal status", app.status.value is ConnectionStatus.Error)
         assertSettled("retire must close the link") { transports.single().closed }
     }
 
@@ -330,7 +334,7 @@ class MumbleConnectionTest {
         val call = FakeVoiceCall()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val pins = InMemoryPinStore()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             pins,
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
@@ -340,18 +344,18 @@ class MumbleConnectionTest {
         })
         val endpoint = MumbleEndpoint.parse("localhost")
 
-        conn.connect(endpoint, "user", null)
-        assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
+        app.connect(endpoint, "user", null)
+        assertSettled("awaiting trust") { app.status.value is ConnectionStatus.AwaitingTrust }
         assertSettled("the prompt must end the call") { call.ends == 1 }
 
-        conn.requestCapture()
+        app.requestCapture()
 
         assertSettled("no microphone may open while a prompt is up") { handles.isEmpty() }
         assertSettled("the stopped handshake's transport is closed") { transports.single().closed }
-        assertTrue(conn.status.value is ConnectionStatus.AwaitingTrust)
+        assertTrue(app.status.value is ConnectionStatus.AwaitingTrust)
 
-        conn.trustAndConnect()
-        handshaking(conn)
+        app.trustAndConnect()
+        handshaking(app)
         assertEquals("ab12", pins.get(endpoint.address))
         assertEquals(1, call.ends)
     }
@@ -362,20 +366,20 @@ class MumbleConnectionTest {
         val call = FakeVoiceCall()
         val pins = InMemoryPinStore()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             pins, call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { pin ->
             FakeControlTransport { _, _ -> if (pin == null) throw UntrustedCertificateException("ab12") }
                 .also { transports += it }
         })
         val endpoint = MumbleEndpoint.parse("localhost")
-        conn.connect(endpoint, "user", null)
-        assertSettled("awaiting trust") { conn.status.value is ConnectionStatus.AwaitingTrust }
+        app.connect(endpoint, "user", null)
+        assertSettled("awaiting trust") { app.status.value is ConnectionStatus.AwaitingTrust }
 
-        conn.trustAndConnect()
-        conn.cancelTrust()
+        app.trustAndConnect()
+        app.cancelTrust()
 
-        assertSettled("the cancel must stand") { conn.status.value == ConnectionStatus.Idle }
+        assertSettled("the cancel must stand") { app.status.value == ConnectionStatus.Idle }
         assertEquals(1, call.starts.size)
         assertEquals(1, transports.size)
         assertEquals("the pin Trust saved", "ab12", pins.get(endpoint.address))
@@ -385,21 +389,21 @@ class MumbleConnectionTest {
      *  the server hands out. */
     @Test fun connectedCarriesTheSessionsGeneration() = deterministic {
         val fakes = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fakes += it } })
         val sync = TcpFrame(TcpMessageType.ServerSync.id,
             MumbleProtos.ServerSync.newBuilder().setSession(5).build().toByteArray())
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         fakes[0].listener!!.onFrame(sync)
-        val first = connected(conn)
+        val first = connected(app)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         fakes[1].listener!!.onFrame(sync)
-        val second = connected(conn)
+        val second = connected(app)
 
         assertEquals(5, first.sessionId)
         assertEquals(5, second.sessionId)
@@ -410,18 +414,18 @@ class MumbleConnectionTest {
     @Test fun holdDeliveredAfterDisconnectRebuildsNothing() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(),
             newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, startPump = startPump,
             call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
-        conn.requestCapture()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
         val gen = call.startedGens.single()
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnect must end the call") { call.ends == 1 }
         call.resumeFor(gen)
 
@@ -434,36 +438,36 @@ class MumbleConnectionTest {
      */
     @Test fun connectingOverALiveConnectionSupersedesThePriorCall() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { null }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("first"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("first"), "user", null)
+        handshaking(app)
 
-        conn.connect(MumbleEndpoint.parse("second"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("second"), "user", null)
+        handshaking(app)
 
         assertEquals(listOf("first", "second"), call.starts)
         assertSettled("the prior call must be superseded, not ended") { call.ends == 0 }
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnecting must end the call once") { call.ends == 1 }
     }
 
     /** Denied microphone, or an engine that would not open: receive still needs the call's service. */
     @Test fun captureThatCannotOpenLeavesTheCallRunning() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { null }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
-        conn.requestCapture()
+        app.requestCapture()
         // No engine, so push-to-talk is inert rather than a crash.
-        conn.setTransmitting(true)
+        app.setTransmitting(true)
         assertSettled("the call must survive an engine that would not open") { call.ends == 0 }
     }
 
@@ -475,17 +479,17 @@ class MumbleConnectionTest {
     /** The platform's answer is the only source; nothing local invents a route. */
     @Test fun routesFromTheLiveCallReachTheUi() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
         call.emitRoutes(routes(AudioRoute.Type.EARPIECE, AudioRoute.Type.SPEAKER, current = AudioRoute.Type.EARPIECE))
 
-        assertSettled("routes must reach the flow") { conn.audioRoutes.value.available.size == 2 }
-        assertEquals(AudioRoute.Type.EARPIECE, conn.audioRoutes.value.current?.type)
+        assertSettled("routes must reach the flow") { app.audioRoutes.value.available.size == 2 }
+        assertEquals(AudioRoute.Type.EARPIECE, app.audioRoutes.value.current?.type)
     }
 
     /**
@@ -494,38 +498,38 @@ class MumbleConnectionTest {
      */
     @Test fun routesFromASupersededCallAreDropped() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         val staleGen = call.startedGens.first()
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
         call.emitRoutesFor(staleGen, routes(AudioRoute.Type.BLUETOOTH, current = AudioRoute.Type.BLUETOOTH))
 
-        assertEquals(AudioRoutes(), conn.audioRoutes.value)
+        assertEquals(AudioRoutes(), app.audioRoutes.value)
     }
 
     /** Every other published flow is cleared on retire; a survivor here would paint the next
      *  session's control with the last one's headset. */
     @Test fun disconnectClearsTheRoutes() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
         call.emitRoutes(routes(AudioRoute.Type.SPEAKER, current = AudioRoute.Type.SPEAKER))
-        assertSettled("routes must reach the flow first") { conn.audioRoutes.value.current != null }
+        assertSettled("routes must reach the flow first") { app.audioRoutes.value.current != null }
 
-        conn.disconnect()
+        app.disconnect()
 
-        assertSettled("teardown must clear the routes") { conn.audioRoutes.value == AudioRoutes() }
+        assertSettled("teardown must clear the routes") { app.audioRoutes.value == AudioRoutes() }
     }
 
     /**
@@ -535,39 +539,39 @@ class MumbleConnectionTest {
     @Test fun aFailedSessionsCallLeavesNothingPublished() = deterministic {
         val call = FakeVoiceCall()
         val refused = CompletableDeferred<Unit>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> refused.await() } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val gen = call.startedGens.single()
         call.emitRoutes(routes(AudioRoute.Type.SPEAKER, current = AudioRoute.Type.SPEAKER))
         call.hold()
         assertSettled("the call's hold and routes must be published while connecting") {
-            conn.callHeld.value && conn.audioRoutes.value != AudioRoutes()
+            app.callHeld.value && app.audioRoutes.value != AudioRoutes()
         }
 
         refused.completeExceptionally(IOException("connection refused"))
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        assertFalse("the end clears the hold", conn.callHeld.value)
-        assertEquals("the end clears the routes", AudioRoutes(), conn.audioRoutes.value)
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        assertFalse("the end clears the hold", app.callHeld.value)
+        assertEquals("the end clears the routes", AudioRoutes(), app.audioRoutes.value)
 
         call.holdFor(gen)
         call.emitRoutesFor(gen, routes(AudioRoute.Type.EARPIECE, current = AudioRoute.Type.EARPIECE))
 
-        assertSettled("a late hold must not raise the banner") { !conn.callHeld.value }
-        assertEquals("late routes must be dropped", AudioRoutes(), conn.audioRoutes.value)
+        assertSettled("a late hold must not raise the banner") { !app.callHeld.value }
+        assertEquals("late routes must be dropped", AudioRoutes(), app.audioRoutes.value)
     }
 
     @Test fun selectingARouteReachesTheCall() = deterministic {
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle() }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
-        conn.requestAudioRoute("id-SPEAKER")
+        app.requestAudioRoute("id-SPEAKER")
 
         assertSettled("the pick must reach the call") { call.routeRequests == listOf("id-SPEAKER") }
     }
@@ -610,24 +614,24 @@ class MumbleConnectionTest {
         val playout = FakePlayoutEngine()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(),
             newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, startPump = startPump,
             newPlayout = { playout }, call = call,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
         assertEquals(1, first.sessionId)
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("capture must open on the first link") { handles.size == 1 }
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        assertSettled("reconnecting") { conn.status.value == ConnectionStatus.Reconnecting(first.gen, 1) }
+        assertSettled("reconnecting") { app.status.value == ConnectionStatus.Reconnecting(first.gen, 1) }
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(conn))
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
 
         assertEquals("one platform call for the whole session", 1, call.starts.size)
         assertEquals("the call must not end across a reconnect", 0, call.ends)
@@ -640,14 +644,14 @@ class MumbleConnectionTest {
     /** A link that never synchronized is the connect failing, and a connect is not retried. */
     @Test fun theFirstLinkIsNotRetried() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         transportAt(transports, 0).listener!!.onClosed(IOException("reset"))
 
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("no replacement for a link that never came up", 1, transports.size)
     }
@@ -657,18 +661,18 @@ class MumbleConnectionTest {
     @Test fun aKickEndsTheSessionInsteadOfRejoining() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val link = startedTransportAt(transports, 0)
         link.listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         link.listener!!.onFrame(userRemove(session = 1, reason = "spam"))
         link.listener!!.onClosed(IOException("reset"))
 
-        assertSettled("kicked") { conn.status.value == ConnectionStatus.Error(ErrorKind.KICKED, "spam") }
+        assertSettled("kicked") { app.status.value == ConnectionStatus.Error(ErrorKind.KICKED, "spam") }
         assertSettled("the call ends") { call.ends == 1 }
         assertEquals("no replacement after a kick", 1, transports.size)
     }
@@ -681,13 +685,13 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
 
         network.lose("wifi")
 
@@ -695,7 +699,7 @@ class MumbleConnectionTest {
         // Our close unblocks the reader, whose exit is what reports the death.
         transports[0].listener!!.onClosed(IOException("closed"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(conn))
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the call must not end across a loss", 0, call.ends)
     }
 
@@ -704,18 +708,18 @@ class MumbleConnectionTest {
     @Test fun aNewDefaultLeavesAWorkingLinkAlone() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
 
         network.switchTo("cell")
 
         assertSettled("a link on a network still up stays") { !transports[0].closed }
-        assertEquals(first, conn.status.value)
+        assertEquals(first, app.status.value)
         assertEquals(1, transports.size)
     }
 
@@ -723,15 +727,15 @@ class MumbleConnectionTest {
     @Test fun changesBeforeConnectingAreNotADeath() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         network.lose("wifi")
         network.switchTo("cell")
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         assertSettled("changes before the dial are not a death") { !transports[0].closed }
         assertEquals(1, transports.size)
@@ -742,18 +746,18 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
         val release = CompletableDeferred<Unit>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> release.await() }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         assertSettled("the handshake is in flight") { transports.size == 1 && transports[0].listener != null }
 
         network.switchTo("cell")
         release.complete(Unit)
 
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         assertSettled("the change during the handshake was not a loss") { !transports[0].closed }
     }
 
@@ -766,11 +770,11 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
         val release = CompletableDeferred<Unit>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> release.await() }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         assertSettled("the handshake is in flight") { transports.size == 1 && transports[0].listener != null }
 
         network.lose("wifi")
@@ -778,8 +782,8 @@ class MumbleConnectionTest {
 
         assertSettled("the link is closed as soon as it is wired") { transports[0].closed }
         transports[0].listener!!.onClosed(IOException("closed"))
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("never retried", 1, transports.size)
     }
@@ -788,36 +792,36 @@ class MumbleConnectionTest {
     @Test fun losingTheReplacementsNetworkClosesItToo() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))   // an ordinary death
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
 
         network.lose("wifi")
 
         assertSettled("the replacement is closed on the loss") { transports[1].closed }
         transports[1].listener!!.onClosed(IOException("closed"))
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
-        assertEquals(3, connected(conn).sessionId)
+        assertEquals(3, connected(app).sessionId)
     }
 
     /** No default to stamp a link with means any change is taken as its loss. */
     @Test fun aLinkDialedWithNoDefaultIsClosedOnAnyChange() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch(default = null)
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = {}, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         network.switchTo("cell")
 
@@ -832,23 +836,23 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val waits = CopyOnWriteArrayList<Duration>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = { waits += it }, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
 
         network.lose("wifi")
 
         assertSettled("the replacement is closed on the loss") { transports[1].closed }
         transports[1].listener!!.onClosed(IOException("closed"))
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
-        assertEquals(3, connected(conn).sessionId)
+        assertEquals(3, connected(app).sessionId)
         assertEquals(listOf(Duration.ZERO, Duration.ZERO), waits.toList())
     }
 
@@ -858,15 +862,15 @@ class MumbleConnectionTest {
         val waits = CopyOnWriteArrayList<Duration>()
         val network = FakeNetworkWatch()
         var refuse = false
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, networkWatch = network,
             context = dispatcher, blocking = dispatcher,
             // Real waits never return here: only the change can end one.
             sleep = { d -> waits += d; if (d > Duration.ZERO) awaitCancellation() },
         ) { FakeControlTransport { _, _ -> if (refuse) throw IOException("refused") }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
         refuse = true
         transports[0].listener!!.onClosed(IOException("reset"))
         assertSettled("attempt 0 refused, attempt 1 waiting") { waits.toList() == listOf(0.seconds, 1.seconds) }
@@ -877,7 +881,7 @@ class MumbleConnectionTest {
         network.switchTo("cell")
 
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(conn))
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the wait was cut, not waited out", listOf(0.seconds, 1.seconds, 0.seconds), waits.toList())
     }
 
@@ -889,7 +893,7 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val waits = CopyOnWriteArrayList<Duration>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, sleep = { waits += it }, networkWatch = network,
             context = dispatcher, blocking = dispatcher,
         ) {
@@ -899,9 +903,9 @@ class MumbleConnectionTest {
                 if (hangs) { while (!holder[0]!!.closed) delay(10); throw IOException("aborted") }
             }.also { holder[0] = it; transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
         assertSettled("the attempt is in flight") { transports.size == 2 && transports[1].listener != null }
         elapse(2.seconds)
@@ -911,7 +915,7 @@ class MumbleConnectionTest {
 
         assertSettled("the attempt in flight is abandoned") { transports[1].closed }
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(conn))
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("attempt 0 again on the new network", listOf(Duration.ZERO, Duration.ZERO), waits.toList())
     }
 
@@ -921,7 +925,7 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val waits = CopyOnWriteArrayList<Duration>()
         val network = FakeNetworkWatch()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), sleep = { waits += it }, networkWatch = network,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) {
@@ -931,9 +935,9 @@ class MumbleConnectionTest {
                 if (hangs) { while (!holder[0]!!.closed) delay(10); throw IOException("aborted") }
             }.also { holder[0] = it; transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
         assertSettled("the attempt is in flight") { transports.size == 2 && transports[1].listener != null }
 
@@ -941,7 +945,7 @@ class MumbleConnectionTest {
         elapse(10.milliseconds)   // the fake transport's own poll loop notices the close and aborts
 
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertEquals("abandoned, but the rung climbs", listOf(0.seconds, 1.seconds), waits.toList())
     }
 
@@ -954,21 +958,21 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
         // The ladder's waits are not what this pins, so the retry's rung is skipped outright.
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, sleep = { }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
 
         startedTransportAt(transports, 1).listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
         transportAt(transports, 2)   // retried
-        assertTrue("still reconnecting after a UsernameInUse", conn.status.value is ConnectionStatus.Reconnecting)
+        assertTrue("still reconnecting after a UsernameInUse", app.status.value is ConnectionStatus.Reconnecting)
 
         transports[2].listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.WrongServerPW))
-        assertSettled("error") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        assertSettled("error") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.WRONG_SERVER_PASSWORD, err.kind)
         assertSettled("giving up ends the call") { call.ends == 1 }
         assertEquals("no attempt after a final rejection", 3, transports.size)
@@ -982,7 +986,7 @@ class MumbleConnectionTest {
         val waits = CopyOnWriteArrayList<Duration>()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
             sleep = { d -> waits += d; delay(d) },
         ) {
@@ -990,16 +994,16 @@ class MumbleConnectionTest {
             val first = transports.isEmpty()
             FakeControlTransport { _, _ -> if (!first) throw IOException("refused") }.also { transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
 
         // 0+1+2+4+8+16+30+30+29 = 120 s: the ninth 30 s wait would overrun, so it is clamped to
         // the 29 s left and spent on one last attempt, which lands exactly on the deadline.
         elapse(120.seconds)
-        assertSettled("gave up") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        assertSettled("gave up") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.DISCONNECTED, err.kind)
         assertEquals("could not get back to the server", err.detail)
         assertEquals(listOf(0, 1, 2, 4, 8, 16, 30, 30, 29).map { it.seconds }, waits.toList())
@@ -1016,7 +1020,7 @@ class MumbleConnectionTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
         val spent = { waits.sumOf { it.inWholeSeconds }.seconds }
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
             sleep = { d -> waits += d; delay(d) },
         ) {
@@ -1024,9 +1028,9 @@ class MumbleConnectionTest {
             FakeControlTransport { _, _ -> if (!reachable) throw IOException("refused") }
                 .also { transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
 
         elapse(121.seconds)   // the whole ladder, refused at every rung until the budget is spent
@@ -1035,7 +1039,7 @@ class MumbleConnectionTest {
                 transports.last().sent.any { it.first == TcpMessageType.Version }
         }
         transports.last().listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertEquals("the call must survive the whole outage", 0, call.ends)
     }
 
@@ -1046,7 +1050,7 @@ class MumbleConnectionTest {
      */
     @Test fun timeSpentConnectedIsGivenBackToTheDeadline() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
             // Long enough that the ping ticker never ends a link during a 29 s connected stretch;
             // the links here die by the resets below, not by ping age.
@@ -1056,15 +1060,15 @@ class MumbleConnectionTest {
             val refuse = transports.size >= 3
             FakeControlTransport { _, _ -> if (refuse) throw IOException("refused") }.also { transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
         for ((rung, session) in listOf(0.seconds to 2, 1.seconds to 3)) {
             elapse(rung)   // short of healthy, each loss is another rung of the same outage
             startedTransportAt(transports, session - 1).listener!!.onFrame(serverSync(session))
-            assertEquals(session, connected(conn).sessionId)
+            assertEquals(session, connected(app).sessionId)
             elapse(29.seconds)                     // connected, and short of healthy either way
             assertEquals("nothing else ended the link", session, transports.size)
             transports[session - 1].listener!!.onClosed(IOException("reset"))
@@ -1072,9 +1076,9 @@ class MumbleConnectionTest {
 
         // Two minutes of reconnecting on top of the 58 s spent connected: the give-up is at 178 s.
         elapse(118.seconds)   // t = 177: the clamped last wait is still running
-        assertSettled("still inside the given-back budget") { conn.status.value is ConnectionStatus.Reconnecting }
+        assertSettled("still inside the given-back budget") { app.status.value is ConnectionStatus.Reconnecting }
         elapse(1.seconds)     // t = 178: the last attempt is refused and the budget is spent
-        assertSettled("gave up") { conn.status.value is ConnectionStatus.Error }
+        assertSettled("gave up") { app.status.value is ConnectionStatus.Error }
     }
 
     /**
@@ -1083,12 +1087,12 @@ class MumbleConnectionTest {
      */
     @Test fun aNameStillHeldPastTheGhostWindowIsFinal() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))
 
         // Every replacement is rejected as it dials, so the clock moves only in the ladder's own
@@ -1100,8 +1104,8 @@ class MumbleConnectionTest {
             startedTransportAt(transports, i).listener!!.onFrame(reject(MumbleProtos.Reject.RejectType.UsernameInUse))
         }
 
-        assertSettled("final rejection") { conn.status.value is ConnectionStatus.Error }
-        val err = conn.status.value as ConnectionStatus.Error
+        assertSettled("final rejection") { app.status.value is ConnectionStatus.Error }
+        val err = app.status.value as ConnectionStatus.Error
         assertEquals(ErrorKind.USERNAME_TAKEN, err.kind)
         assertEquals("no attempt after the name proved to be someone else's", 8, transports.size)
     }
@@ -1111,23 +1115,23 @@ class MumbleConnectionTest {
     @Test fun losingAHealthyLinkStartsTheLadderOver() = deterministic {
         val waits = CopyOnWriteArrayList<Duration>()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
             // Long enough that the ping ticker never ages out the 31 s "healthy" wait below; this
             // test is about the reconnect ladder, not the ping ticker.
             pingIntervalMs = 3_600_000L,
             sleep = { d -> waits += d; delay(d) },
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onClosed(IOException("reset"))          // unhealthy: opens the incident at rung 0
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         transports[1].listener!!.onClosed(IOException("reset"))          // unhealthy again: rung 1
         elapse(1.seconds)   // rung 1's own wait
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
-        assertEquals(3, connected(conn).sessionId)
+        assertEquals(3, connected(app).sessionId)
 
         elapse(31.seconds)                                               // the third link becomes healthy
         transports[2].listener!!.onClosed(IOException("reset"))
@@ -1140,23 +1144,23 @@ class MumbleConnectionTest {
      *  link's messages append to it. */
     @Test fun chatSurvivesAReconnect() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onFrame(textFrom(9, "before"))
-        assertSettled("first message") { conn.messages.value.isNotEmpty() }
-        val before = conn.messages.value.single()
+        assertSettled("first message") { app.messages.value.isNotEmpty() }
+        val before = app.messages.value.single()
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         transports[1].listener!!.onFrame(textFrom(9, "after"))
 
-        assertSettled("both messages") { conn.messages.value.size == 2 }
-        val log = conn.messages.value
+        assertSettled("both messages") { app.messages.value.size == 2 }
+        val log = app.messages.value
         assertTrue("the carried message is the same instance", log[0] === before)
         assertEquals("after", (log[1] as ChatMessage.Remote).htmlBody)
     }
@@ -1173,24 +1177,24 @@ class MumbleConnectionTest {
      */
     @Test fun selfMuteSurvivesAReconnect() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
-        conn.setMuted(true)
+        app.setMuted(true)
         assertEquals("the first link carries the mute", listOf(true), transports[0].selfMutes())
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
 
         assertSettled("the replacement must be told the session is muted") {
             transports[1].selfMutes() == listOf(true)
         }
-        conn.setMuted(false)
+        app.setMuted(false)
         assertSettled("and the tap that lifts it must reach the same link") {
             transports[1].selfMutes() == listOf(true, false)
         }
@@ -1207,19 +1211,19 @@ class MumbleConnectionTest {
      */
     @Test fun selfDeafSurvivesAReconnect() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
-        conn.setSelfDeaf(true)
+        app.setSelfDeaf(true)
         assertEquals("the first link carries the deafen", listOf(true to true), transports[0].selfStates())
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
 
         assertSettled("the replacement must be told the session is deafened") {
             transports[1].selfStates() == listOf(true to true)
@@ -1232,22 +1236,22 @@ class MumbleConnectionTest {
      */
     @Test fun aMuteTheUserSetOutlivesADeafenAcrossAReconnect() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
-        conn.setMuted(true)
-        conn.setSelfDeaf(true)
+        app.setMuted(true)
+        app.setSelfDeaf(true)
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertSettled("the replacement must be told both") { transports[1].selfStates() == listOf(true to true) }
 
-        conn.setSelfDeaf(false)
+        app.setSelfDeaf(false)
         assertSettled("undeafening keeps the mute the user set") {
             transports[1].selfStates() == listOf(true to true, false to true)
         }
@@ -1261,40 +1265,40 @@ class MumbleConnectionTest {
      */
     @Test fun anUnmuteDuringTheOutageIsCarriedNotReverted() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
-        conn.setMuted(true)
+        connected(app)
+        app.setMuted(true)
         assertEquals(listOf(false to true), transports[0].selfStates())
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        assertSettled("reconnecting") { conn.status.value is ConnectionStatus.Reconnecting }
-        conn.setMuted(false)                       // nothing live to carry it
+        assertSettled("reconnecting") { app.status.value is ConnectionStatus.Reconnecting }
+        app.setMuted(false)                       // nothing live to carry it
 
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertEquals("the replacement must not be muted again", emptyList<Pair<Boolean, Boolean>>(), transports[1].selfStates())
     }
 
     /** The same the other way: a deafen taken during the outage reaches the replacement. */
     @Test fun aDeafenDuringTheOutageReachesTheReplacement() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        assertSettled("reconnecting") { conn.status.value is ConnectionStatus.Reconnecting }
-        conn.setSelfDeaf(true)
+        assertSettled("reconnecting") { app.status.value is ConnectionStatus.Reconnecting }
+        app.setSelfDeaf(true)
 
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertSettled("the replacement must be told the session is deafened") {
             transports[1].selfStates() == listOf(true to true)
         }
@@ -1307,7 +1311,7 @@ class MumbleConnectionTest {
      */
     @Test fun theReplacementsTreeIsPublishedBeforeItsConnected() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         fun ourRow(session: Int) = TcpFrame(
@@ -1315,17 +1319,17 @@ class MumbleConnectionTest {
             MumbleProtos.UserState.newBuilder().setSession(session).setChannelId(0).setSelfMute(true)
                 .build().toByteArray(),
         )
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(ourRow(1))
         transports[0].listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         // Unconfined, the collector runs inside the publish itself: a row seeded a task later
         // would be missing here, where a collector that ran afterwards would see it.
         var rowAtConnected: User? = null
         scope.backgroundScope.launch(Dispatchers.Unconfined) {
-            conn.status.collect {
-                if (it is ConnectionStatus.Connected && it.sessionId == 2) rowAtConnected = conn.channelTree.value.users[2]
+            app.status.collect {
+                if (it is ConnectionStatus.Connected && it.sessionId == 2) rowAtConnected = app.channelTree.value.users[2]
             }
         }
 
@@ -1334,7 +1338,7 @@ class MumbleConnectionTest {
         startedTransportAt(transports, 1).listener!!.onFrame(ourRow(2))
         transports[1].listener!!.onFrame(serverSync(2))
 
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertNotNull("our row must be readable the moment Connected lands", rowAtConnected)
         assertTrue("and carry what the replacement was told", rowAtConnected!!.selfMute)
     }
@@ -1347,25 +1351,25 @@ class MumbleConnectionTest {
      */
     @Test fun aMuteTheDyingLinkNeverCarriedIsStillWhatTheReplacementIsTold() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
         fun ourRow(session: Int) = TcpFrame(
             TcpMessageType.UserState.id,
             MumbleProtos.UserState.newBuilder().setSession(session).setChannelId(0).build().toByteArray(),
         )
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(ourRow(1))
         transports[0].listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].close()                      // the socket is gone; the state machine has yet to hear
-        conn.setMuted(true)
+        app.setMuted(true)
         assertEquals("the wire refused it", emptyList<Pair<Boolean, Boolean>>(), transports[0].selfStates())
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
         assertSettled("the replacement must be told the session is muted") {
             transports[1].selfStates() == listOf(false to true)
         }
@@ -1380,16 +1384,16 @@ class MumbleConnectionTest {
      */
     @Test fun undeafenTappedTwiceSendsTheSameMessageTwice() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
-        conn.setSelfDeaf(true)
-        conn.setSelfDeaf(false)
-        conn.setSelfDeaf(false)
+        app.setSelfDeaf(true)
+        app.setSelfDeaf(false)
+        app.setSelfDeaf(false)
 
         val undeafens = transports[0].selfStates().drop(1)
         assertEquals(2, undeafens.size)
@@ -1400,16 +1404,16 @@ class MumbleConnectionTest {
      *  mute for the user's, or the undeafen keeps a mute the user never set. */
     @Test fun deafenTappedTwiceStillUnmutesOnUndeafen() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
-        conn.setSelfDeaf(true)
-        conn.setSelfDeaf(true)
-        conn.setSelfDeaf(false)
+        app.setSelfDeaf(true)
+        app.setSelfDeaf(true)
+        app.setSelfDeaf(false)
 
         assertEquals(
             "the mute was the deafen's, so the undeafen lifts it",
@@ -1425,22 +1429,22 @@ class MumbleConnectionTest {
      */
     @Test fun asksTheWireRefusedStillCompose() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].close()
-        conn.setMuted(true)
-        conn.setSelfDeaf(true)
-        conn.setSelfDeaf(false)
+        app.setMuted(true)
+        app.setSelfDeaf(true)
+        app.setSelfDeaf(false)
         assertEquals("nothing reached the wire", emptyList<Pair<Boolean, Boolean>>(), transports[0].selfStates())
 
         transports[0].listener!!.onClosed(IOException("reset"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(2, connected(conn).sessionId)
+        assertEquals(2, connected(app).sessionId)
 
         assertSettled("the replacement is told the mute, and only the mute") {
             transports[1].selfStates() == listOf(false to true)
@@ -1459,7 +1463,7 @@ class MumbleConnectionTest {
         val pins = InMemoryPinStore()
         val endpoint = MumbleEndpoint.parse("localhost")
         pins.put(endpoint.address, "aa")
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             pins,
             newCapture = { FakeCaptureHandle().also { handles += it } },
             call = call,
@@ -1471,22 +1475,22 @@ class MumbleConnectionTest {
                 if (replacement) throw PinMismatchException(stored = "aa", presented = "bb")
             }.also { transports += it }
         })
-        conn.connect(endpoint, "user", null)
+        app.connect(endpoint, "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        assertSettled("pin mismatch") { conn.status.value == ConnectionStatus.PinMismatch("aa", "bb") }
+        assertSettled("pin mismatch") { app.status.value == ConnectionStatus.PinMismatch("aa", "bb") }
         assertSettled("the prompt must end the call") { call.ends == 1 }
         assertSettled("the dead link and its refused replacement are both closed") {
             transports.size == 2 && transports.all { it.closed }
         }
 
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("no microphone may open while a prompt is up") { handles.isEmpty() }
 
-        conn.trustAndConnect()
+        app.trustAndConnect()
 
         assertSettled("accepting the new certificate reconnects") { transports.size == 3 }
         assertEquals("bb", pins.get(endpoint.address))
@@ -1497,19 +1501,19 @@ class MumbleConnectionTest {
     @Test fun anUnresponsiveLinkIsReplaced() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        val first = connected(conn)
+        val first = connected(app)
 
         elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the link
 
-        assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), conn.status.value)
+        assertEquals(ConnectionStatus.Reconnecting(first.gen, 1), app.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(conn))
+        assertEquals(ConnectionStatus.Connected(first.gen, 2), connected(app))
         assertEquals("the call rides through", 0, call.ends)
     }
 
@@ -1518,19 +1522,19 @@ class MumbleConnectionTest {
     @Test fun theGateFollowsADeafen() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
             startPump = startPump, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
-        conn.requestCapture()   // voice activity is the default mode, so the gate opens with the engine
+        connected(app)
+        app.requestCapture()   // voice activity is the default mode, so the gate opens with the engine
         assertSettled("the gate opens") { handles.size == 1 && handles[0].gateOpen }
 
-        conn.setSelfDeaf(true)
+        app.setSelfDeaf(true)
         assertSettled("deafened is muted, so the gate shuts") { !handles[0].gateOpen }
-        conn.setSelfDeaf(false)
+        app.setSelfDeaf(false)
         assertSettled("the undeafen lifts the mute it set, and the gate with it") { handles[0].gateOpen }
     }
 
@@ -1539,19 +1543,19 @@ class MumbleConnectionTest {
     @Test fun aMuteTappedWhileDeafenedOutlivesTheUndeafen() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
             startPump = startPump, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
-        conn.requestCapture()
+        connected(app)
+        app.requestCapture()
         assertSettled("the gate opens") { handles.size == 1 && handles[0].gateOpen }
 
-        conn.setSelfDeaf(true)
-        conn.setMuted(true)
-        conn.setSelfDeaf(false)
+        app.setSelfDeaf(true)
+        app.setMuted(true)
+        app.setSelfDeaf(false)
 
         assertSettled("undeafened on the wire, and still muted") { transports[0].selfStates().lastOrNull() == (false to true) }
         assertSettled("and the gate agrees") { !handles[0].gateOpen }
@@ -1565,11 +1569,11 @@ class MumbleConnectionTest {
     @Test fun aFailedSessionReleasesTheReceiver() = deterministic {
         lateinit var fake: FakeControlTransport
         val playout = FakePlayoutEngine()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
 
         // Reach the receiver first, so there is a live playout and a started stream to release.
         playout.liveSessions = setOf(9)
@@ -1581,27 +1585,27 @@ class MumbleConnectionTest {
         assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, byteArrayOf(0) + audio.toByteArray()))
         elapse(50.milliseconds)   // VoiceReceiver.POLL_MILLIS: the next poll reads the engine's speaking set
-        assertSettled("speaking") { conn.speakingSessions.value.isNotEmpty() }
+        assertSettled("speaking") { app.speakingSessions.value.isNotEmpty() }
 
         // The server rejects the login: a terminal state nobody asked for.
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
-        assertSettled("rejected") { conn.status.value is ConnectionStatus.Error }
-        assertEquals(ErrorKind.AUTH_REJECTED, (conn.status.value as ConnectionStatus.Error).kind)
+        assertSettled("rejected") { app.status.value is ConnectionStatus.Error }
+        assertEquals(ErrorKind.AUTH_REJECTED, (app.status.value as ConnectionStatus.Error).kind)
 
         assertSettled("a failed session must destroy the playout engine") { playout.destroyed }
         // The error must survive the teardown — it is what the user is looking at.
-        assertTrue("retire() must not reset the terminal status", conn.status.value is ConnectionStatus.Error)
+        assertTrue("retire() must not reset the terminal status", app.status.value is ConnectionStatus.Error)
     }
 
     @Test fun speakingSessionsPopulateThenClearOnDisconnect() = deterministic {
         lateinit var fake: FakeControlTransport
         val playout = FakePlayoutEngine()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
 
         // The engine's answer to the packet below: session 9 holds a slot and is producing.
         playout.liveSessions = setOf(9)
@@ -1615,11 +1619,11 @@ class MumbleConnectionTest {
         assertSettled("the packet must reach the engine") { playout.offered.isNotEmpty() }
 
         elapse(50.milliseconds)   // VoiceReceiver.POLL_MILLIS: the next poll reads the engine's speaking set
-        assertSettled("speaking") { conn.speakingSessions.value == setOf(9) }
+        assertSettled("speaking") { app.speakingSessions.value == setOf(9) }
         assertTrue("a live speaker must start the stream", playout.started)
 
-        conn.disconnect()
-        assertEquals("disconnect() zeroes the flow under the lock", emptySet<Int>(), conn.speakingSessions.value)
+        app.disconnect()
+        assertEquals("disconnect() zeroes the flow under the lock", emptySet<Int>(), app.speakingSessions.value)
         // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
         // synchronously and the generation guard blocks any later receiver-originated write, so
         // deleting the stop() from teardown() would still pass it. This is what actually proves
@@ -1631,19 +1635,19 @@ class MumbleConnectionTest {
     @Test fun aSocketThatCannotOpenLeavesTheSessionHealthyAndTunneled() = deterministic {
         val playout = FakePlayoutEngine()
         lateinit var fake: FakeControlTransport
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) {
             // Unresolved, so DatagramChannel.connect refuses it locally: no DNS, no network.
             FakeControlTransport { _, _ -> }.apply { remote = InetSocketAddress.createUnresolved("nowhere.invalid", 1) }.also { fake = it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
         fake.listener!!.onFrame(keyExchange())
         fake.listener!!.onFrame(serverSync())
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UserState.id,
             MumbleProtos.UserState.newBuilder().setSession(1).setChannelId(0).build().toByteArray()))
-        connected(conn)
+        connected(app)
         assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
 
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.UDPTunnel.id, audioPacket(session = 9)))
@@ -1660,16 +1664,16 @@ class MumbleConnectionTest {
 
     @Test fun aSupersededHandshakeDoesNotClobberIdle() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        lateinit var conn: MumbleConnection
-        conn = own(MumbleConnection(
+        lateinit var app: AppStateImpl
+        app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { FakeControlTransport { _, _ -> conn.disconnect() }.also { transports += it } })
+        ) { FakeControlTransport { _, _ -> app.disconnect() }.also { transports += it } })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
         assertSettled("the superseded link must be closed") { transports.single().closed }
-        assertEquals("no clobber", ConnectionStatus.Idle, conn.status.value)
-        assertEquals(ChannelTree(), conn.channelTree.value)
+        assertEquals("no clobber", ConnectionStatus.Idle, app.status.value)
+        assertEquals(ChannelTree(), app.channelTree.value)
     }
 
     /**
@@ -1679,20 +1683,20 @@ class MumbleConnectionTest {
      * driver's own live check after the lookup is what closes it.
      */
     @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = deterministic {
-        lateinit var conn: MumbleConnection
+        lateinit var app: AppStateImpl
         val pins = object : PinStore {
-            override suspend fun get(key: String): String? { conn.disconnect(); return null }
+            override suspend fun get(key: String): String? { app.disconnect(); return null }
             override suspend fun put(key: String, fingerprint: String) = Unit
             override suspend fun remove(key: String) = Unit
         }
         val engines = AtomicInteger()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        conn = own(MumbleConnection(
+        app = own(AppStateImpl(
             pins, newPlayout = { engines.incrementAndGet(); FakePlayoutEngine() },
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
         assertSettled("a superseded session must close the transport it built") {
             transports.size == 1 && transports.single().closed
@@ -1704,21 +1708,21 @@ class MumbleConnectionTest {
     @Test fun disconnectWhileReconnectingClosesTheReplacement() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
-        lateinit var conn: MumbleConnection
-        conn = own(MumbleConnection(
+        lateinit var app: AppStateImpl
+        app = own(AppStateImpl(
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) {
             val replacement = transports.isNotEmpty()
-            FakeControlTransport { _, _ -> if (replacement) conn.disconnect() }.also { transports += it }
+            FakeControlTransport { _, _ -> if (replacement) app.disconnect() }.also { transports += it }
         })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
         assertSettled("both links must be closed") { transports.size == 2 && transports.all { it.closed } }
-        assertEquals(ConnectionStatus.Idle, conn.status.value)
+        assertEquals(ConnectionStatus.Idle, app.status.value)
         assertEquals("the call ends once", 1, call.ends)
     }
 
@@ -1729,26 +1733,26 @@ class MumbleConnectionTest {
      */
     @Test fun aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
-        connected(conn)
+        connected(app)
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(1).setName("Root").build().toByteArray()))
-        assertSettled("the tree") { conn.channelTree.value.channels.containsKey(1) }
+        assertSettled("the tree") { app.channelTree.value.channels.containsKey(1) }
 
         transports[0].listener!!.onClosed(IOException("reset"))
         // The replacement connects, then waits in replaceLink for a ServerSync this test never
         // sends: the dead link is closed and nothing has been swapped in.
         startedTransportAt(transports, 1)
-        assertTrue(conn.status.value is ConnectionStatus.Reconnecting)
+        assertTrue(app.status.value is ConnectionStatus.Reconnecting)
         assertTrue("the dead link must be closed", transports[0].closed)
         transports[0].listener!!.onFrame(TcpFrame(TcpMessageType.ChannelState.id,
             MumbleProtos.ChannelState.newBuilder().setChannelId(2).setName("Late").build().toByteArray()))
 
-        assertSettled("a frozen link must not reach the tree") { !conn.channelTree.value.channels.containsKey(2) }
+        assertSettled("a frozen link must not reach the tree") { !app.channelTree.value.channels.containsKey(2) }
     }
 
     /**
@@ -1761,15 +1765,15 @@ class MumbleConnectionTest {
         lateinit var fake: FakeControlTransport
         val handle = FakeCaptureHandle(blocking = false)
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { handle }, call = call, startPump = startPump,
             captureClock = clock, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
-        conn.requestCapture()
+        app.requestCapture()
 
         assertSettled("the pump must reach the wire") { fake.sentRaw.isNotEmpty() }
         val (type, payload) = fake.sentRaw.first()
@@ -1777,10 +1781,10 @@ class MumbleConnectionTest {
         // Leading 0 is the UDP audio type byte the tunnel carries ahead of the Audio protobuf.
         assertEquals(0, payload[0].toInt())
 
-        conn.setTransmitting(true)
+        app.setTransmitting(true)
         assertSettled("push-to-talk must open the gate") { handle.gateOpen }
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("teardown must destroy the engine") { handle.destroyed }
         assertTrue("teardown must stop the pump", handle.stopped)
         assertEquals("teardown must end the call", 1, call.ends)
@@ -1796,15 +1800,15 @@ class MumbleConnectionTest {
         lateinit var fake: FakeControlTransport
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } },
             call = call, startPump = startPump, captureClock = clock,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
 
-        conn.requestCapture()
+        app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
         handles[0].script(FakeCaptureHandle.Step.Frame(byteArrayOf(1), frameNumber = 1, terminator = false))
         assertSettled("the first session must reach the wire") { fake.sentRaw.size == 1 }
@@ -1818,7 +1822,7 @@ class MumbleConnectionTest {
         handles[1].script(FakeCaptureHandle.Step.Frame(byteArrayOf(2), frameNumber = 2, terminator = false))
         assertSettled("the rebuilt session must reach the wire") { fake.sentRaw.size == 2 }
 
-        conn.disconnect()
+        app.disconnect()
         assertSettled("disconnect must release the rebuilt engine") { handles[1].destroyed }
         assertEquals("disconnect must end the call", 1, call.ends)
     }
@@ -1832,21 +1836,21 @@ class MumbleConnectionTest {
             droppedFrames = 0, inputLatencyMillis = 12.0,
         )
         var opens = 0
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { opens++; handle }, call = FakeVoiceCall(),
             startPump = startPump, captureClock = clock,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> } })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(conn)
-        conn.requestCapture()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        handshaking(app)
+        app.requestCapture()
         assertSettled("the engine must open") { opens == 1 }
 
         elapse(2.seconds)   // the pump's stats period; the poll after it reads the counters
-        assertEquals(12.0, conn.captureStats.value?.inputLatencyMillis)
+        assertEquals(12.0, app.captureStats.value?.inputLatencyMillis)
 
-        conn.disconnect()
-        assertSettled("teardown must clear the counters") { conn.captureStats.value == null }
+        app.disconnect()
+        assertSettled("teardown must clear the counters") { app.captureStats.value == null }
     }
 
     // ---- Real threads, by design. These run on runBlocking and the default dispatchers with
@@ -1861,7 +1865,7 @@ class MumbleConnectionTest {
         srv.start()
         try {
             val pins = InMemoryPinStore()
-            val conn = MumbleConnection(pins) { pin ->
+            val app = AppStateImpl(pins) { pin ->
                 MumbleTcpTransport(
                     expectedPin = pin,
                     // First contact must be rejected by the authority path so MumbleTrustManager
@@ -1872,19 +1876,19 @@ class MumbleConnectionTest {
             }
             val endpoint = MumbleEndpoint.parse("localhost", srv.port)
 
-            conn.connect(endpoint, "user", null)
+            app.connect(endpoint, "user", null)
 
             val awaiting = withTimeout(5_000) {
-                conn.status.first { it is ConnectionStatus.AwaitingTrust }
+                app.status.first { it is ConnectionStatus.AwaitingTrust }
             } as ConnectionStatus.AwaitingTrust
             assertEquals(sha256Hex(srv.leafCertificate.encoded), awaiting.fingerprint)
 
-            conn.trustAndConnect()
+            app.trustAndConnect()
 
-            withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+            withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
             assertEquals(sha256Hex(srv.leafCertificate.encoded), pins.get(endpoint.address))
 
-            conn.disconnect()
+            app.disconnect()
         } finally {
             srv.close()
         }
@@ -1893,7 +1897,7 @@ class MumbleConnectionTest {
     // ---- the UDP voice socket ------------------------------------------------------------
     //
     // MumbleUdpTransportTest owns what the socket does. Here a FakeUdp stands in for it and the
-    // tests pin the connection's wiring, on the scheduler. The tests with a `peer` run the real
+    // tests pin the app state's wiring, on the scheduler. The tests with a `peer` run the real
     // socket end to end instead, against a loopback peer keyed as the server: our client_nonce is
     // its decrypt seed, its server_nonce ours.
 
@@ -1912,8 +1916,8 @@ class MumbleConnectionTest {
             .build().toByteArray(),
     )
 
-    /** A link's UDP socket: records what the connection asks of it, and keeps the listener the
-     *  connection built, so the test can play the server's side. */
+    /** A link's UDP socket: records what the app state asks of it, and keeps the listener the
+     *  app state built, so the test can play the server's side. */
     private class FakeUdp(val crypt: CryptState, val listener: MumbleUdpTransport.Listener) : UdpTransport {
         var openedOn: InetSocketAddress? = null
         var closed = false
@@ -1940,7 +1944,7 @@ class MumbleConnectionTest {
     private val serverAddress = InetSocketAddress.createUnresolved("mumble.invalid", 64738)
 
     // Each link's control transport and UDP socket, in link order, for the tests that build their
-    // connection from the two factories below.
+    // app state from the two factories below.
     private val controlTransports = mutableListOf<FakeControlTransport>()
     private val udps = mutableListOf<FakeUdp>()
 
@@ -1952,7 +1956,7 @@ class MumbleConnectionTest {
         FakeControlTransport { _, _ -> }.apply { remote = serverAddress }.also { controlTransports += it }
     }
 
-    private fun Rig.udpConnection(newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null }) = own(MumbleConnection(
+    private fun Rig.udpAppState(newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null }) = own(AppStateImpl(
         InMemoryPinStore(), newPlayout = newPlayout, udpClock = clock, context = dispatcher, blocking = dispatcher,
         newUdp = fakeUdps, newTransport = aimedAtServer,
     ))
@@ -1990,9 +1994,9 @@ class MumbleConnectionTest {
     private fun audioPacket(session: Int) = byteArrayOf(0) + MumbleUdpProtos.Audio.newBuilder()
         .setSenderSession(session).setOpusData(ByteString.copyFrom(byteArrayOf(1))).build().toByteArray()
 
-    private suspend fun connectToHandshaking(conn: MumbleConnection) {
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+    private suspend fun connectToHandshaking(app: AppStateImpl) {
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
     }
 
     private fun serverSync() = TcpFrame(TcpMessageType.ServerSync.id,
@@ -2003,8 +2007,8 @@ class MumbleConnectionTest {
     }
 
     @Test fun keyingPingsTheServerOverUdp() = deterministic {
-        val conn = udpConnection()
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val fake = startedTransportAt(controlTransports, 0)
         val udp = udps.single()
         assertEquals("aimed at the control connection's own remote", serverAddress, udp.openedOn)
@@ -2019,8 +2023,8 @@ class MumbleConnectionTest {
     // gets their downlink over UDP from the first ping on, and would otherwise hear nothing.
     @Test fun inboundUdpAudioReachesThePlayoutEngine() = deterministic {
         val playout = FakePlayoutEngine()
-        val conn = udpConnection(newPlayout = { playout })
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState(newPlayout = { playout })
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(controlTransports, 0)
         assertSettled("the receiver's poll started") { playout.startAttempts.get() > 0 }
 
@@ -2032,8 +2036,8 @@ class MumbleConnectionTest {
     }
 
     @Test fun aStalledDecryptAsksTheServerForItsCounter() = deterministic {
-        val conn = udpConnection()
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val fake = startedTransportAt(controlTransports, 0)
 
         udps.single().listener.requestCryptResync()
@@ -2045,38 +2049,38 @@ class MumbleConnectionTest {
     @Test fun disconnectClosesTheUdpSocket() = runBlocking {
         val peer = UdpPeer(serverCrypt())
         val before = readers()
-        val conn = MumbleConnection(InMemoryPinStore(), newTransport = fakeAimedAt(peer) {})
-        connectToHandshaking(conn)
+        val app = AppStateImpl(InMemoryPinStore(), newTransport = fakeAimedAt(peer) {})
+        connectToHandshaking(app)
         awaitOnRealThreads("the socket opens with the connection") { readersSince(before) == 1 }
 
-        conn.disconnect()
+        app.disconnect()
 
         awaitOnRealThreads("disconnect must close the socket and end its reader") { readersSince(before) == 0 }
         peer.close()
     }
 
     @Test fun aSessionThatFailsOnItsOwnClosesTheUdpSocket() = deterministic {
-        val conn = udpConnection()
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val fake = startedTransportAt(controlTransports, 0)
 
         fake.listener!!.onFrame(TcpFrame(TcpMessageType.Reject.id,
             MumbleProtos.Reject.newBuilder().setReason("nope").build().toByteArray()))
 
-        assertSettled("rejected") { conn.status.value is ConnectionStatus.Error }
+        assertSettled("rejected") { app.status.value is ConnectionStatus.Error }
         assertTrue("a retired session must not leak its socket", udps.single().closed)
     }
 
     @Test fun aSupersededSessionClosesItsUdpSocket() = deterministic {
-        val conn = udpConnection()
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(controlTransports, 0)
 
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
 
         startedTransportAt(controlTransports, 1)
         assertEquals("the superseded session's socket closed, the live one's open", listOf(true, false), udps.map { it.closed })
-        conn.disconnect()
+        app.disconnect()
         assertSettled("and none after disconnect") { udps.all { it.closed } }
     }
 
@@ -2114,33 +2118,33 @@ class MumbleConnectionTest {
         val peer = answeringPeer()
         val handle = FakeCaptureHandle()
         lateinit var fake: FakeControlTransport
-        val conn = MumbleConnection(
+        val app = AppStateImpl(
             InMemoryPinStore(), newCapture = { handle }, udpClock = udpClock,
             newTransport = fakeAimedAt(peer) { fake = it },
         )
-        connectToHandshaking(conn)
+        connectToHandshaking(app)
         udpClock += 1.seconds
         fake.listener!!.onFrame(keyExchange())
-        awaitOnRealThreads("the answered ping promotes") { conn.voicePath.value.onUdp }
-        assertNotNull("with its round trip", conn.voicePath.value.roundTrip)
+        awaitOnRealThreads("the answered ping promotes") { app.voicePath.value.onUdp }
+        assertNotNull("with its round trip", app.voicePath.value.roundTrip)
 
         handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(1, 2, 3), frameNumber = 7, terminator = false))
-        conn.requestCapture()
+        app.requestCapture()
 
         val packet = awaitAudio(peer)
         assertNotNull("the frame must reach the peer over UDP", packet)
         assertArrayEquals(byteArrayOf(1, 2, 3), opusOf(packet!!))
         assertTrue("and never the tunnel", fake.sentRaw.none { it.first == TcpMessageType.UDPTunnel })
-        conn.disconnect()
-        assertEquals("cleared with every other flow", VoicePath.State(), conn.voicePath.value)
+        app.disconnect()
+        assertEquals("cleared with every other flow", VoicePath.State(), app.voicePath.value)
         peer.close()
     }
 
     /** What other clients read about our path: once a reply is accepted, the next TCP ping
      *  reports the UDP leg. */
     @Test fun theTcpPingReportsTheUdpLegOnceAReplyIsAccepted() = deterministic {
-        val conn = udpConnection()
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        val app = udpAppState()
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val fake = startedTransportAt(controlTransports, 0)
         udps.single().listener.onPingReply(20.milliseconds)
         fake.listener!!.onFrame(serverSync(1))   // the ping loop starts with the session
@@ -2160,38 +2164,38 @@ class MumbleConnectionTest {
      */
     @Test fun silenceMovesVoiceBackToTheTunnelAndRepliesBringItBack() = deterministic {
         val handle = FakeCaptureHandle(blocking = false)
-        val conn = own(MumbleConnection(
+        val app = own(AppStateImpl(
             InMemoryPinStore(), newCapture = { handle }, startPump = startPump, captureClock = clock,
             udpClock = clock, context = dispatcher, blocking = dispatcher,
             newUdp = fakeUdps, newTransport = aimedAtServer,
         ))
-        conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         val fake = startedTransportAt(controlTransports, 0)
         val udp = udps.single()
         fun tunneled() = fake.sentRaw.filter { it.first == TcpMessageType.UDPTunnel }.map { it.second[0] }
         fun speak() = handle.script(FakeCaptureHandle.Step.Frame(byteArrayOf(9), frameNumber = 1, terminator = false))
         fake.listener!!.onFrame(keyExchange())   // the socket refuses voice on an unkeyed cipher
         udp.listener.onPingReply(20.milliseconds)
-        conn.requestCapture()
-        assertSettled("promoted") { conn.voicePath.value.onUdp }
+        app.requestCapture()
+        assertSettled("promoted") { app.voicePath.value.onUdp }
 
         udp.listener.onPingsUnanswered()
 
-        assertSettled("the report demotes") { conn.voicePath.value == VoicePath.State() }
+        assertSettled("the report demotes") { app.voicePath.value == VoicePath.State() }
         assertEquals("with a tunneled ping, so no peer hears a blip", listOf<Byte>(1), tunneled())
         speak()
         assertSettled("the next frame goes through the tunnel") { tunneled() == listOf<Byte>(1, 0) }
 
         udp.listener.onPingReply(20.milliseconds)
-        assertSettled("one reply is not enough after a demote") { !conn.voicePath.value.onUdp }
+        assertSettled("one reply is not enough after a demote") { !app.voicePath.value.onUdp }
         udp.listener.onPingReply(20.milliseconds)
-        assertSettled("two replies bring voice back") { conn.voicePath.value.onUdp }
+        assertSettled("two replies bring voice back") { app.voicePath.value.onUdp }
         speak()
         assertSettled("on the socket") { udp.sent.size == 1 }
 
         udp.refusing = true
         speak()
         assertSettled("a refused datagram goes through the tunnel in the same call") { tunneled() == listOf<Byte>(1, 0, 0) }
-        assertFalse("and demotes", conn.voicePath.value.onUdp)
+        assertFalse("and demotes", app.voicePath.value.onUdp)
     }
 }

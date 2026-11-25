@@ -1,10 +1,12 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -135,7 +137,7 @@ class CaptureLifecycleChaosTest {
     }
 
     /**
-     * One randomized concurrent storm against a fresh connection: [HAMMER_THREADS] threads firing
+     * One randomized concurrent storm against a fresh app state: [HAMMER_THREADS] threads firing
      * requestCapture/setTransmitting/hold/resume in random order and mix, plus one dedicated thread
      * firing connect/disconnect on its own schedule, then a settle phase that checks the consumer
      * is still alive and every engine it built is gone.
@@ -144,7 +146,7 @@ class CaptureLifecycleChaosTest {
         val call = FakeVoiceCall()
         val created = AtomicInteger()
         val endpoint = MumbleEndpoint.parse("chaos")
-        val conn = MumbleConnection(
+        val app = AppStateImpl(
             InMemoryPinStore(),
             newCapture = {
                 ChaosCaptureHandle(
@@ -156,12 +158,12 @@ class CaptureLifecycleChaosTest {
             stuckPumpMillis = 300L,
         ) { FakeControlTransport { _, _ -> } }
 
-        conn.connect(endpoint, "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        app.connect(endpoint, "user", null)
+        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
         // The storm starts on an open engine, so every round races the lifecycle against a live
         // capture however its schedule falls, and the checks below can never pass on a storm that
         // only ever met a disconnected connection.
-        conn.requestCapture()
+        app.requestCapture()
         awaitTrue(c.violations, "seed=$seed: no engine opened before the storm") { created.get() > 0 }
 
         // The cheap, high-frequency ops a real session sees constantly: a PTT press, a hold/resume
@@ -169,13 +171,13 @@ class CaptureLifecycleChaosTest {
         // Mute and mode change are the other writers of the levels a rebuild reads. Their wire
         // halves are inert: this connection never reaches Synchronized.
         val cheapOps: List<() -> Unit> = listOf(
-            { conn.requestCapture() },
-            { conn.setTransmitting(true) },
-            { conn.setTransmitting(false) },
-            { conn.setMuted(true) },
-            { conn.setMuted(false) },
-            { conn.setTransmitMode(TransmitMode.PushToTalk) },
-            { conn.setTransmitMode(TransmitMode.VoiceActivity) },
+            { app.requestCapture() },
+            { app.setTransmitting(true) },
+            { app.setTransmitting(false) },
+            { app.setMuted(true) },
+            { app.setMuted(false) },
+            { app.setTransmitMode(TransmitMode.PushToTalk) },
+            { app.setTransmitMode(TransmitMode.VoiceActivity) },
             { call.hold() },
             { call.resume() },
         )
@@ -215,7 +217,7 @@ class CaptureLifecycleChaosTest {
             val r = Random(seed * 1_000_003L + HAMMER_THREADS)
             repeat(LIFECYCLE_OPS) {
                 try {
-                    if (r.nextBoolean()) conn.connect(endpoint, "user", null) else conn.disconnect()
+                    if (r.nextBoolean()) app.connect(endpoint, "user", null) else app.disconnect()
                 } catch (e: Throwable) {
                     c.violations += "seed=$seed thread=lifecycle: op threw $e"
                 }
@@ -232,7 +234,7 @@ class CaptureLifecycleChaosTest {
         // Settle into a known state — the storm can leave the connection live, held, or idle at
         // random — then check the two things that must be true no matter which: the consumer is
         // still alive, and it leaked nothing.
-        conn.disconnect()
+        app.disconnect()
         // disconnect() ends the call under the lock every start and end take, so a call still live
         // here leaked through a race between the two.
         if (call.hasLiveCall) c.violations += "seed=$seed: the platform call outlived the disconnect"
@@ -241,17 +243,17 @@ class CaptureLifecycleChaosTest {
         }
 
         // Consumer survival: a dead dispatch loop fails silently and permanently (see the
-        // consumer's runCatching comment in MumbleConnection),
+        // consumer's runCatching comment in AppStateImpl),
         // so this is the one invariant that would otherwise never announce its own failure.
-        conn.connect(endpoint, "user", null)
-        withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
+        app.connect(endpoint, "user", null)
+        withTimeout(5_000) { app.status.first { it is ConnectionStatus.Handshaking } }
         val before = created.get()
-        conn.requestCapture()
+        app.requestCapture()
         awaitTrue(c.violations, "seed=$seed: the consumer did not build an engine for the final requestCapture()") {
             created.get() > before
         }
 
-        conn.disconnect()
+        app.disconnect()
         awaitTrue(c.violations, "seed=$seed: engine count did not reach zero after the final disconnect") {
             c.engineLive.get() == 0
         }

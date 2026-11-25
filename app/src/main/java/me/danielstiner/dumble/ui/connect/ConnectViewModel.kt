@@ -22,7 +22,6 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.data.ServerProfile
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.connection.mySession
@@ -34,6 +33,7 @@ import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.PlayoutStats
 import me.danielstiner.dumble.mumble.voice.TransmitMode
+import me.danielstiner.dumble.session.AppState
 import javax.inject.Inject
 
 sealed interface PortInput {
@@ -89,7 +89,7 @@ data class ConnectUiState(
     // the Mute control says, not a reason to disable it.
     val inaudible: Boolean = false,
     val talkBlock: TalkBlock? = null,
-    // The user's setting; the connection applies it to every session.
+    // The user's setting; the app state applies it to every session.
     val transmitMode: TransmitMode = TransmitMode.VoiceActivity,
     // The platform's answer, not the last tap — same discipline as [deafened]. One round trip of
     // lag on the caption, and no second copy of the truth to drift.
@@ -150,7 +150,7 @@ private data class HealthSnapshot(
 
 @HiltViewModel
 class ConnectViewModel internal constructor(
-    private val connection: Connection,
+    private val appState: AppState,
     private val configStore: ServerConfigStore,
     private val timeSource: TimeSource.WithComparableMarks,
     // Seam: the real check needs a Context and the JVM tests have none.
@@ -158,10 +158,10 @@ class ConnectViewModel internal constructor(
 ) : ViewModel() {
     @Inject constructor(
         @ApplicationContext context: Context,
-        connection: Connection,
+        appState: AppState,
         configStore: ServerConfigStore,
         timeSource: TimeSource.WithComparableMarks,
-    ) : this(connection, configStore, timeSource, {
+    ) : this(appState, configStore, timeSource, {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
     })
@@ -172,34 +172,34 @@ class ConnectViewModel internal constructor(
             // The status outlives this view model, so an error already showing is not new: the one
             // before asked, or, if none was open when it landed, the next Connect will. Nor is it
             // about this form, whose password starts blank whatever was sent.
-            localNetworkAsked = connection.status.value is ConnectionStatus.Error,
-            editedSinceConnect = connection.status.value is ConnectionStatus.Error,
+            localNetworkAsked = appState.status.value is ConnectionStatus.Error,
+            editedSinceConnect = appState.status.value is ConnectionStatus.Error,
         ),
     )
 
-    // Kotlin's typed combine() maxes at 5 flows, so the connection's flows nest into snapshots to
+    // Kotlin's typed combine() maxes at 5 flows, so the app state's flows nest into snapshots to
     // keep the top-level inside it too. Split by what they describe rather than by arity.
-    private val selfSnapshot = combine(connection.callHeld, connection.selfState) { held, self ->
+    private val selfSnapshot = combine(appState.callHeld, appState.selfState) { held, self ->
         SelfSnapshot(held, self)
     }
 
-    private val connSnapshot = combine(
-        connection.status, connection.channelTree, connection.messages, connection.audioRoutes,
+    private val sessionSnapshot = combine(
+        appState.status, appState.channelTree, appState.messages, appState.audioRoutes,
         selfSnapshot,
     ) { status, tree, msgs, routes, self -> ConnSnapshot(status, tree, msgs, routes, self) }
 
-    private val audioSnapshot = combine(connection.playoutStats, connection.captureStats) { p, c ->
+    private val audioSnapshot = combine(appState.playoutStats, appState.captureStats) { p, c ->
         AudioSnapshot(p, c)
     }
 
     private val healthSnapshot = combine(
-        connection.roundTripTime, connection.lastServerReplyAt, audioSnapshot,
-        connection.userStats, connection.voicePath,
+        appState.roundTripTime, appState.lastServerReplyAt, audioSnapshot,
+        appState.userStats, appState.voicePath,
     ) { rtt, replyAt, audio, ping, path -> HealthSnapshot(rtt, replyAt, audio, ping, path) }
 
     val uiState: StateFlow<ConnectUiState> =
         combine(
-            form, connSnapshot, healthSnapshot, connection.speakingSessions, connection.selfSpeaking,
+            form, sessionSnapshot, healthSnapshot, appState.speakingSessions, appState.selfSpeaking,
         ) { f, c, health, speaking, selfSpeaking ->
             val status = c.status
             val session = status.mySession
@@ -238,7 +238,7 @@ class ConnectViewModel internal constructor(
     // session, simply isn't found, so unread falls back to "everything visible" (≤ MAX_MESSAGES). This
     // relies on the log being append-only, so instances stay stable across emissions — see
     // SessionStateMachine.appendMessage.
-    private var lastReadMarker: ChatMessage? = connection.messages.value.lastOrNull()
+    private var lastReadMarker: ChatMessage? = appState.messages.value.lastOrNull()
 
     /** The generation [ConnectUiState.connectedSince] was marked for; null while disconnected. */
     private var anchoredGen: Int? = null
@@ -250,10 +250,10 @@ class ConnectViewModel internal constructor(
             }
             val mode = configStore.transmitMode()
             form.value = form.value.copy(transmitMode = mode)
-            connection.setTransmitMode(mode)
+            appState.setTransmitMode(mode)
         }
         viewModelScope.launch {
-            connection.messages.collect { msgs ->
+            appState.messages.collect { msgs ->
                 if (form.value.showChat) {
                     // Reading now: hold the marker at the tail so unread stays 0.
                     lastReadMarker = msgs.lastOrNull()
@@ -264,7 +264,7 @@ class ConnectViewModel internal constructor(
             }
         }
         viewModelScope.launch {
-            connection.status.collect { s ->
+            appState.status.collect { s ->
                 // Keyed on the generation, not on connected-ness: status is a StateFlow, so the
                 // disconnect between two calls can be conflated away, and a nullness comparison
                 // would then treat the second call as a continuation of the first. Not on the
@@ -298,11 +298,11 @@ class ConnectViewModel internal constructor(
     // Only an edit made with the rejection on screen retires it. One made while the connect is
     // still in flight would hide the answer before it arrives.
     private fun edit(change: (ConnectUiState) -> ConnectUiState) {
-        val retires = form.value.editedSinceConnect || connection.status.value is ConnectionStatus.Error
+        val retires = form.value.editedSinceConnect || appState.status.value is ConnectionStatus.Error
         form.value = change(form.value).copy(editedSinceConnect = retires)
     }
     fun onChatDraftChange(v: String) { form.value = form.value.copy(chatDraft = v) }
-    fun openChat() { lastReadMarker = connection.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
+    fun openChat() { lastReadMarker = appState.messages.value.lastOrNull(); form.value = form.value.copy(showChat = true, unread = 0) }
     fun closeChat() { form.value = form.value.copy(showChat = false) }
     fun openUserDetail(session: Int) { form.value = form.value.copy(selectedSession = session) }
     fun closeUserDetail() { form.value = form.value.copy(selectedSession = null) }
@@ -315,10 +315,10 @@ class ConnectViewModel internal constructor(
         )
     }
     fun sendMessage() {
-        // Trim and HTML-escape here, at the input boundary — the connection sends the body verbatim.
+        // Trim and HTML-escape here, at the input boundary — the app state sends the body verbatim.
         val body = form.value.chatDraft.trim()
         if (body.isEmpty()) return
-        if (connection.sendText(body.escapeHTML())) form.value = form.value.copy(chatDraft = "")
+        if (appState.sendText(body.escapeHTML())) form.value = form.value.copy(chatDraft = "")
     }
 
     fun onConnect() {
@@ -333,7 +333,7 @@ class ConnectViewModel internal constructor(
                 }
                 form.value = f.copy(draft = profile, portError = null, hostError = null)
                 viewModelScope.launch { configStore.saveLastUsed(profile) }
-                connection.connect(endpoint, profile.username, f.password.ifBlank { null })
+                appState.connect(endpoint, profile.username, f.password.ifBlank { null })
                 // Only after connect() has replaced the status: any sooner, the old block would be
                 // asked about again, or the old rejection shown under its field again.
                 form.value = form.value.copy(localNetworkAsked = false, editedSinceConnect = false)
@@ -343,9 +343,9 @@ class ConnectViewModel internal constructor(
 
     fun onLocalNetworkAsked() { form.value = form.value.copy(localNetworkAsked = true) }
 
-    fun onTrust() = connection.trustAndConnect()
-    fun onCancelTrust() = connection.cancelTrust()
-    fun onDisconnect() = connection.disconnect()
+    fun onTrust() = appState.trustAndConnect()
+    fun onCancelTrust() = appState.cancelTrust()
+    fun onDisconnect() = appState.disconnect()
 
     fun onMicrophonePermissionResult(granted: Boolean) {
         form.value = form.value.copy(microphoneGranted = granted)
@@ -356,19 +356,19 @@ class ConnectViewModel internal constructor(
      * because the answer outlives the connection it was given for — every connection has to start
      * its own capture session, not just the one that happened to prompt.
      */
-    fun onMicrophoneReady() = connection.requestCapture()
+    fun onMicrophoneReady() = appState.requestCapture()
 
     /** Reads the mute off [uiState] for the same reason [onToggleDeafen] does. */
-    fun onToggleMute() = connection.setMuted(!uiState.value.muted)
+    fun onToggleMute() = appState.setMuted(!uiState.value.muted)
 
     fun onSelectTransmitMode(mode: TransmitMode) {
         form.value = form.value.copy(transmitMode = mode)
         viewModelScope.launch { configStore.saveTransmitMode(mode) }
-        connection.setTransmitMode(mode)
+        appState.setTransmitMode(mode)
     }
 
     /** Seam for [CallControls]: press and release open and close the transmit gate. */
-    fun onTransmitting(active: Boolean) = connection.setTransmitting(active)
+    fun onTransmitting(active: Boolean) = appState.setTransmitting(active)
 
     /**
      * Reads the current value off [uiState] rather than taking it from the caller, so the button and
@@ -376,18 +376,18 @@ class ConnectViewModel internal constructor(
      * server's echo; the roster row is what shows the echo (`docs/mumble-protocol.md`, Self mute
      * and deafen).
      */
-    fun onToggleDeafen() = connection.setSelfDeaf(!uiState.value.deafened)
+    fun onToggleDeafen() = appState.setSelfDeaf(!uiState.value.deafened)
 
     /**
      * Seam for the route control. Fire-and-forget for the same reason deafen is: the platform's answer
      * arrives through [ConnectUiState.audioRoutes], so nothing here guesses where audio went.
      */
-    fun onSelectRoute(routeId: String) = connection.requestAudioRoute(routeId)
+    fun onSelectRoute(routeId: String) = appState.requestAudioRoute(routeId)
 
     /**
      * Ask the server for one user's ping. Driven by the sheet's own composition rather than a loop
      * here: polling lasts exactly as long as someone is looking, and a ViewModel that spins a
      * timer forever is a ViewModel no test can let finish.
      */
-    fun refreshUserStats(session: Int) = connection.requestUserStats(session)
+    fun refreshUserStats(session: Int) = appState.requestUserStats(session)
 }

@@ -1,12 +1,14 @@
 @file:OptIn(ExperimentalCoroutinesApi::class)
 
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.time.elapse
@@ -15,11 +17,11 @@ import kotlin.time.Duration
 import kotlin.time.TimeSource
 
 /**
- * A converted test: everything the connection runs is on one StandardTestDispatcher, so
+ * A converted test: everything the app state runs is on one StandardTestDispatcher, so
  * nothing moves between two statements unless the test drives the scheduler, and `delay`
  * is virtual. The rule is drive, then assert — never await. runTest's own final drain
  * (`advanceUntilIdleOr`) would otherwise run the handshake deadline, the ping death and the
- * whole reconnect ladder on any connection left up, so every connection is built through
+ * whole reconnect ladder on any app state left up, so every app state is built through
  * [Rig.own] and torn down here.
  */
 internal fun deterministic(body: suspend Rig.() -> Unit) = runTest {
@@ -37,12 +39,12 @@ internal class Rig(val scope: TestScope) {
 
     /** One clock for `delay` and `markNow`: the scheduler's. */
     val clock: TimeSource.WithComparableMarks = scope.testScheduler.timeSource
-    val owned = mutableListOf<MumbleConnection>()
+    val owned = mutableListOf<AppStateImpl>()
     private val pumps = mutableListOf<VoiceSender>()
 
-    fun own(conn: MumbleConnection): MumbleConnection = conn.also { owned += it }
+    fun own(app: AppStateImpl): AppStateImpl = app.also { owned += it }
 
-    /** Pass as `startPump`: the connection's capture pumps then run only when [settle] steps them,
+    /** Pass as `startPump`: the app state's capture pumps then run only when [settle] steps them,
      *  so their handles must never block a poll — `FakeCaptureHandle(blocking = false)`. */
     val startPump: (VoiceSender) -> Unit = { pumps += it }
 
@@ -74,16 +76,16 @@ internal class Rig(val scope: TestScope) {
         settle()
     }
 
-    fun connected(conn: MumbleConnection): ConnectionStatus.Connected {
-        assertSettled("connected") { conn.status.value is ConnectionStatus.Connected }
-        return conn.status.value as ConnectionStatus.Connected
+    fun connected(app: AppStateImpl): ConnectionStatus.Connected {
+        assertSettled("connected") { app.status.value is ConnectionStatus.Connected }
+        return app.status.value as ConnectionStatus.Connected
     }
 
-    fun handshaking(conn: MumbleConnection) {
-        assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
+    fun handshaking(app: AppStateImpl) {
+        assertSettled("handshaking") { app.status.value is ConnectionStatus.Handshaking }
     }
 
-    /** The nth transport the connection built, once it exists and has connected. */
+    /** The nth transport the app state built, once it exists and has connected. */
     fun transportAt(transports: List<FakeControlTransport>, index: Int): FakeControlTransport {
         assertSettled("transport $index must be built and connected") {
             transports.size > index && transports[index].listener != null
