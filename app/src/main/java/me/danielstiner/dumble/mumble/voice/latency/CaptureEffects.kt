@@ -11,25 +11,33 @@ import android.media.audiofx.NoiseSuppressor
  * off). Only the framework's software effects are reachable here: a canceller inside a device's
  * audio HAL is not, and there the check reports "not detected".
  */
-class CaptureEffects private constructor(private val held: List<Held>) {
+class CaptureEffects private constructor(private val held: List<Held>) : CheckEffects {
     private class Held(val name: String, val effect: AudioEffect, val wasEnabled: Boolean, val turnedOff: Boolean)
+
+    private var released = false
 
     /** The effects found on the session, empty where the framework offers none: the check's record
      *  of what it turned off, since [allOff] is vacuously true with nothing found. */
-    val names: List<String> get() = held.map { it.name }
+    override val names: List<String> get() = held.map { it.name }
 
     /** Every effect took the disable and still reads off. A handle that loses control of its effect
      *  is told when the new owner turns it on, so this follows the effect and not only what was
-     *  asked of it. */
-    fun allOff(): Boolean = held.all { it.turnedOff && !it.effect.enabled }
+     *  asked of it. False once [restore] has run: a check reads this on its own thread while the
+     *  connection restores on another, and a released effect throws when read. */
+    @Synchronized
+    override fun allOff(): Boolean = !released && held.all { it.turnedOff && !it.effect.enabled }
 
     /** Back as found, and released. Once. False if an effect refused its state back, which it does
      *  when another handle has taken control of it: that effect may be left off. */
-    fun restore(): Boolean = held.map {
-        val status = runCatching { it.effect.setEnabled(it.wasEnabled) }.getOrNull()
-        it.effect.release()
-        status == AudioEffect.SUCCESS
-    }.all { it }
+    @Synchronized
+    override fun restore(): Boolean {
+        released = true
+        return held.map {
+            val status = runCatching { it.effect.setEnabled(it.wasEnabled) }.getOrNull()
+            it.effect.release()
+            status == AudioEffect.SUCCESS
+        }.all { it }
+    }
 
     companion object {
         const val ECHO_CANCELLER = "echo canceller"

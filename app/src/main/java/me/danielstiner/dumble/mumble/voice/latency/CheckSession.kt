@@ -5,6 +5,13 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.net.PinStore
 import kotlin.time.TimeSource
 
+/** The capture effects a check turns off; [CaptureEffects] on a device, a fake in JVM tests. */
+interface CheckEffects {
+    val names: List<String>
+    fun allOff(): Boolean
+    fun restore(): Boolean
+}
+
 /** The connection's side of a latency check. */
 interface CheckHost {
     /**
@@ -13,10 +20,10 @@ interface CheckHost {
      * there and a trust prompt's answer written there, so the user's pins never learn a
      * throwaway server. A certificate [pins] does not hold ends the session in a trust prompt.
      *
-     * On that session capture runs push-to-talk on [CheckSession.setGateOpen] alone; every packet
-     * it produces goes to [captured], on the pump thread, and none to the server; and every packet
-     * the playout engine accepts is reported to [arrived], on the transport's thread. Neither
-     * callback may block.
+     * On that session capture runs push-to-talk on [CheckSession.setGateOpen] alone, with its
+     * effects off while it is open; every packet it produces goes to [captured], on the pump
+     * thread, and none to the server; and every packet the playout engine accepts is reported to
+     * [arrived], on the transport's thread. Neither callback may block.
      *
      * Null, with nothing changed, while a session is connected or a trust prompt is showing: a
      * check never replaces what the user has open.
@@ -30,7 +37,8 @@ interface CheckHost {
     ): CheckSession?
 }
 
-/** A check's handle on its own session. Nothing here outlives the session. */
+/** A check's handle on its own session. Nothing here outlives the session: its end closes
+ *  capture, which puts the effects back. */
 interface CheckSession {
     /** The clock both packets are marked on. A check marks its own sends on it too: marks from
      *  two sources cannot be subtracted. */
@@ -38,6 +46,10 @@ interface CheckSession {
 
     /** True while a capture stream is open on the session. */
     val captureOpen: StateFlow<Boolean>
+
+    /** What was found on the open capture stream and turned off. Null while capture is closed,
+     *  and when turning them off failed: read either as the effects still on. */
+    val effects: CheckEffects?
 
     /** True once the check can go no further: the session ended, or its link was replaced by one
      *  that never saw the start of the check's numbering. */
