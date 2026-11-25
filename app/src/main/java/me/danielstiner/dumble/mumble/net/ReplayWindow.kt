@@ -15,29 +15,21 @@ internal fun addToCounter(counter: ByteArray, offset: Int, out: ByteArray) {
 }
 
 /**
- * Which of the peer's counters we have already accepted, and where the stream has reached.
+ * Which of the peer's counters we have accepted: the sliding window IPsec uses (RFC 4303 §3.4.3).
  *
- * The highest counter accepted is the top. [bitmap] records the top and the [MAX_LATE] counters
- * below it: bit *k* is set once the counter `top − k` has been accepted, so bit 0 is the top
- * itself. This is the sliding-window form IPsec uses (RFC 4303 §3.4.3).
- *
- * The top and the bitmap are one object rather than two because they move together: advancing the
- * top shifts the bitmap by the same amount.
+ * The top is the highest counter accepted. Bit *k* of [bitmap] is set once `top − k` has been
+ * accepted, so bit 0 is the top itself.
  */
 internal class ReplayWindow {
     private val top = ByteArray(CryptState.NONCE_LEN)
     private var bitmap = 0L
 
     /**
-     * Restarts the stream at [peerNonce] with everything at or below it consumed, wherever that
-     * falls relative to where we had reached. Adoption is unconditional, like upstream: an honest
-     * reply is never behind us, and a forged-ahead top is exactly what adopting heals
+     * Restarts the stream at [peerNonce], whether that is ahead of the old top or behind it
      * (docs/mumble-protocol.md, Resync).
      *
-     * Consumed rather than cleared, so nothing the restart reaches can recur and the seed itself
-     * can never be a packet counter: a sender increments before it seals, so its first packet is
-     * seed + 1. Genuinely late packets from just before a resync drop with the rest of the
-     * window, the cheap half of the trade.
+     * Everything at or below it is marked accepted, not cleared, so nothing older can be
+     * replayed. The seed itself is never a packet: a sender increments before it seals.
      */
     fun restartAt(peerNonce: ByteArray) {
         peerNonce.copyInto(top)
@@ -45,16 +37,11 @@ internal class ReplayWindow {
     }
 
     /**
-     * Guesses the counter a packet carrying [hint] was sealed under and writes it to [out] as the
-     * nonce to try.
+     * Writes to [out] the nonce to try for a packet: the counter nearest the top whose low byte
+     * is [hint], the only byte sent. That is 128 behind to 127 ahead.
      *
-     * [hint] is the counter's low byte, the only part of it sent on the wire. Of the counters
-     * ending in that byte, the guess is the one nearest the top: 128 behind to 127 ahead. There is
-     * only ever one guess, so an attacker cannot force a second decrypt.
-     *
-     * False, with [out] untouched, when the guess is a counter already accepted, or one more than
-     * [MAX_LATE] behind the top, where the bitmap has no record. A packet that is really more than
-     * 127 ahead is guessed wrong: it is refused here as too far behind, or it fails the tag.
+     * False, with [out] untouched, when that counter is refused. There is only one guess, so an
+     * attacker cannot force a second decrypt.
      */
     fun rebuildNonce(hint: Int, out: ByteArray): Boolean {
         val offset = offsetFor(hint)
@@ -68,20 +55,14 @@ internal class ReplayWindow {
     }
 
     /**
-     * Records [nonce], the counter [rebuildNonce] produced, as accepted now that its tag has
-     * verified, and returns its offset from the top: positive when it becomes the new top,
-     * negative when it arrived late.
-     *
-     * Moving the top up shifts the bitmap by the same amount. A jump of more than [MAX_LATE]
-     * empties it instead: the bitmap then covers only counters above the old top, and none of
-     * those has been accepted.
+     * Marks [nonce] accepted, once [rebuildNonce] has produced it and its tag has verified.
+     * Returns its offset from the old top: positive for a new top, negative for a late packet.
      */
     fun accept(nonce: ByteArray): Int {
         val offset = offsetFor(nonce[0].toInt())
         if (offset > 0) {
-            // The empty case must be explicit: Kotlin masks a Long shift count to six bits, so
-            // `shl 64` shifts by nothing, not by everything, and would leave the counters below
-            // the new top marked accepted.
+            // A jump past MAX_LATE leaves nothing accepted in range, so start empty. The shift
+            // cannot do that: Kotlin masks its count to six bits, so `shl 64` shifts by nothing.
             bitmap = if (offset > MAX_LATE) 1L else (bitmap shl offset) or 1L
             nonce.copyInto(top)
         } else {
@@ -90,17 +71,11 @@ internal class ReplayWindow {
         return offset
     }
 
-    /**
-     * How far from the top the nearest counter ending in [hint] is, -128 to 127: the difference
-     * of the two low bytes, read as a signed byte.
-     */
+    /** Offset from the top of the nearest counter whose low byte is [hint]: -128 to 127. */
     private fun offsetFor(hint: Int): Int = (hint - top[0]).toByte().toInt()
 
     companion object {
-        /**
-         * How far behind the top a packet may arrive and still be accepted. 63 is the bits one
-         * Long has left after bit 0, the top itself. Upstream allows 29.
-         */
+        /** How far behind the top a packet is still accepted: a Long holds the top and 63 more. */
         private const val MAX_LATE = 63
     }
 }

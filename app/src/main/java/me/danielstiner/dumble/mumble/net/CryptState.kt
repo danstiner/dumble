@@ -132,8 +132,8 @@ class CryptState {
         val wire1 = src[2]
         val wire2 = src[3]
 
-        // A replay or a packet too far behind costs no AES: the window answers first. Otherwise
-        // guessing is free: a wrong guess makes the wrong nonce and the tag will not match.
+        // Refused before any AES: a replay, or a packet too far behind. A wrong guess that gets
+        // past here fails the tag.
         if (!window.rebuildNonce(hint, nonce)) return reject()
 
         // open() hands back unverified plaintext and a recomputed tag; only this comparison

@@ -207,19 +207,16 @@ carrying into the higher bytes. Only the low byte is sent, so the receiver rebui
 fifteen from the counter it holds and must choose among 256 candidates. That choice is local to
 the receiver: nothing on the wire records it.
 
-This client guesses the candidate nearest the highest counter it has accepted. That is the
-difference of the two low bytes read as a signed byte: 128 behind to 127 ahead. There is only ever
-one guess, so an attacker can never force a second decrypt.
+This client guesses the candidate nearest the highest counter it has accepted: 128 behind to 127
+ahead. There is only one guess, so an attacker can never force a second decrypt.
 
-- **1 to 127 ahead** is decrypted, so 126 packets lost in a row are ridden out. That is 2.5 s of
-  one talker at 50 packets a second.
-- **1 to 63 behind** is decrypted unless that counter was already accepted. 63 is as far back as
-  the replay bitmap records (Replay protection). It is 1.26 s of reordering for one talker, far
-  more than networks produce.
-- **64 to 128 behind** is refused without decrypting.
+- **Up to 127 ahead** is decrypted, so 126 packets lost in a row are ridden out: 2.5 s of one
+  talker at 50 packets a second.
+- **Up to 63 behind** is decrypted unless already accepted. That is as far back as the replay
+  bitmap records, and 1.26 s of reordering, far more than networks produce.
+- **Further behind** is refused without decrypting.
 
-A packet that is really more than 127 ahead gets the wrong guess: it is refused as behind or fails
-the tag. The packets after it fare the same, so the stream needs a resync.
+A sender more than 127 ahead is guessed wrong, so the stream needs a resync.
 
 Upstream accepts 29 behind and 127 ahead, plus 128 ahead when the byte has not wrapped.
 
@@ -289,7 +286,7 @@ This client matches desktop behaviour by default. Each departure is deliberate.
 | Refuses servers older than 1.5 | A 1.4 server silently drops protobuf voice. Refusing also removes the legacy voice framing and CELT. | Old servers cannot be joined, even for chat. | `SessionStateMachine` |
 | No positional audio | A non-goal; voice is mono end to end. | Positions sent by others are ignored. | `AGENTS.md` |
 | Replay bitmap instead of a generation table | The table can wedge the receive direction (Replay protection). | None on the wire. | `net/ReplayWindow.kt` |
-| IV window: 63 behind, 127 ahead | Upstream's 127 ahead, as a signed byte. Behind is what the replay bitmap holds; upstream stops at 29 and gives no reason. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
+| IV window: 63 behind, 127 ahead | Ahead matches upstream. Behind is what the replay bitmap holds; upstream stops at 29 and gives no reason. | None on the wire; the choice is local to the receiver. | `net/ReplayWindow.kt` |
 | Pin checked before the certificate authorities | An authority must not override the user's chosen server. | A renewed certificate must be accepted again. | [network.md](network.md), Trust |
 | 15 s handshake deadline | The protocol has none, and a silent server would hang the connect. | A server slower than that is reported as a timeout. | `SessionStateMachine` |
 | UDP health judged by the ping, not the cipher counts | Our encrypt counter advances whether or not a datagram arrives. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. | `net/VoicePath.kt` |

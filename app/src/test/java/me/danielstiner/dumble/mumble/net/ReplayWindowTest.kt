@@ -29,8 +29,7 @@ class ReplayWindowTest {
     @Test
     fun aRestartSpendsItsSeedAndEverythingBehindIt() {
         val window = windowAt(200)
-        // Hints 137..200 are the seed and the 63 slots below it, which the restart marked spent.
-        // Hints 72..136 are 64 to 128 behind, further back than the window reaches.
+        // The seed and the 63 below it are spent; the rest is further back than the window reaches.
         for (hint in 72..200) assertFalse("hint $hint", window.rebuildNonce(hint, nonce))
     }
 
