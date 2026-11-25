@@ -38,7 +38,7 @@ class AndroidVoiceCall(
         val onRoutes: (AudioRoutes) -> Unit,
     ) {
         /**
-         * Never carried across a supersede: MumbleConnection opens capture for a generation not
+         * Never carried across a supersede: AppStateImpl opens capture for a generation not
          * told it is held.
          */
         var held = false

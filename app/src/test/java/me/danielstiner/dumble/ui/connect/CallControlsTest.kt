@@ -137,7 +137,7 @@ class CallControlsTest {
 
     /**
      * New with deafen: Talk's `enabled` can now flip mid-press, which `granted` never could. Left
-     * open, the gate is not merely stuck for this press — `MumbleConnection` keeps transmit as a
+     * open, the gate is not merely stuck for this press — `AppStateImpl` keeps transmit as a
      * level that every rebuilt capture session re-applies, so it survives engine rebuilds.
      *
      * The defence is Compose's own: disabling a `clickable` disposes its interactions and emits
@@ -191,7 +191,7 @@ class CallControlsTest {
      * (`MainActivity.kt` routes on `showChat`/`route` above the controls), and the gesture's
      * `PressInteraction.Cancel` cannot save us: the clickable node emits it at detach, but the
      * collector's `LaunchedEffect` job is cancelled in the same frame and never resumes to read it.
-     * Left open, the level in `MumbleConnection.transmitting` is what every later `openSession`
+     * Left open, the level in `AppStateImpl.transmitting` is what every later `openSession`
      * re-applies, so one tap while held is a microphone that stays live across engine rebuilds.
      *
      * Leaving composition is the invariant, not the two-finger gesture that first found it: rotating

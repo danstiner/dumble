@@ -1,12 +1,14 @@
 @file:OptIn(ExperimentalCoroutinesApi::class)
 
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import me.danielstiner.dumble.time.elapse
@@ -37,10 +39,10 @@ internal class Rig(val scope: TestScope) {
 
     /** One clock for `delay` and `markNow`: the scheduler's. */
     val clock: TimeSource.WithComparableMarks = scope.testScheduler.timeSource
-    val owned = mutableListOf<MumbleConnection>()
+    val owned = mutableListOf<AppStateImpl>()
     private val pumps = mutableListOf<VoiceSender>()
 
-    fun own(conn: MumbleConnection): MumbleConnection = conn.also { owned += it }
+    fun own(conn: AppStateImpl): AppStateImpl = conn.also { owned += it }
 
     /** Pass as `startPump`: the connection's capture pumps then run only when [settle] steps them,
      *  so their handles must never block a poll — `FakeCaptureHandle(blocking = false)`. */
@@ -74,12 +76,12 @@ internal class Rig(val scope: TestScope) {
         settle()
     }
 
-    fun connected(conn: MumbleConnection): ConnectionStatus.Connected {
+    fun connected(conn: AppStateImpl): ConnectionStatus.Connected {
         assertSettled("connected") { conn.status.value is ConnectionStatus.Connected }
         return conn.status.value as ConnectionStatus.Connected
     }
 
-    fun handshaking(conn: MumbleConnection) {
+    fun handshaking(conn: AppStateImpl) {
         assertSettled("handshaking") { conn.status.value is ConnectionStatus.Handshaking }
     }
 

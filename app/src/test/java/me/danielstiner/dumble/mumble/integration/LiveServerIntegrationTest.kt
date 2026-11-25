@@ -150,7 +150,7 @@ class LiveServerIntegrationTest {
         }
     }
 
-    /** A control connection plus the UDP socket beside it, wired as MumbleConnection wires them:
+    /** A control connection plus the UDP socket beside it, wired as AppStateImpl wires them:
      *  pinned to the probed fingerprint, an optional identity, and a tap that sees every inbound
      *  frame. */
     private inner class Client(

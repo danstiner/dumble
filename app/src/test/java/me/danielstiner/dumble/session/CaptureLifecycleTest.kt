@@ -1,4 +1,4 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CoroutineDispatcher
@@ -9,6 +9,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.proto.MumbleUdpProtos
@@ -56,14 +58,14 @@ class CaptureLifecycleTest {
         newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
         newTransport: () -> FakeControlTransport = { FakeControlTransport { _, _ -> } },
         blocking: CoroutineDispatcher = dispatcher,
-    ) = own(MumbleConnection(
+    ) = own(AppStateImpl(
         InMemoryPinStore(), newCapture = newCapture, newPlayout = newPlayout, call = call,
         stuckPumpMillis = stuckPumpMillis, startPump = startPump, captureClock = clock,
         udpClock = clock, context = dispatcher, blocking = blocking,
     ) { newTransport() })
 
     /** Connects and settles in Handshaking, where every test here stays: none sends a ServerSync. */
-    private fun Rig.connectTo(conn: MumbleConnection, host: String = "localhost") {
+    private fun Rig.connectTo(conn: AppStateImpl, host: String = "localhost") {
         conn.connect(MumbleEndpoint.parse(host), "user", null)
         handshaking(conn)
     }
@@ -699,7 +701,7 @@ class CaptureLifecycleTest {
         repeat(20) {
             val handle = GateAfterDestroyHandle()
             val call = FakeVoiceCall()
-            val conn = MumbleConnection(
+            val conn = AppStateImpl(
                 InMemoryPinStore(),
                 newCapture = { handle },
                 call = call,
@@ -744,7 +746,7 @@ class CaptureLifecycleTest {
      */
     @Test fun aDisconnectDuringNewCaptureLeavesTheStaleHandleUnattached() = deterministic {
         val handle = PollRecordingHandle()
-        lateinit var conn: MumbleConnection
+        lateinit var conn: AppStateImpl
         conn = connection(newCapture = { conn.disconnect(); handle })
         connectTo(conn)
 

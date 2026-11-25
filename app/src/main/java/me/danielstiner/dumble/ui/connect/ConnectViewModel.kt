@@ -22,7 +22,7 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.data.ServerProfile
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
-import me.danielstiner.dumble.mumble.connection.Connection
+import me.danielstiner.dumble.session.AppState
 import me.danielstiner.dumble.mumble.connection.ConnectionStatus
 import me.danielstiner.dumble.mumble.connection.ErrorKind
 import me.danielstiner.dumble.mumble.connection.mySession
@@ -150,7 +150,7 @@ private data class HealthSnapshot(
 
 @HiltViewModel
 class ConnectViewModel internal constructor(
-    private val connection: Connection,
+    private val connection: AppState,
     private val configStore: ServerConfigStore,
     private val timeSource: TimeSource.WithComparableMarks,
     // Seam: the real check needs a Context and the JVM tests have none.
@@ -158,7 +158,7 @@ class ConnectViewModel internal constructor(
 ) : ViewModel() {
     @Inject constructor(
         @ApplicationContext context: Context,
-        connection: Connection,
+        connection: AppState,
         configStore: ServerConfigStore,
         timeSource: TimeSource.WithComparableMarks,
     ) : this(connection, configStore, timeSource, {

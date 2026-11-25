@@ -1,4 +1,4 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import android.content.Context
 import android.util.Log
@@ -28,6 +28,10 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.ErrorKind
+import me.danielstiner.dumble.mumble.connection.Link
+import me.danielstiner.dumble.mumble.connection.mapState
 import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
@@ -87,7 +91,7 @@ import kotlin.time.TimeSource
  * level/reconcile model — is documented in `docs/capture.md`.
  */
 @Singleton
-class MumbleConnection internal constructor(
+class AppStateImpl internal constructor(
     private val pinStore: PinStore,
     // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
     private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
@@ -123,7 +127,7 @@ class MumbleConnection internal constructor(
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
         { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
-) : Connection {
+) : AppState {
     @Inject constructor(
         @ApplicationContext context: Context,
         pinStore: PinStore,

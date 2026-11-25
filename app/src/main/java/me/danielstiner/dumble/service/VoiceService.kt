@@ -19,7 +19,7 @@ import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import me.danielstiner.dumble.MainActivity
 import me.danielstiner.dumble.R
-import me.danielstiner.dumble.mumble.connection.Connection
+import me.danielstiner.dumble.session.AppState
 import javax.inject.Inject
 
 /**
@@ -38,7 +38,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class VoiceService : Service() {
 
-    @Inject lateinit var connection: Connection
+    @Inject lateinit var connection: AppState
 
     override fun onBind(intent: Intent?): IBinder? = null
 

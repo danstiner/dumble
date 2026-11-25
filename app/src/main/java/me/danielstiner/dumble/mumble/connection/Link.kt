@@ -21,7 +21,7 @@ internal class Link(
     /** Opened once the control connection is up, closed with the link; inert in between if it
      *  could not be opened, and voice stays tunneled. */
     val udp: UdpTransport,
-    /** Which transport carries our voice; `MumbleConnection.sendVoice` routes by it. */
+    /** Which transport carries our voice; `AppStateImpl.sendVoice` routes by it. */
     val path: VoicePath,
     /** The default network this link was dialed on, or null when there was none to know. */
     val network: Any?,
@@ -36,7 +36,7 @@ internal class Link(
     private val closed = AtomicBoolean(false)
 
     /** Raised outside the connection's lock, so a check-then-write against it can still lose
-     *  the race; see MumbleConnection.publishFromLink. */
+     *  the race; see AppStateImpl.publishFromLink. */
     val isClosed: Boolean get() = closed.get()
 
     /**

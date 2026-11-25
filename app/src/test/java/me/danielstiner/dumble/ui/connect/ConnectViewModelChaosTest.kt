@@ -48,7 +48,7 @@ class ConnectViewModelChaosTest {
         val r = Random(seed)
         val heldInitially = r.nextBoolean()
         var granted = heldInitially
-        val conn = FakeConnection()
+        val conn = FakeAppState()
         val vm = ConnectViewModel(conn, FakeConfigStore(null), TestTimeSource()) { heldInitially }
         try {
             // Connectable, so onConnect() reaches the connection instead of failing validation.

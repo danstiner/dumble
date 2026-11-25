@@ -1,10 +1,12 @@
-package me.danielstiner.dumble.mumble.connection
+package me.danielstiner.dumble.session
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import me.danielstiner.dumble.hangGuard
+import me.danielstiner.dumble.mumble.connection.ConnectionStatus
+import me.danielstiner.dumble.mumble.connection.FakeControlTransport
 import me.danielstiner.dumble.mumble.net.InMemoryPinStore
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
 import me.danielstiner.dumble.mumble.voice.CaptureStats
@@ -144,7 +146,7 @@ class CaptureLifecycleChaosTest {
         val call = FakeVoiceCall()
         val created = AtomicInteger()
         val endpoint = MumbleEndpoint.parse("chaos")
-        val conn = MumbleConnection(
+        val conn = AppStateImpl(
             InMemoryPinStore(),
             newCapture = {
                 ChaosCaptureHandle(
@@ -241,7 +243,7 @@ class CaptureLifecycleChaosTest {
         }
 
         // Consumer survival: a dead dispatch loop fails silently and permanently (see the
-        // consumer's runCatching comment in MumbleConnection),
+        // consumer's runCatching comment in AppStateImpl),
         // so this is the one invariant that would otherwise never announce its own failure.
         conn.connect(endpoint, "user", null)
         withTimeout(5_000) { conn.status.first { it is ConnectionStatus.Handshaking } }
