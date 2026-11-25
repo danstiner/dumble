@@ -83,7 +83,7 @@ class MumbleConnectionCheckTest {
     /** A check's session, connected and synchronized. */
     private fun Rig.checking(live: Live): CheckSession {
         val check = live.conn.connectForCheck(
-            MumbleEndpoint.parse("localhost"), "check", "ab12", { live.captured += it }, { live.arrived += it },
+            MumbleEndpoint.parse("localhost"), "check", InMemoryPinStore(), { live.captured += it }, { live.arrived += it },
         )!!
         synchronize(live)
         return check
@@ -224,7 +224,7 @@ class MumbleConnectionCheckTest {
         live.conn.connect(MumbleEndpoint.parse("localhost"), "user", null)
         synchronize(live)
 
-        assertNull(live.conn.connectForCheck(MumbleEndpoint.parse("localhost"), "check", "ab12", {}, {}))
+        assertNull(live.conn.connectForCheck(MumbleEndpoint.parse("localhost"), "check", InMemoryPinStore(), {}, {}))
 
         assertSettled("the user's session stands") { live.conn.status.value is ConnectionStatus.Connected }
         assertEquals(1, live.transports.size)
