@@ -215,8 +215,9 @@ class MumbleConnection internal constructor(
         val endpoint: MumbleEndpoint,
         val username: String,
         val password: String?,
-        /** The certificate a pinned connect trusts, in place of the pin store; null otherwise. */
-        val pinned: String?,
+        /** Where the server's pin is read and a trust prompt's answer is written: the app's
+         *  store, or the one a connect was given. */
+        val pins: PinStore,
         /** Built once per session and fed packets by its link; never owns a transport. */
         val receiver: VoiceReceiver,
         /** The driver and the receiver's collectors. Cancelled by [teardown], last. */
@@ -618,16 +619,14 @@ class MumbleConnection internal constructor(
     }
 
     override fun connect(endpoint: MumbleEndpoint, username: String, password: String?) =
-        connect(endpoint, username, password, answering = null, pinned = null)
+        connect(endpoint, username, password, pinStore, answering = null)
 
-    /** A connection that trusts exactly [fingerprint] and records nothing: no pin, no trust
-     *  prompt. The latency check's own, to a throwaway server whose certificate it was handed, so
-     *  it is not on [Connection]: nothing in the app's own flows connects this way.
-     *  [fingerprint] is the lowercase hex SHA-256 of the server's leaf certificate in DER, compared
-     *  exactly: `openssl x509 -fingerprint -sha256` prints uppercase with colons and won't match.
-     *  A different certificate ends the session in an error, never a trust prompt. */
-    internal fun connectPinned(endpoint: MumbleEndpoint, username: String, fingerprint: String) =
-        connect(endpoint, username, null, answering = null, pinned = fingerprint)
+    /** As [connect], with [pins] as the session's pin store in place of the app's. Trust is
+     *  decided the same way; only where the pin is read and written differs. The latency check's,
+     *  for a throwaway server whose certificate must never reach the user's pins, so it is not on
+     *  [Connection]. */
+    internal fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore) =
+        connect(endpoint, username, password, pins, answering = null)
 
     /**
      * Retire, call start and publish are one critical section: connects run on two threads (the
@@ -637,7 +636,7 @@ class MumbleConnection internal constructor(
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
      * dismissed it, and then this does nothing.
      */
-    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, answering: Session?, pinned: String?) {
+    private fun connect(endpoint: MumbleEndpoint, username: String, password: String?, pins: PinStore, answering: Session?) {
         val prior: Session?
         val session: Session
         synchronized(lock) {
@@ -648,7 +647,7 @@ class MumbleConnection internal constructor(
             // only a session whose link comes up ever reaches — building eagerly would leak one per
             // session that fails or is superseded before that.
             session = Session(
-                gen, endpoint, username, password, pinned, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+                gen, endpoint, username, password, pins, VoiceReceiver(newPlayout, context = scope.coroutineContext),
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
             current = session
@@ -683,7 +682,7 @@ class MumbleConnection internal constructor(
      */
     private suspend fun drive(session: Session) {
         val gen = session.gen
-        val pin = session.pinned ?: pinStore.get(session.endpoint.address)
+        val pin = session.pins.get(session.endpoint.address)
         Log.i(TAG, "connect gen=$gen endpoint=${session.endpoint.address} user=${session.username} storedPin=${pin != null}")
         // The loop below runs for minutes beside a live platform call: an escape would leave
         // the call up with nothing driving it.
@@ -953,18 +952,11 @@ class MumbleConnection internal constructor(
      * trust prompt is kept aside for [trustAndConnect] first, since it can follow at once.
      */
     private fun fail(session: Session, status: ConnectionStatus) {
-        var published = status
         if (status is ConnectionStatus.AwaitingTrust || status is ConnectionStatus.PinMismatch) {
-            if (session.pinned != null) {
-                val presented = (status as? ConnectionStatus.AwaitingTrust)?.fingerprint
-                    ?: (status as ConnectionStatus.PinMismatch).presented
-                published = ConnectionStatus.Error(ErrorKind.CONNECT_FAILED, "certificate $presented is not the one given")
-            } else {
-                Log.i(TAG, "handshake stopped for trust decision: $status")
-                synchronized(lock) { if (session.gen == generation) trustPrompt = session }
-            }
+            Log.i(TAG, "handshake stopped for trust decision: $status")
+            synchronized(lock) { if (session.gen == generation) trustPrompt = session }
         }
-        publishStatus(session.gen, published)
+        publishStatus(session.gen, status)
         retire(session)
     }
 
@@ -1003,8 +995,8 @@ class MumbleConnection internal constructor(
         val session = synchronized(lock) { trustPrompt } ?: return
         val presented = session.presented ?: return
         scope.launch {
-            pinStore.put(session.endpoint.address, presented)
-            connect(session.endpoint, session.username, session.password, answering = session, pinned = null)
+            session.pins.put(session.endpoint.address, presented)
+            connect(session.endpoint, session.username, session.password, session.pins, answering = session)
         }
     }
 
