@@ -12,16 +12,16 @@ sealed interface SessionStatus {
     data class PinMismatch(val stored: String, val presented: String) : SessionStatus
     data object Handshaking : SessionStatus
     /** [gen] is the app state's own generation, one per connect(); [sessionId] is the server's,
-     *  and changes with every link. */
+     *  and changes with every connection. */
     data class Connected(val gen: Int, val sessionId: Int) : SessionStatus
-    /** The session's link died and a replacement is being opened under the same generation;
+    /** The session's connection died and a replacement is being opened under the same generation;
      *  [lastSessionId] is the server session the UI's own row still belongs to. */
     data class Reconnecting(val gen: Int, val lastSessionId: Int) : SessionStatus
     data class Error(val kind: ErrorKind, val detail: String?) : SessionStatus
 }
 
 /** Our own server session, or null when there is none: through a reconnect the UI keeps reading the
- *  row of the session the dead link had. */
+ *  row of the session the dead connection had. */
 val SessionStatus.mySession: Int?
     get() = when (this) {
         is SessionStatus.Connected -> sessionId
@@ -38,9 +38,10 @@ enum class ErrorKind {
     CONNECT_FAILED,
     /** Android blocked a LAN address: the app lacks local network access. */
     LOCAL_NETWORK_BLOCKED,
-    /** The first connect got no answer in time. A live link that goes quiet reconnects instead. */
+    /** The first connect got no answer in time. A live connection that goes quiet reconnects
+     *  instead. */
     TIMEOUT,
-    /** The link failed after the socket came up, or reconnecting gave up. */
+    /** The connection failed after the socket came up, or reconnecting gave up. */
     DISCONNECTED,
     SERVER_TOO_OLD,
     /** Also how the server removes us when another device connects on the same certificate. */

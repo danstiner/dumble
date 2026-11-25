@@ -1,9 +1,9 @@
 # Network
 
-How this app reaches a server and stays there. The first half covers a connection as a whole:
-sessions, links and reconnecting. Then [TCP](#tcp-the-control-connection) covers the TLS control
-connection and trust, and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes
-on the wire are in [mumble-protocol.md](mumble-protocol.md).
+How this app reaches a server and stays there. The first half covers sessions, connections and
+reconnecting. Then [TCP](#tcp-the-control-connection) covers the TLS control connection and trust,
+and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes on the wire are in
+[mumble-protocol.md](mumble-protocol.md).
 
 ## Goals
 
@@ -19,7 +19,7 @@ on the wire are in [mumble-protocol.md](mumble-protocol.md).
 UI ─► AppState (interface)
           │
     AppStateImpl                        one live Session, guarded by a generation
-          ├─► Link                      one TLS connect; replaced under the session on a reconnect
+          ├─► Connection                one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
@@ -32,27 +32,27 @@ UI ─► AppState (interface)
 
 | Decision | Why | Cost |
 |---|---|---|
-| A session is split from its link | Audio and the platform call belong to the session, so replacing a link does not interrupt them. | Two lifetimes to guard instead of one. |
+| A session is split from its connection | Audio and the platform call belong to the session, so replacing a connection does not interrupt them. | Two lifetimes to guard instead of one. |
 | Late writes are discarded by generation | A superseded connect can still complete after its session was replaced; teardown cannot always stop a handshake in flight. | Every flow write takes one lock. |
 | Reconnecting gives up after 2 minutes | Long enough for an elevator or a tunnel; short enough that a dead server does not hold the phone in call mode. | A longer outage needs a manual reconnect. |
-| A link with no ping reply for 15 to 20 s is replaced | A dead path may never produce a socket error. | A path stalled that long but alive is torn down too. |
-| The old link is closed before the new one is dialed | The old link would read its own ghost kick as the server removing us, and end the session. | A moment with no link on every handover. |
+| A connection with no ping reply for 15 to 20 s is replaced | A dead path may never produce a socket error. | A path stalled that long but alive is torn down too. |
+| The old connection is closed before the new one is dialed | The old connection would read its own ghost kick as the server removing us, and end the session. | A moment with no connection on every handover. |
 | Voice moves to UDP on the ping alone | A reply proves both directions, and replies keep arriving while voice is on TCP. | Voice can stay on a lossy UDP path: it takes two unanswered pings in a row to move it back to TCP. |
 | The pin is checked before the certificate authorities | Otherwise any authority-issued certificate for the host overrides the user's choice of one exact server. Desktop Mumble uses the other order. | A server that renews its certificate must be accepted again. |
 | One client certificate for every server, stored unencrypted and backed up | It follows a reinstall, is in the format desktop Mumble reads, and lets the server replace our old session on a reconnect. | The key is protected only by the app sandbox, and every server sees the same certificate. |
 | The local network permission is requested after a block, not before | Android decides by destination address, which the host text does not reveal. | The first connect to a LAN server fails once before the prompt. |
 
-## Sessions, links and generations
+## Sessions, connections and generations
 
 - A **session** is one `connect()`: the endpoint, the credentials, the platform call, the voice
   receiver and the capture state. One is live at a time.
-- A **link** is one TLS connect and what lives exactly as long as it: the TCP transport, the
-  state machine, the UDP socket keyed by that link's cipher, the `VoicePath`, and the collectors
-  that republish its flows.
+- A **connection** is one TLS connect and what lives exactly as long as it: the TCP transport, the
+  state machine, the UDP socket keyed by that connection's cipher, the `VoicePath`, and the
+  collectors that republish its flows.
 - The **generation** is a counter that `connect()` bumps. Every flow write is checked under the
-  lock that bumps it, so a superseded link finishing late writes nothing. A session's flows are
-  checked against the generation, the call's hold and routes against the live session, and a
-  link's flows against the link's identity as well.
+  lock that bumps it, so a superseded connection finishing late writes nothing. A session's flows
+  are checked against the generation, the call's hold and routes against the live session, and a
+  connection's flows against the connection's identity as well.
 
 `connect()` retires the old session, publishes the new one and starts its call under one lock, so
 starts reach the platform call in generation order. A start supersedes the call before it and
@@ -67,30 +67,31 @@ A session ends in one of two ways:
 
 ## Reconnect
 
-A link that dies after it synchronized is replaced under the same session. The driver publishes
-`Reconnecting`, closes the dead link and dials replacements until one synchronizes or the budget
-runs out. The first link of a session is never retried: its failure is the connect failing.
+A connection that dies after it synchronized is replaced under the same session. The driver
+publishes `Reconnecting`, closes the dead connection and dials replacements until one synchronizes
+or the budget runs out. The first connection of a session is never retried: its failure is the
+connect failing.
 
 | | Value |
 |---|---|
 | Backoff before each attempt | 0, 1, 2, 4, 8, 16, 30, 30… s, the last one clamped to what is left of the budget |
 | Budget (`GIVE_UP_AFTER`) | 2 min of reconnecting |
-| Healthy link (`HEALTHY_AFTER`) | synchronized for 30 s |
+| Healthy connection (`HEALTHY_AFTER`) | synchronized for 30 s |
 | Ping timeout (`DEGRADED_PING_AGE`) | no reply for 3 ping intervals, checked as each ping is sent |
 | Ghost retry (`GHOST_REAP`) | 45 s |
 
-- **Healthy links reset the outage.** Losing a link that stayed synchronized for 30 s starts the
-  backoff and the budget over. Losing one that did not continues the outage in progress, with the
-  time it spent synchronized added back to the budget. So a path that dies every few seconds
-  gives up after two minutes of outage.
+- **Healthy connections reset the outage.** Losing a connection that stayed synchronized for 30 s
+  starts the backoff and the budget over. Losing one that did not continues the outage in
+  progress, with the time it spent synchronized added back to the budget. So a path that dies
+  every few seconds gives up after two minutes of outage.
 - **The budget bounds when an attempt may start,** not how long it runs. A connect that hangs to
   its socket timeout can finish after the deadline.
 - **Clocks.** The budget is on the boot clock; the backoff waits on `delay`, which stops when the
   CPU sleeps. They disagree only across a suspend, which the call's audio streams prevent by
   holding a partial wakelock.
-- **Whether a link synchronized** is stamped by the state machine at the transition, so a link
-  that synchronized and died within one emission is still replaced.
-- **Flows.** A replacement's flows are wired once it synchronizes and a dead link's are frozen
+- **Whether a connection synchronized** is stamped by the state machine at the transition, so a
+  connection that synchronized and died within one emission is still replaced.
+- **Flows.** A replacement's flows are wired once it synchronizes and a dead connection's are frozen
   when it closes. Chat history carries across.
 - **Ghosts.** Murmur drops a silent client at 30 s, so after a ping timeout the replacement is
   usually dialed while our old session, the ghost, still holds the name.
@@ -109,26 +110,26 @@ runs out. The first link of a session is never retried: its failure is the conne
 
 ### Network changes
 
-- A link is dialed on the default network and remembers which one.
-- When a change of the default network finds a link's own network gone, the link is closed
-  without waiting for the socket to notice. A link on a non-default network gets no such
-  event when that network later disappears; the ping timeout catches it.
+- A connection is dialed on the default network and remembers which one.
+- When a change of the default network finds a connection's own network gone, the connection is
+  closed without waiting for the socket to notice. A connection on a non-default network gets no
+  such event when that network later disappears; the ping timeout catches it.
 - An attempt in flight is abandoned on any change of the default network. Closing a transport
   aborts its connect, so nothing runs out to a timeout.
-- A link whose network merely stopped being the default is left alone. With a LAN server on a
-  WiFi that lost its uplink, it is the only link that reaches the server.
+- A connection whose network merely stopped being the default is left alone. With a LAN server on a
+  WiFi that lost its uplink, it is the only connection that reaches the server.
 - The first attempt after a change is immediate, unless the last dial was under a second ago, so
   a flapping network cannot cause a connect storm.
 
 ## TCP: the control connection
 
-Each link has one TLS connection. It carries every control message, and our voice too until UDP
-has proven itself.
+Each connection has one TLS socket, the control connection. It carries every control message,
+and our voice too until UDP has proven itself.
 
 ### TLS transport
 
 `net/MumbleTcpTransport`. An instance connects once; a reconnect is a new instance, so no teardown
-state leaks between links. One reader coroutine delivers frames, and its `finally` is the only
+state leaks between connections. One reader coroutine delivers frames, and its `finally` is the only
 caller of `onClosed`: exactly once, never from inside `onFrame`, so listeners need no locking. The
 send queue is small on purpose (32 frames): a larger buffer would only hide a stalled socket for
 longer. Voice sent over TCP goes through the same queue, and a full queue refuses the packet.
@@ -213,7 +214,7 @@ picked.
 
 ### Outgoing voice: promote and demote
 
-`net/VoicePath` holds one fact per link: is outgoing voice on UDP? It starts as no.
+`net/VoicePath` holds one fact per connection: is outgoing voice on UDP? It starts as no.
 `AppStateImpl.sendVoice` reads it for every packet. The code has a name for each change:
 
 - **Promote:** outgoing voice switches from TCP to UDP, starting with the next packet.
@@ -226,13 +227,13 @@ or `TCP` beside the round trip.
 
 | Change | Happens when |
 |---|---|
-| Promote | Two UDP pings have been answered since the last demotion. A new link is credited with one, so if its pings are answered from the start, the first answer is enough. Needing two after a demotion keeps a path that works on and off from flipping back and forth. |
+| Promote | Two UDP pings have been answered since the last demotion. A new connection is credited with one, so if its pings are answered from the start, the first answer is enough. Needing two after a demotion keeps a path that works on and off from flipping back and forth. |
 | Demote | Two UDP pings in a row go unanswered, or the socket refuses a voice datagram. A refused datagram is sent over TCP instead, in the same call. A demotion can happen while voice is still on TCP; then it only resets the count. |
 
 For example:
 
 ```
-link connects           outgoing voice on TCP; first UDP ping sent
+connection opens        outgoing voice on TCP; first UDP ping sent
 ping answered           promote: outgoing voice on UDP
 two pings unanswered    demote:  outgoing voice on TCP
 ping answered           one of the two answers now needed
@@ -275,11 +276,11 @@ What follows from that:
   the next one, and reports two in a row unanswered once per outage.
 - **Incoming voice returns to UDP only when we next send audio over UDP,** which needs a
   promotion and then us talking. A listener who never talks keeps hearing over TCP for the rest
-  of the link.
+  of the connection.
 - **A changed port never recovers.** The server ignores datagrams from a port it did not learn,
-  so the pings stay unanswered and voice stays on TCP both ways until the link is replaced.
+  so the pings stay unanswered and voice stays on TCP both ways until the connection is replaced.
 - **A brief loss** costs two unanswered pings to demote and two answers to promote again.
-- **A replacement link starts over:** new address, new cipher, outgoing voice on TCP.
+- **A replacement connection starts over:** new address, new cipher, outgoing voice on TCP.
 
 Pinned against a real server by `LiveServerIntegrationTest`.
 
@@ -289,7 +290,7 @@ The socket itself: `net/MumbleUdpTransport`. A connected `DatagramChannel` aimed
 connection's remote address, `CryptState` encrypting and decrypting every datagram, and one thread
 blocked in read.
 
-- It is opened as soon as the control connection is up, and closed with the link.
+- It is opened as soon as the control socket is up, and closed with the connection.
 - If it cannot be opened, nothing is lost. The server never learns a UDP address and sends our
   incoming voice over TCP.
 - The state machine owns the cipher, because `CryptSetup` is a control message. It sends the first

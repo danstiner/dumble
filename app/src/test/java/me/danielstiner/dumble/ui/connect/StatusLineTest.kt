@@ -52,7 +52,8 @@ class StatusLineTest {
 
     /**
      * The round trip is dropped, not kept, on either leg: it was last true an outage ago, and a
-     * stale latency beside a dead link is exactly the readout that misleads during a device gate.
+     * stale latency beside a dead connection is exactly the readout that misleads during a device
+     * gate.
      */
     @Test fun degradedReplacesTheRoundTripRatherThanJoiningIt() =
         assertEquals("Connected · 12:34 · no response", statusLine(754, 4.1.milliseconds, onUdp, ConnectionStateMachine.DEGRADED_PING_AGE))

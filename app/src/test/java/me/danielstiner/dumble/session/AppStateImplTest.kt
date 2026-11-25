@@ -234,8 +234,8 @@ class AppStateImplTest {
     }
 
     /**
-     * Cancelled inside the handshake, the driver never reaches its own live check: the link it
-     * published under the lock before connecting is teardown's to close.
+     * Cancelled inside the handshake, the driver never reaches its own live check: the connection
+     * it published under the lock before connecting is teardown's to close.
      */
     @Test fun aDisconnectDuringTheHandshakeClosesTheLink() = deterministic {
         val gate = CompletableDeferred<Unit>()
@@ -605,7 +605,7 @@ class AppStateImplTest {
 
     /**
      * The point of the split: the platform call, the receiver and the capture session all belong
-     * to the session and ride through a reconnect; only the link is rebuilt.
+     * to the session and ride through a reconnect; only the connection is rebuilt.
      */
     @Test fun aDeadLinkIsReplacedUnderTheSameSession() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -639,7 +639,8 @@ class AppStateImplTest {
         assertTrue("the dead link must be closed", transports[0].closed)
     }
 
-    /** A link that never synchronized is the connect failing, and a connect is not retried. */
+    /** A connection that never synchronized is the connect failing, and a connect is not
+     *  retried. */
     @Test fun theFirstLinkIsNotRetried() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val app = own(AppStateImpl(
@@ -676,8 +677,8 @@ class AppStateImplTest {
     }
 
     /**
-     * Losing the network the link is on closes it instead of waiting for the socket to notice,
-     * and the call rides through.
+     * Losing the network the connection is on closes it instead of waiting for the socket to
+     * notice, and the call rides through.
      */
     @Test fun losingTheLinksNetworkReplacesItAtOnce() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -702,7 +703,7 @@ class AppStateImplTest {
     }
 
     /** A default that merely moves, the old network still up, is not a death: with a LAN server
-     *  on a WiFi that lost its uplink, that link is the only one that reaches the server. */
+     *  on a WiFi that lost its uplink, that connection is the only one that reaches the server. */
     @Test fun aNewDefaultLeavesAWorkingLinkAlone() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
@@ -721,7 +722,7 @@ class AppStateImplTest {
         assertEquals(1, transports.size)
     }
 
-    /** Changes a session never saw are not deaths: the first link is stamped at its dial. */
+    /** Changes a session never saw are not deaths: the first connection is stamped at its dial. */
     @Test fun changesBeforeConnectingAreNotADeath() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
@@ -739,7 +740,8 @@ class AppStateImplTest {
         assertEquals(1, transports.size)
     }
 
-    /** A switch while the first link is still handshaking, its network staying up, is nothing. */
+    /** A switch while the first connection is still handshaking, its network staying up, is
+     *  nothing. */
     @Test fun aSwitchDuringTheFirstHandshakeLeavesTheLinkAlone() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch()
@@ -760,9 +762,9 @@ class AppStateImplTest {
     }
 
     /**
-     * A loss while the first link is still handshaking is caught once it is wired, the collector
-     * filtering on the link's own stamp, and ends as the connect failing: the first link is
-     * never retried, and a network that is gone is a failed connect.
+     * A loss while the first connection is still handshaking is caught once it is wired, the
+     * collector filtering on the connection's own stamp, and ends as the connect failing: the first
+     * connection is never retried, and a network that is gone is a failed connect.
      */
     @Test fun aLossDuringTheFirstHandshakeIsTheConnectFailing() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -809,7 +811,7 @@ class AppStateImplTest {
         assertEquals(3, connected(app).sessionId)
     }
 
-    /** No default to stamp a link with means any change is taken as its loss. */
+    /** No default to stamp a connection with means any change is taken as its loss. */
     @Test fun aLinkDialedWithNoDefaultIsClosedOnAnyChange() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val network = FakeNetworkWatch(default = null)
@@ -1050,8 +1052,8 @@ class AppStateImplTest {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val app = own(AppStateImpl(
             InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
-            // Long enough that the ping ticker never ends a link during a 29 s connected stretch;
-            // the links here die by the resets below, not by ping age.
+            // Long enough that the ping ticker never ends a connection during a 29 s connected
+            // stretch; the connections here die by the resets below, not by ping age.
             pingIntervalMs = 3_600_000L,
         ) {
             // Two replacements come up and die again short of healthy; everything after is refused.
@@ -1108,7 +1110,7 @@ class AppStateImplTest {
         assertEquals("no attempt after the name proved to be someone else's", 8, transports.size)
     }
 
-    /** A link that stayed synchronized 30 s was a working path; its loss is a new outage, not
+    /** A connection that stayed synchronized 30 s was a working path; its loss is a new outage, not
      *  another failure of the one being retried, so the ladder starts over. */
     @Test fun losingAHealthyLinkStartsTheLadderOver() = deterministic {
         val waits = CopyOnWriteArrayList<Duration>()
@@ -1131,15 +1133,16 @@ class AppStateImplTest {
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
         assertEquals(3, connected(app).sessionId)
 
-        elapse(31.seconds)                                               // the third link becomes healthy
+        // the third connection becomes healthy
+        elapse(31.seconds)
         transports[2].listener!!.onClosed(IOException("reset"))
         transportAt(transports, 3)
 
         assertEquals(listOf(0.seconds, 1.seconds, 0.seconds), waits.toList())
     }
 
-    /** The log is the session's: what the old link received stays, by identity, and the new
-     *  link's messages append to it. */
+    /** The log is the session's: what the old connection received stays, by identity, and the new
+     *  connection's messages append to it. */
     @Test fun chatSurvivesAReconnect() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val app = own(AppStateImpl(
@@ -1256,10 +1259,10 @@ class AppStateImplTest {
     }
 
     /**
-     * A tap inside the outage reaches no live link at all: the dead link's machine refuses to send
-     * and keeps its old state. The session is what remembers the ask, so the replacement is told
-     * what the user last wanted — an unmute as much as a mute, or the swap would quietly put the
-     * microphone back where the user had just taken it from.
+     * A tap inside the outage reaches no live connection at all: the dead connection's machine
+     * refuses to send and keeps its old state. The session is what remembers the ask, so the
+     * replacement is told what the user last wanted — an unmute as much as a mute, or the swap
+     * would quietly put the microphone back where the user had just taken it from.
      */
     @Test fun anUnmuteDuringTheOutageIsCarriedNotReverted() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1304,8 +1307,8 @@ class AppStateImplTest {
 
     /**
      * The swap publishes the replacement's own tree before the driver publishes its Connected, so
-     * the UI never reads the new session id against the dead link's tree — where our own row is
-     * missing and a mute on it would read as gone.
+     * the UI never reads the new session id against the dead connection's tree — where our own row
+     * is missing and a mute on it would read as gone.
      */
     @Test fun theReplacementsTreeIsPublishedBeforeItsConnected() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1343,8 +1346,8 @@ class AppStateImplTest {
 
     /**
      * A mute tapped while the socket is already gone reaches no server, so the row that freezes at
-     * the link's death still reads unmuted. The gate is shut all the same, and it is the gate the
-     * replacement is told from: seeded back from that echo, the user would come back with the
+     * the connection's death still reads unmuted. The gate is shut all the same, and it is the gate
+     * the replacement is told from: seeded back from that echo, the user would come back with the
      * server, the row and the control saying unmuted while nothing left the device.
      */
     @Test fun aMuteTheDyingLinkNeverCarriedIsStillWhatTheReplacementIsTold() = deterministic {
@@ -1450,9 +1453,9 @@ class AppStateImplTest {
     }
 
     /**
-     * The server's certificate changed while we were rebuilding the link. The prompt is the one a
-     * fresh connect gives: the session is retired behind it — no microphone opens against it, and
-     * the call ends — but kept aside, so accepting the new pin reconnects.
+     * The server's certificate changed while we were rebuilding the connection. The prompt is the
+     * one a fresh connect gives: the session is retired behind it — no microphone opens against it,
+     * and the call ends — but kept aside, so accepting the new pin reconnects.
      */
     @Test fun aTrustPromptOnAReconnectRetiresTheSessionAndCanStillBeAccepted() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1494,8 +1497,8 @@ class AppStateImplTest {
         assertEquals("bb", pins.get(endpoint.address))
     }
 
-    /** A link whose pings go unanswered is replaced, not waited out: on a dead path the socket
-     *  may never say so. */
+    /** A connection whose pings go unanswered is replaced, not waited out: on a dead path the
+     *  socket may never say so. */
     @Test fun anUnresponsiveLinkIsReplaced() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         val call = FakeVoiceCall()
@@ -1506,7 +1509,7 @@ class AppStateImplTest {
         startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
         val first = connected(app)
 
-        elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the link
+        elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the connection
 
         assertEquals(SessionStatus.Reconnecting(first.gen, 1), app.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
@@ -1675,10 +1678,10 @@ class AppStateImplTest {
     }
 
     /**
-     * connect() publishes the session synchronously, but its link is built on the driver after the
-     * pin lookup, so a disconnect() landing while that lookup is still in flight must find the
-     * session already retired. No teardown can reach a link that was never published, so the
-     * driver's own live check after the lookup is what closes it.
+     * connect() publishes the session synchronously, but its connection is built on the driver
+     * after the pin lookup, so a disconnect() landing while that lookup is still in flight must
+     * find the session already retired. No teardown can reach a connection that was never
+     * published, so the driver's own live check after the lookup is what closes it.
      */
     @Test fun aDisconnectDuringThePinLookupClosesTheLinkItBuilt() = deterministic {
         lateinit var app: AppStateImpl
@@ -1725,9 +1728,9 @@ class AppStateImplTest {
     }
 
     /**
-     * The freeze: from its close, nothing the dead link still reduces may reach the UI, or the
-     * ghost kick's UserRemove would read as "you left". The close is what the guard reads, and it
-     * lands before any replacement is swapped in.
+     * The freeze: from its close, nothing the dead connection still reduces may reach the UI, or
+     * the ghost kick's UserRemove would read as "you left". The close is what the guard reads, and
+     * it lands before any replacement is swapped in.
      */
     @Test fun aFrameTheDeadLinkReducesAfterItsCloseNeverReachesTheTree() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
@@ -1742,8 +1745,8 @@ class AppStateImplTest {
         assertSettled("the tree") { app.channelTree.value.channels.containsKey(1) }
 
         transports[0].listener!!.onClosed(IOException("reset"))
-        // The replacement connects, then waits in replaceConnection for a ServerSync this test never
-        // sends: the dead link is closed and nothing has been swapped in.
+        // The replacement connects, then waits in replaceConnection for a ServerSync this test
+        // never sends: the dead connection is closed and nothing has been swapped in.
         startedTransportAt(transports, 1)
         assertTrue(app.status.value is SessionStatus.Reconnecting)
         assertTrue("the dead link must be closed", transports[0].closed)
@@ -1914,7 +1917,7 @@ class AppStateImplTest {
             .build().toByteArray(),
     )
 
-    /** A link's UDP socket: records what the app state asks of it, and keeps the listener the
+    /** A connection's UDP socket: records what the app state asks of it, and keeps the listener the
      *  app state built, so the test can play the server's side. */
     private class FakeUdp(val crypt: CryptState, val listener: MumbleUdpTransport.Listener) : UdpTransport {
         var openedOn: InetSocketAddress? = null
@@ -1941,15 +1944,15 @@ class AppStateImplTest {
 
     private val serverAddress = InetSocketAddress.createUnresolved("mumble.invalid", 64738)
 
-    // Each link's control transport and UDP socket, in link order, for the tests that build their
-    // app state from the two factories below.
+    // Each connection's control transport and UDP socket, in connection order, for the tests that
+    // build their app state from the two factories below.
     private val controlTransports = mutableListOf<FakeControlTransport>()
     private val udps = mutableListOf<FakeUdp>()
 
     private val fakeUdps = { crypt: CryptState, listener: MumbleUdpTransport.Listener ->
         FakeUdp(crypt, listener).also { udps += it }
     }
-    /** Aimed at [serverAddress], so every link opens its socket. */
+    /** Aimed at [serverAddress], so every connection opens its socket. */
     private val aimedAtServer = { _: String? ->
         FakeControlTransport { _, _ -> }.apply { remote = serverAddress }.also { controlTransports += it }
     }
