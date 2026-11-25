@@ -49,7 +49,8 @@ interface CheckSession {
 
     fun setGateOpen(open: Boolean)
 
-    /** Ends the session and leaves the connection idle. Does nothing once another session or a
-     *  trust prompt has taken its place: that one is the user's. */
+    /** Ends the session, or dismisses the trust prompt it stopped at, and leaves the connection
+     *  idle. Does nothing once another session or its trust prompt has taken its place: that one
+     *  is the user's. */
     fun end()
 }
