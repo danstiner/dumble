@@ -181,9 +181,8 @@ class AppStateImpl internal constructor(
         val last = current
         current = null; generation += 1
         last?.publisher?.close()
-        // end() queues the capture release here, under the lock: nothing the next session can
-        // ask of the capture consumer is queued before it, so the release runs first. Queuing
-        // never blocks, so it is safe under the lock.
+        // end() queues the capture release here, under the lock, so it is ahead of anything the
+        // next session queues and runs first. Queuing never blocks, so it is safe under the lock.
         val prior = last?.takeIf { it.end() }
         state.reset(status)
         return prior
@@ -290,7 +289,8 @@ class AppStateImpl internal constructor(
     private fun ask(change: (DeafenState) -> DeafenState) {
         val session = live ?: return
         if (!session.ask(change)) return
-        captures.apply(session.capture)   // opens or closes a capture engine; never under the lock
+        // Sets the gate and may ask for capture. Never under the lock.
+        captures.apply(session.capture)
     }
 
     private companion object {

@@ -120,9 +120,10 @@ publisher that the next `connect()` or `disconnect()` closes under one lock, so 
 nothing.
 
 **Levels, not events.** Four things ask for capture to open or close, concurrently. Each sends a
-command to one channel in `CaptureLifecycle`. Its single consumer sets a level (capture wanted,
-call held, session live) and reconciles the levels, and that is the only place the capture session
-opens or closes. Two input streams can therefore never be open at once.
+command to one channel in `CaptureLifecycle`. One coroutine reads the channel. It records what each
+command says as a level, a flag for what is true now (capture wanted, call held), then opens or
+closes the capture session to match the levels. Nothing else opens or closes it, so two input
+streams can never be open at once.
 
 **Publish last.** A `StateFlow` emission is a promise that everything the new state implies is
 already in place: the timer armed, the resource built. A reader that acts on the emission must

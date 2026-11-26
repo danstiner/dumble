@@ -9,7 +9,10 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceSender
 import kotlin.time.TimeSource
 
-/** One session's capture: what the lifecycle needs of it, and the levels it reconciles. */
+/**
+ * One session's capture: what the lifecycle needs from the session, and the flags it reads to
+ * decide whether this session's microphone should be open.
+ */
 internal class CaptureState(
     /** For logs. */
     val gen: Int,
@@ -23,16 +26,17 @@ internal class CaptureState(
 ) {
     /** The live capture session, or null. One field, one lifetime: splitting handle and pump
      *  would leave a window where a hold could open a second microphone stream. Written only
-     *  by the lifecycle consumer; read on the UI thread by [CaptureLifecycle.apply]. */
+     *  by the lifecycle consumer (the one coroutine that runs [CaptureLifecycle]'s commands);
+     *  read on the UI thread by [CaptureLifecycle.apply]. */
     @Volatile var capture: CaptureLifecycle.CaptureSession? = null
-    /** Talk is held. A level, not an edge, so a capture session rebuilt under a still-held
-     *  button comes up transmitting. UI thread writes it; [CaptureLifecycle.openCapture] reads
-     *  it after publishing [capture] — see [CaptureLifecycle.apply] for why that order matters,
-     *  and keep both `@Volatile`. */
+    /** Talk is held. The current state, not the press event, so a capture session rebuilt under
+     *  a still-held button comes up transmitting. UI thread writes it;
+     *  [CaptureLifecycle.openCapture] reads it after publishing [capture] — see
+     *  [CaptureLifecycle.apply] for why that order matters, and keep both `@Volatile`. */
     @Volatile var pressed: Boolean = false
-    /** The app wants capture on this session — the level [CaptureLifecycle.reconcile] opens from.
-     *  Raised by Acquire, cleared by Release and by a terminal pump exit. Lifecycle consumer
-     *  only. */
+    /** The app wants this session's microphone open; [CaptureLifecycle.reconcile] opens it from
+     *  this flag. Set by Acquire, cleared by Release and by a pump exit that was not requested.
+     *  Lifecycle consumer only. */
     var wanted: Boolean = false
     /** A release is in flight: stop() has returned and only the pump's own exit will free the
      *  engine. Keeps [CaptureLifecycle.reconcile] from starting a second release meanwhile;
@@ -43,9 +47,13 @@ internal class CaptureState(
 }
 
 /**
- * Opens and releases every session's microphone: one command channel, its single consumer, and
- * the levels on each [CaptureState] it reconciles. One per app state, so a session's release is
- * ordered ahead of its successor's open. See docs/capture.md, "Lifecycle".
+ * Opens and closes the microphone for every session. Each request is a command on one channel,
+ * and one coroutine, the "lifecycle consumer", runs them in order. A request sets a flag on the
+ * session's [CaptureState] (a "level": what is true now, not what happened); [reconcile] then
+ * opens or closes the microphone to match the flags.
+ *
+ * One per app state, so an ended session's release runs before the next session's open. See
+ * docs/capture.md, "Lifecycle".
  */
 internal class CaptureLifecycle(
     private val newCapture: () -> VoiceSender.CaptureHandle?,
@@ -61,7 +69,8 @@ internal class CaptureLifecycle(
 ) {
     private sealed interface CaptureCommand {
         /** Capture is wanted on this session — the microphone became ready, or Talk was
-         *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
+         *  pressed. Pairs with [Release]. Sets a flag rather than opening anything, so repeats
+         *  are free. */
         data class Acquire(val client: CaptureState) : CaptureCommand
         /** The platform has taken, or returned, the input device for [client]'s call. */
         data class Held(val client: CaptureState, val held: Boolean) : CaptureCommand
@@ -90,8 +99,8 @@ internal class CaptureLifecycle(
         fun ownedBy(s: VoiceSender) = sender === s
 
         /**
-         * Push the levels to the engine: the mode, then the gate derived from it. Reads them under
-         * the monitor so concurrent callers agree on the newest values.
+         * Give the engine the transmit mode, then the gate ([wantsGate]). Both are read under the
+         * monitor so concurrent callers agree on the newest values.
          *
          * A direct call from the UI thread, not a command: the channel's consumer blocks in
          * `newCapture()` and `stop()`, busiest exactly when the user is pressing Talk, and a gate
@@ -125,16 +134,16 @@ internal class CaptureLifecycle(
     private val captureCommands = Channel<CaptureCommand>(Channel.UNLIMITED)
 
     init {
-        // The single owner of capture. On blockingScope, never a session's or a connection's scope
-        // — teardown cancels those synchronously and would discard queued commands, leaking the
-        // engine and the microphone — and because every handler blocks: newCapture() on the HAL,
-        // stop() on OboeCapture::close(). runCatching because a SupervisorJob does not restart a
-        // coroutine that threw, and a dead consumer fails silently and permanently.
+        // The consumer: the one coroutine that runs every capture command. On blockingScope, never
+        // a session's or a connection's scope: teardown cancels those synchronously and would
+        // discard queued commands, leaking the engine and the microphone. Every handler also
+        // blocks: newCapture() on the HAL, stop() on OboeCapture::close(). runCatching because a
+        // SupervisorJob does not restart a coroutine that threw, and a dead consumer fails
+        // silently and permanently.
         //
-        // After `captureCommands` is declared: Kotlin runs property initializers and init blocks in
-        // textual order, so a consumer launched before that declaration can start against a
-        // still-null channel, which a real, if rare, "Channel.iterator() on null" crash traced
-        // back to.
+        // Below the `captureCommands` declaration: Kotlin runs property initializers and init
+        // blocks in textual order, so a consumer launched above it can start against a still-null
+        // channel (a rare "Channel.iterator() on null" crash).
         blockingScope.launch {
             for (cmd in captureCommands) {
                 runCatching { dispatch(cmd) }
@@ -170,19 +179,15 @@ internal class CaptureLifecycle(
         }
     }
 
-    /**
-     * A capture session was asked for — the microphone became ready, or Talk was pressed. Raises
-     * the level and reconciles. Lifecycle consumer only.
-     */
+    /** Lifecycle consumer only. */
     private fun onAcquire(client: CaptureState) {
         client.wanted = true
         reconcile(client)
     }
 
     /**
-     * The platform took the input device out from under [client]'s call — another call, the
-     * phone's or another app's, is the case that matters — or gave it back. Records the hold as a
-     * level and reconciles, which releases the capture session on a hold and rebuilds it on a
+     * The platform took the input device from [client]'s call (for another call, the phone's or
+     * another app's) or gave it back. Closes the capture session on a hold and reopens it on a
      * resume. Lifecycle consumer only.
      */
     private fun onHeld(client: CaptureState, held: Boolean) {
@@ -203,21 +208,21 @@ internal class CaptureLifecycle(
     }
 
     /**
-     * [client]'s session has ended: lower its want and close any capture session it still holds.
-     * Queued under [Publisher.lock] in the critical section that ended it, which is what orders
-     * this ahead of anything a replacing session can produce on the same channel. Lifecycle
-     * consumer only.
+     * [client]'s session has ended: close its capture session, if it has one. The command was
+     * queued under [Publisher.lock] in the critical section that ended the session, which puts it
+     * ahead of anything the next session can queue. Lifecycle consumer only.
      */
     private fun onRelease(client: CaptureState) {
         client.wanted = false
         reconcile(client)
     }
 
-    /** Lifecycle consumer only. The only place a capture session is created or released. */
+    /** Open or close [client]'s capture session to match its flags. The only place one is
+     *  created or released. Lifecycle consumer only. */
     private fun reconcile(client: CaptureState) {
         if (client.wanted && !client.held && client.isLive()) {
-            // A release in flight re-reconciles from onPumpExited; opening a second engine here is
-            // exactly the two-microphone defect.
+            // Already open, or still being released. onPumpExited reconciles again once a release
+            // finishes; opening here would put two microphones open at once.
             if (client.capture != null) return
             openCapture(client)
         } else {
@@ -230,8 +235,8 @@ internal class CaptureLifecycle(
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
      *  consumer runs on blockingScope. */
     private fun openCapture(client: CaptureState) {
-        // Leaves `wanted` set on failure, unlike onPumpExited's terminal branch: opens here are
-        // command-rate-bounded rather than a loop, and a Talk press re-asks anyway.
+        // Leaves `wanted` set on failure, unlike onPumpExited: an open happens once per command,
+        // so a failing one cannot loop, and a Talk press asks again anyway.
         val handle = newCapture() ?: return
         val sender = VoiceSender(
             handle, { client.sendVoice(it) },
@@ -258,17 +263,16 @@ internal class CaptureLifecycle(
         // after its bound). That ordering is the entire one-microphone invariant — making it
         // asynchronous would silently reopen the hole.
         capture.stop()
-        // The signal belongs to the session being released. A pump that exited already lowered it;
-        // a wedged one has not, and left standing it would carry into whatever opens next.
+        // The speaking indicator belongs to the session being released. A pump that exited already
+        // lowered it; a wedged one has not, and left up it would carry into whatever opens next.
         client.publisher.state.selfSpeaking.value = false
-        // Marked released only once stop() has returned. Set before it, a throw out of that JNI
-        // call would latch the client for good: `capture` stays non-null and `releasing` stays
-        // true, after which reconcile will neither reopen nor retry, and the engine is never
-        // destroyed. Left false, the next reconcile simply tries the release again. Re-entry is
-        // not a concern — this whole handler runs on the single lifecycle consumer.
+        // Set only once stop() has returned. Set before it, a throw out of that JNI call would
+        // leave `capture` non-null and `releasing` true for good: reconcile would neither reopen
+        // nor retry, and the engine would never be destroyed. Left false, the next reconcile tries
+        // the release again.
         client.releasing = true
-        // Armed after stop() returns, not before: stop() is itself unbounded, so timing across it
-        // would report a slow HAL as a wedged pump.
+        // Armed after stop() returns, not before: stop() can itself wait out its bound, so timing
+        // across it would report a slow HAL as a wedged pump.
         scope.launch { delay(stuckPumpMillis); send(CaptureCommand.WedgeCheck(client, capture)) }
     }
 
@@ -306,7 +310,7 @@ internal class CaptureLifecycle(
      * use-after-free this design exists to prevent. Lifecycle consumer only.
      */
     private fun onWedgeCheck(client: CaptureState, capture: CaptureSession) {
-        if (client.capture !== capture) return   // released in time, or superseded
+        if (client.capture !== capture) return   // released in time, or already replaced
         Log.e(
             TAG,
             "capture pump has not exited after ${stuckPumpMillis}ms " +
@@ -326,12 +330,13 @@ internal class CaptureLifecycle(
      * Wanting it open also asks for a session, which is what brings one back after a terminal
      * engine failure.
      *
-     * Levels first, then the live session — the mirror of [openCapture], which publishes the
-     * session and then reads the levels. Each side writes one volatile and reads the other, so a
-     * press cannot be lost to a racing open: for both to miss, this read of `capture` would have
-     * to precede openCapture's write of it *and* openCapture's read of the level precede the
-     * caller's write of it, which program order forbids. Every level must stay `@Volatile` for
-     * that. When both act, the gate is set twice, which costs nothing.
+     * The caller writes its level (`pressed`, mute or the mode) first, then this reads the live
+     * session — the mirror of [openCapture], which publishes the session and then reads the
+     * levels. Each side writes one volatile and reads the other, so a press cannot be lost to a
+     * racing open: for both to miss, this read of `capture` would have to precede openCapture's
+     * write of it *and* openCapture's read of the level precede the caller's write of it, which
+     * program order forbids. Every level must stay `@Volatile` for that. When both act, the gate
+     * is set twice, which costs nothing.
      */
     fun apply(client: CaptureState) {
         if (wantsGate(client)) send(CaptureCommand.Acquire(client))

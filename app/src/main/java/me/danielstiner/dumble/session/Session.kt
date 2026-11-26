@@ -51,8 +51,8 @@ import kotlin.time.TimeSource
  * critical section, then [close] once the lock is dropped. Or it fails for good and ends itself
  * ([endSelf]), keeping its publisher open, so its final status stays published.
  *
- * Capture levels hang off the session ([capture]), not the shared [CaptureLifecycle], because a
- * release must find the session that opened the microphone rather than whichever session
+ * The capture flags live on the session ([capture]), not on the shared [CaptureLifecycle],
+ * because a release must find the session that opened the microphone, not whichever session
  * replaced it.
  */
 internal class Session(
@@ -107,7 +107,7 @@ internal class Session(
      *  Written by the driver, read on caller threads. */
     @Volatile var presented: String? = null
         private set
-    /** This session's capture levels, which [CaptureLifecycle] reconciles. */
+    /** The flags [CaptureLifecycle] reads to open or close this session's microphone. */
     val capture = CaptureState(gen, publisher, { isLive }, { selfState.muted }, ::sendVoice)
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
