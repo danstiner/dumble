@@ -43,6 +43,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
+/** The seams every session is built from; the app state makes one. */
 internal class SessionParts(
     val pinStore: PinStore,
     val newTransport: (expectedPin: String?) -> MumbleControlTransport,
@@ -65,14 +66,18 @@ internal class SessionParts(
 )
 
 /**
- * What the user asked for, and what outlives its connection: one per connect(), published as
- * [AppStateImpl.current] under [lock] and unpublished by the next connect(), by disconnect(), or by
- * [endSelf] when its connection dies. Outlives being current too: capture state hangs off the
- * session, not the app state, because a release must find the session that opened the
- * microphone rather than whichever session replaced it.
+ * One connect by the user, across its reconnects: the endpoint and credentials, the receiver, the
+ * connections its driver opens, and the capture state.
  *
- * The first seven fields are immutable identity. The mutable ones are either `@Volatile`
- * (crossing threads) or plain (confined to the lifecycle consumer's single coroutine).
+ * It ends in one of two ways. Its owner supersedes or disconnects it: [end] inside the owner's
+ * critical section, then [close] once the lock is dropped. Or it fails for good and ends itself
+ * ([endSelf]), keeping its publisher open, so its final status stays published.
+ *
+ * Capture state hangs off the session, not the app state, because a release must find the
+ * session that opened the microphone rather than whichever session replaced it.
+ *
+ * The mutable fields are either `@Volatile` (crossing threads) or plain (confined to the
+ * lifecycle consumer's single coroutine).
  */
 internal class Session(
     val gen: Int,
@@ -92,7 +97,8 @@ internal class Session(
         // one per session that fails or is superseded before that.
         VoiceReceiver(parts.newPlayout, context = parts.scope.coroutineContext)
     /** The driver and the receiver's collectors. Cancelled by [close], last. */
-    private val scope: CoroutineScope = CoroutineScope(parts.scope.coroutineContext + SupervisorJob())
+    private val scope: CoroutineScope =
+        CoroutineScope(parts.scope.coroutineContext + SupervisorJob())
     /** The connection carrying this session, or null until the driver has built one. Written
      *  only under [lock], by the driver; read on the pump thread by [sendVoice]. */
     @Volatile var connection: Connection? = null
@@ -112,8 +118,9 @@ internal class Session(
      *  by the lifecycle consumer; read on the UI thread by [AppStateImpl.apply]. */
     @Volatile var capture: AppStateImpl.CaptureSession? = null
     /** Talk is held. A level, not an edge, so a capture session rebuilt under a still-held
-     *  button comes up transmitting. UI thread writes it; [AppStateImpl.openCapture] reads it after
-     *  publishing [capture] — see [AppStateImpl.apply] for why that order matters, and keep both `@Volatile`. */
+     *  button comes up transmitting. UI thread writes it; [AppStateImpl.openCapture] reads it
+     *  after publishing [capture] — see [AppStateImpl.apply] for why that order matters, and keep
+     *  both `@Volatile`. */
     @Volatile var pressed: Boolean = false
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
@@ -129,8 +136,7 @@ internal class Session(
     /** The platform is holding this session's call. Lifecycle consumer only. */
     var held: Boolean = false
 
-    /** No longer the session the user is in: superseded, disconnected, or failed. Written under
-     *  the lock. */
+    /** Superseded, disconnected, or failed. Written under the lock. */
     @Volatile var ended: Boolean = false
         private set
     /** The handshake stopped for a trust decision. Written under the lock, before the status that
@@ -142,14 +148,24 @@ internal class Session(
      *  takes. */
     val isLive: Boolean get() = synchronized(lock) { !ended }
 
-    /** Starts the receiver's collectors and the driver. Once, after the owner has dropped the lock. */
+    /** Starts the receiver's collectors and the driver. Once, after the owner has dropped the
+     *  lock. */
     fun start() {
-        scope.launch { receiver.speakingSessions.collect { ids -> publisher.publish { speakingSessions.value = ids } } }
-        scope.launch { receiver.playoutStats.collect { stats -> publisher.publish { playoutStats.value = stats } } }
+        scope.launch {
+            receiver.speakingSessions.collect { ids ->
+                publisher.publish { speakingSessions.value = ids }
+            }
+        }
+        scope.launch {
+            receiver.playoutStats.collect { stats ->
+                publisher.publish { playoutStats.value = stats }
+            }
+        }
         scope.launch { drive() }
     }
 
-    /** Unpublishes this session. Caller holds the lock. False if it had already ended. */
+    /** Ends this session and queues its capture release. Caller holds the lock. False if it
+     *  had already ended. */
     fun end(): Boolean {
         if (ended) return false
         ended = true
@@ -163,15 +179,20 @@ internal class Session(
         // join of the poll suspends. Its own coroutine, so a stalled socket close cannot delay
         // it. The receiver drops any datagram that reaches it after stop().
         parts.blockingScope.launch { receiver.stop() }
-        // Either the driver published the connection under the lock before `current` was cleared,
-        // and this closes it, or it will see the session is no longer current and close it itself.
+        // Either the driver published the connection under the lock before the session ended,
+        // and this closes it, or it will see the session has ended and close it itself.
         connection?.close()
         next?.close()
-        // Last: retire() reaches here from the driver, which runs on this scope.
+        // Last: endSelf() reaches here from the driver, which runs on this scope.
         scope.cancel()
     }
 
-    /** Advances what the session asks of the server; false if the session has ended. */
+    /**
+     * Advances what the session asks, publishes it, and sends it to whatever connection is there,
+     * all under [lock] so a swap's wire() cannot slip between a tap's write and its send and leave
+     * the server on the older of the two. During an outage the send reaches no connection; the
+     * swap makes it. False if the session has ended.
+     */
     fun ask(next: (DeafenState) -> DeafenState): Boolean {
         synchronized(lock) {
             if (ended) return false
@@ -199,7 +220,9 @@ internal class Session(
      * reading as "you left".
      */
     private fun <T> publishFromConnection(connection: Connection, flow: MutableStateFlow<T>, value: T) =
-        publisher.publish { if (this@Session.connection === connection && !connection.isClosed) flow.value = value }
+        publisher.publish {
+            if (this@Session.connection === connection && !connection.isClosed) flow.value = value
+        }
 
     /** One TLS connect, built but not yet connected. */
     private fun buildConnection(pin: String?): Connection {
@@ -210,7 +233,8 @@ internal class Session(
                 voiceBitrate = ACCOUNTED_BITRATE,
             ),
             parts.newTransport, parts.newUdp, receiver::onVoicePacket,
-            parts.networkWatch.current, parts.networkChanges.value, connectionScope, parts.blockingScope,
+            parts.networkWatch.current, parts.networkChanges.value, connectionScope,
+            parts.blockingScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
             bootClock = parts.bootClock,
@@ -222,8 +246,8 @@ internal class Session(
     /**
      * The session's driver: opens its first connection and holds it until the state machine fails,
      * then replaces the connection under the same session until one synchronizes or the deadline
-     * passes. One coroutine per session, on the session's own scope, so a teardown cancels it
-     * wherever it waits; the connections it built are closed by that teardown, not by the
+     * passes. One coroutine per session, on the session's own scope, so [close] cancels it
+     * wherever it waits; the connections it built are closed by [close] itself, not by the
      * cancellation.
      */
     private suspend fun drive() {
@@ -262,7 +286,9 @@ internal class Session(
                 parts.networkChanges.filter { it != firstDialedUnder }.collect { changes ->
                     val doomed = synchronized(lock) {
                         next?.takeIf { it.dialedUnder != changes }
-                            ?: this@Session.connection?.takeIf { it.network?.let { n -> !parts.networkWatch.isUp(n) } ?: true }
+                            ?: this@Session.connection?.takeIf {
+                                it.network?.let { n -> !parts.networkWatch.isUp(n) } ?: true
+                            }
                     } ?: return@collect
                     val what = if (doomed === next) "the attempt" else "the link, its network gone"
                     Log.i(TAG, "network changed gen=$gen; closing $what")
@@ -273,11 +299,13 @@ internal class Session(
             var deadline: ComparableTimeMark? = null   // the open incident's end, if one is open
             while (true) {
                 // Status is the driver's own collector, not one of the connection's: the terminal
-                // Error must be on `status` before retire() cancels this coroutine's scope, and a
+                // Error must be on `status` before endSelf() cancels this coroutine's scope, and a
                 // Failed is never published before it is classified.
                 val failed = connection.state
                     .onEach { st ->
-                        if (st !is ConnectionState.Failed) mapState(gen, st)?.let { mapped -> publisher.publish { status.value = mapped } }
+                        if (st !is ConnectionState.Failed) mapState(gen, st)?.let { mapped ->
+                            publisher.publish { status.value = mapped }
+                        }
                     }
                     .first { it is ConnectionState.Failed } as ConnectionState.Failed
                 // The connection's own stamp, not what a collector on a conflating flow saw: it
@@ -310,9 +338,12 @@ internal class Session(
                     attempt = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
-                publisher.publish { status.value = SessionStatus.Reconnecting(gen, synced.sessionId) }
+                publisher.publish {
+                    status.value = SessionStatus.Reconnecting(gen, synced.sessionId)
+                }
                 connection.close()
-                connection = replaceConnection(pin, deadline, diedAt = now, firstAttempt = attempt, since = connection.dialedUnder)
+                connection = replaceConnection(pin, deadline, diedAt = now, firstAttempt = attempt,
+                    since = connection.dialedUnder)
                     ?: return
             }
         } catch (t: Throwable) {
@@ -324,7 +355,7 @@ internal class Session(
 
     /**
      * Connects [connection] and starts its protocol. Null on success; otherwise the status the
-     * failure maps to, with the connection still open: the caller either drops it or retires the
+     * failure maps to, with the connection still open: the caller either drops it or ends the
      * session it belongs to, which closes it.
      */
     private suspend fun open(connection: Connection): SessionStatus? {
@@ -340,8 +371,8 @@ internal class Session(
     }
 
     /**
-     * Republishes [connection]'s flows as the session's. The connection must already be
-     * `session.connection`.
+     * Republishes [connection]'s flows as the session's. It must already be the session's
+     * connection.
      */
     private fun wire(connection: Connection) {
         // Seeded here, before the driver publishes this connection's Connected: a collector on its
@@ -380,7 +411,7 @@ internal class Session(
     /**
      * Opens replacement connections until one synchronizes, backing off further on each failure, or
      * the deadline passes. Returns the synchronized connection, swapped in and wired; null once the
-     * session has been ended or parked here.
+     * session has ended.
      */
     private suspend fun replaceConnection(
         pin: String?,
@@ -409,10 +440,13 @@ internal class Session(
             // and audioserver holds partial wakelocks (AudioMix, AudioIn) while they are —
             // measured held across a whole outage.
             // Attempt 0 is the first since the network last changed, unless the last dial was
-            // under a second ago: a flapping default must not turn the backoff into a connect storm.
+            // under a second ago: a flapping default must not turn the backoff into a connect
+            // storm.
             if (parts.networkChanges.value != seen) {
                 seen = parts.networkChanges.value
-                if (lastDial == null || parts.bootClock.markNow() - lastDial >= BACKOFF[1]) attempt = 0
+                if (lastDial == null || parts.bootClock.markNow() - lastDial >= BACKOFF[1]) {
+                    attempt = 0
+                }
             }
             if (backOff(minOf(BACKOFF[minOf(attempt, BACKOFF.lastIndex)], remaining))) continue
             val next = buildConnection(pin)
@@ -475,14 +509,16 @@ internal class Session(
      *  to go round again. */
     private suspend fun backOff(wait: Duration): Boolean {
         val seen = parts.networkChanges.value
-        merge(flow { parts.sleep(wait); emit(Unit) }, parts.networkChanges.filter { it != seen }.map { }).first()
+        merge(flow { parts.sleep(wait); emit(Unit) },
+            parts.networkChanges.filter { it != seen }.map { }).first()
         return parts.networkChanges.value != seen
     }
 
     /**
      * Ends the session on [status]: published before [endSelf], which cancels the scope this runs
-     * on, and retiring keeps a Talk press from opening a microphone against a finished call. A
-     * trust prompt is kept aside for [AppStateImpl.trustAndConnect] first, since it can follow at once.
+     * on. Ending keeps a Talk press from opening a microphone against a finished call. A trust
+     * prompt raises [trustPending] before its status, since [AppStateImpl.trustAndConnect] can
+     * follow that at once.
      */
     private fun fail(status: SessionStatus) {
         if (status is SessionStatus.AwaitingTrust || status is SessionStatus.PinMismatch) {
@@ -525,15 +561,14 @@ internal class Session(
     }
 
     /**
-     * Release a still-current session whose connection died on its own, or never came up.
-     * Deliberately does not close its publisher or reset published state beyond the call's own — the
-     * terminal Error status is what the user is looking at. Setting [ended] is what makes this
-     * at-most-once: a later disconnect() sees no prior and a later connect() has nothing to tear
-     * down.
+     * Ends a session whose connection died on its own, or never came up. Deliberately does not
+     * close its publisher or reset published state beyond the call's own — the terminal status is
+     * what the user is looking at. [end] makes this at-most-once: a later connect() or
+     * disconnect() finds the session ended and has nothing to release or close.
      */
     private fun endSelf() {
         val live = synchronized(lock) {
-            // Under the lock, for the same ordering retireAndClearLocked keeps.
+            // Under the lock, for the same ordering AppStateImpl.retireAndClearLocked keeps.
             if (end()) {
                 parts.call.end()
                 state.callHeld.value = false

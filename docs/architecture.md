@@ -45,9 +45,9 @@ connection, but switches to UDP once a round-trip ping proves UDP connectivity. 
 mono 16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packets.
 
 **App state** ([network.md](network.md)). `AppStateImpl` is a Hilt singleton bound to the
-`AppState` interface. It runs the TLS connect, the connection state machine and the reconnects, and
-publishes one `status` flow. One session is live at a time, and that session owns both audio
-pipelines and the platform call.
+`AppState` interface. It publishes one `status` flow and opens a `Session` per `connect()`, which
+runs the TLS connect, the connection state machine and the reconnects. One session is live at a
+time, and that session owns both audio pipelines and the platform call.
 
 **Audio** ([capture.md](capture.md), [playout.md](playout.md)). Capture and playout are separate
 pipelines built the same way: a C++ engine with no Android dependency (`cpp/core`), an Oboe
@@ -77,7 +77,7 @@ still listen in the background.
 
 | Thread | Runs | Constraint |
 |---|---|---|
-| Coroutines on `Dispatchers.Default` | `AppStateImpl`, `ConnectionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
+| Coroutines on `Dispatchers.Default` | `AppStateImpl`, `Session`, `ConnectionStateMachine` | blocking calls (stream opens, socket closes) go to `Dispatchers.IO` |
 | TLS reader coroutine | inbound frames; tunneled voice goes straight to `VoiceReceiver.onVoicePacket` | sole caller of the transport's `onClosed` |
 | UDP reader thread | decrypts datagrams, hands voice to `VoiceReceiver.onVoicePacket` | |
 | Capture audio callback | `CaptureEngine.onPcm` | realtime: no locks, no allocation |
@@ -93,7 +93,7 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 | Path | Contents |
 |---|---|
 | `app/src/main/java/.../ui/` | screens, `ConnectViewModel`, theme |
-| `.../session/` | `AppState`, `AppStateImpl`, `SessionStatus` |
+| `.../session/` | `AppState`, `AppStateImpl`, `Session`, `SessionStatus` |
 | `.../mumble/connection/` | `Connection` |
 | `.../mumble/net/` | TLS and UDP transports, OCB2 (`Ocb2`, `CryptState`, `ReplayWindow`), trust and pins, client certificate, `VoicePath` |
 | `.../mumble/protocol/` | `ConnectionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |

@@ -2,7 +2,7 @@ package me.danielstiner.dumble.mumble.net
 
 /**
  * The app's default network and its changes. Networks are opaque identities, `Any` rather than
- * `android.net.Network`: the app state only ever asks which one a connection was dialed on and
+ * `android.net.Network`: a session only ever asks which one a connection was dialed on and
  * whether that one is still up, and nothing outside the platform can construct a `Network`, so
  * typing it would put every driver test that loses or switches a network on Robolectric.
  */

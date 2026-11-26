@@ -18,14 +18,16 @@ and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes on
 ```
 UI ─► AppState (interface)
           │
-    AppStateImpl                        one live Session; a replaced one can no longer publish
+    AppStateImpl                        the last Session opened; a replaced one cannot publish
+          │
+       Session                          one connect by the user, across its reconnects
           ├─► Connection                one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
           │     │      cipher: CryptState; path: VoicePath
           │     └─► ConnectionStateMachine  handshake, pings, channel tree, chat, cipher keys
-          └─► audio and the platform call     capture.md, playout.md
+          └─► audio and the platform call     capture.md, playout.md; AppStateImpl runs capture
 ```
 
 ## Decisions
@@ -44,8 +46,9 @@ UI ─► AppState (interface)
 
 ## Sessions and connections
 
-- A **session** is one `connect()`: the endpoint, the credentials, the platform call, the voice
-  receiver and the capture state. One is live at a time.
+- A **session** (`Session`) is one `connect()`, across its reconnects: the endpoint, the
+  credentials, the platform call, the voice receiver and the capture state. One is live at a
+  time. `AppStateImpl` holds the last one opened, which may have ended.
 - A **connection** is one TLS connect and what lives exactly as long as it: the TCP transport, the
   state machine, the UDP socket keyed by that connection's cipher, the `VoicePath`, and the
   collectors that republish its flows.
@@ -55,18 +58,19 @@ UI ─► AppState (interface)
   routes against the live session, and a connection's flows against the connection's identity as
   well.
 
-`connect()` retires the old session, publishes the new one and starts its call under one lock, so
-starts reach the platform call in the order of the connects. A start supersedes the call before it and
-keeps its audio mode and route.
+`connect()` ends the old session, publishes the new one and starts its call under one lock, so
+starts reach the platform call in the order of the connects. A start supersedes the call before it
+and keeps its audio mode and route.
 
 A session ends in one of two ways:
 
-- **Superseded or disconnected.** Its publisher is closed and every published flow is cleared, in
-  one step.
-- **Failed.** The session is retired, its publisher stays open, and its flows are left alone, because
-  the final status is what the user is looking at. The call's hold and routes are cleared
-  regardless. A trust prompt retires its session this way too, and keeps it for
-  `trustAndConnect()`.
+- **Superseded or disconnected.** Its owner ends it (`end()`), closes its publisher and clears
+  every published flow in one critical section, then closes it (`close()`) outside the lock.
+- **Failed.** The session ends itself. Its publisher stays open, and its flows are left alone,
+  because the final status is what the user is looking at. The call's hold and routes are
+  cleared regardless. `AppStateImpl` still holds it until the next `connect()` or
+  `disconnect()`; user actions skip an ended session. A trust prompt ends its session this way
+  too, and `trustAndConnect()` reconnects from it.
 
 ## Reconnect
 
@@ -107,8 +111,8 @@ connect failing.
 - **A kick or a ban.** Murmur sends the removal before closing the socket, and the session ends with
   its reason. Another device connecting on our certificate kicks us with the same message, so two
   devices never kick each other back and forth.
-- **A trust prompt on a replacement.** The session is retired and kept for `trustAndConnect()`, as
-  on a first connect.
+- **A trust prompt on a replacement.** The session ends and `trustAndConnect()` reconnects from
+  it, as on a first connect.
 - **A local network block on a replacement.** It waits on the user.
 
 ### Network changes

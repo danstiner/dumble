@@ -53,16 +53,14 @@ import javax.inject.Singleton
 import kotlin.time.TimeSource
 
 /**
- * Owns connecting to a server and what the user sees of it: each session's [Connection], its
- * reconnects and its trust failures, unified into one [status] flow.
+ * Owns what outlives a connect: the [SessionState] behind the [AppState] flows, the [lock] every
+ * write to it takes, the transmit-mode setting, and the [Session] opened last, which opens its
+ * own [Connection]s.
  *
- * One live [Session] at a time; each session's driver opens its [Connection]. A blocking
- * handshake cannot be preempted by teardown — the socket is not owned until it publishes — so a
- * superseded connection can complete late and would otherwise clobber a newer session's status.
- * A session's writes are therefore checked under [lock] — its own through its [Publisher], which
- * the next connect or disconnect closes, or for the call's hold and routes on the live session
- * — and a connection's own flows on the connection's identity as well, so a superseded writer's
- * late writes become no-ops.
+ * A blocking handshake cannot be preempted, so a superseded session can complete late. [connect]
+ * and [disconnect] therefore end the last session, close its publisher and reset the state in one
+ * critical section, and its late writes do nothing. A session that failed on its own stays in
+ * [current] with its final status published; user actions go through [live], which skips it.
  *
  * The audio-capture half of this class — the command channel, its single consumer, and the
  * level/reconcile model — is documented in `docs/capture.md`.
@@ -259,7 +257,7 @@ class AppStateImpl internal constructor(
         if (captureCommands.trySend(cmd).isFailure) Log.e(TAG, "capture command dropped: $cmd")
     }
 
-    // The call's own flow: a retired session's call is ended, so its late updates are dropped too.
+    // The call's own flow: an ended session's call is ended, so its late updates are dropped too.
     private fun publishRoutes(session: Session, r: AudioRoutes) =
         synchronized(lock) { if (!session.ended) state.audioRoutes.value = r }
 
@@ -295,8 +293,8 @@ class AppStateImpl internal constructor(
         val live = synchronized(lock) {
             (!session.ended).also { if (it) state.callHeld.value = held }
         }
-        // A superseded or retired call's hold changes nothing: its session is released, and the
-        // banner belongs to the live one.
+        // An ended session's hold changes nothing: its capture is released, and the banner
+        // belongs to the live one.
         if (live) {
             Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${session.gen}")
             session.held = held
@@ -307,9 +305,9 @@ class AppStateImpl internal constructor(
     }
 
     /**
-     * [session] is being torn down: lower its want and close any capture session it still holds.
-     * Queued under [lock] by whoever unpublished it, which is what orders this ahead of anything a
-     * replacing session can produce on the same channel. Lifecycle consumer only.
+     * [session] has ended: lower its want and close any capture session it still holds. Queued
+     * under [lock] in the critical section that ended it, which is what orders this ahead of
+     * anything a replacing session can produce on the same channel. Lifecycle consumer only.
      */
     private fun onRelease(session: Session) {
         session.wanted = false
@@ -343,8 +341,7 @@ class AppStateImpl internal constructor(
             onStats = { stats -> session.publisher.publish { captureStats.value = stats } },
             clock = captureClock,
         )
-        // Recheck: `current` is still mutated on caller threads while newCapture() blocks, so a
-        // disconnect landing in that window has already moved the world.
+        // Recheck: the session can end on another thread while newCapture() blocks.
         if (!session.isLive) { handle.stop(); handle.destroy(); return }
         val capture = CaptureSession(handle, sender)
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
@@ -420,21 +417,22 @@ class AppStateImpl internal constructor(
     }
 
     /**
-     * Retire the live session and clear everything published about it, returning the session to
-     * tear down. Shared by [connect] and [disconnect] because the two clearing different subsets is
-     * a silent bug — the survivor is a flow the next screen renders with the last session's data.
-     * The status is the only thing that legitimately differs, so it is the only parameter.
+     * End the last session and clear everything published about it, returning it for the caller
+     * to close, or null if it had already ended by itself. Shared by [connect] and [disconnect]
+     * because the two clearing different subsets is a silent bug — the survivor is a flow the next
+     * screen renders with the last session's data. The status is the only thing that legitimately
+     * differs, so it is the only parameter.
      *
-     * Clearing `current`, closing the publisher and queuing the prior's Release under the same lock
-     * is what makes the writes safe: every write checks one of the two under it, and the
-     * release is ordered ahead of anything the successor asks. Caller holds [lock].
+     * Closing the publisher, ending the session and queuing its Release under the same lock is
+     * what makes the writes safe: every write checks the publisher or [Session.ended] under it, and
+     * the release is ordered ahead of anything the successor asks. Caller holds [lock].
      */
     private fun retireAndClearLocked(status: SessionStatus): Session? {
         val last = current
         current = null; generation += 1
         last?.publisher?.close()
-        // Queued here, under the lock that unpublishes [prior]: nothing the next session can ask
-        // of the capture consumer is queued before this, so the release runs first. trySend
+        // end() queues the capture release here, under the lock: nothing the next session can
+        // ask of the capture consumer is queued before it, so the release runs first. trySend
         // never blocks, so it is safe under the lock.
         val prior = last?.takeIf { it.end() }
         state.reset(status)
@@ -445,9 +443,10 @@ class AppStateImpl internal constructor(
         connect(endpoint, username, password, answering = null)
 
     /**
-     * Retire, call start and publish are one critical section: connects run on two threads (the
-     * UI's and trust-and-connect's), and [lock] hands the call their starts in generation order.
-     * Every end goes out under it too, so none can land after a later start.
+     * Ending the last session, starting the call and publishing the new session are one critical
+     * section: connects run on two threads (the UI's and trust-and-connect's), and [lock] hands
+     * the call their starts in generation order. Every end goes out under it too, so none can
+     * land after a later start.
      *
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
      * dismissed it, and then this does nothing.
@@ -461,7 +460,7 @@ class AppStateImpl internal constructor(
             val gen = generation
             session = Session(gen, Publisher(state, lock), endpoint, username, password, parts)
             current = session
-            // Here rather than in requestCapture(): tying the call to the app state, not the
+            // Here rather than in requestCapture(): tying the call to the session, not the
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
             // survives backgrounding. The service starts a main-looper hop after this returns, while
             // the connect tap still has the app in front — a microphone service cannot start later.
@@ -553,12 +552,7 @@ class AppStateImpl internal constructor(
 
     override fun setMuted(on: Boolean) = ask { it.mute(on) }
 
-    /**
-     * Advance what the session asks, publish it, and send it to whatever connection is there, all
-     * under [lock] so a swap's wire() cannot slip between a tap's write and its send and leave the
-     * server on the older of the two. During an outage the send reaches no connection; the swap
-     * makes it.
-     */
+    /** [Session.ask] on the live session, then the gate, which a mute moves. */
     private fun ask(next: (DeafenState) -> DeafenState) {
         val session = live ?: return
         if (!session.ask(next)) return
