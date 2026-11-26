@@ -42,15 +42,13 @@ UI ─► AppState (interface)
 | One client certificate for every server, stored unencrypted and backed up | It follows a reinstall, is in the format desktop Mumble reads, and lets the server replace our old session on a reconnect. | The key is protected only by the app sandbox, and every server sees the same certificate. |
 | The local network permission is requested after a block, not before | Android decides by destination address, which the host text does not reveal. | The first connect to a LAN server fails once before the prompt. |
 
-## Sessions, connections and generations
+## Sessions and connections
 
 - A **session** is one `connect()`: the endpoint, the credentials, the platform call, the voice
   receiver and the capture state. One is live at a time.
 - A **connection** is one TLS connect and what lives exactly as long as it: the TCP transport, the
   state machine, the UDP socket keyed by that connection's cipher, the `VoicePath`, and the
   collectors that republish its flows.
-- The **generation** is a counter that every `connect()` and `disconnect()` bumps: it names a
-  connect in the status, in the platform call and in the logs. It guards nothing.
 - A session writes through a **publisher** that the next `connect()` or `disconnect()` closes.
   Its writes are checked under the one lock that closes it, so a superseded connection finishing
   late writes nothing. A session's flows are checked against its publisher, the call's hold and
@@ -58,7 +56,7 @@ UI ─► AppState (interface)
   well.
 
 `connect()` retires the old session, publishes the new one and starts its call under one lock, so
-starts reach the platform call in generation order. A start supersedes the call before it and
+starts reach the platform call in the order of the connects. A start supersedes the call before it and
 keeps its audio mode and route.
 
 A session ends in one of two ways:
