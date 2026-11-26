@@ -51,11 +51,11 @@ UI ─► AppState (interface)
   collectors that republish its flows.
 - The **generation** is a counter that every `connect()` and `disconnect()` bumps: it names a
   connect in the status, in the platform call and in the logs. It guards nothing.
-- A session publishes through a **licence** (`Publisher`) that the next `connect()` or
-  `disconnect()` revokes. Its writes are checked under the one lock that revokes it, so a
-  superseded connection finishing late writes nothing. A session's flows are checked against its
-  licence, the call's hold and routes against the live session, and a connection's flows against
-  the connection's identity as well.
+- A session writes through a **publisher** that the next `connect()` or `disconnect()` closes.
+  Its writes are checked under the one lock that closes it, so a superseded connection finishing
+  late writes nothing. A session's flows are checked against its publisher, the call's hold and
+  routes against the live session, and a connection's flows against the connection's identity as
+  well.
 
 `connect()` retires the old session, publishes the new one and starts its call under one lock, so
 starts reach the platform call in generation order. A start supersedes the call before it and
@@ -63,9 +63,9 @@ keeps its audio mode and route.
 
 A session ends in one of two ways:
 
-- **Superseded or disconnected.** Its licence is revoked and every published flow is cleared, in
+- **Superseded or disconnected.** Its publisher is closed and every published flow is cleared, in
   one step.
-- **Failed.** The session is retired, keeps its licence, and its flows are left alone, because
+- **Failed.** The session is retired, its publisher stays open, and its flows are left alone, because
   the final status is what the user is looking at. The call's hold and routes are cleared
   regardless. A trust prompt retires its session this way too, and keeps it for
   `trustAndConnect()`.

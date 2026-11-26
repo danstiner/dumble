@@ -80,7 +80,7 @@ import kotlin.time.TimeSource
  * handshake cannot be preempted by teardown — the socket is not owned until it publishes — so a
  * superseded connection can complete late and would otherwise clobber a newer session's status.
  * A session's writes are therefore checked under [lock] — its own through its [Publisher], which
- * the next connect or disconnect revokes, or for the call's hold and routes on the live session
+ * the next connect or disconnect closes, or for the call's hold and routes on the live session
  * — and a connection's own flows on the connection's identity as well, so a superseded writer's
  * late writes become no-ops.
  *
@@ -179,7 +179,7 @@ class AppStateImpl internal constructor(
     /** The session whose handshake stopped for a trust decision: retired like any failed connect,
      *  kept aside for [trustAndConnect] to reconnect from. Under [lock]. */
     private var trustPrompt: Session? = null
-    /** The last licence issued, under [lock]. Not [current]'s: a session that ended on its own is
+    /** The last publisher handed out, under [lock]. Not [current]'s: a session that ended on its own is
      *  no longer current and keeps writing until the next connect or disconnect. */
     private var issued: Publisher? = null
 
@@ -324,7 +324,7 @@ class AppStateImpl internal constructor(
 
     /**
      * A connection's own flow, guarded on the connection's identity and its close flag as well as
-     * the licence: cancelling a connection's collectors is no barrier for one already inside its
+     * the publisher: cancelling a connection's collectors is no barrier for one already inside its
      * body. Best effort, since the flag is raised outside this lock. A kick's UserRemove lands
      * before the close, on a live connection; the UI blocking on Reconnecting is what keeps it from
      * reading as "you left".
@@ -346,7 +346,7 @@ class AppStateImpl internal constructor(
         synchronized(lock) { if (current === session) state.audioRoutes.value = r }
 
     /** Whether [session] is still the published, live session — the gate every open decision
-     *  takes. [current] alone decides it: only retireAndClearLocked revokes a licence, and it
+     *  takes. [current] alone decides it: only retireAndClearLocked closes a publisher, and it
      *  clears [current] in the same step. */
     private fun isLive(session: Session) =
         synchronized(lock) { current === session }
@@ -518,14 +518,14 @@ class AppStateImpl internal constructor(
      * a silent bug — the survivor is a flow the next screen renders with the last session's data.
      * The status is the only thing that legitimately differs, so it is the only parameter.
      *
-     * Clearing `current`, revoking the licence and queuing the prior's Release under the same lock
+     * Clearing `current`, closing the publisher and queuing the prior's Release under the same lock
      * is what makes the writes safe: every write checks one of the two under it, and the
      * release is ordered ahead of anything the successor asks. Caller holds [lock].
      */
     private fun retireAndClearLocked(status: SessionStatus): Session? {
         val prior = current
         current = null; generation += 1
-        issued?.revoke(); issued = null
+        issued?.close(); issued = null
         trustPrompt = null
         // Queued here, under the lock that unpublishes [prior]: nothing the next session can ask
         // of the capture consumer is queued before this, so the release runs first. trySend
@@ -1001,7 +1001,7 @@ class AppStateImpl internal constructor(
 
     /**
      * Release a still-current session whose connection died on its own, or never came up.
-     * Deliberately does not revoke its licence or reset published state beyond the call's own — the
+     * Deliberately does not close its publisher or reset published state beyond the call's own — the
      * terminal Error status is what the user is looking at. Clearing [current] is what makes this
      * at-most-once: a later disconnect() sees no prior and a later connect() has nothing to tear
      * down.

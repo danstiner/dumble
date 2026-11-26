@@ -53,16 +53,16 @@ internal class SessionState {
 }
 
 /**
- * One session's licence to write a [SessionState]. A blocking handshake cannot be preempted, so a
- * superseded session can finish late; its owner revokes the licence under [lock] when it opens
+ * How one session writes a [SessionState]. A blocking handshake cannot be preempted, so a
+ * superseded session can finish late; its owner closes the publisher under [lock] when it opens
  * the next session or disconnects, and the late writes do nothing. A session that ended on its
- * own keeps its licence: its terminal values are what the user is looking at.
+ * own keeps its publisher open: its terminal values are what the user is looking at.
  */
 internal class Publisher(private val state: SessionState, private val lock: Any) {
-    private var revoked = false
+    private var closed = false
 
-    fun revoke() = synchronized(lock) { revoked = true }
+    fun close() = synchronized(lock) { closed = true }
 
-    /** Runs [write] under [lock], unless revoked. */
-    fun publish(write: SessionState.() -> Unit) = synchronized(lock) { if (!revoked) state.write() }
+    /** Runs [write] under [lock], unless closed. */
+    fun publish(write: SessionState.() -> Unit) = synchronized(lock) { if (!closed) state.write() }
 }

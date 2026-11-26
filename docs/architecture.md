@@ -67,7 +67,7 @@ still listen in the background.
 |---|---|---|
 | Audio engines in portable C++, Android confined to a thin adapter | The realtime audio callbacks never enter the JVM, and CI runs the engines on the host against the real libopus, sample-exact. | A JNI seam, and a few constants kept in step by hand on both sides. |
 | Oboe streams driven by the device's callbacks | The device paces the audio, so the buffer can be two bursts. A Kotlin loop feeding an `AudioTrack` could not hold a buffer that small (measured: about 3000 underruns a minute). | Below API 37 a low-latency stream disconnects on every route change and must be reopened. |
-| Platform `SSLSocket` for TLS | TLS 1.3, patched by the OS. Ktor's own TLS was 1.2 only when this was decided (2026-07). | Reads block and cannot be cancelled, so teardown closes the socket and late results are discarded (Licences, below). |
+| Platform `SSLSocket` for TLS | TLS 1.3, patched by the OS. Ktor's own TLS was 1.2 only when this was decided (2026-07). | Reads block and cannot be cancelled, so teardown closes the socket and late results are discarded (Publishers, below). |
 | No Telecom call | Telecom shows a call to every in-call service that asks or to none. The first lets another app's dialer draw over our screen; the second leaves a Bluetooth headset without call audio. | This app detects holds itself, from the audio mode and the recording callback, and has no system call UI. |
 | Voice starts inside TLS and moves to UDP on a ping reply | It works at once through any firewall, and UDP is used only once proven in both directions. | Until the switch, a lost TCP packet delays all the voice behind it. |
 | Servers older than 1.5 are refused | A 1.4 server silently drops protobuf voice, so a session there has no audio. Refusing also removes the legacy voice framing and CELT. | No access to old servers, even for chat. |
@@ -111,9 +111,10 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 
 These recur across the code. Each exists because of a specific failure.
 
-**Licences.** Teardown cannot always stop a TLS handshake in flight, so a superseded connect can
-finish late and overwrite a newer session's state. Each session writes its state through a licence
-that the next `connect()` or `disconnect()` revokes under one lock, so a late write does nothing.
+**Publishers.** Teardown cannot always stop a TLS handshake in flight, so a superseded connect
+can finish late and overwrite a newer session's state. Each session writes its state through a
+publisher that the next `connect()` or `disconnect()` closes under one lock, so a late write does
+nothing.
 
 **Levels, not events.** Four things ask for capture to open or close, concurrently. Each sends a
 command to one channel. Its single consumer sets a level (capture wanted, call held, session live)
