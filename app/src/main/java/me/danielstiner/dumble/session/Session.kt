@@ -66,8 +66,8 @@ internal class SessionParts(
 )
 
 /**
- * One connect by the user, across its reconnects: the endpoint and credentials, the receiver, the
- * connections its driver opens, and the capture state.
+ * Everything one Connect starts. It lasts until the user disconnects or connects elsewhere, or it
+ * fails for good; each reconnect in between is a new [Connection] in the same session.
  *
  * It ends in one of two ways. Its owner supersedes or disconnects it: [end] inside the owner's
  * critical section, then [close] once the lock is dropped. Or it fails for good and ends itself

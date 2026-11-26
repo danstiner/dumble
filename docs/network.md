@@ -20,7 +20,7 @@ UI ─► AppState (interface)
           │
     AppStateImpl                        the last Session opened; a replaced one cannot publish
           │
-       Session                          one connect by the user, across its reconnects
+       Session                          one Connect; ends on disconnect or final failure
           ├─► Connection                one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
@@ -46,9 +46,11 @@ UI ─► AppState (interface)
 
 ## Sessions and connections
 
-- A **session** (`Session`) is one `connect()`, across its reconnects: the endpoint, the
-  credentials, the platform call, the voice receiver and the capture state. One is live at a
-  time. `AppStateImpl` holds the last one opened, which may have ended.
+- A **session** (`Session`) is everything one `connect()` starts. It ends when the user
+  disconnects or connects elsewhere, or when it fails for good. A reconnect replaces its
+  connection, not the session: the endpoint, credentials, platform call, voice receiver and
+  capture state carry on. One is live at a time; `AppStateImpl` holds the last one opened, which
+  may have ended.
 - A **connection** is one TLS connect and what lives exactly as long as it: the TCP transport, the
   state machine, the UDP socket keyed by that connection's cipher, the `VoicePath`, and the
   collectors that republish its flows.
