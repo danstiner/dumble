@@ -105,7 +105,8 @@ internal class Session(
      *  driver at the swap, read by the new connection's collector on its own scope. */
     @Volatile private var carried: List<ChatMessage> = emptyList()
     /** Fingerprint the server presented when the handshake stopped for a trust decision;
-     *  what [AppStateImpl.trustAndConnect] pins. Written by the driver, read on caller threads. */
+     *  what [AppStateImpl.trustAndConnect] pins. Set before the status that shows the prompt.
+     *  Written by the driver, read on caller threads. */
     @Volatile var presented: String? = null
         private set
     /** The live capture session, or null. One field, one lifetime: splitting handle and pump
@@ -134,13 +135,8 @@ internal class Session(
     /** Superseded, disconnected, or failed. Written under the lock. */
     @Volatile var ended: Boolean = false
         private set
-    /** The handshake stopped for a trust decision. Written under the lock, before the status that
-     *  shows it. */
-    @Volatile var trustPending: Boolean = false
-        private set
-
-    /** Whether this is still the live session, read under the lock: the gate every open decision
-     *  takes. */
+    /** Whether this is still the live session, read under the lock, so a capture open and its
+     *  recheck order against the end. */
     val isLive: Boolean get() = synchronized(lock) { !ended }
 
     /** Starts the receiver's collectors and the driver. Once, after the owner has dropped the
@@ -188,10 +184,10 @@ internal class Session(
      * the server on the older of the two. During an outage the send reaches no connection; the
      * swap makes it. False if the session has ended.
      */
-    fun ask(next: (DeafenState) -> DeafenState): Boolean {
+    fun ask(change: (DeafenState) -> DeafenState): Boolean {
         synchronized(lock) {
             if (ended) return false
-            selfState = next(selfState)
+            selfState = change(selfState)
             state.selfState.value = selfState
             connection?.sendSelfState(selfState)
         }
@@ -511,14 +507,11 @@ internal class Session(
 
     /**
      * Ends the session on [status]: published before [endSelf], which cancels the scope this runs
-     * on. Ending keeps a Talk press from opening a microphone against a finished call. A trust
-     * prompt raises [trustPending] before its status, since [AppStateImpl.trustAndConnect] can
-     * follow that at once.
+     * on. Ending keeps a Talk press from opening a microphone against a finished call.
      */
     private fun fail(status: SessionStatus) {
         if (status is SessionStatus.AwaitingTrust || status is SessionStatus.PinMismatch) {
             Log.i(TAG, "handshake stopped for trust decision: $status")
-            synchronized(lock) { trustPending = true }
         }
         publisher.publish { this.status.value = status }
         endSelf()

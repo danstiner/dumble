@@ -483,7 +483,7 @@ class AppStateImpl internal constructor(
 
     /** Accept the presented certificate (first contact or a mismatch) and reconnect on the pinned path. */
     override fun trustAndConnect() {
-        val session = synchronized(lock) { current?.takeIf { it.trustPending } } ?: return
+        val session = synchronized(lock) { current } ?: return
         val presented = session.presented ?: return
         scope.launch {
             pinStore.put(session.endpoint.address, presented)
@@ -553,9 +553,9 @@ class AppStateImpl internal constructor(
     override fun setMuted(on: Boolean) = ask { it.mute(on) }
 
     /** [Session.ask] on the live session, then the gate, which a mute moves. */
-    private fun ask(next: (DeafenState) -> DeafenState) {
+    private fun ask(change: (DeafenState) -> DeafenState) {
         val session = live ?: return
-        if (!session.ask(next)) return
+        if (!session.ask(change)) return
         apply(session)   // opens or closes a capture engine; never under the lock
     }
 
