@@ -14,7 +14,7 @@ class NativeCaptureTest {
     @Test
     fun stopUnblocksAParkedPollFrame() {
         // The bundled blob: an engine refuses anything else, and a refused engine is handle 0,
-        // which polls as POLL_NO_SESSION forever rather than parking.
+        // which polls as POLL_NO_HANDLE forever rather than parking.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val weights = context.assets.open("silero_vad_weights.bin").use { it.readBytes() }
         val h = NativeCapture.create(40_000, weights, CaptureSessionId.get(context))

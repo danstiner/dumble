@@ -15,7 +15,7 @@ namespace dumble {
  * The pump thread owns the stream, as the receiver's poll owns playout's: it is the only caller
  * of start(), close() and the diagnostics, in sequence, which is all Oboe's thread-safety
  * contract asks — so there is no lock. The error callback runs on a thread Oboe detaches and
- * never joins, possibly after the session is gone, so it touches only the Callbacks object,
+ * never joins, possibly after the handle is gone, so it touches only the Callbacks object,
  * which Oboe keeps alive, and through it the engine, which Callbacks holds strongly for exactly
  * that reason.
  */

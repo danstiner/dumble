@@ -15,7 +15,7 @@ object NativeCapture {
     // which [pollPacket] recovers from on its own.
     const val POLL_UNAVAILABLE = -3
     // Contract violations, not conditions to handle. Separate from POLL_SHUTDOWN.
-    const val POLL_NO_SESSION = -4
+    const val POLL_NO_HANDLE = -4
     const val POLL_BUFFER_TOO_SMALL = -5
     const val FLAG_TERMINATOR = 1L
     const val FLAG_HANGOVER = 2L

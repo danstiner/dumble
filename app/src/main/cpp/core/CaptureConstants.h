@@ -33,7 +33,7 @@ constexpr int kMaxPacketBytes = 1276;
 constexpr int kPollRetry = -1;          // stream down; the poll itself reopens it
 constexpr int kPollShutdown = -2;       // stop() was called
 constexpr int kPollUnavailable = -3;    // terminal: the device will not open a usable stream
-constexpr int kPollNoSession = -4;      // null handle
+constexpr int kPollNoHandle = -4;       // null handle
 constexpr int kPollBufferTooSmall = -5; // out array too small
 
 constexpr uint32_t kFlagTerminator = 1u;

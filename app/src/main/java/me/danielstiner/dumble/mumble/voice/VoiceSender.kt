@@ -167,7 +167,7 @@ class VoiceSender(
                 Log.w(TAG, "capture engine unavailable; transmit stopped for this session")
                 stopReason = StopReason.UNAVAILABLE
             }
-            NativeCapture.POLL_NO_SESSION, NativeCapture.POLL_BUFFER_TOO_SMALL -> {
+            NativeCapture.POLL_NO_HANDLE, NativeCapture.POLL_BUFFER_TOO_SMALL -> {
                 Log.e(TAG, "pollPacket rejected the call ($n); transmit stopped for this session")
                 stopReason = StopReason.UNAVAILABLE
             }
