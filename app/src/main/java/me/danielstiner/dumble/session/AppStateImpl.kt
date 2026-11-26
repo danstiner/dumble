@@ -54,7 +54,7 @@ import kotlin.time.TimeSource
 /**
  * Owns what outlives a connect: the [SessionState] behind the [AppState] flows, the [lock] every
  * write to it takes, the transmit-mode setting, and the [Session] opened last, which opens its
- * own [Connection]s.
+ * own [Connection]s. Builds the one [CaptureLifecycle] its sessions share.
  *
  * A blocking handshake cannot be preempted, so a superseded session can complete late. [connect]
  * and [disconnect] therefore end the last session, close its publisher and reset the state in one
@@ -158,9 +158,9 @@ class AppStateImpl internal constructor(
     @Volatile private var transmitMode = TransmitMode.VoiceActivity
 
     private val captures = CaptureLifecycle(
-        newCapture, startPump, captureClock, stuckPumpMillis, { transmitMode }, scope, blockingScope,
+        newCapture, startPump, captureClock, stuckPumpMillis, { transmitMode },
+        scope, blockingScope,
     )
-
 
     // The call's own flow: an ended session's call is ended, so its late updates are dropped too.
     private fun publishRoutes(session: Session, r: AudioRoutes) =
@@ -182,7 +182,7 @@ class AppStateImpl internal constructor(
         current = null; generation += 1
         last?.publisher?.close()
         // end() queues the capture release here, under the lock: nothing the next session can
-        // ask of the capture consumer is queued before it, so the release runs first. trySend
+        // ask of the capture consumer is queued before it, so the release runs first. Queuing
         // never blocks, so it is safe under the lock.
         val prior = last?.takeIf { it.end() }
         state.reset(status)

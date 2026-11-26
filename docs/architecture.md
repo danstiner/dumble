@@ -30,12 +30,15 @@ Non-goals:
       │
  AppStateImpl                          one per process; owns everything below
       │
-      ├─ MumbleTcpTransport            TLS on the platform SSLSocket, certificate pinning
-      │    └─ ConnectionStateMachine   control protocol: handshake, pings, channel tree, chat
-      ├─ MumbleUdpTransport            voice datagrams, encrypted with OCB2
+      ├─ Session                       one Connect; ends on disconnect or final failure
+      │    ├─ Connection               one TLS connect; replaced on a reconnect
+      │    │    ├─ MumbleTcpTransport  TLS on the platform SSLSocket, certificate pinning
+      │    │    │    └─ ConnectionStateMachine  handshake, pings, channel tree, chat
+      │    │    └─ MumbleUdpTransport  voice datagrams, encrypted with OCB2
+      │    └─ VoiceReceiver ── PlayoutEngine ── OboePlayout ── speaker      playout.md
       │
-      ├─ VoiceSender ── CaptureEngine ── OboeCapture ── microphone      capture.md
-      ├─ VoiceReceiver ── PlayoutEngine ── OboePlayout ── speaker       playout.md
+      ├─ CaptureLifecycle ── VoiceSender ── CaptureEngine ── OboeCapture   capture.md
+      │                                 one microphone, shared by every session
       │
       └─ AndroidVoiceCall              audio mode and route, foreground service, hold and resume
 ```
@@ -93,7 +96,7 @@ Each stream has one caller at a time, so neither Oboe adapter needs a lock.
 | Path | Contents |
 |---|---|
 | `app/src/main/java/.../ui/` | screens, `ConnectViewModel`, theme |
-| `.../session/` | `AppState`, `AppStateImpl`, `Session`, `SessionStatus` |
+| `.../session/` | `AppState`, `AppStateImpl`, `Session`, `CaptureLifecycle`, `SessionStatus` |
 | `.../mumble/connection/` | `Connection` |
 | `.../mumble/net/` | TLS and UDP transports, OCB2 (`Ocb2`, `CryptState`, `ReplayWindow`), trust and pins, client certificate, `VoicePath` |
 | `.../mumble/protocol/` | `ConnectionStateMachine`, framing (`MumbleCodec`), mute and deafen (`DeafenState`) |
@@ -117,9 +120,9 @@ publisher that the next `connect()` or `disconnect()` closes under one lock, so 
 nothing.
 
 **Levels, not events.** Four things ask for capture to open or close, concurrently. Each sends a
-command to one channel. Its single consumer sets a level (capture wanted, call held, session live)
-and reconciles the levels, and that is the only place the capture session opens or closes. Two
-input streams can therefore never be open at once.
+command to one channel in `CaptureLifecycle`. Its single consumer sets a level (capture wanted,
+call held, session live) and reconciles the levels, and that is the only place the capture session
+opens or closes. Two input streams can therefore never be open at once.
 
 **Publish last.** A `StateFlow` emission is a promise that everything the new state implies is
 already in place: the timer armed, the resource built. A reader that acts on the emission must

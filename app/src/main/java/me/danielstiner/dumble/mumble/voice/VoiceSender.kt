@@ -84,7 +84,7 @@ class VoiceSender(
      * Requests shutdown and waits, bounded, for the pump to exit: the stream closes on its way
      * out, and the caller's one-microphone invariant needs that to have happened before it opens
      * another. A pump wedged in native code past the bound is left to [onExit] and the
-     * app state's wedge check.
+     * capture lifecycle's wedge check.
      */
     fun stop() {
         stopped = true

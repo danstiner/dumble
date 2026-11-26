@@ -166,8 +166,8 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * A requestCapture during a hold must open nothing. reconcile only checked
-     * `session.capture == null`, which a hold had just made true, so a Chat/Connected remount
+     * A requestCapture during a hold must open nothing. reconcile once checked only that no
+     * capture was open, which a hold had just made true, so a Chat/Connected remount
      * during a cellular call opened the microphone — and could do it while the first engine
      * was still live.
      */

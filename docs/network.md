@@ -27,7 +27,8 @@ UI ─► AppState (interface)
           │     ├─► MumbleUdpTransport ─► DatagramChannel ───┘
           │     │      cipher: CryptState; path: VoicePath
           │     └─► ConnectionStateMachine  handshake, pings, channel tree, chat, cipher keys
-          └─► audio and the platform call     capture.md, playout.md; AppStateImpl runs capture
+          └─► audio and the platform call     capture.md, playout.md; capture runs in
+                                              CaptureLifecycle, one per app
 ```
 
 ## Decisions

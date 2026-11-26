@@ -51,11 +51,9 @@ import kotlin.time.TimeSource
  * critical section, then [close] once the lock is dropped. Or it fails for good and ends itself
  * ([endSelf]), keeping its publisher open, so its final status stays published.
  *
- * Capture state hangs off the session, not the app state, because a release must find the
- * session that opened the microphone rather than whichever session replaced it.
- *
- * The mutable fields are either `@Volatile` (crossing threads) or plain (confined to the
- * lifecycle consumer's single coroutine).
+ * Capture levels hang off the session ([mic]), not the shared [CaptureLifecycle], because a
+ * release must find the session that opened the microphone rather than whichever session
+ * replaced it.
  */
 internal class Session(
     val gen: Int,

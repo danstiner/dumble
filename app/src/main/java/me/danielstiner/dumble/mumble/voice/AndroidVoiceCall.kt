@@ -38,8 +38,8 @@ class AndroidVoiceCall(
         val onRoutes: (AudioRoutes) -> Unit,
     ) {
         /**
-         * Never carried across a supersede: AppStateImpl opens capture for a generation not
-         * told it is held.
+         * Never carried across a supersede: capture opens for a generation not told it is
+         * held.
          */
         var held = false
     }

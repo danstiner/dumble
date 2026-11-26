@@ -24,7 +24,7 @@ class FakeVoiceCall : VoiceCall {
      *  app state's own idea of "connected" and the platform's idea of "a call exists" agree. */
     val hasLiveCall: Boolean get() = synchronized(lock) { liveGen != NO_CALL }
     // Per generation, not one field: a stale hold from a superseded call is exactly the failure the
-    // app state's liveness check exists to stop, and a single field cannot express one.
+    // capture lifecycle's liveness check exists to stop, and a single field cannot express one.
     private val onHeld = ConcurrentHashMap<Int, (Boolean) -> Unit>()
     // Per generation for the same reason onHeld is: a route update from a superseded call is
     // exactly what the app state's liveness check exists to drop.
