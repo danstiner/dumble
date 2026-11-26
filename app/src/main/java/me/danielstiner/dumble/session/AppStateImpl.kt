@@ -227,7 +227,7 @@ class AppStateImpl internal constructor(
                     // the capture consumer, which can be blocked in newCapture() or stop(). The
                     // receiver is this session's own, so a dead session's hold reaches nothing live.
                     session.receiver.setHeld(held)
-                    captures.held(session.mic, held)
+                    captures.held(session.capture, held)
                 },
                 onRoutes = { r -> publishRoutes(session, r) },
             )
@@ -265,14 +265,14 @@ class AppStateImpl internal constructor(
 
     override fun requestCapture() {
         val session = live ?: return
-        captures.acquire(session.mic)
+        captures.acquire(session.capture)
     }
 
     /** A press while muted stays shut: mute has no engine-side existence, so nothing below this
      *  refuses it. */
     override fun setTransmitting(on: Boolean) {
         val session = live ?: return
-        captures.press(session.mic, on)
+        captures.press(session.capture, on)
     }
 
     /** Switching to push-to-talk lifts the user's own mute: that mode has no Mute control, so one
@@ -281,7 +281,7 @@ class AppStateImpl internal constructor(
         transmitMode = mode
         val session = live ?: return
         val carried = mode != TransmitMode.VoiceActivity && session.selfState.ownMute
-        if (carried) ask { it.liftOwnMute() } else captures.apply(session.mic)
+        if (carried) ask { it.liftOwnMute() } else captures.apply(session.capture)
     }
 
     override fun setMuted(on: Boolean) = ask { it.mute(on) }
@@ -290,7 +290,7 @@ class AppStateImpl internal constructor(
     private fun ask(change: (DeafenState) -> DeafenState) {
         val session = live ?: return
         if (!session.ask(change)) return
-        captures.apply(session.mic)   // opens or closes a capture engine; never under the lock
+        captures.apply(session.capture)   // opens or closes a capture engine; never under the lock
     }
 
     private companion object {

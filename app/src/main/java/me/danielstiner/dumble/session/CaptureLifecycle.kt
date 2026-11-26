@@ -10,7 +10,7 @@ import me.danielstiner.dumble.mumble.voice.VoiceSender
 import kotlin.time.TimeSource
 
 /** One session's capture: what the lifecycle needs of it, and the levels it reconciles. */
-internal class Microphone(
+internal class CaptureState(
     /** For logs. */
     val gen: Int,
     /** Speaking, capture stats and the call-held banner are published through it. */
@@ -44,7 +44,7 @@ internal class Microphone(
 
 /**
  * Opens and releases every session's microphone: one command channel, its single consumer, and
- * the levels on each [Microphone] it reconciles. One per app state, so a session's release is
+ * the levels on each [CaptureState] it reconciles. One per app state, so a session's release is
  * ordered ahead of its successor's open. See docs/capture.md, "Lifecycle".
  */
 internal class CaptureLifecycle(
@@ -62,12 +62,13 @@ internal class CaptureLifecycle(
     private sealed interface CaptureCommand {
         /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]; a level-raise, not an open, so repeats are free. */
-        data class Acquire(val client: Microphone) : CaptureCommand
+        data class Acquire(val client: CaptureState) : CaptureCommand
         /** The platform has taken, or returned, the input device for [client]'s call. */
-        data class Held(val client: Microphone, val held: Boolean) : CaptureCommand
-        data class Release(val client: Microphone) : CaptureCommand
-        data class PumpExited(val client: Microphone, val sender: VoiceSender) : CaptureCommand
-        data class WedgeCheck(val client: Microphone, val capture: CaptureSession) : CaptureCommand
+        data class Held(val client: CaptureState, val held: Boolean) : CaptureCommand
+        data class Release(val client: CaptureState) : CaptureCommand
+        data class PumpExited(val client: CaptureState, val sender: VoiceSender) : CaptureCommand
+        data class WedgeCheck(val client: CaptureState, val capture: CaptureSession) :
+            CaptureCommand
     }
 
     /**
@@ -96,7 +97,7 @@ internal class CaptureLifecycle(
          * `newCapture()` and `stop()`, busiest exactly when the user is pressing Talk, and a gate
          * edge queued behind that clips the start of a spurt. (The hop itself is p50 11 µs.)
          */
-        fun apply(client: Microphone) {
+        fun apply(client: CaptureState) {
             synchronized(this) {
                 if (destroyed) return
                 // Only on a change: every mode write resets the engine's detector, mid-spurt too.
@@ -142,12 +143,12 @@ internal class CaptureLifecycle(
         }
     }
 
-    fun acquire(client: Microphone) = send(CaptureCommand.Acquire(client))
+    fun acquire(client: CaptureState) = send(CaptureCommand.Acquire(client))
 
-    fun held(client: Microphone, held: Boolean) = send(CaptureCommand.Held(client, held))
+    fun held(client: CaptureState, held: Boolean) = send(CaptureCommand.Held(client, held))
 
     /** Caller holds the client's lock, in the critical section that ended its session. */
-    fun release(client: Microphone) = send(CaptureCommand.Release(client))
+    fun release(client: CaptureState) = send(CaptureCommand.Release(client))
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
@@ -173,7 +174,7 @@ internal class CaptureLifecycle(
      * A capture session was asked for — the microphone became ready, or Talk was pressed. Raises
      * the level and reconciles. Lifecycle consumer only.
      */
-    private fun onAcquire(client: Microphone) {
+    private fun onAcquire(client: CaptureState) {
         client.wanted = true
         reconcile(client)
     }
@@ -184,7 +185,7 @@ internal class CaptureLifecycle(
      * level and reconciles, which releases the capture session on a hold and rebuilds it on a
      * resume. Lifecycle consumer only.
      */
-    private fun onHeld(client: Microphone, held: Boolean) {
+    private fun onHeld(client: CaptureState, held: Boolean) {
         // Published under the check's lock: a connect() between the two would clear the banner
         // only for this stale hold to set it again on the new session.
         val live = synchronized(client.publisher.lock) {
@@ -207,13 +208,13 @@ internal class CaptureLifecycle(
      * this ahead of anything a replacing session can produce on the same channel. Lifecycle
      * consumer only.
      */
-    private fun onRelease(client: Microphone) {
+    private fun onRelease(client: CaptureState) {
         client.wanted = false
         reconcile(client)
     }
 
     /** Lifecycle consumer only. The only place a capture session is created or released. */
-    private fun reconcile(client: Microphone) {
+    private fun reconcile(client: CaptureState) {
         if (client.wanted && !client.held && client.isLive()) {
             // A release in flight re-reconciles from onPumpExited; opening a second engine here is
             // exactly the two-microphone defect.
@@ -228,7 +229,7 @@ internal class CaptureLifecycle(
     /** Build the native engine and its pump for [client] and publish them as its capture.
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
      *  consumer runs on blockingScope. */
-    private fun openCapture(client: Microphone) {
+    private fun openCapture(client: CaptureState) {
         // Leaves `wanted` set on failure, unlike onPumpExited's terminal branch: opens here are
         // command-rate-bounded rather than a loop, and a Talk press re-asks anyway.
         val handle = newCapture() ?: return
@@ -252,7 +253,7 @@ internal class CaptureLifecycle(
     /** Start releasing [capture]: close its stream synchronously, then leave the engine for the
      *  pump's own exit to free via [onPumpExited]. Lifecycle consumer only; callers guarantee
      *  `!client.releasing`. */
-    private fun beginRelease(client: Microphone, capture: CaptureSession) {
+    private fun beginRelease(client: CaptureState, capture: CaptureSession) {
         // Synchronous, inline: stop() returns once the pump has closed the Oboe stream (or, wedged,
         // after its bound). That ordering is the entire one-microphone invariant — making it
         // asynchronous would silently reopen the hole.
@@ -277,7 +278,7 @@ internal class CaptureLifecycle(
      * a resume or a fresh Acquire may have arrived while the release was in flight and was
      * refused then. Lifecycle consumer only.
      */
-    private fun onPumpExited(client: Microphone, sender: VoiceSender) {
+    private fun onPumpExited(client: CaptureState, sender: VoiceSender) {
         // Identity, not client: a later open may already have published a different capture, and
         // freeing that one would delete a live engine.
         val capture = client.capture
@@ -304,7 +305,7 @@ internal class CaptureLifecycle(
      * The leak it reports is deliberate — freeing an engine under a live pump is the
      * use-after-free this design exists to prevent. Lifecycle consumer only.
      */
-    private fun onWedgeCheck(client: Microphone, capture: CaptureSession) {
+    private fun onWedgeCheck(client: CaptureState, capture: CaptureSession) {
         if (client.capture !== capture) return   // released in time, or superseded
         Log.e(
             TAG,
@@ -315,7 +316,7 @@ internal class CaptureLifecycle(
     }
 
     /** Talk pressed or released: the level first, then the gate, as [apply] requires. */
-    fun press(client: Microphone, on: Boolean) {
+    fun press(client: CaptureState, on: Boolean) {
         client.pressed = on
         apply(client)
     }
@@ -332,12 +333,12 @@ internal class CaptureLifecycle(
      * caller's write of it, which program order forbids. Every level must stay `@Volatile` for
      * that. When both act, the gate is set twice, which costs nothing.
      */
-    fun apply(client: Microphone) {
+    fun apply(client: CaptureState) {
         if (wantsGate(client)) send(CaptureCommand.Acquire(client))
         client.capture?.apply(client)
     }
 
-    private fun wantsGate(client: Microphone) =
+    private fun wantsGate(client: CaptureState) =
         !client.muted() && (client.pressed || transmitMode() == TransmitMode.VoiceActivity)
 
     private companion object {

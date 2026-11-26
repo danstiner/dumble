@@ -64,7 +64,7 @@ The KDoc on `apply` explains why a press cannot race the session opening.
 `CaptureLifecycle` owns it, one per app state and shared by its sessions. Four sources ask for
 transitions concurrently: the Talk button, platform hold and resume, disconnect and reconnect, and
 the pump's own exit. Each transition is a command on one channel with a single consumer. State is
-kept as levels, not events, on each session's `Microphone`, and `reconcile()` compares the levels
+kept as levels, not events, on each session's `CaptureState`, and `reconcile()` compares the levels
 and is the only place the capture session opens or closes.
 
 The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` and `VoiceSenderTest`:
