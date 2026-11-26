@@ -272,8 +272,7 @@ class AppStateImpl internal constructor(
      *  refuses it. */
     override fun setTransmitting(on: Boolean) {
         val session = live ?: return
-        session.mic.pressed = on
-        captures.apply(session.mic)
+        captures.press(session.mic, on)
     }
 
     /** Switching to push-to-talk lifts the user's own mute: that mode has no Mute control, so one

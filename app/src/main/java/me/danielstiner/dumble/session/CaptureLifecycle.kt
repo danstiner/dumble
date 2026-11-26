@@ -314,6 +314,12 @@ internal class CaptureLifecycle(
         )
     }
 
+    /** Talk pressed or released: the level first, then the gate, as [apply] requires. */
+    fun press(client: Microphone, on: Boolean) {
+        client.pressed = on
+        apply(client)
+    }
+
     /**
      * Re-derive the gate: open when not muted and either Talk is held or voice activity is on.
      * Wanting it open also asks for a session, which is what brings one back after a terminal
