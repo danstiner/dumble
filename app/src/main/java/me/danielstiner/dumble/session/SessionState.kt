@@ -56,9 +56,12 @@ internal class SessionState {
  * How one session writes a [SessionState]. A blocking handshake cannot be preempted, so a
  * superseded session can finish late; its owner closes the publisher under [lock] when it opens
  * the next session or disconnects, and the late writes do nothing. A session that ended on its
- * own keeps its publisher open: its terminal values are what the user is looking at.
+ * own keeps its publisher open: its terminal values are what the user is looking at. A session that has
+ * not ended writes [state] directly under [lock] for what belongs to the live session only (the
+ * call's hold and routes, self-state); [publish] is for what a session may still write after it
+ * ended on its own.
  */
-internal class Publisher(private val state: SessionState, private val lock: Any) {
+internal class Publisher(val state: SessionState, val lock: Any) {
     private var closed = false
 
     fun close() = synchronized(lock) { closed = true }
