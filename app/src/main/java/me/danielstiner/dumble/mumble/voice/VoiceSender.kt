@@ -12,9 +12,13 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
- * Pulls encoded packets off the native engine and puts them on the wire. The pump thread blocks
- * in native code (no CPU cost, no GC stall). Cannot be interrupted — [stop] works through the
- * engine.
+ * One open microphone: pulls encoded packets off the native engine and puts them on the wire. The
+ * pump thread blocks in native code (no CPU cost, no GC stall). Cannot be interrupted — [stop]
+ * works through the engine.
+ *
+ * [handle] stays private: setGateOpen reaches `self(h)->engine` in capture_jni.cpp, which
+ * destroy() deletes, so a push-to-talk edge racing a release is a use-after-free. [apply] and
+ * [destroy] share this monitor to close that; an exposed handle would let a caller walk around it.
  */
 class VoiceSender(
     private val handle: CaptureHandle,
@@ -54,6 +58,9 @@ class VoiceSender(
     @Volatile var droppedFrames = 0; private set
     @Volatile private var thread: Thread? = null
     @Volatile private var stopped = false
+    private var destroyed = false
+    /** The engine's mode. A fresh engine is push-to-talk; an engine never refuses a mode. */
+    private var appliedMode = TransmitMode.PushToTalk
 
     /** Null while running or before the first [start]; left null by a poll that throws, which the
      *  owner reads as terminal. */
@@ -84,7 +91,8 @@ class VoiceSender(
      * Requests shutdown and waits, bounded, for the pump to exit: the stream closes on its way
      * out, and the caller's one-microphone invariant needs that to have happened before it opens
      * another. A pump wedged in native code past the bound is left to [onExit] and the
-     * capture lifecycle's wedge check.
+     * capture lifecycle's wedge check. Off the monitor deliberately: this waits on a HAL close,
+     * and the UI must not queue behind it.
      */
     fun stop() {
         stopped = true
@@ -92,7 +100,31 @@ class VoiceSender(
         thread?.join(STOP_JOIN_MILLIS)
     }
 
-    fun setTransmitting(on: Boolean) = handle.setGateOpen(on)
+    /**
+     * Push the levels to the engine: the mode, then the gate. Taken as functions and read under
+     * the monitor so concurrent callers agree on the newest values.
+     *
+     * A direct call from the UI thread, not a lifecycle command: that consumer blocks in the HAL
+     * open and in [stop], busiest exactly when the user is pressing Talk, and a gate edge queued
+     * behind that clips the start of a spurt. (The hop itself is p50 11 µs.)
+     */
+    fun apply(mode: () -> TransmitMode, gateOpen: () -> Boolean) {
+        synchronized(this) {
+            if (destroyed) return
+            // Only on a change: every mode write resets the engine's detector, mid-spurt too.
+            if (mode() != appliedMode) {
+                handle.setTransmitMode(mode())
+                appliedMode = mode()
+            }
+            handle.setGateOpen(gateOpen())
+        }
+    }
+
+    /** Free the engine. Only after the pump has exited; the monitor is what keeps a racing
+     *  push-to-talk edge off the freed engine. */
+    fun destroy() = synchronized(this) {
+        if (!destroyed) { destroyed = true; handle.destroy() }
+    }
 
     /**
      * One poll and what it asks for. False once the pump has ended, [onExit] having fired — on a
