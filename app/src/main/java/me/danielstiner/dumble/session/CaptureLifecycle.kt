@@ -29,8 +29,8 @@ internal class CaptureState(
      *  by the lifecycle consumer (the one coroutine that runs [CaptureLifecycle]'s commands);
      *  read on the UI thread by [CaptureLifecycle.apply]. */
     @Volatile var sender: VoiceSender? = null
-    /** Talk is held. The current state, not the press event, so a capture session rebuilt under
-     *  a still-held button comes up transmitting. UI thread writes it;
+    /** Talk is held. The current state, not the press event, so a sender rebuilt under a
+     *  still-held button comes up transmitting. UI thread writes it;
      *  [CaptureLifecycle.openCapture] reads it after publishing [sender] — see
      *  [CaptureLifecycle.apply] for why that order matters, and keep both `@Volatile`. */
     @Volatile var pressed: Boolean = false
@@ -135,7 +135,7 @@ internal class CaptureLifecycle(
 
     /**
      * The platform took the input device from [client]'s call (for another call, the phone's or
-     * another app's) or gave it back. Closes the capture session on a hold and reopens it on a
+     * another app's) or gave it back. Closes the microphone on a hold and reopens it on a
      * resume. Lifecycle consumer only.
      */
     private fun onHeld(client: CaptureState, held: Boolean) {
@@ -156,7 +156,7 @@ internal class CaptureLifecycle(
     }
 
     /**
-     * [client]'s session has ended: close its capture session, if it has one. The command was
+     * [client]'s session has ended: close its microphone, if open. The command was
      * queued under [Publisher.lock] in the critical section that ended the session, which puts it
      * ahead of anything the next session can queue. Lifecycle consumer only.
      */
@@ -165,8 +165,8 @@ internal class CaptureLifecycle(
         reconcile(client)
     }
 
-    /** Open or close [client]'s capture session to match its flags. The only place one is
-     *  created or released. Lifecycle consumer only. */
+    /** Open or close [client]'s microphone to match its flags. The only place a [VoiceSender] is
+     *  built or released. Lifecycle consumer only. */
     private fun reconcile(client: CaptureState) {
         if (client.wanted && !client.held && client.isLive()) {
             // Already open, or still being released. onPumpExited reconciles again once a release
@@ -179,7 +179,7 @@ internal class CaptureLifecycle(
         }
     }
 
-    /** Build the native engine and its pump for [client] and publish them as its capture.
+    /** Build the native engine and its sender for [client] and publish the sender.
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
      *  consumer runs on blockingScope. */
     private fun openCapture(client: CaptureState) {
@@ -230,7 +230,7 @@ internal class CaptureLifecycle(
      * refused then. Lifecycle consumer only.
      */
     private fun onPumpExited(client: CaptureState, sender: VoiceSender) {
-        // Identity, not client: a later open may already have published a different capture, and
+        // Identity, not client: a later open may already have published a different sender, and
         // freeing that one would delete a live engine.
         if (client.sender === sender) {
             sender.destroy()
@@ -273,11 +273,11 @@ internal class CaptureLifecycle(
 
     /**
      * Re-derive the gate: open when not muted and either Talk is held or voice activity is on.
-     * Wanting it open also asks for a session, which is what brings one back after a terminal
+     * Wanting it open also asks for capture, which is what brings one back after a terminal
      * engine failure.
      *
      * The caller writes its level (`pressed`, mute or the mode) first, then this reads the live
-     * session — the mirror of [openCapture], which publishes the session and then reads the
+     * sender — the mirror of [openCapture], which publishes the sender and then reads the
      * levels. Each side writes one volatile and reads the other, so a press cannot be lost to a
      * racing open: for both to miss, this read of `sender` would have to precede openCapture's
      * write of it *and* openCapture's read of the level precede the caller's write of it, which

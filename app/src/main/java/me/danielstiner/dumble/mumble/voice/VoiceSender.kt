@@ -45,7 +45,7 @@ class VoiceSender(
         fun setTransmitMode(mode: TransmitMode)
         fun stop()
 
-        /** Releases the engine. Called by whoever owns the session, never by the pump. */
+        /** Releases the engine. Called by its owner once no pump can touch it, never by the pump. */
         fun destroy()
 
         /** Diagnostics for the periodic log line; null when there is nothing to read. */
@@ -74,7 +74,7 @@ class VoiceSender(
     private var speaking = false
     private var lastSpeech = clock.markNow()
 
-    /** Single-shot: the engine's shutdown latch never resets. Build a sender per session. */
+    /** Single-shot: the engine's shutdown latch never resets. Build a sender per engine. */
     fun start() {
         if (stopped || thread != null) return
         stopReason = null

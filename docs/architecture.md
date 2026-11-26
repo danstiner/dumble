@@ -121,8 +121,8 @@ nothing.
 
 **Levels, not events.** Four things ask for capture to open or close, concurrently. Each sends a
 command to one channel in `CaptureLifecycle`. One coroutine reads the channel. It records what each
-command says as a level, a flag for what is true now (capture wanted, call held), then opens or
-closes the capture session to match the levels. Nothing else opens or closes it, so two input
+command says as a level, a flag for what is true now (capture wanted, call held), then builds or
+releases the `VoiceSender` to match the levels. Nothing else does, so two input
 streams can never be open at once.
 
 **Publish last.** A `StateFlow` emission is a promise that everything the new state implies is

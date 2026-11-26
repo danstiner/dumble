@@ -355,7 +355,7 @@ TEST(CaptureEngine, FrameNumberIsStrictlyIncreasingAcrossSpurtsAndTerminators) {
 }
 
 // A repeat of the state we are already in is not a transition and must do nothing. Nothing above
-// enforces alternation: VoiceSender.setTransmitting is a pass-through, and a release plausibly
+// enforces alternation: VoiceSender.apply sets the gate on every call, and a release plausibly
 // arrives twice (a pointer-up alongside a lifecycle-driven release). With the gate at onPcm() a
 // repeated close can no longer sweep closed-gate audio into a flush — nothing closed-gate is
 // buffered — but unguarded it would owe a second, empty terminator after the real one was spent.
