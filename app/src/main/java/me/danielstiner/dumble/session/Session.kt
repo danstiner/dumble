@@ -79,8 +79,8 @@ internal class Session(
     private val parentScope: CoroutineScope,
     /** Never cancelled; the launches that block. */
     private val blockingScope: CoroutineScope,
-    /** Queues the capture release of a session that has just ended. Called under the lock. */
-    private val releaseCapture: (Session) -> Unit,
+    /** The one microphone owner every session shares. */
+    private val captures: CaptureLifecycle,
 ) {
     private val lock = publisher.lock
     private val state = publisher.state
@@ -109,28 +109,12 @@ internal class Session(
      *  Written by the driver, read on caller threads. */
     @Volatile var presented: String? = null
         private set
-    /** The live capture session, or null. One field, one lifetime: splitting handle and pump
-     *  would leave a window where a hold could open a second microphone stream. Written only
-     *  by the lifecycle consumer; read on the UI thread by [AppStateImpl.apply]. */
-    @Volatile var capture: AppStateImpl.CaptureSession? = null
-    /** Talk is held. A level, not an edge, so a capture session rebuilt under a still-held
-     *  button comes up transmitting. UI thread writes it; [AppStateImpl.openCapture] reads it
-     *  after publishing [capture] — see [AppStateImpl.apply] for why that order matters, and keep
-     *  both `@Volatile`. */
-    @Volatile var pressed: Boolean = false
+    /** This session's capture levels, which [CaptureLifecycle] reconciles. */
+    val mic = Microphone(gen, publisher, { isLive }, { selfState.muted }, ::sendVoice)
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
     @Volatile var selfState: DeafenState = DeafenState()
         private set
-    /** The app wants capture on this session — the level [AppStateImpl.reconcile] opens from.
-     *  Raised by Acquire, cleared by Release and by a terminal pump exit. */
-    var wanted: Boolean = false
-    /** A release is in flight: stop() has returned and only the pump's own exit will free the
-     *  engine. Keeps [AppStateImpl.reconcile] from starting a second release meanwhile; cleared by
-     *  [AppStateImpl.onPumpExited]. */
-    var releasing: Boolean = false
-    /** The platform is holding this session's call. Lifecycle consumer only. */
-    var held: Boolean = false
 
     /** Superseded, disconnected, or failed. Written under the lock. */
     @Volatile var ended: Boolean = false
@@ -160,7 +144,7 @@ internal class Session(
     fun end(): Boolean {
         if (ended) return false
         ended = true
-        releaseCapture(this)
+        captures.release(mic)
         return true
     }
 
