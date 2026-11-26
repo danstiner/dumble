@@ -43,28 +43,6 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
-/** The seams every session is built from; the app state makes one. */
-internal class SessionParts(
-    val pinStore: PinStore,
-    val newTransport: (expectedPin: String?) -> MumbleControlTransport,
-    val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport,
-    val newPlayout: () -> VoiceReceiver.PlayoutEngine?,
-    val call: VoiceCall,
-    /** The clock of everything that must count sleep; see AppStateImpl's `udpClock`. */
-    val bootClock: TimeSource.WithComparableMarks,
-    val pingIntervalMs: Long,
-    val sleep: suspend (Duration) -> Unit,
-    val networkWatch: NetworkWatch,
-    /** Bumped on every change of the default network. */
-    val networkChanges: StateFlow<Int>,
-    /** Parent of every session's and connection's scope. */
-    val scope: CoroutineScope,
-    /** Never cancelled; the launches that block. */
-    val blockingScope: CoroutineScope,
-    /** Queues the capture release of a session that has just ended. Called under the lock. */
-    val releaseCapture: (Session) -> Unit,
-)
-
 /**
  * Everything one Connect starts. It lasts until the user disconnects or connects elsewhere, or it
  * fails for good; each reconnect in between is a new [Connection] in the same session.
@@ -85,7 +63,24 @@ internal class Session(
     val endpoint: MumbleEndpoint,
     val username: String,
     val password: String?,
-    private val parts: SessionParts,
+    private val pinStore: PinStore,
+    private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
+    private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport,
+    newPlayout: () -> VoiceReceiver.PlayoutEngine?,
+    private val call: VoiceCall,
+    /** The clock of everything that must count sleep; see AppStateImpl's `udpClock`. */
+    private val bootClock: TimeSource.WithComparableMarks,
+    private val pingIntervalMs: Long,
+    private val sleep: suspend (Duration) -> Unit,
+    private val networkWatch: NetworkWatch,
+    /** Bumped on every change of the default network. */
+    private val networkChanges: StateFlow<Int>,
+    /** Parent of this session's and its connections' scopes. */
+    private val parentScope: CoroutineScope,
+    /** Never cancelled; the launches that block. */
+    private val blockingScope: CoroutineScope,
+    /** Queues the capture release of a session that has just ended. Called under the lock. */
+    private val releaseCapture: (Session) -> Unit,
 ) {
     private val lock = publisher.lock
     private val state = publisher.state
@@ -95,10 +90,10 @@ internal class Session(
         // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
         // only a session whose connection comes up ever reaches — building eagerly would leak
         // one per session that fails or is superseded before that.
-        VoiceReceiver(parts.newPlayout, context = parts.scope.coroutineContext)
+        VoiceReceiver(newPlayout, context = parentScope.coroutineContext)
     /** The driver and the receiver's collectors. Cancelled by [close], last. */
     private val scope: CoroutineScope =
-        CoroutineScope(parts.scope.coroutineContext + SupervisorJob())
+        CoroutineScope(parentScope.coroutineContext + SupervisorJob())
     /** The connection carrying this session, or null until the driver has built one. Written
      *  only under [lock], by the driver; read on the pump thread by [sendVoice]. */
     @Volatile var connection: Connection? = null
@@ -169,7 +164,7 @@ internal class Session(
     fun end(): Boolean {
         if (ended) return false
         ended = true
-        parts.releaseCapture(this)
+        releaseCapture(this)
         return true
     }
 
@@ -178,7 +173,7 @@ internal class Session(
         // blockingScope because stop() ends with the native stream's destroy, which blocks; its
         // join of the poll suspends. Its own coroutine, so a stalled socket close cannot delay
         // it. The receiver drops any datagram that reaches it after stop().
-        parts.blockingScope.launch { receiver.stop() }
+        blockingScope.launch { receiver.stop() }
         // Either the driver published the connection under the lock before the session ended,
         // and this closes it, or it will see the session has ended and close it itself.
         connection?.close()
@@ -226,19 +221,19 @@ internal class Session(
 
     /** One TLS connect, built but not yet connected. */
     private fun buildConnection(pin: String?): Connection {
-        val connectionScope = CoroutineScope(parts.scope.coroutineContext + SupervisorJob())
+        val connectionScope = CoroutineScope(parentScope.coroutineContext + SupervisorJob())
         return Connection(
             ConnectionOptions(
                 endpoint, username, password, pin,
                 voiceBitrate = ACCOUNTED_BITRATE,
             ),
-            parts.newTransport, parts.newUdp, receiver::onVoicePacket,
-            parts.networkWatch.current, parts.networkChanges.value, connectionScope,
-            parts.blockingScope,
+            newTransport, newUdp, receiver::onVoicePacket,
+            networkWatch.current, networkChanges.value, connectionScope,
+            blockingScope,
             // The driver compares the sync stamp against its own clock, and marks from two
             // sources cannot be compared.
-            bootClock = parts.bootClock,
-            pingIntervalMs = parts.pingIntervalMs,
+            bootClock = bootClock,
+            pingIntervalMs = pingIntervalMs,
             gen = gen,
         )
     }
@@ -251,7 +246,7 @@ internal class Session(
      * cancellation.
      */
     private suspend fun drive() {
-        val pin = parts.pinStore.get(endpoint.address)
+        val pin = pinStore.get(endpoint.address)
         Log.i(TAG, "connect gen=$gen endpoint=${endpoint.address} user=${username} storedPin=${pin != null}")
         // The loop below runs for minutes beside a live platform call: an escape would leave
         // the call up with nothing driving it.
@@ -283,11 +278,11 @@ internal class Session(
             // still counts.
             val firstDialedUnder = connection.dialedUnder
             scope.launch {
-                parts.networkChanges.filter { it != firstDialedUnder }.collect { changes ->
+                networkChanges.filter { it != firstDialedUnder }.collect { changes ->
                     val doomed = synchronized(lock) {
                         next?.takeIf { it.dialedUnder != changes }
                             ?: this@Session.connection?.takeIf {
-                                it.network?.let { n -> !parts.networkWatch.isUp(n) } ?: true
+                                it.network?.let { n -> !networkWatch.isUp(n) } ?: true
                             }
                     } ?: return@collect
                     val what = if (doomed === next) "the attempt" else "the link, its network gone"
@@ -317,7 +312,7 @@ internal class Session(
                     fail(mapState(gen, failed)!!)
                     return
                 }
-                val now = parts.bootClock.markNow()
+                val now = bootClock.markNow()
                 // Past Synchronized a connection ends as IO, from its socket, or by the server
                 // removing us, which is final: a kick rejoined at once is a kick again.
                 classify(gen, failed, now)?.let { fail(it); return }
@@ -429,7 +424,7 @@ internal class Session(
             // Measured on a Pixel 7a: WiFi returned with 28.8 s of budget left and a 30 s wait
             // next, while the in-flight connect, bound to the dead interface, ran out its own
             // timeout. One last attempt at the deadline costs one connect.
-            val remaining = deadline - parts.bootClock.markNow()
+            val remaining = deadline - bootClock.markNow()
             if (remaining <= Duration.ZERO) {
                 Log.w(TAG, "gave up gen=$gen")
                 fail(SessionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
@@ -442,9 +437,9 @@ internal class Session(
             // Attempt 0 is the first since the network last changed, unless the last dial was
             // under a second ago: a flapping default must not turn the backoff into a connect
             // storm.
-            if (parts.networkChanges.value != seen) {
-                seen = parts.networkChanges.value
-                if (lastDial == null || parts.bootClock.markNow() - lastDial >= BACKOFF[1]) {
+            if (networkChanges.value != seen) {
+                seen = networkChanges.value
+                if (lastDial == null || bootClock.markNow() - lastDial >= BACKOFF[1]) {
                     attempt = 0
                 }
             }
@@ -457,9 +452,9 @@ internal class Session(
             }
             if (!live) { next.close(); return null }
             // A change between the dial and the publish is one the collector could not have seen.
-            if (parts.networkChanges.value != next.dialedUnder) { drop(next); continue }
+            if (networkChanges.value != next.dialedUnder) { drop(next); continue }
             Log.i(TAG, "replacement gen=$gen attempt=$attempt")
-            lastDial = parts.bootClock.markNow()
+            lastDial = bootClock.markNow()
             val failure = open(next)
             if (failure != null) {
                 drop(next)
@@ -508,10 +503,10 @@ internal class Session(
     /** Waits [wait], or less: true if the default network changed meanwhile, the caller's cue
      *  to go round again. */
     private suspend fun backOff(wait: Duration): Boolean {
-        val seen = parts.networkChanges.value
-        merge(flow { parts.sleep(wait); emit(Unit) },
-            parts.networkChanges.filter { it != seen }.map { }).first()
-        return parts.networkChanges.value != seen
+        val seen = networkChanges.value
+        merge(flow { sleep(wait); emit(Unit) },
+            networkChanges.filter { it != seen }.map { }).first()
+        return networkChanges.value != seen
     }
 
     /**
@@ -551,7 +546,7 @@ internal class Session(
         // that says nothing about why. Every other rejection is final at once.
         FailReason.AUTH_REJECT ->
             if (failed.rejectType == MumbleProtos.Reject.RejectType.UsernameInUse &&
-                parts.bootClock.markNow() - diedAt < GHOST_REAP
+                bootClock.markNow() - diedAt < GHOST_REAP
             ) {
                 null
             } else {
@@ -570,7 +565,7 @@ internal class Session(
         val live = synchronized(lock) {
             // Under the lock, for the same ordering AppStateImpl.retireAndClearLocked keeps.
             if (end()) {
-                parts.call.end()
+                call.end()
                 state.callHeld.value = false
                 state.audioRoutes.value = AudioRoutes()
                 true

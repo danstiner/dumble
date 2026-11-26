@@ -242,11 +242,6 @@ class AppStateImpl internal constructor(
         }
     }
 
-    private val parts = SessionParts(
-        pinStore, newTransport, newUdp, newPlayout, call, udpClock, pingIntervalMs, sleep,
-        networkWatch, networkChanges, scope = scope, blockingScope = blockingScope,
-        releaseCapture = { send(CaptureCommand.Release(it)) },
-    )
 
     /**
      * Any thread; never blocks. Cannot fail: the channel is UNLIMITED and never closed, and its
@@ -458,7 +453,12 @@ class AppStateImpl internal constructor(
             if (answering != null && current !== answering) return
             prior = retireAndClearLocked(SessionStatus.Connecting)
             val gen = generation
-            session = Session(gen, Publisher(state, lock), endpoint, username, password, parts)
+            session = Session(
+                gen, Publisher(state, lock), endpoint, username, password,
+                pinStore, newTransport, newUdp, newPlayout, call, udpClock, pingIntervalMs, sleep,
+                networkWatch, networkChanges, parentScope = scope, blockingScope = blockingScope,
+                releaseCapture = { send(CaptureCommand.Release(it)) },
+            )
             current = session
             // Here rather than in requestCapture(): tying the call to the session, not the
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
