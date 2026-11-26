@@ -193,8 +193,8 @@ class VoiceReceiverTest {
     }
 
     /**
-     * The ordering AppStateImpl can produce: an attempt killed by an instant auth reject is
-     * retired — which calls stop() — before connect()'s coroutine gets as far as start(). The
+     * The ordering a Session can produce: an attempt killed by an instant auth reject is
+     * ended — which calls stop() — before its driver gets as far as start(). The
      * refused start() must build nothing, since nothing would ever destroy it.
      */
     @Test
@@ -502,7 +502,7 @@ class VoiceReceiverTest {
     }
 
     /**
-     * Mirrors AppStateImpl.teardown(): an attempt superseded or failing before its connection comes
+     * Mirrors Session.close(): an attempt superseded or failing before its connection comes
      * up calls stop() on a receiver whose start() was never reached. newEngine must never run on
      * that path: an engine built at construction would leak one per such attempt.
      */

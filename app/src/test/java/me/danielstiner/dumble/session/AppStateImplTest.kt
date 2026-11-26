@@ -168,8 +168,8 @@ class AppStateImplTest {
         app.connect(MumbleEndpoint.parse("second"), "user", null)
 
         // Sampled, not awaited: connect() clears under the same lock that bumps the generation, so
-        // it has already happened when the call returns, and every publish helper is gen-checked so
-        // the retired session cannot write these again.
+        // it has already happened when the call returns, and the same step closes the first
+        // session's publisher, so it cannot write these again.
         assertEquals(ChannelTree(), app.channelTree.value)
         assertEquals(emptyList<ChatMessage>(), app.messages.value)
     }
@@ -512,7 +512,7 @@ class AppStateImplTest {
         assertEquals(AudioRoutes(), app.audioRoutes.value)
     }
 
-    /** Every other published flow is cleared on retire; a survivor here would paint the next
+    /** Every other published flow is cleared on disconnect; a survivor here would paint the next
      *  session's control with the last one's headset. */
     @Test fun disconnectClearsTheRoutes() = deterministic {
         val call = FakeVoiceCall()
@@ -1564,8 +1564,8 @@ class AppStateImplTest {
 
     /**
      * A session that dies on its own reaches no disconnect() and supersedes no prior session, so
-     * before retire() nothing tore the session down and the playback thread outlived it — waking
-     * at 100 Hz with an open AudioTrack for as long as the error screen stayed up.
+     * it has to stop its own receiver: left running, the playback thread wakes at 100 Hz with an
+     * open AudioTrack for as long as the error screen stays up.
      */
     @Test fun aFailedSessionReleasesTheReceiver() = deterministic {
         lateinit var fake: FakeControlTransport
@@ -1627,8 +1627,8 @@ class AppStateImplTest {
         assertEquals("disconnect() zeroes the flow under the lock", emptySet<Int>(), app.speakingSessions.value)
         // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
         // synchronously and closing the publisher blocks any later receiver-originated write, so
-        // deleting the stop() from teardown() would still pass it. This is what actually proves
-        // the receiver was released.
+        // deleting the stop() from Session.close() would still pass it. This is what actually
+        // proves the receiver was released.
         assertSettled("teardown must destroy the playout engine") { playout.destroyed }
     }
 

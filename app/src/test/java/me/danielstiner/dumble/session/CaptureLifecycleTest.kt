@@ -125,7 +125,7 @@ class CaptureLifecycleTest {
 
     /**
      * The same non-destruction-under-a-live-pump via the hold path, not just disconnect. Worth its
-     * own case because teardown() and a hold's release are separate call sites with the same shape,
+     * own case because a session's end and a hold's release are separate paths with the same shape,
      * and a hold is the common one — every incoming cellular call takes it.
      */
     @Test fun holdDoesNotDestroyTheEngineWhileThePumpIsStillPolling() = deterministic {
