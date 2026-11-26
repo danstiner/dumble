@@ -76,12 +76,13 @@ import kotlin.time.TimeSource
  * Owns connecting to a server and what the user sees of it: each session's [Connection], its
  * reconnects and its trust failures, unified into one [status] flow.
  *
- * One live [Session] at a time, guarded by [generation]; each session's driver opens its
- * [Connection]. A blocking handshake cannot be preempted by teardown — the socket is not owned
- * until it publishes — so a superseded connection can complete late and would otherwise clobber a
- * newer session's status. Every write is therefore checked under [lock] — on the generation, or
- * for the call's hold and routes on the live session — and a connection's own flows on the
- * connection's identity as well, so a superseded writer's late writes become no-ops.
+ * One live [Session] at a time; each session's driver opens its [Connection]. A blocking
+ * handshake cannot be preempted by teardown — the socket is not owned until it publishes — so a
+ * superseded connection can complete late and would otherwise clobber a newer session's status.
+ * A session's writes are therefore checked under [lock] — its own through its [Publisher], which
+ * the next connect or disconnect revokes, or for the call's hold and routes on the live session
+ * — and a connection's own flows on the connection's identity as well, so a superseded writer's
+ * late writes become no-ops.
  *
  * The audio-capture half of this class — the command channel, its single consumer, and the
  * level/reconcile model — is documented in `docs/capture.md`.
@@ -171,6 +172,8 @@ class AppStateImpl internal constructor(
     init { networkWatch.start { networkChanges.update { it + 1 } } }
 
     private val lock = Any()
+    /** Bumped by every connect and disconnect: names the connect a status, the platform call and
+     *  a log line are about. */
     private var generation = 0
     @Volatile private var current: Session? = null
     /** The session whose handshake stopped for a trust decision: retired like any failed connect,
@@ -343,7 +346,7 @@ class AppStateImpl internal constructor(
         synchronized(lock) { if (current === session) state.audioRoutes.value = r }
 
     /** Whether [session] is still the published, live session — the gate every open decision
-     *  takes. [current] alone decides it: only retireAndClearLocked bumps [generation], and it
+     *  takes. [current] alone decides it: only retireAndClearLocked revokes a licence, and it
      *  clears [current] in the same step. */
     private fun isLive(session: Session) =
         synchronized(lock) { current === session }
@@ -572,7 +575,8 @@ class AppStateImpl internal constructor(
             // only a session whose connection comes up ever reaches — building eagerly would leak
             // one per session that fails or is superseded before that.
             session = Session(
-                gen, Publisher(state, lock).also { issued = it }, endpoint, username, password, VoiceReceiver(newPlayout, context = scope.coroutineContext),
+                gen, Publisher(state, lock).also { issued = it }, endpoint, username, password,
+                VoiceReceiver(newPlayout, context = scope.coroutineContext),
                 CoroutineScope(scope.coroutineContext + SupervisorJob()),
             )
             current = session
@@ -997,7 +1001,7 @@ class AppStateImpl internal constructor(
 
     /**
      * Release a still-current session whose connection died on its own, or never came up.
-     * Deliberately does not bump [generation] or reset published state beyond the call's own — the
+     * Deliberately does not revoke its licence or reset published state beyond the call's own — the
      * terminal Error status is what the user is looking at. Clearing [current] is what makes this
      * at-most-once: a later disconnect() sees no prior and a later connect() has nothing to tear
      * down.

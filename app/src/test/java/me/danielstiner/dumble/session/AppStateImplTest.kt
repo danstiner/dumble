@@ -1626,7 +1626,7 @@ class AppStateImplTest {
         app.disconnect()
         assertEquals("disconnect() zeroes the flow under the lock", emptySet<Int>(), app.speakingSessions.value)
         // The assertion above alone is vacuous as a lifecycle test: disconnect() writes the flow
-        // synchronously and the generation guard blocks any later receiver-originated write, so
+        // synchronously and revoking the licence blocks any later receiver-originated write, so
         // deleting the stop() from teardown() would still pass it. This is what actually proves
         // the receiver was released.
         assertSettled("teardown must destroy the playout engine") { playout.destroyed }

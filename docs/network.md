@@ -18,7 +18,7 @@ and [UDP](#udp-the-low-latency-voice-path) covers the voice socket. The bytes on
 ```
 UI ─► AppState (interface)
           │
-    AppStateImpl                        one live Session, guarded by a generation
+    AppStateImpl                        one live Session; a replaced one can no longer publish
           ├─► Connection                one TLS connect; replaced under the session on a reconnect
           │     ├─► MumbleTcpTransport ─► SSLSocket ─────────┐
           │     │      trust: MumbleTrustManager + PinStore   ├─► server
@@ -33,7 +33,7 @@ UI ─► AppState (interface)
 | Decision | Why | Cost |
 |---|---|---|
 | A session is split from its connection | Audio and the platform call belong to the session, so replacing a connection does not interrupt them. | Two lifetimes to guard instead of one. |
-| Late writes are discarded by generation | A superseded connect can still complete after its session was replaced; teardown cannot always stop a handshake in flight. | Every flow write takes one lock. |
+| A replaced session's late writes are discarded | A superseded connect can still complete after its session was replaced; teardown cannot always stop a handshake in flight. | Every flow write takes one lock. |
 | Reconnecting gives up after 2 minutes | Long enough for an elevator or a tunnel; short enough that a dead server does not hold the phone in call mode. | A longer outage needs a manual reconnect. |
 | A connection with no ping reply for 15 to 20 s is replaced | A dead path may never produce a socket error. | A path stalled that long but alive is torn down too. |
 | The old connection is closed before the new one is dialed | The old connection would read its own ghost kick as the server removing us, and end the session. | A moment with no connection on every handover. |
@@ -49,10 +49,13 @@ UI ─► AppState (interface)
 - A **connection** is one TLS connect and what lives exactly as long as it: the TCP transport, the
   state machine, the UDP socket keyed by that connection's cipher, the `VoicePath`, and the
   collectors that republish its flows.
-- The **generation** is a counter that `connect()` bumps. Every flow write is checked under the
-  lock that bumps it, so a superseded connection finishing late writes nothing. A session's flows
-  are checked against the generation, the call's hold and routes against the live session, and a
-  connection's flows against the connection's identity as well.
+- The **generation** is a counter that every `connect()` and `disconnect()` bumps: it names a
+  connect in the status, in the platform call and in the logs. It guards nothing.
+- A session publishes through a **licence** (`Publisher`) that the next `connect()` or
+  `disconnect()` revokes. Its writes are checked under the one lock that revokes it, so a
+  superseded connection finishing late writes nothing. A session's flows are checked against its
+  licence, the call's hold and routes against the live session, and a connection's flows against
+  the connection's identity as well.
 
 `connect()` retires the old session, publishes the new one and starts its call under one lock, so
 starts reach the platform call in generation order. A start supersedes the call before it and
@@ -60,10 +63,12 @@ keeps its audio mode and route.
 
 A session ends in one of two ways:
 
-- **Superseded or disconnected.** Every published flow is cleared in the same step as the bump.
-- **Failed.** The session is retired and its flows are left alone, because the final status is
-  what the user is looking at. The call's hold and routes are cleared regardless. A trust prompt
-  retires its session this way too, and keeps it for `trustAndConnect()`.
+- **Superseded or disconnected.** Its licence is revoked and every published flow is cleared, in
+  one step.
+- **Failed.** The session is retired, keeps its licence, and its flows are left alone, because
+  the final status is what the user is looking at. The call's hold and routes are cleared
+  regardless. A trust prompt retires its session this way too, and keeps it for
+  `trustAndConnect()`.
 
 ## Reconnect
 
