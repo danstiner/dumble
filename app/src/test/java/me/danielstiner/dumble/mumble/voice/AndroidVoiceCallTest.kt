@@ -44,17 +44,21 @@ class AndroidVoiceCallTest {
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
-    private fun start(id: Int, host: String = "host") {
-        call.start(
+    /** Ends the call most recently started. */
+    private var lastEnd: () -> Unit = {}
+
+    private fun start(id: Int, host: String = "host"): () -> Unit {
+        lastEnd = call.start(
             id, MumbleEndpoint.parse(host),
             onHeld = { held.getOrPut(id) { mutableListOf() } += it },
             onRoutes = { routes[id] = it },
         )
         idle()
+        return lastEnd
     }
 
     private fun end() {
-        call.end()
+        lastEnd()
         idle()
     }
 
@@ -184,8 +188,7 @@ class AndroidVoiceCallTest {
 
     /** The app state sends an end right behind its start; the end must queue behind it, not find no call. */
     @Test fun anEndSentBeforeItsStartAppliesStillEndsIt() {
-        call.start(1, MumbleEndpoint.parse("host"), onHeld = {}, onRoutes = {})
-        call.end()
+        call.start(1, MumbleEndpoint.parse("host"), onHeld = {}, onRoutes = {})()
         idle()
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
         assertNull(audio.communicationDevice)
@@ -193,12 +196,23 @@ class AndroidVoiceCallTest {
         assertEquals(VoiceService.ACTION_STOP, application.nextStartedService?.action)
     }
 
-    @Test fun anEndWithNoCallDoesNothing() {
-        end()
+    @Test fun aSecondEndOfTheSameCallDoesNothing() {
         start(1)
         end()
         end()
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
+    }
+
+    /** The check's session ends its own call when it finishes; a user's connect has superseded it
+     *  by then, and that end must leave the user's call up. */
+    @Test fun anEndForASupersededCallLeavesTheLiveOne() {
+        val endFirst = start(1)
+        start(2)
+        endFirst()
+        idle()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+        phone(AudioManager.MODE_IN_CALL)
+        assertEquals(listOf(true), held[2])
     }
 
     @Test fun afterEndNothingIsPublished() {

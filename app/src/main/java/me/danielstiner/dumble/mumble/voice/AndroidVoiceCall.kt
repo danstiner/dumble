@@ -76,12 +76,10 @@ class AndroidVoiceCall(
         endpoint: MumbleEndpoint,
         onHeld: (held: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-    ) {
-        main.post { handleStart(id, endpoint.host, onHeld, onRoutes) }
-    }
-
-    override fun end() {
-        main.post { handleEnd() }
+    ): () -> Unit {
+        val l = Live(id, onHeld, onRoutes)
+        main.post { handleStart(l, endpoint.host) }
+        return { main.post { handleEnd(l) } }
     }
 
     override fun requestRoute(routeId: String) {
@@ -92,14 +90,8 @@ class AndroidVoiceCall(
      * A start while live supersedes: listeners and whatever mode and route were taken carry over,
      * so a headset's call link is not closed only to be reopened.
      */
-    private fun handleStart(
-        id: Int,
-        host: String,
-        onHeld: (Boolean) -> Unit,
-        onRoutes: (AudioRoutes) -> Unit,
-    ) {
+    private fun handleStart(l: Live, host: String) {
         val superseding = live != null
-        val l = Live(id, onHeld, onRoutes)
         live = l
         // Again on a supersede, only to show the new host.
         VoiceService.start(context, host)
@@ -114,13 +106,9 @@ class AndroidVoiceCall(
         reconcile(l)
     }
 
-    private fun handleEnd() {
-        // The listener removals below throw for listeners that are not registered.
-        if (live == null) {
-            // The caller contract rules this out: a log is all that shows it broke.
-            Log.w(TAG, "end with no live call")
-            return
-        }
+    private fun handleEnd(l: Live) {
+        // A superseded call's end is ordinary; the removals below throw once nothing is registered.
+        if (live !== l) return
         live = null
         routed = false
         modeTaken = false
