@@ -158,8 +158,7 @@ class AppStateImpl internal constructor(
     @Volatile private var transmitMode = TransmitMode.VoiceActivity
 
     private val captures = CaptureLifecycle(
-        newCapture, startPump, captureClock, stuckPumpMillis, { transmitMode },
-        scope, blockingScope,
+        startPump, captureClock, stuckPumpMillis, scope, blockingScope,
     )
 
     /**
@@ -206,7 +205,7 @@ class AppStateImpl internal constructor(
                 id, Publisher(state, lock), endpoint, username, password,
                 pinStore, newTransport, newUdp, newPlayout, call, udpClock, pingIntervalMs, sleep,
                 networkWatch, networkChanges, parentScope = scope, blockingScope = blockingScope,
-                captures = captures,
+                captures = captures, newCapture = newCapture, transmitMode = { transmitMode },
             )
             current = session
             // Here rather than in requestCapture(): tying the call to the session, not the

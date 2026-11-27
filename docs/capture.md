@@ -78,6 +78,11 @@ The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` an
 - A hold reaches only the live session, and pauses playout without waiting for the capture
   consumer.
 
+Each `CaptureState` carries its own engine factory and transmit mode, so a second client can run
+beside a session. Opening one client's microphone first stops the other's and lowers its `wanted`,
+so the loser does not take it back when its pump exits. The app never reaches this: one session is
+live at a time, and an ended session's release is queued before the next session can open.
+
 ## Platform call
 
 `AndroidVoiceCall`, behind the `VoiceCall` interface. The session sets `MODE_IN_COMMUNICATION` and

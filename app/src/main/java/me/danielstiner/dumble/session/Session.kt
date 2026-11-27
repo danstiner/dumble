@@ -34,8 +34,10 @@ import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
+import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
+import me.danielstiner.dumble.mumble.voice.VoiceSender
 import java.net.SocketTimeoutException
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
@@ -79,6 +81,8 @@ internal class Session(
     private val blockingScope: CoroutineScope,
     /** The one microphone owner every session shares. */
     private val captures: CaptureLifecycle,
+    newCapture: () -> VoiceSender.CaptureHandle?,
+    transmitMode: () -> TransmitMode,
 ) {
     private val lock = publisher.lock
     private val state = publisher.state
@@ -110,7 +114,9 @@ internal class Session(
     @Volatile var presented: String? = null
         private set
     /** The flags [CaptureLifecycle] reads to open or close this session's microphone. */
-    val capture = CaptureState(id, publisher, { isLive }, { selfState.muted }, ::sendVoice)
+    val capture = CaptureState(
+        id, publisher, { isLive }, { selfState.muted }, ::sendVoice, newCapture, transmitMode,
+    )
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
     @Volatile var selfState: DeafenState = DeafenState()
