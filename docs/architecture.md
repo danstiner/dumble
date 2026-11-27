@@ -28,7 +28,7 @@ Non-goals:
       │
  AppState (interface)                  what the UI sees; faked in ViewModel tests
       │
- AppStateImpl                          one per process; owns everything below
+ AppStateImpl                          one per process; its SessionParts hold the capture and call
       │
       ├─ Session                       one Connect; ends on disconnect or final failure
       │    ├─ Connection               one TLS connect; replaced on a reconnect
@@ -50,7 +50,7 @@ mono 16-bit PCM throughout, counted in 10 ms frames and sent as 20 ms Opus packe
 **App state** ([network.md](network.md)). `AppStateImpl` is a Hilt singleton bound to the
 `AppState` interface. It publishes one `status` flow and opens a `Session` per `connect()`, which
 runs the TLS connect, the connection state machine and the reconnects. One session is live at a
-time, and that session owns both audio pipelines and the platform call.
+time. It owns its playout and the platform call it started; capture is shared by every session.
 
 **Audio** ([capture.md](capture.md), [playout.md](playout.md)). Capture and playout are separate
 pipelines built the same way: a C++ engine with no Android dependency (`cpp/core`), an Oboe
