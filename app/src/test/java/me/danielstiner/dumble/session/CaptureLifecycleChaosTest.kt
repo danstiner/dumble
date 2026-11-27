@@ -97,7 +97,7 @@ class CaptureLifecycleChaosTest {
             // this firing after destroyed is the use-after-free VoiceSender's monitor closes.
             // It should never fire — the monitor already guards it at the Kotlin level — so this
             // is a second, independent witness rather than the only one.
-            if (destroyed.get()) violations += "handle $id: setTransmitting reached a destroyed handle"
+            if (destroyed.get()) violations += "handle $id: setGateOpen reached a destroyed handle"
         }
 
         override fun setTransmitMode(mode: TransmitMode) = Unit

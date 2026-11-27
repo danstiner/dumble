@@ -113,9 +113,10 @@ class VoiceSender(
         synchronized(this) {
             if (destroyed) return
             // Only on a change: every mode write resets the engine's detector, mid-spurt too.
-            if (mode() != appliedMode) {
-                handle.setTransmitMode(mode())
-                appliedMode = mode()
+            val wanted = mode()
+            if (wanted != appliedMode) {
+                handle.setTransmitMode(wanted)
+                appliedMode = wanted
             }
             handle.setGateOpen(gateOpen())
         }
