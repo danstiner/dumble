@@ -23,6 +23,10 @@ internal class CaptureState(
     /** The user's own mute or a deafen, which keeps the gate shut. */
     val muted: () -> Boolean,
     val sendVoice: (ByteArray) -> Boolean,
+    /** Builds this client's native engine; null when the device refuses. */
+    val newCapture: () -> VoiceSender.CaptureHandle?,
+    /** This client's transmit mode. */
+    val transmitMode: () -> TransmitMode,
 ) {
     /** The open microphone, or null. One field, one lifetime: splitting handle and pump
      *  would leave a window where a hold could open a second microphone stream. Written only
@@ -56,12 +60,9 @@ internal class CaptureState(
  * docs/capture.md, "Lifecycle".
  */
 internal class CaptureLifecycle(
-    private val newCapture: () -> VoiceSender.CaptureHandle?,
     private val startPump: (VoiceSender) -> Unit,
     private val captureClock: TimeSource,
     private val stuckPumpMillis: Long,
-    /** The app's transmit mode setting. */
-    private val transmitMode: () -> TransmitMode,
     /** Long-lived; the wedge watchdog's delays run here. */
     private val scope: CoroutineScope,
     /** Never cancelled; the consumer runs here. */
@@ -78,6 +79,9 @@ internal class CaptureLifecycle(
         data class PumpExited(val client: CaptureState, val sender: VoiceSender) : CaptureCommand
         data class WedgeCheck(val client: CaptureState, val sender: VoiceSender) : CaptureCommand
     }
+
+    /** The client whose microphone is open or being released. Lifecycle consumer only. */
+    private var holder: CaptureState? = null
 
     private val captureCommands = Channel<CaptureCommand>(Channel.UNLIMITED)
 
@@ -162,6 +166,7 @@ internal class CaptureLifecycle(
      */
     private fun onRelease(client: CaptureState) {
         client.wanted = false
+        if (holder === client) holder = null
         reconcile(client)
     }
 
@@ -183,9 +188,16 @@ internal class CaptureLifecycle(
      *  Lifecycle consumer only; blocks in newCapture() — a full HAL open — which is why the
      *  consumer runs on blockingScope. */
     private fun openCapture(client: CaptureState) {
+        holder?.takeIf { it !== client }?.let { other ->
+            // One microphone across clients: the last to open wins, and the loser must not take
+            // it back when its pump exits.
+            Log.i(TAG, "capture id=${client.id} preempts id=${other.id}")
+            other.wanted = false
+            other.sender?.let { if (!other.releasing) beginRelease(other, it) }
+        }
         // Leaves `wanted` set on failure, unlike onPumpExited: an open happens once per command,
         // so a failing one cannot loop, and a Talk press asks again anyway.
-        val handle = newCapture() ?: return
+        val handle = client.newCapture() ?: return
         val sender = VoiceSender(
             handle, { client.sendVoice(it) },
             onExit = { s -> send(CaptureCommand.PumpExited(client, s)) },
@@ -197,8 +209,9 @@ internal class CaptureLifecycle(
         if (!client.isLive()) { handle.stop(); handle.destroy(); return }
         // Published before the levels are read — the mirror of apply()'s order; see its KDoc.
         client.sender = sender
+        holder = client
         // Before the pump starts, so its first poll already reads the mode and the gate.
-        sender.apply(transmitMode, { wantsGate(client) })
+        sender.apply(client.transmitMode, { wantsGate(client) })
         startPump(sender)
     }
 
@@ -286,11 +299,11 @@ internal class CaptureLifecycle(
      */
     fun apply(client: CaptureState) {
         if (wantsGate(client)) send(CaptureCommand.Acquire(client))
-        client.sender?.apply(transmitMode, { wantsGate(client) })
+        client.sender?.apply(client.transmitMode, { wantsGate(client) })
     }
 
     private fun wantsGate(client: CaptureState) =
-        !client.muted() && (client.pressed || transmitMode() == TransmitMode.VoiceActivity)
+        !client.muted() && (client.pressed || client.transmitMode() == TransmitMode.VoiceActivity)
 
     private companion object {
         const val TAG = "MumbleConn"

@@ -2,6 +2,8 @@ package me.danielstiner.dumble.session
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -337,6 +339,43 @@ class CaptureLifecycleTest {
 
         app.disconnect()
         assertSettled("disconnect must release the second engine") { handles[1].destroys.get() == 1 }
+    }
+
+    /** Two clients share the microphone: whoever opens last gets it, the other's stream is closed
+     *  first, and the loser does not take it back when its pump exits. */
+    @Test fun anOpenForOneClientStopsAnothersCaptureFirst() = deterministic {
+        val aHandles = mutableListOf<FakeCaptureHandle>()
+        val bHandles = mutableListOf<FakeCaptureHandle>()
+        var aStoppedWhenBOpened = false
+        val lifecycle = CaptureLifecycle(
+            startPump, clock, 1_000L,
+            CoroutineScope(dispatcher + SupervisorJob()), CoroutineScope(dispatcher + SupervisorJob()),
+        )
+        val publisher = Publisher(SessionState(), Any())
+        // Capped so a client that wrongly takes the microphone back fails the assertions below
+        // instead of ping-ponging until the heap runs out.
+        fun client(id: Int, handles: MutableList<FakeCaptureHandle>, onOpen: () -> Unit = {}) = CaptureState(
+            id, publisher, { true }, { false }, { true },
+            { onOpen(); if (handles.size >= 3) null else FakeCaptureHandle(blocking = false).also { handles += it } },
+            { TransmitMode.VoiceActivity },
+        )
+        val a = client(1, aHandles)
+        val b = client(2, bHandles) { aStoppedWhenBOpened = aHandles[0].stopped }
+
+        lifecycle.acquire(a)
+        settle()
+        assertEquals(1, aHandles.size)
+
+        lifecycle.acquire(b)
+        settle()
+        assertTrue("a's stream closed before b's opened", aStoppedWhenBOpened)
+        assertEquals(1, bHandles.size)
+        assertTrue(aHandles[0].destroyed)
+        assertEquals("a does not reopen", 1, aHandles.size)
+
+        lifecycle.release(b)
+        settle()
+        assertTrue(bHandles[0].destroyed)
     }
 
     /** A hold from a superseded call must reach neither the live session's capture nor its banner. */
