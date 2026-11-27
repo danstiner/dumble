@@ -203,8 +203,8 @@ class AndroidVoiceCallTest {
         assertEquals(AudioManager.MODE_NORMAL, audio.mode)
     }
 
-    /** The check's session ends its own call when it finishes; a user's connect has superseded it
-     *  by then, and that end must leave the user's call up. */
+    /** A session can end its call after a newer connect has superseded it; that end must leave
+     *  the newer call up. */
     @Test fun anEndForASupersededCallLeavesTheLiveOne() {
         val endFirst = start(1)
         start(2)

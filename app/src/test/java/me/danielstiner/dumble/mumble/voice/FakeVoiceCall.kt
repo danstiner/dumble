@@ -7,7 +7,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Lets a test drive a hold or a resume synchronously, without AndroidVoiceCall's main-looper hop.
  * Commands apply inside the call, in the order the real call's looper would apply them: a start
- * supersedes silently, and a superseded call's end does nothing.
+ * supersedes silently, and a superseded call's end does nothing. A second end of the same call
+ * throws here, though the real call ignores it: an owner ending twice is a bug.
  */
 class FakeVoiceCall : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */

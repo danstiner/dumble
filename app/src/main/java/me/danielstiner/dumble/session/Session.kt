@@ -156,7 +156,7 @@ internal class Session(
                 receiver.setHeld(held)
                 captures.held(capture, held)
             },
-            // An ended session's call is ended, so its late updates are dropped.
+            // Once this session has ended, the routes belong to its successor or to the reset.
             onRoutes = { r -> synchronized(lock) { if (!ended) state.audioRoutes.value = r } },
         )
     }

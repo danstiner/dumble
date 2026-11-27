@@ -107,7 +107,8 @@ class AndroidVoiceCall(
     }
 
     private fun handleEnd(l: Live) {
-        // A superseded call's end is ordinary; the removals below throw once nothing is registered.
+        // A superseded call's end must leave the successor's call alone, and a repeated end finds
+        // nothing registered, which the removals below throw on.
         if (live !== l) return
         live = null
         routed = false

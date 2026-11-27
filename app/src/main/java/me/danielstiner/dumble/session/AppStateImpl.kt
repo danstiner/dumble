@@ -190,8 +190,7 @@ class AppStateImpl internal constructor(
     /**
      * Ending the last session, starting the call and publishing the new session are one critical
      * section: connects run on two threads (the UI's and trust-and-connect's), and [lock] hands
-     * the call their starts in connect order. Every end goes out under it too, so none can
-     * land after a later start.
+     * the call their starts in connect order.
      *
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
      * dismissed it, and then this does nothing.
