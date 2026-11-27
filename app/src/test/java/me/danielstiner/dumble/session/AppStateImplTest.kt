@@ -167,7 +167,7 @@ class AppStateImplTest {
 
         app.connect(MumbleEndpoint.parse("second"), "user", null)
 
-        // Sampled, not awaited: connect() clears under the same lock that bumps the generation, so
+        // Sampled, not awaited: connect() clears under the same lock that bumps the session id, so
         // it has already happened when the call returns, and the same step closes the first
         // session's publisher, so it cannot write these again.
         assertEquals(ChannelTree(), app.channelTree.value)
@@ -396,11 +396,11 @@ class AppStateImplTest {
         handshaking(app)
         app.requestCapture()
         assertSettled("the engine must open") { handles.size == 1 }
-        val gen = call.startedGens.single()
+        val id = call.startedIds.single()
 
         app.disconnect()
         assertSettled("disconnect must end the call") { call.ends == 1 }
-        call.resumeFor(gen)
+        call.resumeFor(id)
 
         assertSettled("no engine may be built for a dead session") { handles.size == 1 }
     }
@@ -477,12 +477,12 @@ class AppStateImplTest {
         ) { FakeControlTransport { _, _ -> } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         handshaking(app)
-        val staleGen = call.startedGens.first()
+        val staleId = call.startedIds.first()
 
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         handshaking(app)
 
-        call.emitRoutesFor(staleGen, routes(AudioRoute.Type.BLUETOOTH, current = AudioRoute.Type.BLUETOOTH))
+        call.emitRoutesFor(staleId, routes(AudioRoute.Type.BLUETOOTH, current = AudioRoute.Type.BLUETOOTH))
 
         assertEquals(AudioRoutes(), app.audioRoutes.value)
     }
@@ -516,7 +516,7 @@ class AppStateImplTest {
             InMemoryPinStore(), call = call, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> refused.await() } })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        val gen = call.startedGens.single()
+        val id = call.startedIds.single()
         call.emitRoutes(routes(AudioRoute.Type.SPEAKER, current = AudioRoute.Type.SPEAKER))
         call.hold()
         assertSettled("the call's hold and routes must be published while connecting") {
@@ -528,8 +528,8 @@ class AppStateImplTest {
         assertFalse("the end clears the hold", app.callHeld.value)
         assertEquals("the end clears the routes", AudioRoutes(), app.audioRoutes.value)
 
-        call.holdFor(gen)
-        call.emitRoutesFor(gen, routes(AudioRoute.Type.EARPIECE, current = AudioRoute.Type.EARPIECE))
+        call.holdFor(id)
+        call.emitRoutesFor(id, routes(AudioRoute.Type.EARPIECE, current = AudioRoute.Type.EARPIECE))
 
         assertSettled("a late hold must not raise the banner") { !app.callHeld.value }
         assertEquals("late routes must be dropped", AudioRoutes(), app.audioRoutes.value)

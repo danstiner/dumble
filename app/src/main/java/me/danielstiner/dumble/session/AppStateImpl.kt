@@ -148,7 +148,7 @@ class AppStateImpl internal constructor(
     private val lock = Any()
     /** Bumped by every connect and disconnect: names the connect a status, the platform call and
      *  a log line are about. */
-    private var generation = 0
+    private var lastId = 0
     /** The last session opened; it may have ended. */
     @Volatile private var current: Session? = null
     private val live: Session? get() = current?.takeUnless { it.ended }
@@ -179,7 +179,7 @@ class AppStateImpl internal constructor(
      */
     private fun retireAndClearLocked(status: SessionStatus): Session? {
         val last = current
-        current = null; generation += 1
+        current = null; lastId += 1
         last?.publisher?.close()
         // end() queues the capture release here, under the lock, so it is ahead of anything the
         // next session queues and runs first. Queuing never blocks, so it is safe under the lock.
@@ -194,7 +194,7 @@ class AppStateImpl internal constructor(
     /**
      * Ending the last session, starting the call and publishing the new session are one critical
      * section: connects run on two threads (the UI's and trust-and-connect's), and [lock] hands
-     * the call their starts in generation order. Every end goes out under it too, so none can
+     * the call their starts in connect order. Every end goes out under it too, so none can
      * land after a later start.
      *
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
@@ -206,9 +206,9 @@ class AppStateImpl internal constructor(
         synchronized(lock) {
             if (answering != null && current !== answering) return
             prior = retireAndClearLocked(SessionStatus.Connecting)
-            val gen = generation
+            val id = lastId
             session = Session(
-                gen, Publisher(state, lock), endpoint, username, password,
+                id, Publisher(state, lock), endpoint, username, password,
                 pinStore, newTransport, newUdp, newPlayout, call, udpClock, pingIntervalMs, sleep,
                 networkWatch, networkChanges, parentScope = scope, blockingScope = blockingScope,
                 captures = captures,
@@ -220,7 +220,7 @@ class AppStateImpl internal constructor(
             // the connect tap still has the app in front — a microphone service cannot start later.
             // No end for the prior's call: this start supersedes it, carrying its mode and route.
             call.start(
-                gen, endpoint,
+                id, endpoint,
                 onHeld = { held ->
                     // The output stream follows the hold too: straight to the receiver, not through
                     // the capture consumer, which can be blocked in newCapture() or stop(). The

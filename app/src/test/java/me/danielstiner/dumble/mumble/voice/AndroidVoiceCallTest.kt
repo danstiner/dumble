@@ -32,9 +32,9 @@ class AndroidVoiceCallTest {
     private val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, 3, "Pixel 7a")
     private val headset = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, 7, "WH-1000XM5")
     private val call = AndroidVoiceCall(context, captureSession = OURS)
-    /** What each generation was told through onHeld, in order. */
+    /** What each call was told through onHeld, in order. */
     private val held = mutableMapOf<Int, MutableList<Boolean>>()
-    /** The last routes each generation was given. */
+    /** The last routes each call was given. */
     private val routes = mutableMapOf<Int, AudioRoutes>()
 
     @Before fun builtIns() {
@@ -44,11 +44,11 @@ class AndroidVoiceCallTest {
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
-    private fun start(gen: Int, host: String = "host") {
+    private fun start(id: Int, host: String = "host") {
         call.start(
-            gen, MumbleEndpoint.parse(host),
-            onHeld = { held.getOrPut(gen) { mutableListOf() } += it },
-            onRoutes = { routes[gen] = it },
+            id, MumbleEndpoint.parse(host),
+            onHeld = { held.getOrPut(id) { mutableListOf() } += it },
+            onRoutes = { routes[id] = it },
         )
         idle()
     }

@@ -33,12 +33,12 @@ class AndroidVoiceCall(
     private val main = Handler(Looper.getMainLooper())
 
     private class Live(
-        val gen: Int,
+        val id: Int,
         val onHeld: (Boolean) -> Unit,
         val onRoutes: (AudioRoutes) -> Unit,
     ) {
         /**
-         * Starts false for every call, even one that replaces a live call: a new generation
+         * Starts false for every call, even one that replaces a live call: a new session
          * opens capture unless it is told it is held.
          */
         var held = false
@@ -72,12 +72,12 @@ class AndroidVoiceCall(
     }
 
     override fun start(
-        gen: Int,
+        id: Int,
         endpoint: MumbleEndpoint,
         onHeld: (held: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
-        main.post { handleStart(gen, endpoint.host, onHeld, onRoutes) }
+        main.post { handleStart(id, endpoint.host, onHeld, onRoutes) }
     }
 
     override fun end() {
@@ -93,13 +93,13 @@ class AndroidVoiceCall(
      * so a headset's call link is not closed only to be reopened.
      */
     private fun handleStart(
-        gen: Int,
+        id: Int,
         host: String,
         onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
         val superseding = live != null
-        val l = Live(gen, onHeld, onRoutes)
+        val l = Live(id, onHeld, onRoutes)
         live = l
         // Again on a supersede, only to show the new host.
         VoiceService.start(context, host)
@@ -143,7 +143,7 @@ class AndroidVoiceCall(
         known = routes.mapTo(HashSet()) { it.id }
         if (held != l.held) {
             l.held = held
-            Log.i(TAG, "${if (held) "held" else "resumed"} gen=${l.gen} mode=${audio.mode}")
+            Log.i(TAG, "${if (held) "held" else "resumed"} id=${l.id} mode=${audio.mode}")
             l.onHeld(held)
         }
         l.onRoutes(AudioRoutes(routes.sorted(), audio.communicationDevice?.toAudioRoute()))
