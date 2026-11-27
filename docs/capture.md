@@ -46,7 +46,7 @@ packet for the transport. Its exit callback is the only signal that the pump is 
 
 While the gate is closed, `onPcm` advances the frame clock and discards the samples.
 
-The gate is not stored. `apply` derives it from three levels as
+The gate is not stored. `CaptureLifecycle.apply` derives it from three levels as
 `!muted && (pressed || voiceActivity)`, whenever one of them changes and again when the capture
 session opens.
 
@@ -61,10 +61,13 @@ The KDoc on `apply` explains why a press cannot race the session opening.
 
 ## Lifecycle
 
-`AppStateImpl` owns it. Four sources ask for transitions concurrently: the Talk button,
-platform hold and resume, disconnect and reconnect, and the pump's own exit. Each transition is a
-command on one channel with a single consumer. State is kept as levels, not events, and
-`reconcile()` compares the levels and is the only place the capture session opens or closes.
+`CaptureLifecycle` owns it, one per app state and shared by its sessions. Four sources ask for
+transitions concurrently: the Talk button, platform hold and resume, disconnect and reconnect, and
+the pump's own exit. Each transition is a command on one channel with a single consumer, the one
+coroutine that runs the commands in order. Commands set flags on the session's `CaptureState`. The
+flags are levels, not events: each says what is true now (capture wanted, call held), so commands
+can arrive in any order. `reconcile()` then opens or closes the capture session to match them, and
+is the only place that does.
 
 The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` and `VoiceSenderTest`:
 
@@ -95,8 +98,8 @@ session resumes by itself. A Talk press held through the hold transmits once it 
 
 ## Speaking indicator
 
-`VoiceSender` reports whether we are speaking, and `AppStateImpl` publishes it as
-`selfSpeaking` in either transmit mode. A packet of speech that reaches the wire raises it. It is
+`VoiceSender` reports whether we are speaking, and `CaptureLifecycle` publishes it for the session
+as `selfSpeaking` in either transmit mode. A packet of speech that reaches the wire raises it. It is
 lowered by the first packet of the hangover (flagged `kFlagHangover` by the engine), a terminator,
 a refused send, 100 ms with no packet, and the pump ending. The indicator fades over the 200 ms
 hangover, so it is dark as the spurt ends.

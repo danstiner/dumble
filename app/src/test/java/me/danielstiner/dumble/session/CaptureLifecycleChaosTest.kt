@@ -242,7 +242,7 @@ class CaptureLifecycleChaosTest {
         }
 
         // Consumer survival: a dead dispatch loop fails silently and permanently (see the
-        // consumer's runCatching comment in AppStateImpl),
+        // consumer's runCatching comment in CaptureLifecycle),
         // so this is the one invariant that would otherwise never announce its own failure.
         app.connect(endpoint, "user", null)
         withTimeout(5_000) { app.status.first { it is SessionStatus.Handshaking } }

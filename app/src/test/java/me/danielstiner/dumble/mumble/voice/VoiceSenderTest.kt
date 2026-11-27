@@ -250,9 +250,9 @@ class VoiceSenderTest {
     }
 
     /**
-     * stop() waits for the pump to leave: the stream closes on its way out, and the app state's
-     * one-microphone invariant opens the next engine only after stop() returns. The wait is
-     * bounded at a second, the bound production relies on too.
+     * stop() waits for the pump to leave: the stream closes on its way out, and the capture
+     * lifecycle's one-microphone invariant opens the next engine only after stop() returns. The
+     * wait is bounded at a second, the bound production relies on too.
      */
     @Test
     fun stopRequestsShutdownAndThePumpExits() {

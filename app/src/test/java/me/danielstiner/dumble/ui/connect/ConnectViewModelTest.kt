@@ -437,9 +437,9 @@ class ConnectViewModelTest {
     }
 
     /**
-     * The press asks for capture too, but that pairing belongs to the app state and is pinned
-     * there — CaptureLifecycleTest.aTalkPressAloneRebuildsAndTransmits. All the ViewModel owes is
-     * forwarding the edge, which onTransmittingDrivesTheConnectionGate above covers.
+     * The press asks for capture too, but that pairing belongs to the capture lifecycle and is
+     * pinned in CaptureLifecycleTest. All the ViewModel owes is forwarding the edge, which
+     * onTransmittingDrivesTheConnectionGate above covers.
      */
     @Test fun onTransmittingDoesNotAskForCaptureItself() = runTest(dispatcher) {
         val app = FakeAppState()
