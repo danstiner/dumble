@@ -6,19 +6,21 @@ import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import kotlin.time.TestTimeSource
 
 class SessionStatusMappingTest {
+    private val since = TestTimeSource().markNow()
+
     @Test fun disconnectedIsNotSurfaced() =
-        assertNull(mapState(3, ConnectionState.Disconnected))
+        assertNull(mapState(ConnectionState.Disconnected) { since })
 
     @Test fun handshakingMapsThrough() =
-        assertEquals(SessionStatus.Handshaking, mapState(3, ConnectionState.Handshaking))
+        assertEquals(SessionStatus.Handshaking, mapState(ConnectionState.Handshaking) { since })
 
-    /** The generation is the caller's, not the protocol's: the state machine never learns it. */
     @Test fun synchronizedBecomesConnected() =
         assertEquals(
-            SessionStatus.Connected(gen = 3, sessionId = 42),
-            mapState(3, ConnectionState.Synchronized(42)),
+            SessionStatus.Connected(since, sessionId = 42),
+            mapState(ConnectionState.Synchronized(42)) { since },
         )
 
     @Test fun eachRejectTypeMapsToItsKind() =
@@ -34,25 +36,25 @@ class SessionStatusMappingTest {
             assertEquals(
                 "$type",
                 SessionStatus.Error(kind, "no"),
-                mapState(3, ConnectionState.Failed(FailReason.AUTH_REJECT, "no", rejectType = type)),
+                errorFor(ConnectionState.Failed(FailReason.AUTH_REJECT, "no", rejectType = type)),
             )
         }
 
     @Test fun timeoutMapsToTimeout() =
         assertEquals(
             SessionStatus.Error(ErrorKind.TIMEOUT, "slow"),
-            mapState(3, ConnectionState.Failed(FailReason.TIMEOUT, "slow")),
+            errorFor(ConnectionState.Failed(FailReason.TIMEOUT, "slow")),
         )
 
     @Test fun ioBecomesDisconnected() =
         assertEquals(
             SessionStatus.Error(ErrorKind.DISCONNECTED, "dropped"),
-            mapState(3, ConnectionState.Failed(FailReason.IO, "dropped")),
+            errorFor(ConnectionState.Failed(FailReason.IO, "dropped")),
         )
 
     @Test fun versionTooOldBecomesServerTooOld() =
         assertEquals(
             SessionStatus.Error(ErrorKind.SERVER_TOO_OLD, "server 1.4.287 — need >= 1.5"),
-            mapState(3, ConnectionState.Failed(FailReason.VERSION_TOO_OLD, "server 1.4.287 — need >= 1.5")),
+            errorFor(ConnectionState.Failed(FailReason.VERSION_TOO_OLD, "server 1.4.287 — need >= 1.5")),
         )
 }

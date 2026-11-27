@@ -3,6 +3,7 @@ package me.danielstiner.dumble.ui.connect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
+import kotlin.time.TestTimeSource
 import kotlinx.coroutines.flow.StateFlow
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
@@ -79,9 +80,11 @@ class FakeAppState : AppState {
 
     override fun requestUserStats(session: Int) { userStatsRequests += session }
 
-    fun emitConnected(sessionId: Int, gen: Int = 1) { status.value = SessionStatus.Connected(gen, sessionId) }
-    fun emitReconnecting(gen: Int, lastSessionId: Int) {
-        status.value = SessionStatus.Reconnecting(gen, lastSessionId)
+    fun emitConnected(sessionId: Int, since: ComparableTimeMark = SINCE) {
+        status.value = SessionStatus.Connected(since, sessionId)
+    }
+    fun emitReconnecting(lastSessionId: Int, since: ComparableTimeMark = SINCE) {
+        status.value = SessionStatus.Reconnecting(since, lastSessionId)
     }
     fun emitSpeaking(sessions: Set<Int>) { speakingSessions.value = sessions }
 
@@ -94,6 +97,9 @@ class FakeAppState : AppState {
             bufferedSamples = depths, targetSamples = emptyMap(),
         )
     }
-}
 
-/** Advances only when a test says so, so anchors taken at different moments are always distinct. */
+    companion object {
+        /** The session's connect time when a test does not care which. */
+        val SINCE: ComparableTimeMark = TestTimeSource().markNow()
+    }
+}

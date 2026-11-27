@@ -12,7 +12,6 @@ import io.ktor.util.escapeHTML
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlin.time.TimeSource
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlinx.coroutines.flow.combine
@@ -33,6 +32,7 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.session.AppState
 import me.danielstiner.dumble.session.ErrorKind
 import me.danielstiner.dumble.session.SessionStatus
+import me.danielstiner.dumble.session.connectedSince
 import me.danielstiner.dumble.session.mySession
 import javax.inject.Inject
 
@@ -99,7 +99,7 @@ data class ConnectUiState(
     // the task is swiped away, so resuming from the notification builds a fresh ViewModel over a
     // still-live session, and a "not asked yet" value there would disable Talk for the rest of it.
     val microphoneGranted: Boolean = false,
-    // Marked on [BootTimeSource] when the session reached Connected, or null. A mark rather than a
+    // When the session first connected, marked on [BootTimeSource], or null. A mark rather than a
     // reading so the elapsed duration can only be taken against the clock that produced it —
     // elapsedNow() — instead of against wall time, with which it shares no origin.
     val connectedSince: ComparableTimeMark? = null,
@@ -152,7 +152,6 @@ private data class HealthSnapshot(
 class ConnectViewModel internal constructor(
     private val appState: AppState,
     private val configStore: ServerConfigStore,
-    private val timeSource: TimeSource.WithComparableMarks,
     // Seam: the real check needs a Context and the JVM tests have none.
     private val microphoneHeld: () -> Boolean = { false },
 ) : ViewModel() {
@@ -160,8 +159,7 @@ class ConnectViewModel internal constructor(
         @ApplicationContext context: Context,
         appState: AppState,
         configStore: ServerConfigStore,
-        timeSource: TimeSource.WithComparableMarks,
-    ) : this(appState, configStore, timeSource, {
+    ) : this(appState, configStore, {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
     })
@@ -216,7 +214,8 @@ class ConnectViewModel internal constructor(
             // it with a name it cannot look up.
             val selected = f.selectedSession?.takeIf { it in c.channelTree.users }
             f.copy(
-                status = status, roundTripTime = health.roundTripTime, voicePath = health.voicePath,
+                status = status, connectedSince = status.connectedSince,
+                roundTripTime = health.roundTripTime, voicePath = health.voicePath,
                 lastServerReplyAt = health.lastServerReplyAt,
                 playoutStats = health.audio.playoutStats, captureStats = health.audio.captureStats,
                 channelTree = c.channelTree, messages = c.messages,
@@ -240,9 +239,6 @@ class ConnectViewModel internal constructor(
     // ConnectionStateMachine.appendMessage.
     private var lastReadMarker: ChatMessage? = appState.messages.value.lastOrNull()
 
-    /** The generation [ConnectUiState.connectedSince] was marked for; null while disconnected. */
-    private var anchoredGen: Int? = null
-
     init {
         viewModelScope.launch {
             configStore.lastUsed()?.let { p ->
@@ -261,25 +257,6 @@ class ConnectViewModel internal constructor(
                 } else {
                     form.value = form.value.copy(unread = unreadAfter(msgs))
                 }
-            }
-        }
-        viewModelScope.launch {
-            appState.status.collect { s ->
-                // Keyed on the generation, not on connected-ness: status is a StateFlow, so the
-                // disconnect between two calls can be conflated away, and a nullness comparison
-                // would then treat the second call as a continuation of the first. Not on the
-                // server's session id either: a connection rebuilt under the same call gets a new
-                // one while the call the user is timing goes on.
-                val gen = when (s) {
-                    is SessionStatus.Connected -> s.gen
-                    is SessionStatus.Reconnecting -> s.gen
-                    else -> null
-                }
-                if (gen == anchoredGen) return@collect
-                anchoredGen = gen
-                form.value = form.value.copy(
-                    connectedSince = gen?.let { timeSource.markNow() },
-                )
             }
         }
     }
