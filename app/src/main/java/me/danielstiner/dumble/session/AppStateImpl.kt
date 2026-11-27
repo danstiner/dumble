@@ -1,8 +1,6 @@
 package me.danielstiner.dumble.session
 
-import android.content.Context
 import android.util.Log
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,12 +17,9 @@ import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.channeltree.ChannelTree
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
-import me.danielstiner.dumble.mumble.net.AndroidNetworkWatch
-import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.net.MumbleTcpTransport
 import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
 import me.danielstiner.dumble.mumble.net.NetworkWatch
 import me.danielstiner.dumble.mumble.net.NoNetworkWatch
@@ -35,7 +30,6 @@ import me.danielstiner.dumble.mumble.protocol.ConnectionStateMachine
 import me.danielstiner.dumble.mumble.protocol.DeafenState
 import me.danielstiner.dumble.mumble.protocol.ServerVersion
 import me.danielstiner.dumble.mumble.protocol.UserStats
-import me.danielstiner.dumble.mumble.voice.AndroidVoiceCall
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
@@ -44,8 +38,6 @@ import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.mumble.voice.VoiceSender
-import me.danielstiner.dumble.mumble.voice.openNativeCapture
-import me.danielstiner.dumble.mumble.voice.openNativePlayout
 import me.danielstiner.dumble.time.BootTimeSource
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -54,7 +46,7 @@ import kotlin.time.TimeSource
 /**
  * Owns what outlives a connect: the [SessionState] behind the [AppState] flows, the [lock] every
  * write to it takes, the transmit-mode setting, and the [Session] opened last, which opens its
- * own [Connection]s. Builds the one [CaptureLifecycle] its sessions share.
+ * own [Connection]s. Its [SessionParts] carry the one [CaptureLifecycle] every session shares.
  *
  * A blocking handshake cannot be preempted, so a superseded session can complete late. [connect]
  * and [disconnect] therefore end the last session, close its publisher and reset the state in one
@@ -63,52 +55,52 @@ import kotlin.time.TimeSource
  */
 @Singleton
 class AppStateImpl internal constructor(
-    private val pinStore: PinStore,
-    // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
-    private val newCapture: () -> VoiceSender.CaptureHandle? = { null },
-    // Defaulted to no receive at all, the same way newCapture defaults to no send: a JVM test
-    // that never overrides this never touches System.loadLibrary. Real callers get
-    // openNativePlayout() from the @Inject constructor below.
-    private val newPlayout: () -> VoiceReceiver.PlayoutHandle? = { null },
-    private val call: VoiceCall = NoVoiceCall,
-    // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
-    private val stuckPumpMillis: Long = 1_000L,
-    // Seam: what runs a built pump — its own thread, or a test that steps it.
-    private val startPump: (VoiceSender) -> Unit = VoiceSender::start,
-    // Seam: the pump's clock, for its stats cadence and its speech stall, so a test that steps the
-    // pump runs both on the scheduler's time.
-    private val captureClock: TimeSource = TimeSource.Monotonic,
-    // Seams: the clock of everything that must count sleep — the sync stamp, the reconnect budget,
-    // the UDP transport — which reads zero off-device, so a test injects one; and the ping
-    // interval, so a test can keep the ticker out of its way.
-    private val udpClock: TimeSource.WithComparableMarks = BootTimeSource,
-    private val pingIntervalMs: Long = ConnectionStateMachine.PING_INTERVAL_MS,
-    // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
-    private val sleep: suspend (Duration) -> Unit = { delay(it) },
-    // Seam: what reports a change of the default network; the app registers with ConnectivityManager.
-    private val networkWatch: NetworkWatch = NoNetworkWatch,
-    // Seams: where everything that suspends runs, and where the three launches that block do
-    // (HAL opens, socket closes, the receiver's native destroy). A test passes one
-    // StandardTestDispatcher for both and drives the scheduler; production never names another
-    // dispatcher below here.
-    private val context: CoroutineContext = Dispatchers.Default,
-    private val blocking: CoroutineDispatcher = Dispatchers.IO,
-    // Seam: the UDP voice socket, so a test runs a connection's UDP wiring on virtual time
-    // against a fake instead of a socket and its reader thread.
-    private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
-        { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
-    private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
+    private val parts: SessionParts,
+    context: CoroutineContext,
+    blocking: CoroutineDispatcher,
 ) : AppState {
-    @Inject constructor(
-        @ApplicationContext context: Context,
+    @Inject internal constructor(parts: SessionParts) : this(parts, Dispatchers.Default, Dispatchers.IO)
+
+    internal constructor(
         pinStore: PinStore,
-        identityStore: ClientIdentityStore,
+        // Defaulted so the tests that predate voice capture keep their trailing-lambda transport.
+        newCapture: () -> VoiceSender.CaptureHandle? = { null },
+        // Defaulted to no receive at all, the same way newCapture defaults to no send: a JVM test
+        // that never overrides this never touches System.loadLibrary.
+        newPlayout: () -> VoiceReceiver.PlayoutHandle? = { null },
+        call: VoiceCall = NoVoiceCall,
+        // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
+        stuckPumpMillis: Long = CaptureLifecycle.STUCK_PUMP_MILLIS,
+        // Seam: what runs a built pump — its own thread, or a test that steps it.
+        startPump: (VoiceSender) -> Unit = VoiceSender::start,
+        // Seam: the pump's clock, for its stats cadence and its speech stall, so a test that steps
+        // the pump runs both on the scheduler's time.
+        captureClock: TimeSource = TimeSource.Monotonic,
+        // Seams: the clock of everything that must count sleep — the sync stamp, the reconnect
+        // budget, the UDP transport — which reads zero off-device, so a test injects one; and the
+        // ping interval, so a test can keep the ticker out of its way.
+        udpClock: TimeSource.WithComparableMarks = BootTimeSource,
+        pingIntervalMs: Long = ConnectionStateMachine.PING_INTERVAL_MS,
+        // Seam: the backoff's waits, so its tests drive a clock instead of sleeping.
+        sleep: suspend (Duration) -> Unit = { delay(it) },
+        // Seam: what reports a change of the default network.
+        networkWatch: NetworkWatch = NoNetworkWatch,
+        // Seams: where everything that suspends runs, and where the launches that block do. A test
+        // passes one StandardTestDispatcher for both and drives the scheduler.
+        context: CoroutineContext = Dispatchers.Default,
+        blocking: CoroutineDispatcher = Dispatchers.IO,
+        // Seam: the UDP voice socket, so a test runs a connection's UDP wiring on virtual time
+        // against a fake instead of a socket and its reader thread.
+        newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport =
+            { crypt, listener -> MumbleUdpTransport(crypt, listener, udpClock) },
+        newTransport: (expectedPin: String?) -> MumbleControlTransport,
     ) : this(
-        pinStore, { openNativeCapture(context) },
-        { openNativePlayout() },
-        AndroidVoiceCall(context),
-        networkWatch = AndroidNetworkWatch(context),
-        newTransport = { MumbleTcpTransport(it, identityStore = identityStore) },
+        SessionParts(
+            pinStore, newTransport, newUdp, newPlayout, newCapture, call,
+            CaptureLifecycle(startPump, captureClock, stuckPumpMillis, context, blocking),
+            udpClock, pingIntervalMs, sleep, networkWatch,
+        ),
+        context, blocking,
     )
 
     private val scope = CoroutineScope(context + SupervisorJob())
@@ -143,7 +135,7 @@ class AppStateImpl internal constructor(
      *  asks is whether it has changed since a connection or an attempt was opened. */
     private val networkChanges = MutableStateFlow(0)
 
-    init { networkWatch.start { networkChanges.update { it + 1 } } }
+    init { parts.networkWatch.start { networkChanges.update { it + 1 } } }
 
     private val lock = Any()
     /** Bumped by every connect and disconnect: names the connect a status, the platform call and
@@ -156,10 +148,6 @@ class AppStateImpl internal constructor(
     /** The transmit mode, as a setting: outlives sessions and is applied to every session this
      *  app state opens. UI thread writes it. */
     @Volatile private var transmitMode = TransmitMode.VoiceActivity
-
-    private val captures = CaptureLifecycle(
-        startPump, captureClock, stuckPumpMillis, scope, blockingScope,
-    )
 
     /**
      * End the last session and clear everything published about it, returning it for the caller
@@ -203,9 +191,8 @@ class AppStateImpl internal constructor(
             val id = lastId
             session = Session(
                 id, Publisher(state, lock), endpoint, username, password,
-                pinStore, newTransport, newUdp, newPlayout, call, udpClock, pingIntervalMs, sleep,
-                networkWatch, networkChanges, parentScope = scope, blockingScope = blockingScope,
-                captures = captures, newCapture = newCapture, transmitMode = { transmitMode },
+                parts, networkChanges, parentScope = scope, blockingScope = blockingScope,
+                transmitMode = { transmitMode },
             )
             current = session
             // Here rather than in requestCapture(): tying the call to the session, not the
@@ -224,7 +211,7 @@ class AppStateImpl internal constructor(
         val session = synchronized(lock) { current } ?: return
         val presented = session.presented ?: return
         scope.launch {
-            pinStore.put(session.endpoint.address, presented)
+            parts.pinStore.put(session.endpoint.address, presented)
             connect(session.endpoint, session.username, session.password, answering = session)
         }
     }
@@ -244,18 +231,18 @@ class AppStateImpl internal constructor(
 
     override fun requestUserStats(session: Int) { live?.requestUserStats(session) }
 
-    override fun requestAudioRoute(routeId: String) = call.requestRoute(routeId)
+    override fun requestAudioRoute(routeId: String) = parts.call.requestRoute(routeId)
 
     override fun requestCapture() {
         val session = live ?: return
-        captures.acquire(session.capture)
+        parts.captures.acquire(session.capture)
     }
 
     /** A press while muted stays shut: mute has no engine-side existence, so nothing below this
      *  refuses it. */
     override fun setTransmitting(on: Boolean) {
         val session = live ?: return
-        captures.press(session.capture, on)
+        parts.captures.press(session.capture, on)
     }
 
     /** Switching to push-to-talk lifts the user's own mute: that mode has no Mute control, so one
@@ -264,7 +251,7 @@ class AppStateImpl internal constructor(
         transmitMode = mode
         val session = live ?: return
         val carried = mode != TransmitMode.VoiceActivity && session.selfState.ownMute
-        if (carried) ask { it.liftOwnMute() } else captures.apply(session.capture)
+        if (carried) ask { it.liftOwnMute() } else parts.captures.apply(session.capture)
     }
 
     override fun setMuted(on: Boolean) = ask { it.mute(on) }
@@ -274,7 +261,7 @@ class AppStateImpl internal constructor(
         val session = live ?: return
         if (!session.ask(change)) return
         // Sets the gate and may ask for capture. Never under the lock.
-        captures.apply(session.capture)
+        parts.captures.apply(session.capture)
     }
 
     private companion object {

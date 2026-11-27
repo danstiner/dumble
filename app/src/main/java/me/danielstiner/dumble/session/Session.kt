@@ -17,15 +17,9 @@ import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.chat.ChatMessage
 import me.danielstiner.dumble.mumble.connection.Connection
 import me.danielstiner.dumble.mumble.connection.ConnectionOptions
-import me.danielstiner.dumble.mumble.net.CryptState
 import me.danielstiner.dumble.mumble.net.LocalNetworkBlockedException
-import me.danielstiner.dumble.mumble.net.MumbleControlTransport
 import me.danielstiner.dumble.mumble.net.MumbleEndpoint
-import me.danielstiner.dumble.mumble.net.MumbleUdpTransport
-import me.danielstiner.dumble.mumble.net.NetworkWatch
 import me.danielstiner.dumble.mumble.net.PinMismatchException
-import me.danielstiner.dumble.mumble.net.PinStore
-import me.danielstiner.dumble.mumble.net.UdpTransport
 import me.danielstiner.dumble.mumble.net.UntrustedCertificateException
 import me.danielstiner.dumble.mumble.proto.MumbleProtos
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
@@ -35,15 +29,12 @@ import me.danielstiner.dumble.mumble.protocol.FailReason
 import me.danielstiner.dumble.mumble.voice.ACCOUNTED_BITRATE
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.TransmitMode
-import me.danielstiner.dumble.mumble.voice.VoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
-import me.danielstiner.dumble.mumble.voice.VoiceSender
 import java.net.SocketTimeoutException
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 
 /**
  * Everything one Connect starts. It lasts until the user disconnects or connects elsewhere, or it
@@ -63,27 +54,24 @@ internal class Session(
     val endpoint: MumbleEndpoint,
     val username: String,
     val password: String?,
-    private val pinStore: PinStore,
-    private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
-    private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport,
-    newPlayout: () -> VoiceReceiver.PlayoutHandle?,
-    private val call: VoiceCall,
-    /** The clock of everything that must count sleep; see AppStateImpl's `udpClock`. */
-    private val bootClock: TimeSource.WithComparableMarks,
-    private val pingIntervalMs: Long,
-    private val sleep: suspend (Duration) -> Unit,
-    private val networkWatch: NetworkWatch,
+    private val parts: SessionParts,
     /** Bumped on every change of the default network. */
     private val networkChanges: StateFlow<Int>,
     /** Parent of this session's and its connections' scopes. */
     private val parentScope: CoroutineScope,
     /** Never cancelled; the launches that block. */
     private val blockingScope: CoroutineScope,
-    /** The one microphone owner every session shares. */
-    private val captures: CaptureLifecycle,
-    newCapture: () -> VoiceSender.CaptureHandle?,
     transmitMode: () -> TransmitMode,
 ) {
+    private val pinStore = parts.pinStore
+    private val newTransport = parts.newTransport
+    private val newUdp = parts.newUdp
+    private val call = parts.call
+    private val captures = parts.captures
+    private val bootClock = parts.bootClock
+    private val pingIntervalMs = parts.pingIntervalMs
+    private val sleep = parts.sleep
+    private val networkWatch = parts.networkWatch
     private val lock = publisher.lock
     private val state = publisher.state
 
@@ -92,7 +80,7 @@ internal class Session(
         // newPlayout itself, not its result: VoiceReceiver only calls it from start(), which
         // only a session whose connection comes up ever reaches — building eagerly would leak
         // one per session that fails or is superseded before that.
-        VoiceReceiver(newPlayout, context = parentScope.coroutineContext)
+        VoiceReceiver(parts.newPlayout, context = parentScope.coroutineContext)
     /** The driver and the receiver's collectors. Cancelled by [close], last. */
     private val scope: CoroutineScope =
         CoroutineScope(parentScope.coroutineContext + SupervisorJob())
@@ -115,7 +103,7 @@ internal class Session(
         private set
     /** The flags [CaptureLifecycle] reads to open or close this session's microphone. */
     val capture = CaptureState(
-        id, publisher, { isLive }, { selfState.muted }, ::sendVoice, newCapture, transmitMode,
+        id, publisher, { isLive }, { selfState.muted }, ::sendVoice, parts.newCapture, transmitMode,
     )
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
