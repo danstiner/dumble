@@ -691,9 +691,10 @@ class CaptureLifecycleTest {
      * the odds of catching a regression, it does not pin it.
      *
      * Released via a hold, not disconnect(): disconnect() nulls `current` synchronously, and
-     * setTransmitting() checks `current` before it ever reaches the session, which would starve this
-     * race of its window regardless of whether VoiceSender's own guard exists. A hold releases the
-     * session while `current` stays put, so the monitor is the only thing left standing in the way.
+     * setTransmitting() checks `current` before it ever reaches the sender, which would starve
+     * this race of its window regardless of whether VoiceSender's own guard exists. A hold
+     * releases the sender while `current` stays put, so the monitor is the only thing left
+     * standing in the way.
      */
     @Test fun settingTransmittingDuringAReleaseDoesNotReachADestroyedHandle() = runBlocking {
         repeat(20) {

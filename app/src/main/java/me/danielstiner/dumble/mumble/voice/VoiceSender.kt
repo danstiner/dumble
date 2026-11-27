@@ -16,9 +16,10 @@ import kotlin.time.TimeSource
  * pump thread blocks in native code (no CPU cost, no GC stall). Cannot be interrupted — [stop]
  * works through the engine.
  *
- * [handle] stays private: setGateOpen reaches `self(h)->engine` in capture_jni.cpp, which
- * destroy() deletes, so a push-to-talk edge racing a release is a use-after-free. [apply] and
- * [destroy] share this monitor to close that; an exposed handle would let a caller walk around it.
+ * [handle] stays private: setGateOpen reaches `self(h)->engine` in capture_jni.cpp, a member of
+ * the native handle that destroy() deletes, so a push-to-talk edge racing a release is a
+ * use-after-free. [apply] and [destroy] share this monitor to close that; an exposed handle
+ * would let a caller walk around it.
  */
 class VoiceSender(
     private val handle: CaptureHandle,
@@ -45,7 +46,7 @@ class VoiceSender(
         fun setTransmitMode(mode: TransmitMode)
         fun stop()
 
-        /** Releases the engine. Called by its owner once no pump can touch it, never by the pump. */
+        /** Releases the engine. Called once no pump can touch it, never by the pump. */
         fun destroy()
 
         /** Diagnostics for the periodic log line; null when there is nothing to read. */
@@ -104,9 +105,9 @@ class VoiceSender(
      * Push the levels to the engine: the mode, then the gate. Taken as functions and read under
      * the monitor so concurrent callers agree on the newest values.
      *
-     * A direct call from the UI thread, not a lifecycle command: that consumer blocks in the HAL
-     * open and in [stop], busiest exactly when the user is pressing Talk, and a gate edge queued
-     * behind that clips the start of a spurt. (The hop itself is p50 11 µs.)
+     * A direct call from the UI thread, not a lifecycle command: the lifecycle's consumer blocks
+     * in the HAL open and in [stop], busiest exactly when the user is pressing Talk, and a gate
+     * edge queued behind that clips the start of a spurt. (The hop itself is p50 11 µs.)
      */
     fun apply(mode: () -> TransmitMode, gateOpen: () -> Boolean) {
         synchronized(this) {

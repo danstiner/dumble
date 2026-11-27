@@ -49,8 +49,7 @@ packet for the transport. Its exit callback is the only signal that the pump is 
 While the gate is closed, `onPcm` advances the frame clock and discards the samples.
 
 The gate is not stored. `CaptureLifecycle.apply` derives it from three levels as
-`!muted && (pressed || voiceActivity)`, whenever one of them changes and again when a `VoiceSender`
-opens.
+`!muted && (pressed || voiceActivity)`, whenever one of them changes and again when capture opens.
 
 - **Muted** is the `self_mute` the app last asked the server for, including one forced by a
   deafen. It is not the server's echo, so the gate closes at the tap.

@@ -214,7 +214,7 @@ internal class CaptureLifecycle(
         // lowered it; a wedged one has not, and left up it would carry into whatever opens next.
         client.publisher.state.selfSpeaking.value = false
         // Set only once stop() has returned. Set before it, a throw out of that JNI call would
-        // leave `capture` non-null and `releasing` true for good: reconcile would neither reopen
+        // leave `sender` non-null and `releasing` true for good: reconcile would neither reopen
         // nor retry, and the engine would never be destroyed. Left false, the next reconcile tries
         // the release again.
         client.releasing = true

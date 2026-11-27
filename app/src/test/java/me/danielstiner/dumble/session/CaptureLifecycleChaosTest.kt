@@ -94,9 +94,9 @@ class CaptureLifecycleChaosTest {
 
         override fun setGateOpen(open: Boolean) {
             // setGateOpen reaches a member of the C++ CaptureHandle that destroy() deletes, so
-            // this firing after destroyed is the use-after-free defect 5 fixed with VoiceSender's
-            // monitor. It should never fire — the monitor already guards it at the Kotlin level —
-            // so this is a second, independent witness rather than the only one.
+            // this firing after destroyed is the use-after-free VoiceSender's monitor closes.
+            // It should never fire — the monitor already guards it at the Kotlin level — so this
+            // is a second, independent witness rather than the only one.
             if (destroyed.get()) violations += "handle $id: setTransmitting reached a destroyed handle"
         }
 
