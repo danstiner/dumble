@@ -30,7 +30,9 @@ preroll queue (`popPacket`), and `PacketAssembler::takePacket` never runs.
 it has no lock. A poll that finds the stream down reopens it, at most once a second.
 
 **`VoiceSender`** (Kotlin) is the pump: one daemon thread parked in `pollPacket`, wrapping each
-packet for the transport. Its exit callback is the only signal that the pump is gone.
+packet for the transport. Its exit callback is the only signal that the pump is gone. One
+`VoiceSender` is one open microphone: it also holds the native handle, and its `apply` and
+`destroy` share a monitor so a gate edge cannot reach a freed engine.
 
 ## Decisions
 
@@ -47,8 +49,7 @@ packet for the transport. Its exit callback is the only signal that the pump is 
 While the gate is closed, `onPcm` advances the frame clock and discards the samples.
 
 The gate is not stored. `CaptureLifecycle.apply` derives it from three levels as
-`!muted && (pressed || voiceActivity)`, whenever one of them changes and again when the capture
-session opens.
+`!muted && (pressed || voiceActivity)`, whenever one of them changes and again when capture opens.
 
 - **Muted** is the `self_mute` the app last asked the server for, including one forced by a
   deafen. It is not the server's echo, so the gate closes at the tap.
@@ -57,7 +58,7 @@ session opens.
 - **The transmit mode lives on the app state, not the session.** A rebuilt engine starts in
   push-to-talk and is given the mode back.
 
-The KDoc on `apply` explains why a press cannot race the session opening.
+The KDoc on `apply` explains why a press cannot race capture opening.
 
 ## Lifecycle
 
@@ -66,7 +67,7 @@ transitions concurrently: the Talk button, platform hold and resume, disconnect 
 the pump's own exit. Each transition is a command on one channel with a single consumer, the one
 coroutine that runs the commands in order. Commands set flags on the session's `CaptureState`. The
 flags are levels, not events: each says what is true now (capture wanted, call held), so commands
-can arrive in any order. `reconcile()` then opens or closes the capture session to match them, and
+can arrive in any order. `reconcile()` then builds or releases the `VoiceSender` to match them, and
 is the only place that does.
 
 The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` and `VoiceSenderTest`:
@@ -92,7 +93,7 @@ Two things hold the session:
   ours. Every capture stream opens with `CaptureSessionId`'s id, because the platform anonymizes
   every recording it reports but keeps that id.
 
-A hold closes the capture session and pauses playout: the receiver drops incoming packets and
+A hold releases the `VoiceSender` and pauses playout: the receiver drops incoming packets and
 pauses its output stream. The mode and the recording callback also report the hold ending, so the
 session resumes by itself. A Talk press held through the hold transmits once it ends.
 

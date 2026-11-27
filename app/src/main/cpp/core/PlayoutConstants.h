@@ -167,7 +167,7 @@ constexpr int kOfferMalformedPacket = 3;
 // The caller's buffers, not ours — separate from "no audio" (return 0), because a caller that
 // cannot tell "I allocated my buffers too small" from "nobody is speaking" has hidden a bug in the
 // Kotlin side behind an orderly-looking silence. See CaptureConstants.h for the same reasoning and
-// kPollNoSession / kPollBufferTooSmall.
+// kPollNoHandle / kPollBufferTooSmall.
 constexpr int kErrorBufferTooSmall = -1;
 
 }  // namespace dumble::playout

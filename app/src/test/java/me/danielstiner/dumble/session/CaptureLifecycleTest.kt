@@ -685,15 +685,16 @@ class CaptureLifecycleTest {
     }
 
     /**
-     * STRESS CASE, not a proof. setGateOpen reaches a member of the Session that destroy() deletes,
-     * so a push-to-talk edge racing a release is a use-after-free; CaptureSession's monitor closes
-     * it. Absence of a race is not deterministically provable from a JVM test — this raises the odds
-     * of catching a regression, it does not pin it.
+     * STRESS CASE, not a proof. setGateOpen reaches a member of the CaptureHandle that destroy()
+     * deletes, so a push-to-talk edge racing a release is a use-after-free; VoiceSender's monitor
+     * closes it. Absence of a race is not deterministically provable from a JVM test — this raises
+     * the odds of catching a regression, it does not pin it.
      *
      * Released via a hold, not disconnect(): disconnect() nulls `current` synchronously, and
-     * setTransmitting() checks `current` before it ever reaches the session, which would starve this
-     * race of its window regardless of whether CaptureSession's own guard exists. A hold releases the
-     * session while `current` stays put, so the monitor is the only thing left standing in the way.
+     * setTransmitting() checks `current` before it ever reaches the sender, which would starve
+     * this race of its window regardless of whether VoiceSender's own guard exists. A hold
+     * releases the sender while `current` stays put, so the monitor is the only thing left
+     * standing in the way.
      */
     @Test fun settingTransmittingDuringAReleaseDoesNotReachADestroyedHandle() = runBlocking {
         repeat(20) {

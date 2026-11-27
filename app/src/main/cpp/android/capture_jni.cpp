@@ -9,12 +9,12 @@
 #define FN(name) Java_me_danielstiner_dumble_mumble_voice_NativeCapture_##name
 
 namespace {
-struct Session {
-    static Session* create(int bitrate, const void* weights, size_t weightBytes, int32_t sessionId) {
+struct CaptureHandle {
+    static CaptureHandle* create(int bitrate, const void* weights, size_t weightBytes, int32_t sessionId) {
         std::shared_ptr<dumble::CaptureEngine> engine =
             dumble::CaptureEngine::create(bitrate, weights, weightBytes);
         if (!engine) return nullptr;
-        return new Session(std::move(engine), sessionId);
+        return new CaptureHandle(std::move(engine), sessionId);
     }
 
     // The engine is shared because Oboe's error callback can reach it after destroy(); the
@@ -23,10 +23,10 @@ struct Session {
     const std::unique_ptr<dumble::OboeCapture> capture;
 
 private:
-    Session(std::shared_ptr<dumble::CaptureEngine> e, int32_t sessionId)
+    CaptureHandle(std::shared_ptr<dumble::CaptureEngine> e, int32_t sessionId)
         : engine(std::move(e)), capture(std::make_unique<dumble::OboeCapture>(engine, sessionId)) {}
 };
-inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
+inline CaptureHandle* self(jlong h) { return reinterpret_cast<CaptureHandle*>(h); }
 }  // namespace
 
 extern "C" {
@@ -36,7 +36,7 @@ FN(create)(JNIEnv* env, jobject, jint bitrate, jbyteArray weights, jint sessionI
     const jsize n = env->GetArrayLength(weights);
     std::vector<uint8_t> blob(static_cast<size_t>(n));
     env->GetByteArrayRegion(weights, 0, n, reinterpret_cast<jbyte*>(blob.data()));
-    return reinterpret_cast<jlong>(Session::create(bitrate, blob.data(), blob.size(), sessionId));
+    return reinterpret_cast<jlong>(CaptureHandle::create(bitrate, blob.data(), blob.size(), sessionId));
 }
 
 JNIEXPORT jboolean JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
@@ -78,7 +78,7 @@ JNIEXPORT void JNICALL FN(setGateOpen)(JNIEnv*, jobject, jlong h, jboolean open)
 
 JNIEXPORT jint JNICALL
 FN(pollPacket)(JNIEnv* env, jobject, jlong h, jbyteArray out, jlongArray meta) {
-    if (!h) return dumble::kPollNoSession;
+    if (!h) return dumble::kPollNoHandle;
     if (env->GetArrayLength(out) < dumble::kMaxPacketBytes) return dumble::kPollBufferTooSmall;
     // Stack scratch: pinning `out` across the blocking wait would hold a GC pin for milliseconds.
     uint8_t buf[dumble::kMaxPacketBytes];
