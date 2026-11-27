@@ -69,7 +69,7 @@ class AppStateImpl internal constructor(
     // Defaulted to no receive at all, the same way newCapture defaults to no send: a JVM test
     // that never overrides this never touches System.loadLibrary. Real callers get
     // openNativePlayout() from the @Inject constructor below.
-    private val newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
+    private val newPlayout: () -> VoiceReceiver.PlayoutHandle? = { null },
     private val call: VoiceCall = NoVoiceCall,
     // Seam: the wedge watchdog's deadline, so its tests do not each spend a real second.
     private val stuckPumpMillis: Long = 1_000L,

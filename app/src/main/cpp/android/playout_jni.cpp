@@ -29,17 +29,17 @@ constexpr int kCounterLostSamples = 9;
 constexpr int kCounterOutOfOrderPackets = 10;
 constexpr int kCounterCount = 11;
 
-struct Session {
+struct PlayoutHandle {
     // In this order: the adapter is destroyed first, closing its stream, and only then the
     // engine it reads from.
     const std::unique_ptr<pl::PlayoutEngine> engine;
     const std::unique_ptr<dumble::OboePlayout> playout;
 };
 
-// No handle is checked for null below. NativePlayoutEngine is only ever constructed around a
+// No handle is checked for null below. NativePlayoutHandle is only ever constructed around a
 // non-zero create() result — a zero becomes a Kotlin null and no engine object at all — so a null
 // here would be unreachable, and offer() in particular has no honest code left to answer with.
-inline Session* self(jlong h) { return reinterpret_cast<Session*>(h); }
+inline PlayoutHandle* self(jlong h) { return reinterpret_cast<PlayoutHandle*>(h); }
 
 }  // namespace
 
@@ -56,7 +56,7 @@ JNIEXPORT jlong JNICALL FN(create)(JNIEnv*, jobject, jint sampleRate) {
     // land meanwhile pile up ahead of the gate as standing delay. An open stream that is not
     // started runs no callback. Failure is not terminal: start() opens again.
     playout->open();
-    return reinterpret_cast<jlong>(new Session{std::move(engine), std::move(playout)});
+    return reinterpret_cast<jlong>(new PlayoutHandle{std::move(engine), std::move(playout)});
 }
 
 JNIEXPORT jboolean JNICALL FN(start)(JNIEnv*, jobject, jlong h) {
@@ -106,7 +106,7 @@ FN(readStats)(JNIEnv* env, jobject, jlong h, jintArray sessions, jintArray depth
         env->GetArrayLength(counters) < kCounterCount) {
         return pl::kErrorBufferTooSmall;
     }
-    const Session& s = *self(h);
+    const PlayoutHandle& s = *self(h);
     const pl::PlayoutEngine::Stats stats = s.engine->stats();
     const double latencyMillis = s.playout->latencyMillis();
     jlong countersOut[kCounterCount];

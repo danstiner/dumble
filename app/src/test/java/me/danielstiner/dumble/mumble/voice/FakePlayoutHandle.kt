@@ -4,11 +4,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Stand-in for the native session: what [readStats] reports is whatever the test last set, and
+ * Stand-in for the native handle: what [readStats] reports is whatever the test last set, and
  * every stream call is recorded, so a test drives the receiver's poll by state rather than by
  * cadence.
  */
-class FakePlayoutEngine : VoiceReceiver.PlayoutEngine {
+class FakePlayoutHandle : VoiceReceiver.PlayoutHandle {
     data class Offer(
         val session: Int,
         val opusData: ByteArray,

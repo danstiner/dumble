@@ -24,10 +24,10 @@ import kotlin.time.TimeSource
 private const val UDP_TYPE_AUDIO = 0
 
 /**
- * Owns inbound voice: hands packets to the native playout session, and runs the one coroutine —
- * the poll — that owns the session's output stream and republishes what it reports.
+ * Owns inbound voice: hands packets to the native playout handle, and runs the one coroutine —
+ * the poll — that owns the handle's output stream and republishes what it reports.
  *
- * The audio itself never comes up here. The native session's output stream pulls each burst from
+ * The audio itself never comes up here. The handle's output stream pulls each burst from
  * the engine on its own realtime thread; the poll's job is to keep that stream started for the
  * life of the receiver — paused only while the platform holds the call — and to read the engine's
  * stats every [POLL_MILLIS]: the speaking set for the UI, the counters for [playoutStats].
@@ -39,19 +39,19 @@ private const val UDP_TYPE_AUDIO = 0
  * regardless.
  *
  * Two rules carry the threading. `offer()` and `destroy()` share this object's monitor, so a
- * packet can never reach a freed session; `offer()` never touches the stream. And the poll is
+ * packet can never reach a freed handle; `offer()` never touches the stream. And the poll is
  * the only caller of `start()`/`pause()`, and [stop] joins it before destroying, so no stream
- * call is ever in flight against a dead session.
+ * call is ever in flight against a dead handle.
  */
 class VoiceReceiver(
-    private val newEngine: () -> PlayoutEngine?,
+    private val newHandle: () -> PlayoutHandle?,
     // Seam: the stats period's clock, so its test jumps the second instead of waiting it out.
     private val clock: TimeSource.WithComparableMarks = TimeSource.Monotonic,
     // Seam: where the poll runs; a session passes the app state's.
     context: CoroutineContext = Dispatchers.Default,
 ) {
     /** Seam so JVM tests can drive the receiver without loading native code. */
-    interface PlayoutEngine {
+    interface PlayoutHandle {
         /** Reader thread. One of [NativePlayout]'s `OFFER_*` codes. [frameNumber] is the sender's
          *  own frame counter, which the engine measures arrival jitter against. */
         fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean): Int
@@ -85,10 +85,10 @@ class VoiceReceiver(
     private val _playoutStats = MutableStateFlow<PlayoutStats?>(null)
     val playoutStats: StateFlow<PlayoutStats?> = _playoutStats.asStateFlow()
 
-    // Null until start() builds one, and permanently null if it never does (newEngine() refused,
+    // Null until start() builds one, and permanently null if it never does (newHandle() refused,
     // or start() is never called at all — the ordinary case for a superseded or failed session).
     // Guarded by this object's monitor.
-    private var engine: PlayoutEngine? = null
+    private var handle: PlayoutHandle? = null
 
     // The poll, once start() has launched it. Guarded by the monitor.
     private var poll: Job? = null
@@ -116,33 +116,33 @@ class VoiceReceiver(
     /**
      * Single-shot, and synchronized to pair with [stop]: the caller builds a receiver per session.
      *
-     * [newEngine] is called from here, not from the constructor: the engine must exist if and only
+     * [newHandle] is called from here, not from the constructor: the engine must exist if and only
      * if the poll that owns its stream is running. Building it eagerly at construction leaked one
      * engine per session that was superseded or failed before ever reaching this call.
      */
     @Synchronized
     fun start() {
         if (stopped || poll != null) return
-        val built = newEngine()
+        val built = newHandle()
         if (built == null) {
             // Voice is additive, so an unavailable engine disables receive for this session
             // rather than failing the connection. Nothing was built, so there is nothing to free.
             stopped = true
             return
         }
-        engine = built
+        handle = built
         poll = scope.launch { poll(built) }
     }
 
     /**
      * Safe to call before start(), twice, or from two threads at once: `stopped` latches, the
-     * join is idempotent, and the destroy is guarded by the engine going null under the monitor.
+     * join is idempotent, and the destroy is guarded by the handle going null under the monitor.
      * Suspends for the join rather than blocking, so a single-threaded caller cannot wait on itself.
      */
     suspend fun stop() {
         stopped = true
         // Joined, not merely cancelled: a start()/pause() in flight on the poll's thread must
-        // have returned before the session underneath it is freed. Outside the monitor because
+        // have returned before the handle underneath it is freed. Outside the monitor because
         // the poll takes it for readStats, and a join under it would wait on itself.
         val job = synchronized(this) { poll }
         // The destroy below must follow even if the caller is cancelled mid-join.
@@ -150,8 +150,8 @@ class VoiceReceiver(
         synchronized(this) {
             // Under the monitor, like offer(): a reader already inside offer() finishes first,
             // and one arriving later sees `stopped`.
-            engine?.destroy()
-            engine = null
+            handle?.destroy()
+            handle = null
         }
         scope.cancel()
         _speakingSessions.value = emptySet()
@@ -199,7 +199,7 @@ class VoiceReceiver(
             // Null before start() has built one — reachable, since sm.audioListener is wired
             // before receiver.start() runs — or permanently null if it never will. Either way,
             // dropped rather than queued: there is nothing yet for it to queue into.
-            val live = engine ?: return
+            val live = handle ?: return
             // A refusal is a latched log and nothing more: the engine has no failure a packet can
             // trigger, only refusals a misbehaving server can. Whatever it refused is already
             // dropped by the time this returns, and the counts live in PlayoutStats.
@@ -215,7 +215,7 @@ class VoiceReceiver(
         }
     }
 
-    /** Counters are monotonic since the session was built, so a spurt's numbers are read against
+    /** Counters are monotonic since the handle was built, so a spurt's numbers are read against
      *  where they stood when it opened (the stream's own underruns) or when the previous one closed
      *  (everything the engine counts). */
     private class Baselines {
@@ -241,7 +241,7 @@ class VoiceReceiver(
         }
     }
 
-    private suspend fun poll(engine: PlayoutEngine) {
+    private suspend fun poll(handle: PlayoutHandle) {
         // Allocated once, sized by the constants the seam validates against.
         val sessions = IntArray(MAX_SPEAKERS)
         val depths = IntArray(MAX_SPEAKERS)
@@ -259,16 +259,16 @@ class VoiceReceiver(
             // reopens one lost to an error the adapter's own retries gave up on. Before the read
             // rather than after it, so the first packet finds the stream running.
             if (held) {
-                if (started) engine.pause()
+                if (started) handle.pause()
                 started = false
             } else {
-                val up = engine.start()
+                val up = handle.start()
                 if (up != started) Log.i(TAG, if (up) "output stream started" else "output stream lost; retrying")
                 started = up
             }
             val live = synchronized(this) {
                 if (stopped) return
-                runCatching { engine.readStats(sessions, depths, targets, audible, counters) }
+                runCatching { handle.readStats(sessions, depths, targets, audible, counters) }
                     .getOrDefault(-1)
             }
             if (live < 0) {
