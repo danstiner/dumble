@@ -12,70 +12,70 @@ import java.util.concurrent.CopyOnWriteArrayList
 class FakeVoiceCall : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
     val starts = CopyOnWriteArrayList<String>()
-    /** Generation per start(), in order — so a test can address a superseded call by generation. */
-    val startedGens = CopyOnWriteArrayList<Int>()
+    /** Session id per start(), in order — so a test can address a superseded call by its id. */
+    val startedIds = CopyOnWriteArrayList<Int>()
     var ends = 0; private set
     /** routeId per requestRoute(), in order — so a test can assert which route was asked for. */
     val routeRequests = CopyOnWriteArrayList<String>()
 
     private val lock = Any()
-    private var liveGen = NO_CALL
+    private var liveId = NO_CALL
     /** Whether the platform currently holds an un-ended call — for a test to check that the
      *  app state's own idea of "connected" and the platform's idea of "a call exists" agree. */
-    val hasLiveCall: Boolean get() = synchronized(lock) { liveGen != NO_CALL }
-    // Per generation, not one field: a stale hold from a call that was replaced is exactly the
+    val hasLiveCall: Boolean get() = synchronized(lock) { liveId != NO_CALL }
+    // Per call, not one field: a stale hold from a call that was replaced is exactly the
     // failure the capture lifecycle's liveness check exists to stop, and a single field cannot
     // express one.
     private val onHeld = ConcurrentHashMap<Int, (Boolean) -> Unit>()
-    // Per generation for the same reason onHeld is: a route update from a superseded call is
+    // Per call for the same reason onHeld is: a route update from a superseded call is
     // exactly what the app state's liveness check exists to drop.
     private val onRoutes = ConcurrentHashMap<Int, (AudioRoutes) -> Unit>()
 
     override fun start(
-        gen: Int,
+        id: Int,
         endpoint: MumbleEndpoint,
         onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
     ) {
         synchronized(lock) {
             starts += endpoint.host
-            startedGens += gen
-            liveGen = gen
-            this.onHeld[gen] = onHeld
-            this.onRoutes[gen] = onRoutes
+            startedIds += id
+            liveId = id
+            this.onHeld[id] = onHeld
+            this.onRoutes[id] = onRoutes
         }
     }
 
     override fun end(): Unit = synchronized(lock) {
-        check(liveGen != NO_CALL) { "end() with no call to end" }
-        liveGen = NO_CALL
+        check(liveId != NO_CALL) { "end() with no call to end" }
+        liveId = NO_CALL
         ends++
     }
 
     // Dropped with no live call, as the real one does. Deliberately does not echo the route back:
     // the platform confirms through onRoutes, so a test drives that itself via emitRoutes().
     override fun requestRoute(routeId: String): Unit = synchronized(lock) {
-        if (liveGen != NO_CALL) routeRequests += routeId
+        if (liveId != NO_CALL) routeRequests += routeId
     }
 
-    /** Deliver a route update to a specific generation, live or not — same reason as [holdFor]. */
-    fun emitRoutesFor(gen: Int, routes: AudioRoutes) { onRoutes[gen]?.invoke(routes) }
+    /** Deliver a route update to a specific call, live or not — same reason as [holdFor]. */
+    fun emitRoutesFor(id: Int, routes: AudioRoutes) { onRoutes[id]?.invoke(routes) }
 
-    fun emitRoutes(routes: AudioRoutes) = emitRoutesFor(liveGen, routes)
+    fun emitRoutes(routes: AudioRoutes) = emitRoutesFor(liveId, routes)
 
-    // hold() and resume() no-op once end() has run: liveGen is NO_CALL then, matching a platform
+    // hold() and resume() no-op once end() has run: liveId is NO_CALL then, matching a platform
     // call that has ended.
-    fun hold() = holdFor(liveGen)
+    fun hold() = holdFor(liveId)
 
-    fun resume() = resumeFor(liveGen)
+    fun resume() = resumeFor(liveId)
 
     /**
-     * Deliver a hold to a specific generation, live or not — the platform does not fence a callback
+     * Deliver a hold to a specific call, live or not — the platform does not fence a callback
      * already in flight, so a superseded call can still call back.
      */
-    fun holdFor(gen: Int) { onHeld[gen]?.invoke(true) }
+    fun holdFor(id: Int) { onHeld[id]?.invoke(true) }
 
-    fun resumeFor(gen: Int) { onHeld[gen]?.invoke(false) }
+    fun resumeFor(id: Int) { onHeld[id]?.invoke(false) }
 
     private companion object {
         const val NO_CALL = -1

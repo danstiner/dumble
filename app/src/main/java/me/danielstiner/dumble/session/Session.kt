@@ -56,7 +56,7 @@ import kotlin.time.TimeSource
  * replaced it.
  */
 internal class Session(
-    val gen: Int,
+    val id: Int,
     val publisher: Publisher,
     val endpoint: MumbleEndpoint,
     val username: String,
@@ -110,7 +110,7 @@ internal class Session(
     @Volatile var presented: String? = null
         private set
     /** The flags [CaptureLifecycle] reads to open or close this session's microphone. */
-    val capture = CaptureState(gen, publisher, { isLive }, { selfState.muted }, ::sendVoice)
+    val capture = CaptureState(id, publisher, { isLive }, { selfState.muted }, ::sendVoice)
     /** Self-mute and self-deafen as last asked for, not as last sent: a tap during a reconnect
      *  reaches no connection, and this is what the replacement is told. */
     @Volatile var selfState: DeafenState = DeafenState()
@@ -214,7 +214,7 @@ internal class Session(
             // sources cannot be compared.
             bootClock = bootClock,
             pingIntervalMs = pingIntervalMs,
-            gen = gen,
+            id = id,
         )
     }
 
@@ -227,7 +227,7 @@ internal class Session(
      */
     private suspend fun drive() {
         val pin = pinStore.get(endpoint.address)
-        Log.i(TAG, "connect gen=$gen endpoint=${endpoint.address} user=${username} storedPin=${pin != null}")
+        Log.i(TAG, "connect id=$id endpoint=${endpoint.address} user=${username} storedPin=${pin != null}")
         // The loop below runs for minutes beside a live platform call: an escape would leave
         // the call up with nothing driving it.
         try {
@@ -266,7 +266,7 @@ internal class Session(
                             }
                     } ?: return@collect
                     val what = if (doomed === next) "the attempt" else "the link, its network gone"
-                    Log.i(TAG, "network changed gen=$gen; closing $what")
+                    Log.i(TAG, "network changed id=$id; closing $what")
                     doomed.close()
                 }
             }
@@ -314,7 +314,7 @@ internal class Session(
                     deadline += now - synced.at
                     attempt = 1
                 }
-                Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
+                Log.i(TAG, "link died id=$id reason=${failed.reason} healthy=$healthy attempt=$attempt")
                 // The collector above can miss Synchronized on the conflating flow; the stamp cannot.
                 val since = connectedAt ?: synced.at.also { connectedAt = it }
                 publisher.publish {
@@ -327,7 +327,7 @@ internal class Session(
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            Log.e(TAG, "driver failed gen=$gen", t)
+            Log.e(TAG, "driver failed id=$id", t)
             fail(SessionStatus.Error(ErrorKind.CONNECT_FAILED, t.message))
         }
     }
@@ -342,7 +342,7 @@ internal class Session(
             connection.connect()
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            Log.w(TAG, "connect failed gen=${gen} for ${endpoint.address}", t)
+            Log.w(TAG, "connect failed id=${id} for ${endpoint.address}", t)
             return mapConnectError(t)
         }
         connection.start()
@@ -410,7 +410,7 @@ internal class Session(
             // timeout. One last attempt at the deadline costs one connect.
             val remaining = deadline - bootClock.markNow()
             if (remaining <= Duration.ZERO) {
-                Log.w(TAG, "gave up gen=$gen")
+                Log.w(TAG, "gave up id=$id")
                 fail(SessionStatus.Error(ErrorKind.DISCONNECTED, GAVE_UP_DETAIL))
                 return null
             }
@@ -437,7 +437,7 @@ internal class Session(
             if (!live) { next.close(); return null }
             // A change between the dial and the publish is one the collector could not have seen.
             if (networkChanges.value != next.dialedUnder) { drop(next); continue }
-            Log.i(TAG, "replacement gen=$gen attempt=$attempt")
+            Log.i(TAG, "replacement id=$id attempt=$attempt")
             lastDial = bootClock.markNow()
             val failure = open(next)
             if (failure != null) {
@@ -450,7 +450,7 @@ internal class Session(
                     fail(failure)
                     return null
                 }
-                Log.w(TAG, "replacement failed gen=$gen attempt=$attempt status=$failure")
+                Log.w(TAG, "replacement failed id=$id attempt=$attempt status=$failure")
                 attempt += 1
                 continue
             }
@@ -464,7 +464,7 @@ internal class Session(
                 classify(outcome, diedAt)?.let { fail(it); return null }
                 Log.w(
                     TAG,
-                    "replacement handshake failed gen=$gen attempt=$attempt reason=${outcome.reason} " +
+                    "replacement handshake failed id=$id attempt=$attempt reason=${outcome.reason} " +
                         "detail=${outcome.detail}",
                 )
                 attempt += 1

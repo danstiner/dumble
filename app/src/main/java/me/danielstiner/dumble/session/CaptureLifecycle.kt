@@ -15,7 +15,7 @@ import kotlin.time.TimeSource
  */
 internal class CaptureState(
     /** For logs. */
-    val gen: Int,
+    val id: Int,
     /** Speaking, capture stats and the call-held banner are published through it. */
     val publisher: Publisher,
     /** Whether the session is still live; takes the publisher's lock. */
@@ -147,11 +147,11 @@ internal class CaptureLifecycle(
         // An ended session's hold changes nothing: its capture is released, and the banner
         // belongs to the live one.
         if (live) {
-            Log.i(TAG, "call ${if (held) "held" else "resumed"} gen=${client.gen}")
+            Log.i(TAG, "call ${if (held) "held" else "resumed"} id=${client.id}")
             client.held = held
             reconcile(client)
         } else {
-            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: gen=${client.gen} not live")
+            Log.w(TAG, "call ${if (held) "hold" else "resume"} dropped: id=${client.id} not live")
         }
     }
 

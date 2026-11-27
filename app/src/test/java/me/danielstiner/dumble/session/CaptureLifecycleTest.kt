@@ -346,13 +346,13 @@ class CaptureLifecycleTest {
         val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
         connectTo(app, "first")
-        val staleGen = 1   // the first connect's generation
+        val staleId = 1   // the first connect's id
 
         connectTo(app, "second")
         app.requestCapture()
         assertSettled("the live attempt must be capturing") { handles.any { !it.destroyed } }
 
-        call.holdFor(staleGen)
+        call.holdFor(staleId)
         assertSettled("a stale hold must not release the live engine") { handles.any { !it.destroyed } }
         assertFalse("a stale hold must not raise the banner", app.callHeld.value)
         app.disconnect()
@@ -556,20 +556,20 @@ class CaptureLifecycleTest {
         val app = appState(newCapture = { FakeCaptureHandle(blocking = false).also { handles += it } }, call = call)
 
         connectTo(app, "first")
-        val staleGen = 1   // the first connect's generation
+        val staleId = 1   // the first connect's id
 
         connectTo(app, "second")
         app.requestCapture()
         assertSettled("the live attempt must open") { handles.size == 1 }
 
-        call.hold()   // holds the live generation (2)
+        call.hold()   // holds the live call (2)
         assertSettled("the hold must release the engine") { handles[0].destroyed }
 
-        call.resumeFor(staleGen)   // a resume for the superseded call (1), not the live hold
+        call.resumeFor(staleId)   // a resume for the superseded call (1), not the live hold
         assertSettled("a stale resume must not reopen capture the platform still holds") { handles.size == 1 }
         assertTrue("a stale resume must not clear the banner", app.callHeld.value)
 
-        call.resume()   // the genuine resume, for the live generation
+        call.resume()   // the genuine resume, for the live call
         assertSettled("the genuine resume must rebuild") { handles.size == 2 }
         app.disconnect()
     }

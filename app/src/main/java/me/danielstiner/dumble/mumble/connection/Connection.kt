@@ -50,8 +50,8 @@ internal class Connection(
     private val blockingScope: CoroutineScope,
     bootClock: TimeSource.WithComparableMarks,
     pingIntervalMs: Long,
-    /** The session's connect count, for logs. */
-    private val gen: Int,
+    /** The session's id, for logs. */
+    private val id: Int,
 ) {
     private val transport = newTransport(options.pin)
     private val stateMachine = ConnectionStateMachine(
@@ -73,7 +73,7 @@ internal class Connection(
         override fun onVoicePacket(buf: ByteArray, len: Int) {
             if (!heard) {
                 heard = true
-                Log.i(TAG, "UDP downlink: first voice packet gen=$gen")
+                Log.i(TAG, "UDP downlink: first voice packet id=$id")
             }
             onVoice(buf, len)
         }
@@ -84,7 +84,7 @@ internal class Connection(
         // for a client that never speaks, since the server never re-learns an address
         // (docs/network.md, When UDP stops working).
         override fun onPingsUnanswered() {
-            Log.w(TAG, "UDP pings unanswered; voice on the tunnel gen=$gen")
+            Log.w(TAG, "UDP pings unanswered; voice on the tunnel id=$id")
             path.demote()
             transport.sendRaw(TcpMessageType.UDPTunnel, TUNNEL_PING)
         }

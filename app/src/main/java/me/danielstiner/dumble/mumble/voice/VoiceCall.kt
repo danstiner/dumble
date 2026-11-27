@@ -11,15 +11,15 @@ import me.danielstiner.dumble.mumble.net.MumbleEndpoint
  */
 interface VoiceCall {
     /**
-     * [gen] names the connection attempt in the call's logs. [onHeld] reports the platform holding the
+     * [id] names the session in the call's logs. [onHeld] reports the platform holding the
      * call — the phone, or another app's call, taking the audio — and resuming it.
      *
      * Calls here apply in send order on a single consumer, and return before their effects apply.
      * A start while a call is live supersedes it, keeping the mode and route it took. Callers send
-     * starts and ends in generation order; nothing here checks.
+     * starts and ends in connect order; nothing here checks.
      */
     fun start(
-        gen: Int,
+        id: Int,
         endpoint: MumbleEndpoint,
         onHeld: (held: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
@@ -41,7 +41,7 @@ interface VoiceCall {
 /** The constructor default the tests use; every build uses [AndroidVoiceCall]. */
 object NoVoiceCall : VoiceCall {
     override fun start(
-        gen: Int,
+        id: Int,
         endpoint: MumbleEndpoint,
         onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,

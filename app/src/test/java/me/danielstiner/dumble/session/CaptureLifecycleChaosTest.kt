@@ -201,7 +201,7 @@ class CaptureLifecycleChaosTest {
         }
 
         // connect()/disconnect() get one dedicated thread, not a slot in the same random draw as
-        // the cheap ops above. Both are non-blocking calls that bump the attempt generation, so
+        // the cheap ops above. Both are non-blocking calls that bump the session id, so
         // several threads free to fire them at unbounded rate raced each other for the *right* to
         // ever publish `current` — connect()'s own async pipeline (a pinStore suspend hop, building
         // the transport/state machine, then a synchronized publish) takes long enough, relative to
