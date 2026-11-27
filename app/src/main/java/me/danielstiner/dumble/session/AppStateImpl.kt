@@ -162,10 +162,6 @@ class AppStateImpl internal constructor(
         scope, blockingScope,
     )
 
-    // The call's own flow: an ended session's call is ended, so its late updates are dropped too.
-    private fun publishRoutes(session: Session, r: AudioRoutes) =
-        synchronized(lock) { if (!session.ended) state.audioRoutes.value = r }
-
     /**
      * End the last session and clear everything published about it, returning it for the caller
      * to close, or null if it had already ended by itself. Shared by [connect] and [disconnect]
@@ -177,13 +173,13 @@ class AppStateImpl internal constructor(
      * what makes the writes safe: every write checks the publisher or [Session.ended] under it, and
      * the release is ordered ahead of anything the successor asks. Caller holds [lock].
      */
-    private fun retireAndClearLocked(status: SessionStatus): Session? {
+    private fun retireAndClearLocked(status: SessionStatus, superseded: Boolean): Session? {
         val last = current
         current = null; lastId += 1
         last?.publisher?.close()
         // end() queues the capture release here, under the lock, so it is ahead of anything the
         // next session queues and runs first. Queuing never blocks, so it is safe under the lock.
-        val prior = last?.takeIf { it.end() }
+        val prior = last?.takeIf { it.end(superseded) }
         state.reset(status)
         return prior
     }
@@ -194,8 +190,7 @@ class AppStateImpl internal constructor(
     /**
      * Ending the last session, starting the call and publishing the new session are one critical
      * section: connects run on two threads (the UI's and trust-and-connect's), and [lock] hands
-     * the call their starts in connect order. Every end goes out under it too, so none can
-     * land after a later start.
+     * the call their starts in connect order.
      *
      * [answering] is the trust prompt this connect accepts. A disconnect or connect since has
      * dismissed it, and then this does nothing.
@@ -205,7 +200,7 @@ class AppStateImpl internal constructor(
         val session: Session
         synchronized(lock) {
             if (answering != null && current !== answering) return
-            prior = retireAndClearLocked(SessionStatus.Connecting)
+            prior = retireAndClearLocked(SessionStatus.Connecting, superseded = true)
             val id = lastId
             session = Session(
                 id, Publisher(state, lock), endpoint, username, password,
@@ -218,18 +213,8 @@ class AppStateImpl internal constructor(
             // microphone, gives a user who denied RECORD_AUDIO a service at all, and receive that
             // survives backgrounding. The service starts a main-looper hop after this returns, while
             // the connect tap still has the app in front — a microphone service cannot start later.
-            // No end for the prior's call: this start supersedes it, carrying its mode and route.
-            call.start(
-                id, endpoint,
-                onHeld = { held ->
-                    // The output stream follows the hold too: straight to the receiver, not through
-                    // the capture consumer, which can be blocked in newCapture() or stop(). The
-                    // receiver is this session's own, so a dead session's hold reaches nothing live.
-                    session.receiver.setHeld(held)
-                    captures.held(session.capture, held)
-                },
-                onRoutes = { r -> publishRoutes(session, r) },
-            )
+            // The prior's call is not ended: this start supersedes it, carrying its mode and route.
+            session.startCall()
         }
         prior?.close()
         session.start()
@@ -249,7 +234,7 @@ class AppStateImpl internal constructor(
 
     override fun disconnect() {
         val prior = synchronized(lock) {
-            retireAndClearLocked(SessionStatus.Idle)?.also { call.end() }
+            retireAndClearLocked(SessionStatus.Idle, superseded = false)
         }
         prior?.close()
     }

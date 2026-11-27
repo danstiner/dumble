@@ -7,7 +7,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Lets a test drive a hold or a resume synchronously, without AndroidVoiceCall's main-looper hop.
  * Commands apply inside the call, in the order the real call's looper would apply them: a start
- * supersedes silently, and an end with no live call throws, since the caller contract rules it out.
+ * supersedes silently, and a superseded call's end does nothing. A second end of the same call
+ * throws here, though the real call ignores it: an owner ending twice is a bug.
  */
 class FakeVoiceCall : VoiceCall {
     /** Server host per start(), in order — so a test can assert what the call was opened against. */
@@ -36,7 +37,7 @@ class FakeVoiceCall : VoiceCall {
         endpoint: MumbleEndpoint,
         onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-    ) {
+    ): () -> Unit {
         synchronized(lock) {
             starts += endpoint.host
             startedIds += id
@@ -44,12 +45,17 @@ class FakeVoiceCall : VoiceCall {
             this.onHeld[id] = onHeld
             this.onRoutes[id] = onRoutes
         }
-    }
-
-    override fun end(): Unit = synchronized(lock) {
-        check(liveId != NO_CALL) { "end() with no call to end" }
-        liveId = NO_CALL
-        ends++
+        var called = false
+        return {
+            synchronized(lock) {
+                check(!called) { "end of call $id called twice" }
+                called = true
+                if (liveId == id) {
+                    liveId = NO_CALL
+                    ends++
+                }
+            }
+        }
     }
 
     // Dropped with no live call, as the real one does. Deliberately does not echo the route back:

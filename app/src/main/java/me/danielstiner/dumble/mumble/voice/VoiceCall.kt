@@ -15,18 +15,17 @@ interface VoiceCall {
      * call — the phone, or another app's call, taking the audio — and resuming it.
      *
      * Calls here apply in send order on a single consumer, and return before their effects apply.
-     * A start while a call is live supersedes it, keeping the mode and route it took. Callers send
-     * starts and ends in connect order; nothing here checks.
+     * A start while a call is live supersedes it, keeping the mode and route it took.
+     *
+     * Returns the end of this call. It does nothing once the call has ended or a later start has
+     * superseded it, so a caller never ends a call it no longer owns.
      */
     fun start(
         id: Int,
         endpoint: MumbleEndpoint,
         onHeld: (held: Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-    )
-
-    /** Ends the live call; sent only while there is one. A call being replaced gets no end. */
-    fun end()
+    ): () -> Unit
 
     /**
      * Route call audio to [routeId] — one of the ids last reported through [start]'s `onRoutes`.
@@ -45,7 +44,6 @@ object NoVoiceCall : VoiceCall {
         endpoint: MumbleEndpoint,
         onHeld: (Boolean) -> Unit,
         onRoutes: (AudioRoutes) -> Unit,
-    ) = Unit
-    override fun end() = Unit
+    ): () -> Unit = {}
     override fun requestRoute(routeId: String) = Unit
 }

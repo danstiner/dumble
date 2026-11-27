@@ -116,6 +116,9 @@ internal class Session(
     @Volatile var selfState: DeafenState = DeafenState()
         private set
 
+    /** This session's platform call's end, from [startCall]. Under the lock. */
+    private var endCall: () -> Unit = {}
+
     /** Superseded, disconnected, or failed. Written under the lock. */
     @Volatile var ended: Boolean = false
         private set
@@ -139,12 +142,34 @@ internal class Session(
         scope.launch { drive() }
     }
 
-    /** Ends this session and queues its capture release. Caller holds the lock. False if it
-     *  had already ended. */
-    fun end(): Boolean {
+    /**
+     * Starts the platform call for this session. Caller holds the lock, so starts reach the
+     * call in connect order. Once, before [start].
+     */
+    fun startCall() {
+        endCall = call.start(
+            id, endpoint,
+            onHeld = { held ->
+                // The output stream follows the hold too: straight to the receiver, not through
+                // the capture consumer, which can be blocked in newCapture() or stop(). The
+                // receiver is this session's own, so a dead session's hold reaches nothing live.
+                receiver.setHeld(held)
+                captures.held(capture, held)
+            },
+            // Once this session has ended, the routes belong to its successor or to the reset.
+            onRoutes = { r -> synchronized(lock) { if (!ended) state.audioRoutes.value = r } },
+        )
+    }
+
+    /**
+     * Ends this session, queues its capture release and, unless [superseded] by a successor's
+     * call, ends its call. Caller holds the lock. False if it had already ended.
+     */
+    fun end(superseded: Boolean): Boolean {
         if (ended) return false
         ended = true
         captures.release(capture)
+        if (!superseded) endCall()
         return true
     }
 
@@ -544,8 +569,7 @@ internal class Session(
     private fun endSelf() {
         val live = synchronized(lock) {
             // Under the lock, for the same ordering AppStateImpl.retireAndClearLocked keeps.
-            if (end()) {
-                call.end()
+            if (end(superseded = false)) {
                 state.callHeld.value = false
                 state.audioRoutes.value = AudioRoutes()
                 true
