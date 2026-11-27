@@ -2,8 +2,6 @@ package me.danielstiner.dumble.session
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -348,8 +346,7 @@ class CaptureLifecycleTest {
         val bHandles = mutableListOf<FakeCaptureHandle>()
         var aStoppedWhenBOpened = false
         val lifecycle = CaptureLifecycle(
-            startPump, clock, 1_000L,
-            CoroutineScope(dispatcher + SupervisorJob()), CoroutineScope(dispatcher + SupervisorJob()),
+            startPump, clock, 1_000L, dispatcher, dispatcher,
         )
         val publisher = Publisher(SessionState(), Any())
         // Capped so a client that wrongly takes the microphone back fails the assertions below

@@ -62,13 +62,13 @@ The KDoc on `apply` explains why a press cannot race capture opening.
 
 ## Lifecycle
 
-`CaptureLifecycle` owns it, one per app state and shared by its sessions. Four sources ask for
-transitions concurrently: the Talk button, platform hold and resume, disconnect and reconnect, and
-the pump's own exit. Each transition is a command on one channel with a single consumer, the one
-coroutine that runs the commands in order. Commands set flags on the session's `CaptureState`. The
-flags are levels, not events: each says what is true now (capture wanted, call held), so commands
-can arrive in any order. `reconcile()` then builds or releases the `VoiceSender` to match them, and
-is the only place that does.
+`CaptureLifecycle` owns it, one per `SessionParts` and shared by every session built from them. Four
+sources ask for transitions concurrently: the Talk button, platform hold and resume, disconnect and
+reconnect, and the pump's own exit. Each transition is a command on one channel with a single
+consumer, the one coroutine that runs the commands in order. Commands set flags on the session's
+`CaptureState`. The flags are levels, not events: each says what is true now (capture wanted, call
+held), so commands can arrive in any order. `reconcile()` then builds or releases the `VoiceSender`
+to match them, and is the only place that does.
 
 The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` and `VoiceSenderTest`:
 

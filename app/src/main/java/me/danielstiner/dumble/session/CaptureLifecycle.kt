@@ -1,12 +1,15 @@
 package me.danielstiner.dumble.session
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import me.danielstiner.dumble.mumble.voice.TransmitMode
 import me.danielstiner.dumble.mumble.voice.VoiceSender
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.TimeSource
 
 /**
@@ -56,18 +59,21 @@ internal class CaptureState(
  * session's [CaptureState] (a "level": what is true now, not what happened); [reconcile] then
  * opens or closes the microphone to match the flags.
  *
- * One per app state, so an ended session's release runs before the next session's open. See
+ * One per [SessionParts], so an ended session's release runs before the next session's open. See
  * docs/capture.md, "Lifecycle".
  */
 internal class CaptureLifecycle(
     private val startPump: (VoiceSender) -> Unit,
     private val captureClock: TimeSource,
     private val stuckPumpMillis: Long,
-    /** Long-lived; the wedge watchdog's delays run here. */
-    private val scope: CoroutineScope,
-    /** Never cancelled; the consumer runs here. */
-    private val blockingScope: CoroutineScope,
+    context: CoroutineContext,
+    blocking: CoroutineDispatcher,
 ) {
+    /** Long-lived; the wedge watchdog's delays run here. */
+    private val scope = CoroutineScope(context + SupervisorJob())
+    /** Never cancelled; the consumer runs here. */
+    private val blockingScope = CoroutineScope(SupervisorJob() + blocking)
+
     private sealed interface CaptureCommand {
         /** Capture is wanted on this session — the microphone became ready, or Talk was
          *  pressed. Pairs with [Release]. Sets a flag rather than opening anything, so repeats
@@ -305,7 +311,9 @@ internal class CaptureLifecycle(
     private fun wantsGate(client: CaptureState) =
         !client.muted() && (client.pressed || client.transmitMode() == TransmitMode.VoiceActivity)
 
-    private companion object {
-        const val TAG = "MumbleConn"
+    companion object {
+        /** How long a stopped pump may take to exit before the watchdog calls it wedged. */
+        const val STUCK_PUMP_MILLIS = 1_000L
+        private const val TAG = "MumbleConn"
     }
 }
