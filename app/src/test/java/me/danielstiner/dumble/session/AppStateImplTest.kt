@@ -383,31 +383,6 @@ class AppStateImplTest {
         assertEquals("the pin Trust saved", "ab12", pins.get(endpoint.address))
     }
 
-    /** The generation is the UI's handle on "which call": one per connect(), whatever session id
-     *  the server hands out. */
-    @Test fun connectedCarriesTheSessionsGeneration() = deterministic {
-        val fakes = CopyOnWriteArrayList<FakeControlTransport>()
-        val app = own(AppStateImpl(
-            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
-        ) { FakeControlTransport { _, _ -> }.also { fakes += it } })
-        val sync = TcpFrame(TcpMessageType.ServerSync.id,
-            MumbleProtos.ServerSync.newBuilder().setSession(5).build().toByteArray())
-
-        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(app)
-        fakes[0].listener!!.onFrame(sync)
-        val first = connected(app)
-
-        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
-        handshaking(app)
-        fakes[1].listener!!.onFrame(sync)
-        val second = connected(app)
-
-        assertEquals(5, first.sessionId)
-        assertEquals(5, second.sessionId)
-        assertNotEquals(first.gen, second.gen)
-    }
-
     /** A late callback from a call we already ended must not resurrect a dead session. */
     @Test fun holdDeliveredAfterDisconnectRebuildsNothing() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
@@ -603,6 +578,36 @@ class AppStateImplTest {
         MumbleProtos.TextMessage.newBuilder().setActor(actor).setMessage(body).build().toByteArray(),
     )
 
+    /** The call timer's anchor: a reconnect keeps the session's connect time, a new connect
+     *  starts its own. Time passes between each step, so a re-mark would show. */
+    @Test fun aReconnectKeepsTheConnectTimeAndANewConnectMarksItsOwn() = deterministic {
+        val transports = CopyOnWriteArrayList<FakeControlTransport>()
+        val app = own(AppStateImpl(
+            InMemoryPinStore(), udpClock = clock, context = dispatcher, blocking = dispatcher,
+        ) { FakeControlTransport { _, _ -> }.also { transports += it } })
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 0).listener!!.onFrame(serverSync(1))
+        val first = connected(app).since
+
+        elapse(10.seconds)
+        transports[0].listener!!.onClosed(IOException("reset"))
+        assertSettled("reconnecting") { app.status.value == SessionStatus.Reconnecting(first, 1) }
+        startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
+        assertEquals(first, connected(app).since)
+        assertEquals(10.seconds, first.elapsedNow())
+
+        elapse(30.seconds)   // healthy, so this outage is a new one with no backoff
+        transports[1].listener!!.onClosed(IOException("reset"))
+        assertSettled("reconnecting again") { app.status.value == SessionStatus.Reconnecting(first, 2) }
+        startedTransportAt(transports, 2).listener!!.onFrame(serverSync(3))
+        assertEquals(first, connected(app).since)
+
+        elapse(10.seconds)
+        app.connect(MumbleEndpoint.parse("localhost"), "user", null)
+        startedTransportAt(transports, 3).listener!!.onFrame(serverSync(4))
+        assertTrue(connected(app).since > first)
+    }
+
     /**
      * The point of the split: the platform call, the receiver and the capture session all belong
      * to the session and ride through a reconnect; only the connection is rebuilt.
@@ -627,9 +632,9 @@ class AppStateImplTest {
 
         transports[0].listener!!.onClosed(IOException("reset"))
 
-        assertSettled("reconnecting") { app.status.value == SessionStatus.Reconnecting(first.gen, 1) }
+        assertSettled("reconnecting") { app.status.value == SessionStatus.Reconnecting(first.since, 1) }
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.since, 2), connected(app))
 
         assertEquals("one platform call for the whole session", 1, call.starts.size)
         assertEquals("the call must not end across a reconnect", 0, call.ends)
@@ -698,7 +703,7 @@ class AppStateImplTest {
         // Our close unblocks the reader, whose exit is what reports the death.
         transports[0].listener!!.onClosed(IOException("closed"))
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.since, 2), connected(app))
         assertEquals("the call must not end across a loss", 0, call.ends)
     }
 
@@ -881,7 +886,7 @@ class AppStateImplTest {
         network.switchTo("cell")
 
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.since, 2), connected(app))
         assertEquals("the wait was cut, not waited out", listOf(0.seconds, 1.seconds, 0.seconds), waits.toList())
     }
 
@@ -915,7 +920,7 @@ class AppStateImplTest {
 
         assertSettled("the attempt in flight is abandoned") { transports[1].closed }
         startedTransportAt(transports, 2).listener!!.onFrame(serverSync(2))
-        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.since, 2), connected(app))
         assertEquals("attempt 0 again on the new network", listOf(Duration.ZERO, Duration.ZERO), waits.toList())
     }
 
@@ -1511,10 +1516,10 @@ class AppStateImplTest {
 
         elapse(16.seconds)   // three ping intervals unanswered; the third tick ends the connection
 
-        assertEquals(SessionStatus.Reconnecting(first.gen, 1), app.status.value)
+        assertEquals(SessionStatus.Reconnecting(first.since, 1), app.status.value)
         assertTrue("the unresponsive link is closed", transports[0].closed)
         startedTransportAt(transports, 1).listener!!.onFrame(serverSync(2))
-        assertEquals(SessionStatus.Connected(first.gen, 2), connected(app))
+        assertEquals(SessionStatus.Connected(first.since, 2), connected(app))
         assertEquals("the call rides through", 0, call.ends)
     }
 

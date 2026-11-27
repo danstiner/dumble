@@ -16,8 +16,6 @@ import me.danielstiner.dumble.data.ServerConfigStore
 import me.danielstiner.dumble.mumble.net.ClientIdentityStore
 import me.danielstiner.dumble.mumble.net.FileClientIdentityStore
 import me.danielstiner.dumble.mumble.net.PinStore
-import me.danielstiner.dumble.time.BootTimeSource
-import kotlin.time.TimeSource
 import javax.inject.Singleton
 import java.io.File
 
@@ -44,9 +42,6 @@ object MumbleModule {
     @Singleton
     fun provideClientIdentityStore(@ApplicationContext context: Context): ClientIdentityStore =
         FileClientIdentityStore(File(context.filesDir, IDENTITY_FILE))
-
-    @Provides
-    fun provideTimeSource(): TimeSource.WithComparableMarks = BootTimeSource
 
     const val SERVER_CONFIG_NAME = "server_config"
 

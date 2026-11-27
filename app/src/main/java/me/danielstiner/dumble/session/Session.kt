@@ -102,6 +102,8 @@ internal class Session(
     /** Chat from connections this session has already replaced, oldest first. Written by the
      *  driver at the swap, read by the new connection's collector on its own scope. */
     @Volatile private var carried: List<ChatMessage> = emptyList()
+    /** When the first connection synchronized; the driver's own. */
+    private var connectedAt: ComparableTimeMark? = null
     /** Fingerprint the server presented when the handshake stopped for a trust decision;
      *  what [AppStateImpl.trustAndConnect] pins. Set before the status that shows the prompt.
      *  Written by the driver, read on caller threads. */
@@ -276,7 +278,9 @@ internal class Session(
                 // Failed is never published before it is classified.
                 val failed = connection.state
                     .onEach { st ->
-                        if (st !is ConnectionState.Failed) mapState(gen, st)?.let { mapped ->
+                        if (st !is ConnectionState.Failed) mapState(st) {
+                            connectedAt ?: bootClock.markNow().also { connectedAt = it }
+                        }?.let { mapped ->
                             publisher.publish { status.value = mapped }
                         }
                     }
@@ -287,13 +291,13 @@ internal class Session(
                 // The first connection dying before it synchronized is the connect failing, never
                 // retried; every later connection came out of replaceConnection synchronized.
                 if (synced == null) {
-                    fail(mapState(gen, failed)!!)
+                    fail(errorFor(failed))
                     return
                 }
                 val now = bootClock.markNow()
                 // Past Synchronized a connection ends as IO, from its socket, or by the server
                 // removing us, which is final: a kick rejoined at once is a kick again.
-                classify(gen, failed, now)?.let { fail(it); return }
+                classify(failed, now)?.let { fail(it); return }
                 // Losing a healthy connection is a new outage: fresh deadline, backoff from the
                 // start. Losing one that never got healthy continues the outage, one attempt in,
                 // against the same deadline, which is what bounds a path that dies every few
@@ -311,8 +315,10 @@ internal class Session(
                     attempt = 1
                 }
                 Log.i(TAG, "link died gen=$gen reason=${failed.reason} healthy=$healthy attempt=$attempt")
+                // The collector above can miss Synchronized on the conflating flow; the stamp cannot.
+                val since = connectedAt ?: synced.at.also { connectedAt = it }
                 publisher.publish {
-                    status.value = SessionStatus.Reconnecting(gen, synced.sessionId)
+                    status.value = SessionStatus.Reconnecting(since, synced.sessionId)
                 }
                 connection.close()
                 connection = replaceConnection(pin, deadline, diedAt = now, firstAttempt = attempt,
@@ -455,7 +461,7 @@ internal class Session(
             }
             if (outcome is ConnectionState.Failed) {
                 drop(next)
-                classify(gen, outcome, diedAt)?.let { fail(it); return null }
+                classify(outcome, diedAt)?.let { fail(it); return null }
                 Log.w(
                     TAG,
                     "replacement handshake failed gen=$gen attempt=$attempt reason=${outcome.reason} " +
@@ -512,7 +518,6 @@ internal class Session(
      * fresh ghost.
      */
     private fun classify(
-        gen: Int,
         failed: ConnectionState.Failed,
         diedAt: ComparableTimeMark,
     ): SessionStatus? = when (failed.reason) {
@@ -525,9 +530,9 @@ internal class Session(
             ) {
                 null
             } else {
-                mapState(gen, failed)
+                errorFor(failed)
             }
-        FailReason.VERSION_TOO_OLD, FailReason.KICKED, FailReason.BANNED -> mapState(gen, failed)
+        FailReason.VERSION_TOO_OLD, FailReason.KICKED, FailReason.BANNED -> errorFor(failed)
     }
 
     /**

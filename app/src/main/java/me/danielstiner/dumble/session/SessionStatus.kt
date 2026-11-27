@@ -3,6 +3,7 @@ package me.danielstiner.dumble.session
 import me.danielstiner.dumble.mumble.proto.MumbleProtos.Reject.RejectType
 import me.danielstiner.dumble.mumble.protocol.ConnectionState
 import me.danielstiner.dumble.mumble.protocol.FailReason
+import kotlin.time.ComparableTimeMark
 
 /** The session's status as the UI observes it: TLS + trust + protocol, unified. */
 sealed interface SessionStatus {
@@ -11,12 +12,12 @@ sealed interface SessionStatus {
     data class AwaitingTrust(val fingerprint: String) : SessionStatus
     data class PinMismatch(val stored: String, val presented: String) : SessionStatus
     data object Handshaking : SessionStatus
-    /** [gen] is the app state's own generation, one per connect(); [sessionId] is the server's,
-     *  and changes with every connection. */
-    data class Connected(val gen: Int, val sessionId: Int) : SessionStatus
-    /** The session's connection died and a replacement is being opened under the same generation;
-     *  [lastSessionId] is the server session the UI's own row still belongs to. */
-    data class Reconnecting(val gen: Int, val lastSessionId: Int) : SessionStatus
+    /** [since] is when the session first connected; its reconnects keep it. [sessionId] is the
+     *  server's, and changes with every connection. */
+    data class Connected(val since: ComparableTimeMark, val sessionId: Int) : SessionStatus
+    /** The session's connection died and a replacement is being opened; [lastSessionId] is the
+     *  server session the UI's own row still belongs to. */
+    data class Reconnecting(val since: ComparableTimeMark, val lastSessionId: Int) : SessionStatus
     data class Error(val kind: ErrorKind, val detail: String?) : SessionStatus
 }
 
@@ -26,6 +27,14 @@ val SessionStatus.mySession: Int?
     get() = when (this) {
         is SessionStatus.Connected -> sessionId
         is SessionStatus.Reconnecting -> lastSessionId
+        else -> null
+    }
+
+/** When the session first connected, or null when it is not connected or reconnecting. */
+val SessionStatus.connectedSince: ComparableTimeMark?
+    get() = when (this) {
+        is SessionStatus.Connected -> since
+        is SessionStatus.Reconnecting -> since
         else -> null
     }
 
@@ -61,20 +70,22 @@ enum class ErrorKind {
 /**
  * Protocol state → session status. Null for [ConnectionState.Disconnected]: it is the state
  * machine's start value and the coordinator, not the protocol, owns the pre-handshake phases.
- * [gen] is stamped into [SessionStatus.Connected]; the protocol layer never learns it.
+ * [since] is read only for [ConnectionState.Synchronized].
  */
-fun mapState(gen: Int, s: ConnectionState): SessionStatus? = when (s) {
+fun mapState(s: ConnectionState, since: () -> ComparableTimeMark): SessionStatus? = when (s) {
     ConnectionState.Disconnected -> null
     ConnectionState.Handshaking -> SessionStatus.Handshaking
-    is ConnectionState.Synchronized -> SessionStatus.Connected(gen, s.sessionId)
-    is ConnectionState.Failed -> when (s.reason) {
-        FailReason.AUTH_REJECT -> SessionStatus.Error(rejectKind(s.rejectType), s.detail)
-        FailReason.TIMEOUT -> SessionStatus.Error(ErrorKind.TIMEOUT, s.detail)
-        FailReason.IO -> SessionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
-        FailReason.VERSION_TOO_OLD -> SessionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
-        FailReason.KICKED -> SessionStatus.Error(ErrorKind.KICKED, s.detail)
-        FailReason.BANNED -> SessionStatus.Error(ErrorKind.BANNED, s.detail)
-    }
+    is ConnectionState.Synchronized -> SessionStatus.Connected(since(), s.sessionId)
+    is ConnectionState.Failed -> errorFor(s)
+}
+
+fun errorFor(s: ConnectionState.Failed): SessionStatus.Error = when (s.reason) {
+    FailReason.AUTH_REJECT -> SessionStatus.Error(rejectKind(s.rejectType), s.detail)
+    FailReason.TIMEOUT -> SessionStatus.Error(ErrorKind.TIMEOUT, s.detail)
+    FailReason.IO -> SessionStatus.Error(ErrorKind.DISCONNECTED, s.detail)
+    FailReason.VERSION_TOO_OLD -> SessionStatus.Error(ErrorKind.SERVER_TOO_OLD, s.detail)
+    FailReason.KICKED -> SessionStatus.Error(ErrorKind.KICKED, s.detail)
+    FailReason.BANNED -> SessionStatus.Error(ErrorKind.BANNED, s.detail)
 }
 
 private fun rejectKind(type: RejectType?): ErrorKind = when (type) {

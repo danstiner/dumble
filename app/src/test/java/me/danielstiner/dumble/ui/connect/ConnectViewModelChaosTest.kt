@@ -21,7 +21,6 @@ import org.junit.Before
 import org.junit.Test
 import java.time.Instant
 import kotlin.random.Random
-import kotlin.time.TestTimeSource
 
 /**
  * [ConnectViewModel]'s permission and speaking state under every interleaving a seed picks.
@@ -49,7 +48,7 @@ class ConnectViewModelChaosTest {
         val heldInitially = r.nextBoolean()
         var granted = heldInitially
         val app = FakeAppState()
-        val vm = ConnectViewModel(app, FakeConfigStore(null), TestTimeSource()) { heldInitially }
+        val vm = ConnectViewModel(app, FakeConfigStore(null)) { heldInitially }
         try {
             // Connectable, so onConnect() reaches the app state instead of failing validation.
             vm.onHostChange("chaos.example"); vm.onUsernameChange("u"); vm.onPortChange("64738")
@@ -79,7 +78,7 @@ class ConnectViewModelChaosTest {
 
             // A floor the random mix cannot promise: the merge must fire when all three line up.
             val own = OWN_SESSION_IDS[0]
-            app.status.value = SessionStatus.Connected(gen = 1, sessionId = own)
+            app.status.value = SessionStatus.Connected(since = FakeAppState.SINCE, sessionId = own)
             vm.onMicrophonePermissionResult(true)
             app.selfSpeaking.value = true
             runCurrent()
@@ -109,7 +108,7 @@ class ConnectViewModelChaosTest {
         0 -> SessionStatus.Idle
         1 -> SessionStatus.Connecting
         2 -> SessionStatus.Handshaking
-        in 3..7 -> SessionStatus.Connected(gen = 1, sessionId = OWN_SESSION_IDS.random(r))
+        in 3..7 -> SessionStatus.Connected(since = FakeAppState.SINCE, sessionId = OWN_SESSION_IDS.random(r))
         else -> SessionStatus.Error(ErrorKind.entries.random(r), null)
     }
 
