@@ -55,8 +55,8 @@ The gate is not stored. `CaptureLifecycle.apply` derives it from three levels as
   deafen. It is not the server's echo, so the gate closes at the tap.
 - **Wanting the gate open also asks for capture again,** which is how capture comes back after a
   terminal failure.
-- **The transmit mode lives on the app state, not the session.** A rebuilt engine starts in
-  push-to-talk and is given the mode back.
+- **The transmit mode is a setting on the app state, which its sessions read.** A rebuilt engine
+  starts in push-to-talk and is given the mode back.
 
 The KDoc on `apply` explains why a press cannot race capture opening.
 
@@ -80,8 +80,9 @@ The invariants, pinned by `CaptureLifecycleTest`, `CaptureLifecycleChaosTest` an
 
 Each `CaptureState` carries its own engine factory and transmit mode, so a second client can run
 beside a session. Opening one client's microphone first stops the other's and lowers its `wanted`,
-so the loser does not take it back when its pump exits. The app never reaches this: one session is
-live at a time, and an ended session's release is queued before the next session can open.
+so the loser does not take it back when its pump exits. If the winner's open then fails, no client
+holds the microphone until one asks again. The app never reaches this: one session is live at a
+time, and an ended session's release is queued before the next session can open.
 
 ## Platform call
 

@@ -86,7 +86,7 @@ internal class CaptureLifecycle(
         data class WedgeCheck(val client: CaptureState, val sender: VoiceSender) : CaptureCommand
     }
 
-    /** The client whose microphone is open or being released. Lifecycle consumer only. */
+    /** The client that opened last; cleared by its release. Lifecycle consumer only. */
     private var holder: CaptureState? = null
 
     private val captureCommands = Channel<CaptureCommand>(Channel.UNLIMITED)
