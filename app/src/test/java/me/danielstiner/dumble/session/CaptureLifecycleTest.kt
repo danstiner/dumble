@@ -18,7 +18,7 @@ import me.danielstiner.dumble.mumble.protocol.TcpFrame
 import me.danielstiner.dumble.mumble.protocol.TcpMessageType
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
-import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
+import me.danielstiner.dumble.mumble.voice.FakePlayoutHandle
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.NativeCapture
 import me.danielstiner.dumble.mumble.voice.NoVoiceCall
@@ -54,7 +54,7 @@ class CaptureLifecycleTest {
         newCapture: () -> VoiceSender.CaptureHandle? = { null },
         call: VoiceCall = NoVoiceCall,
         stuckPumpMillis: Long = 1_000L,
-        newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null },
+        newPlayout: () -> VoiceReceiver.PlayoutHandle? = { null },
         newTransport: () -> FakeControlTransport = { FakeControlTransport { _, _ -> } },
         blocking: CoroutineDispatcher = dispatcher,
     ) = own(AppStateImpl(
@@ -199,7 +199,7 @@ class CaptureLifecycleTest {
      * the platform has the device, started again by the next claim once it is given back.
      */
     @Test fun theReceiverPausesOnHoldAndStartsOnResume() = deterministic {
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val call = FakeVoiceCall()
         lateinit var fake: FakeControlTransport
         val app = appState(
@@ -231,7 +231,7 @@ class CaptureLifecycleTest {
      * dispatcher nothing advances.
      */
     @Test fun aHoldPausesTheStreamWhileTheMicrophoneIsStillOpening() = deterministic {
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val call = FakeVoiceCall()
         val stuck = TestCoroutineScheduler()
         lateinit var fake: FakeControlTransport
@@ -581,7 +581,7 @@ class CaptureLifecycleTest {
      */
     @Test fun aCallThatStartsHeldHoldsCaptureAndPlayout() = deterministic {
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         var engines = 0
         val call = FakeVoiceCall()
         val app = appState(

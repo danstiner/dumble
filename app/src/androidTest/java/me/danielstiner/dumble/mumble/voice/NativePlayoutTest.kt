@@ -9,7 +9,7 @@ import org.junit.Test
 
 /**
  * The seam itself, on a real ABI: array validation, the flat `counters` layout, and a payload's
- * trip into the engine's queue. [FakePlayoutEngine] stands in for all of this in the JVM tests, so
+ * trip into the engine's queue. [FakePlayoutHandle] stands in for all of this in the JVM tests, so
  * nothing there can catch a layout that drifted from `playout_jni.cpp` — which is the one bug this
  * file exists for. What the stream does with the queued audio is [OboePlayoutDeviceTest]'s.
  */
@@ -156,7 +156,7 @@ class NativePlayoutTest {
     /**
      * The counters cross as a flat array, so their indices are agreed by hand between
      * `playout_jni.cpp` and [NativePlayout]. Nothing in the JVM tests can catch those being
-     * swapped — [FakePlayoutEngine] fills the same array from the same constants, so it agrees
+     * swapped — [FakePlayoutHandle] fills the same array from the same constants, so it agrees
      * with itself whatever they are. This is the test that would fail.
      */
     @Test

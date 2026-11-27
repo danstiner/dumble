@@ -39,10 +39,10 @@ class VoiceReceiverTest {
      * stopped before the test returns, or runTest's final drain would run the poll forever.
      */
     private fun receiving(
-        newEngine: () -> VoiceReceiver.PlayoutEngine?,
+        newHandle: () -> VoiceReceiver.PlayoutHandle?,
         body: suspend TestScope.(VoiceReceiver) -> Unit,
     ) = runTest {
-        val rx = VoiceReceiver(newEngine, clock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
+        val rx = VoiceReceiver(newHandle, clock = testScheduler.timeSource, context = StandardTestDispatcher(testScheduler))
         try {
             body(rx)
         } finally {
@@ -51,7 +51,7 @@ class VoiceReceiverTest {
     }
 
     /** A started receiver whose first poll has run, so each [onePoll] from here is exactly one more. */
-    private fun polling(fake: FakePlayoutEngine, body: suspend TestScope.(VoiceReceiver) -> Unit) =
+    private fun polling(fake: FakePlayoutHandle, body: suspend TestScope.(VoiceReceiver) -> Unit) =
         receiving({ fake }) { rx ->
             rx.start()
             runCurrent()
@@ -68,7 +68,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun lenBoundsThePacketNotTheArray() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             val packet = audioPayload(session = 5)
             val past = MumbleUdpProtos.Audio.newBuilder().setSenderSession(999).build().toByteArray()
@@ -81,7 +81,7 @@ class VoiceReceiverTest {
 
     @Test
     fun theStreamStartsWithTheReceiverNotWithTheFirstPacket() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             // Before any packet: a start costs up to 100 ms on some devices, and packets landing
             // during it pile up ahead of the gate as standing delay.
@@ -102,7 +102,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun aStreamThatCannotOpenIsRetriedUntilItCan() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.startResult = false
         polling(fake) { rx ->
             elapse(onePoll * 2)
@@ -116,7 +116,7 @@ class VoiceReceiverTest {
 
     @Test
     fun speakingFollowsTheAudibleSet() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             // Two slots held, one producing: live is what starts the stream, audible is what the
             // UI shows, and they are not the same set.
@@ -132,7 +132,7 @@ class VoiceReceiverTest {
 
     @Test
     fun aHoldPausesTheStreamAndAResumeStartsIt() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             assertTrue("start", fake.started)
             fake.liveSessions = setOf(3)
@@ -161,7 +161,7 @@ class VoiceReceiverTest {
      *  receiver. */
     @Test
     fun aHoldBeforeStartKeepsTheStreamClosedUntilTheResume() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         receiving({ fake }) { rx ->
             rx.setHeld(true)
             rx.start()
@@ -175,7 +175,7 @@ class VoiceReceiverTest {
 
     @Test
     fun stopJoinsThePollDestroysOnceAndDropsALateOffer() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             assertTrue("start", fake.started)
             rx.offer(audioPayload(session = 3))
@@ -200,7 +200,7 @@ class VoiceReceiverTest {
     @Test
     fun startAfterStopBuildsNoEngine() {
         val engines = AtomicInteger()
-        receiving({ engines.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+        receiving({ engines.incrementAndGet(); FakePlayoutHandle() }) { rx ->
             rx.stop()
             rx.start()
             assertEquals("start() after stop() built a playout engine", 0, engines.get())
@@ -210,7 +210,7 @@ class VoiceReceiverTest {
     @Test
     fun startIsSingleShot() {
         val engines = AtomicInteger()
-        receiving({ engines.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+        receiving({ engines.incrementAndGet(); FakePlayoutHandle() }) { rx ->
             rx.start()
             rx.start()
             assertEquals(1, engines.get())
@@ -222,7 +222,7 @@ class VoiceReceiverTest {
 
     @Test
     fun routesEachPacketToTheEngine() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             rx.offer(audioPayload(session = 1))
             rx.offer(audioPayload(session = 2, terminator = true))
@@ -240,7 +240,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun keepsReadingThroughMalformedPayloads() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.offerResult = NativePlayout.OFFER_MALFORMED_PACKET
         polling(fake) { rx ->
             repeat(8) { rx.offer(audioPayload(session = 3)) }
@@ -253,7 +253,7 @@ class VoiceReceiverTest {
 
     @Test
     fun keepsReadingWhileTheSpeakerCapRefuses() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.offerResult = NativePlayout.OFFER_SPEAKER_CAP
         polling(fake) { rx ->
             repeat(8) { rx.offer(audioPayload(session = it)) }
@@ -266,7 +266,7 @@ class VoiceReceiverTest {
 
     @Test
     fun ignoresUnknownTypeByte() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             // The body must be a *valid* Audio message, differing from an accepted packet only in
             // the type byte; with a garbage body the malformed-protobuf path would reject it anyway.
@@ -279,7 +279,7 @@ class VoiceReceiverTest {
 
     @Test
     fun ignoresMalformedProtobufBody() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             // Valid type byte, garbage body. MumbleTcpTransport's reader catches Throwable and
             // tears the whole session down, so an escaping parse failure would take chat with it.
@@ -289,7 +289,7 @@ class VoiceReceiverTest {
     }
 
     /** Opens a spurt on session 1: the next poll finds it audible. */
-    private fun TestScope.openSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver) {
+    private fun TestScope.openSpurt(fake: FakePlayoutHandle, rx: VoiceReceiver) {
         fake.liveSessions = setOf(1)
         fake.audibleSessions = setOf(1)
         elapse(onePoll)
@@ -297,7 +297,7 @@ class VoiceReceiverTest {
     }
 
     /** Closes the open spurt: the next poll publishes its closing sample, then clears the speaking set. */
-    private fun TestScope.closeSpurt(fake: FakePlayoutEngine, rx: VoiceReceiver) {
+    private fun TestScope.closeSpurt(fake: FakePlayoutHandle, rx: VoiceReceiver) {
         val before = rx.playoutStats.value
         fake.audibleSessions = emptySet()
         elapse(onePoll)
@@ -312,7 +312,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun aSpurtPublishesStatsWhenItEnds() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         // Underruns the stream counted before the spurt are its baseline, not its glitches.
         fake.counter(NativePlayout.COUNTER_UNDERRUNS, 7)
         fake.counter(NativePlayout.COUNTER_LATENCY_MICROS, 42_000)
@@ -329,7 +329,7 @@ class VoiceReceiverTest {
 
     @Test
     fun aLatencyOfMinusOneFromTheSeamReadsAsNull() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             openSpurt(fake, rx)
             closeSpurt(fake, rx)
@@ -345,7 +345,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun concealedGapsDoesNotCarryAcrossSpurts() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_CONCEALED_GAPS, 1)
@@ -361,7 +361,7 @@ class VoiceReceiverTest {
 
     @Test
     fun droppedPacketsAreCountedFromTheSpurtBaseline() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             openSpurt(fake, rx)
             fake.counter(NativePlayout.COUNTER_DROPPED_PACKETS, 5)
@@ -382,7 +382,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun underrunsAreCountedFromTheSpurtBaseline() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.counter(NativePlayout.COUNTER_UNDERRUNS, 3)
         polling(fake) { rx ->
             openSpurt(fake, rx)
@@ -394,7 +394,7 @@ class VoiceReceiverTest {
 
     @Test
     fun statsCarryEachSpeakersBufferedDepthAndTarget() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.depthsBySession = mapOf(1 to 960)
         fake.targetsBySession = mapOf(1 to 1440)
         polling(fake) { rx ->
@@ -414,7 +414,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun aLongSpurtPublishesAPeriodicSampleWhileStillRunning() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.depthsBySession = mapOf(1 to 480)
         polling(fake) { rx ->
             openSpurt(fake, rx)
@@ -432,7 +432,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun thePeriodicSampleIsRateLimited() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             openSpurt(fake, rx)
             elapse(VoiceReceiver.STATS_PERIOD - onePoll)
@@ -453,7 +453,7 @@ class VoiceReceiverTest {
 
     @Test
     fun statsAreClearedWhenTheReceiverStops() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         polling(fake) { rx ->
             openSpurt(fake, rx)
             closeSpurt(fake, rx)
@@ -470,7 +470,7 @@ class VoiceReceiverTest {
      */
     @Test
     fun refusedStatsBuffersDoNotStopThePoll() {
-        val fake = FakePlayoutEngine()
+        val fake = FakePlayoutHandle()
         fake.refuseBuffers = true
         polling(fake) { rx ->
             assertTrue("the stream must start regardless", fake.started)
@@ -486,7 +486,7 @@ class VoiceReceiverTest {
     }
 
     /**
-     * newEngine() returning null — libopus unreachable — must degrade receive to silence for the
+     * newHandle() returning null — libopus unreachable — must degrade receive to silence for the
      * session: latched, no poll, and a later start() refused the way one after stop() is.
      */
     @Test
@@ -503,13 +503,13 @@ class VoiceReceiverTest {
 
     /**
      * Mirrors Session.close(): an attempt superseded or failing before its connection comes
-     * up calls stop() on a receiver whose start() was never reached. newEngine must never run on
+     * up calls stop() on a receiver whose start() was never reached. newHandle must never run on
      * that path: an engine built at construction would leak one per such attempt.
      */
     @Test
     fun stopWithoutEverStartingBuildsNoEngine() {
         val builds = AtomicInteger()
-        receiving({ builds.incrementAndGet(); FakePlayoutEngine() }) { rx ->
+        receiving({ builds.incrementAndGet(); FakePlayoutHandle() }) { rx ->
             rx.stop()
             assertEquals("a receiver that never started must never build an engine", 0, builds.get())
             rx.start()

@@ -64,7 +64,7 @@ internal class Session(
     private val pinStore: PinStore,
     private val newTransport: (expectedPin: String?) -> MumbleControlTransport,
     private val newUdp: (CryptState, MumbleUdpTransport.Listener) -> UdpTransport,
-    newPlayout: () -> VoiceReceiver.PlayoutEngine?,
+    newPlayout: () -> VoiceReceiver.PlayoutHandle?,
     private val call: VoiceCall,
     /** The clock of everything that must count sleep; see AppStateImpl's `udpClock`. */
     private val bootClock: TimeSource.WithComparableMarks,

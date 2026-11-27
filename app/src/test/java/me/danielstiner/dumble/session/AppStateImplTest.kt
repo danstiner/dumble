@@ -40,7 +40,7 @@ import me.danielstiner.dumble.mumble.voice.AudioRoute
 import me.danielstiner.dumble.mumble.voice.AudioRoutes
 import me.danielstiner.dumble.mumble.voice.CaptureStats
 import me.danielstiner.dumble.mumble.voice.FakeCaptureHandle
-import me.danielstiner.dumble.mumble.voice.FakePlayoutEngine
+import me.danielstiner.dumble.mumble.voice.FakePlayoutHandle
 import me.danielstiner.dumble.mumble.voice.FakeVoiceCall
 import me.danielstiner.dumble.mumble.voice.VoiceReceiver
 import me.danielstiner.dumble.time.AtomicTimeSource
@@ -609,7 +609,7 @@ class AppStateImplTest {
      */
     @Test fun aDeadLinkIsReplacedUnderTheSameSession() = deterministic {
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val handles = CopyOnWriteArrayList<FakeCaptureHandle>()
         val call = FakeVoiceCall()
         val app = own(AppStateImpl(
@@ -1569,7 +1569,7 @@ class AppStateImplTest {
      */
     @Test fun aFailedSessionReleasesTheReceiver() = deterministic {
         lateinit var fake: FakeControlTransport
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
@@ -1601,7 +1601,7 @@ class AppStateImplTest {
 
     @Test fun speakingSessionsPopulateThenClearOnDisconnect() = deterministic {
         lateinit var fake: FakeControlTransport
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { fake = it } })
@@ -1634,7 +1634,7 @@ class AppStateImplTest {
 
     // Voice is additive: a socket that cannot be opened must cost the session nothing but UDP.
     @Test fun aSocketThatCannotOpenLeavesTheSessionHealthyAndTunneled() = deterministic {
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         lateinit var fake: FakeControlTransport
         val app = own(AppStateImpl(
             InMemoryPinStore(), newPlayout = { playout }, udpClock = clock, context = dispatcher, blocking = dispatcher,
@@ -1693,7 +1693,7 @@ class AppStateImplTest {
         val engines = AtomicInteger()
         val transports = CopyOnWriteArrayList<FakeControlTransport>()
         app = own(AppStateImpl(
-            pins, newPlayout = { engines.incrementAndGet(); FakePlayoutEngine() },
+            pins, newPlayout = { engines.incrementAndGet(); FakePlayoutHandle() },
             udpClock = clock, context = dispatcher, blocking = dispatcher,
         ) { FakeControlTransport { _, _ -> }.also { transports += it } })
 
@@ -1957,7 +1957,7 @@ class AppStateImplTest {
         FakeControlTransport { _, _ -> }.apply { remote = serverAddress }.also { controlTransports += it }
     }
 
-    private fun Rig.udpAppState(newPlayout: () -> VoiceReceiver.PlayoutEngine? = { null }) = own(AppStateImpl(
+    private fun Rig.udpAppState(newPlayout: () -> VoiceReceiver.PlayoutHandle? = { null }) = own(AppStateImpl(
         InMemoryPinStore(), newPlayout = newPlayout, udpClock = clock, context = dispatcher, blocking = dispatcher,
         newUdp = fakeUdps, newTransport = aimedAtServer,
     ))
@@ -2023,7 +2023,7 @@ class AppStateImplTest {
     // The reason the socket lands with receive wired: a listener who has never transmitted
     // gets their downlink over UDP from the first ping on, and would otherwise hear nothing.
     @Test fun inboundUdpAudioReachesThePlayoutEngine() = deterministic {
-        val playout = FakePlayoutEngine()
+        val playout = FakePlayoutHandle()
         val app = udpAppState(newPlayout = { playout })
         app.connect(MumbleEndpoint.parse("localhost"), "user", null)
         startedTransportAt(controlTransports, 0)

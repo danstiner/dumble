@@ -3,7 +3,7 @@ package me.danielstiner.dumble.mumble.voice
 import android.util.Log
 
 /**
- * Thin binding over the native playout session — the engine and the Oboe output stream that
+ * Thin binding over the native playout handle — the engine and the Oboe output stream that
  * pulls from it. Bound by symbol name from C++, so these declarations must not be renamed without
  * updating `playout_jni.cpp` — R8 keeps them via AGP's default
  * `-keepclasseswithmembernames class * { native <methods>; }` rule.
@@ -30,7 +30,7 @@ object NativePlayout {
     const val ERROR_BUFFER_TOO_SMALL = -1
 
     /** Indices into [readStats]' `counters`: `PlayoutEngine::Stats` is a struct, and JNI carries
-     *  primitive arrays. Monotonic since the session was created unless noted — the caller
+     *  primitive arrays. Monotonic since the handle was created unless noted — the caller
      *  subtracts a talk-spurt baseline. */
     const val COUNTER_CONCEALED_GAPS = 0
     const val COUNTER_DROPPED_PACKETS = 1
@@ -95,8 +95,8 @@ object NativePlayout {
     external fun destroy(handle: Long)
 }
 
-/** The real [VoiceReceiver.PlayoutEngine], one native session per receiver. */
-class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngine {
+/** The real [VoiceReceiver.PlayoutHandle], one native handle per receiver. */
+class NativePlayoutHandle(private val handle: Long) : VoiceReceiver.PlayoutHandle {
     override fun offer(session: Int, opusData: ByteArray, frameNumber: Long, terminator: Boolean) =
         NativePlayout.offer(handle, session, opusData, frameNumber, terminator)
 
@@ -114,13 +114,13 @@ class NativePlayoutEngine(private val handle: Long) : VoiceReceiver.PlayoutEngin
 }
 
 /**
- * Build a native playout session, or null if one could not be built. Mirrors [openNativeCapture]
+ * Build a native playout handle, or null if one could not be built. Mirrors [openNativeCapture]
  * in shape: the class initializer this reaches runs `System.loadLibrary`, so an
  * `UnsatisfiedLinkError` on a device missing the .so is an Error, not an Exception, and voice
  * receive is additive on top of chat and channels — it must degrade to silence rather than fail
  * the connection.
  */
-fun openNativePlayout(): VoiceReceiver.PlayoutEngine? {
+fun openNativePlayout(): VoiceReceiver.PlayoutHandle? {
     val handle = runCatching {
         NativePlayout.create(SAMPLE_RATE)
     }.getOrElse {
@@ -128,5 +128,5 @@ fun openNativePlayout(): VoiceReceiver.PlayoutEngine? {
         0L
     }
     if (handle == 0L) return null
-    return NativePlayoutEngine(handle)
+    return NativePlayoutHandle(handle)
 }

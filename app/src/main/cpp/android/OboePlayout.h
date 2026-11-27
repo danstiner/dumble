@@ -12,7 +12,7 @@ namespace dumble {
  * The only Android-aware piece of the playout path: owns the Oboe output stream and pulls each
  * burst from PlayoutEngine. Like OboeCapture in the stream it asks for and the mono-I16 refusal;
  * unlike it in ownership. Capture is shared-owned so a stream error, which Oboe delivers on a
- * detached thread it never joins, can reach the engine after the session is gone. Here the error
+ * detached thread it never joins, can reach the engine after the handle is gone. Here the error
  * callbacks touch nothing but the Callbacks object — which Oboe keeps alive for as long as it
  * can call it — and the receiver's poll, calling start() every interval, is what notices the
  * dead stream, tells the engine, and opens another. So this object and the engine have plain
